@@ -1,6 +1,6 @@
 # DevPod Design
 
-**Status:** Draft (brainstorming output, awaiting user review)
+**Status:** Approved (2026-05-12)
 **Date:** 2026-05-12
 **Audience:** project author and future implementers
 
