@@ -1,0 +1,354 @@
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.16.5
+  name: gatewayconfigs.devpod.io
+spec:
+  group: devpod.io
+  names:
+    kind: GatewayConfig
+    listKind: GatewayConfigList
+    plural: gatewayconfigs
+    shortNames:
+    - dgc
+    singular: gatewayconfig
+  scope: Cluster
+  versions:
+  - name: v1alpha1
+    schema:
+      openAPIV3Schema:
+        description: GatewayConfig is the cluster-singleton runtime configuration
+          for DevPod.
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: GatewayConfigSpec configures the gateway and the cluster-wide
+              DevPod runtime.
+            properties:
+              backendPort:
+                default: 2222
+                description: |-
+                  BackendPort is the TCP port the in-container sshd listens on
+                  inside each DevPod Pod. Defaults to 2222 so the user container
+                  can bind it without CAP_NET_BIND_SERVICE regardless of UID. The
+                  gateway dials this port via DevPod.status.endpoint.
+                format: int32
+                maximum: 65535
+                minimum: 1024
+                type: integer
+              banner:
+                description: |-
+                  Banner is the pre-auth SSH banner the gateway sends to every
+                  incoming connection. Rendered as a Go text/template against a
+                  fixed field set that is available WITHOUT any cluster lookup
+                  (banner runs before authentication, so the gateway refuses to
+                  trust the login name beyond syntactic parsing):
+
+                    .Now       time.Time — current server time
+                    .ClientIP  string    — remote peer addr (after PROXY-protocol
+                                           if enabled)
+                    .Login     string    — raw conn.User() (e.g. "alice+smoke")
+                    .User      string    — parsed user part, or "" on bad format
+                    .Pod       string    — parsed pod part, or "" on bad format
+                    .Host      string    — gateway pod hostname
+
+                  Empty string disables the banner. Invalid templates fail fast
+                  at gateway startup.
+                type: string
+              defaultIdleTimeoutSeconds:
+                format: int32
+                minimum: 0
+                type: integer
+              devPodNamespace:
+                default: devpods
+                description: DevPodNamespace is where every DevPod-owned object lives.
+                minLength: 1
+                type: string
+              hostKeyRef:
+                description: |-
+                  HostKeyRef points to a Secret holding the gateway's externally
+                  presented SSH host key. The Secret must contain
+                  `ssh_host_ed25519_key` (PEM-encoded private) and `ssh_host_ed25519_key.pub`.
+                properties:
+                  name:
+                    type: string
+                  namespace:
+                    type: string
+                required:
+                - name
+                - namespace
+                type: object
+              internalKeyRef:
+                description: |-
+                  InternalKeyRef points to a Secret holding the gateway's outbound
+                  key used when dialing backend sshd. Same format as HostKeyRef.
+                properties:
+                  name:
+                    type: string
+                  namespace:
+                    type: string
+                required:
+                - name
+                - namespace
+                type: object
+              ldap:
+                description: |-
+                  LDAP, when non-nil, registers a secondary identity source
+                  queried after the User CRD source. Disabled when nil.
+                properties:
+                  baseDN:
+                    description: BaseDN is the search base for user entries.
+                    minLength: 1
+                    type: string
+                  bindDN:
+                    description: BindDN is the DN used for simple bind.
+                    minLength: 1
+                    type: string
+                  bindPasswordSecretRef:
+                    description: |-
+                      BindPasswordSecretRef points to a Secret whose key "password"
+                      holds the bind password.
+                    properties:
+                      name:
+                        type: string
+                      namespace:
+                        type: string
+                    required:
+                    - name
+                    - namespace
+                    type: object
+                  caSecretRef:
+                    description: |-
+                      CASecretRef points to a Secret whose key "ca.crt" holds the
+                      PEM-encoded LDAP server CA bundle. The system trust store is
+                      never consulted, so a CA rotation here is an explicit,
+                      observable event rather than a silent drift.
+                    properties:
+                      name:
+                        type: string
+                      namespace:
+                        type: string
+                    required:
+                    - name
+                    - namespace
+                    type: object
+                  cacheTTLSeconds:
+                    default: 300
+                    description: |-
+                      CacheTTLSeconds is the positive-cache lifetime. Within this
+                      window, a successful prior lookup is served without touching
+                      LDAP.
+                    format: int32
+                    minimum: 10
+                    type: integer
+                  negativeCacheTTLSeconds:
+                    default: 30
+                    description: |-
+                      NegativeCacheTTLSeconds is the lifetime of a "this user is not
+                      in LDAP" cache entry.
+                    format: int32
+                    minimum: 0
+                    type: integer
+                  pubkeyAttribute:
+                    default: sshPublicKey
+                    description: |-
+                      PubkeyAttribute is the LDAP attribute that carries
+                      OpenSSH-format authorized_keys lines. Defaults to
+                      "sshPublicKey" (the OpenSSH schema OID
+                      1.3.6.1.4.1.24552.500.1.1.1.13). Multi-valued attributes are
+                      supported; each value is parsed independently.
+                    type: string
+                  requestTimeoutSeconds:
+                    default: 5
+                    description: RequestTimeoutSeconds bounds a single LDAP search
+                      round-trip.
+                    format: int32
+                    maximum: 30
+                    minimum: 1
+                    type: integer
+                  staleGraceSeconds:
+                    default: 900
+                    description: |-
+                      StaleGraceSeconds is the soft-fail window. When LDAP is
+                      currently failing, a cache entry whose age is between
+                      CacheTTLSeconds and CacheTTLSeconds+StaleGraceSeconds is still
+                      served (audit: served_stale=true). Beyond that, the entry is
+                      treated as evicted.
+                    format: int32
+                    minimum: 0
+                    type: integer
+                  url:
+                    description: |-
+                      URL is the LDAP server URL. Only ldaps:// is supported
+                      (plaintext ldap:// is refused at admission).
+                    pattern: ^ldaps://[^/\s]+(:[0-9]+)?$
+                    type: string
+                  userFilter:
+                    description: |-
+                      UserFilter is a Go text/template for the LDAP search filter,
+                      rendered against {.Username string}. Username has already
+                      passed the DevPod login-name regex ([a-z0-9-]{1,32}); the
+                      gateway additionally RFC 4515-escapes it before substitution
+                      as defense-in-depth.
+
+                      Default: `(&(objectClass=posixAccount)(uid={{.Username}}))`
+                    type: string
+                required:
+                - baseDN
+                - bindDN
+                - bindPasswordSecretRef
+                - caSecretRef
+                - url
+                type: object
+              listen:
+                description: ListenSpec configures the gateway listener.
+                properties:
+                  port:
+                    default: 22
+                    format: int32
+                    maximum: 65535
+                    minimum: 1
+                    type: integer
+                  proxyProtocol:
+                    description: ProxyProtocolSpec configures the PROXY-protocol v2
+                      listener.
+                    properties:
+                      enabled:
+                        default: false
+                        type: boolean
+                      trustedCIDRs:
+                        description: |-
+                          TrustedCIDRs lists source CIDRs from which a PROXY header is honored.
+                          Required when Enabled is true.
+                        items:
+                          type: string
+                        type: array
+                    type: object
+                    x-kubernetes-validations:
+                    - message: trustedCIDRs must be non-empty when proxyProtocol.enabled
+                        is true
+                      rule: '!self.enabled || size(self.trustedCIDRs) > 0'
+                type: object
+              supervisorImage:
+                description: |-
+                  SupervisorImage is the container image holding the init-container
+                  payload for each Pod-backed DevPod: static OpenSSH (sshd,
+                  sftp-server) and the devpod-supervisor binary. A `cp`-style
+                  initContainer copies its contents into a shared emptyDir, after
+                  which the user's target container runs the supervisor as PID 1.
+                minLength: 1
+                type: string
+              trustedProxyKeys:
+                items:
+                  description: |-
+                    TrustedProxyKey is an SSH-terminating outer proxy that may impersonate
+                    users when its pubkey matches.
+                  properties:
+                    alias:
+                      minLength: 1
+                      type: string
+                    pubkey:
+                      minLength: 1
+                      type: string
+                  required:
+                  - alias
+                  - pubkey
+                  type: object
+                type: array
+            required:
+            - hostKeyRef
+            - internalKeyRef
+            - supervisorImage
+            type: object
+          status:
+            description: GatewayConfigStatus reports observed state.
+            properties:
+              conditions:
+                items:
+                  description: Condition contains details for one aspect of the current
+                    state of this API Resource.
+                  properties:
+                    lastTransitionTime:
+                      description: |-
+                        lastTransitionTime is the last time the condition transitioned from one status to another.
+                        This should be when the underlying condition changed.  If that is not known, then using the time when the API field changed is acceptable.
+                      format: date-time
+                      type: string
+                    message:
+                      description: |-
+                        message is a human readable message indicating details about the transition.
+                        This may be an empty string.
+                      maxLength: 32768
+                      type: string
+                    observedGeneration:
+                      description: |-
+                        observedGeneration represents the .metadata.generation that the condition was set based upon.
+                        For instance, if .metadata.generation is currently 12, but the .status.conditions[x].observedGeneration is 9, the condition is out of date
+                        with respect to the current state of the instance.
+                      format: int64
+                      minimum: 0
+                      type: integer
+                    reason:
+                      description: |-
+                        reason contains a programmatic identifier indicating the reason for the condition's last transition.
+                        Producers of specific condition types may define expected values and meanings for this field,
+                        and whether the values are considered a guaranteed API.
+                        The value should be a CamelCase string.
+                        This field may not be empty.
+                      maxLength: 1024
+                      minLength: 1
+                      pattern: ^[A-Za-z]([A-Za-z0-9_,:]*[A-Za-z0-9_])?$
+                      type: string
+                    status:
+                      description: status of the condition, one of True, False, Unknown.
+                      enum:
+                      - "True"
+                      - "False"
+                      - Unknown
+                      type: string
+                    type:
+                      description: type of condition in CamelCase or in foo.example.com/CamelCase.
+                      maxLength: 316
+                      pattern: ^([a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*/)?(([A-Za-z0-9][-A-Za-z0-9_.]*)?[A-Za-z0-9])$
+                      type: string
+                  required:
+                  - lastTransitionTime
+                  - message
+                  - reason
+                  - status
+                  - type
+                  type: object
+                type: array
+                x-kubernetes-list-map-keys:
+                - type
+                x-kubernetes-list-type: map
+              readyReplicas:
+                format: int32
+                type: integer
+            type: object
+        type: object
+        x-kubernetes-validations:
+        - message: GatewayConfig must be named 'default'
+          rule: self.metadata.name == 'default'
+    served: true
+    storage: true
+    subresources:
+      status: {}

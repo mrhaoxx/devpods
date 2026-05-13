@@ -1,0 +1,40 @@
+apiVersion: devpod.io/v1alpha1
+kind: GatewayConfig
+metadata:
+  name: default
+spec:
+  devPodNamespace: {{ .Values.namespaces.devpods }}
+  supervisorImage: "{{ .Values.image.supervisor.repository }}:{{ .Values.image.supervisor.tag }}"
+  hostKeyRef:
+    name: devpod-gateway-host-key
+    namespace: {{ .Values.namespaces.system }}
+  internalKeyRef:
+    name: devpod-gateway-internal-key
+    namespace: {{ .Values.namespaces.system }}
+  listen:
+    port: 22
+  # banner: a Go text/template rendered server-side per connection;
+  # see api/v1alpha1/gatewayconfig_types.go for the field set. Helm's
+  # backtick raw-string passes the inner template through unprocessed.
+  banner: |
+    {{ `devpod-gateway · {{ .ClientIP }} → {{ if .User }}{{ .User }}+{{ .Pod }}{{ else }}{{ .Login }}{{ end }} · {{ .Now.Format "2006-01-02 15:04:05 MST" }}` }}
+  {{- if .Values.gateway.ldap.enabled }}
+  ldap:
+    url: {{ .Values.gateway.ldap.url | quote }}
+    bindDN: {{ .Values.gateway.ldap.bindDN | quote }}
+    baseDN: {{ .Values.gateway.ldap.baseDN | quote }}
+    {{- with .Values.gateway.ldap.userFilter }}
+    userFilter: {{ . | quote }}
+    {{- end }}
+    pubkeyAttribute: {{ .Values.gateway.ldap.pubkeyAttribute | quote }}
+    requestTimeoutSeconds: {{ .Values.gateway.ldap.requestTimeoutSeconds }}
+    cacheTTLSeconds: {{ .Values.gateway.ldap.cacheTTLSeconds }}
+    negativeCacheTTLSeconds: {{ .Values.gateway.ldap.negativeCacheTTLSeconds }}
+    staleGraceSeconds: {{ .Values.gateway.ldap.staleGraceSeconds }}
+    caSecretRef:
+      name: {{ .Values.gateway.ldap.caSecret.name | quote }}
+      namespace: {{ .Values.gateway.ldap.caSecret.namespace | quote }}
+    bindPasswordSecretRef:
+      name: {{ .Values.gateway.ldap.bindPasswordSecret.name | quote }}
+      namespace: {{ .Values.gateway.ldap.bindPasswordSecret.namespace | quote }}
+  {{- end }}

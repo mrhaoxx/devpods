@@ -1,0 +1,175 @@
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: devpod-controller
+  namespace: {{ .Values.namespaces.system }}
+---
+# Cluster-scoped reach: only the cluster-scoped CRD kinds the
+# controller actually reconciles (User, GatewayConfig). Pods, Services,
+# Secrets, PVCs, NetworkPolicies move to a namespaced Role below.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: devpod-controller
+rules:
+- apiGroups: ["devpod.io"]
+  resources: ["users","gatewayconfigs"]
+  verbs: ["get","list","watch","create","update","patch","delete"]
+- apiGroups: ["devpod.io"]
+  resources: ["users/status","gatewayconfigs/status"]
+  verbs: ["get","update","patch"]
+- apiGroups: ["devpod.io"]
+  resources: ["users/finalizers"]
+  verbs: ["update"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: devpod-controller
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: devpod-controller
+subjects:
+- kind: ServiceAccount
+  name: devpod-controller
+  namespace: {{ .Values.namespaces.system }}
+---
+# Namespaced reach: everything the controller writes (Pods, Services,
+# Secrets, PVCs, NetworkPolicies, DevPods + their status/finalizers,
+# events) is scoped to the configured devpod namespace. A compromised
+# controller can't touch resources in other namespaces.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: devpod-controller
+  namespace: {{ .Values.namespaces.devpods }}
+rules:
+- apiGroups: ["devpod.io"]
+  resources: ["devpods"]
+  verbs: ["get","list","watch","create","update","patch","delete"]
+- apiGroups: ["devpod.io"]
+  resources: ["devpods/status"]
+  verbs: ["get","update","patch"]
+- apiGroups: ["devpod.io"]
+  resources: ["devpods/finalizers"]
+  verbs: ["update"]
+- apiGroups: [""]
+  resources: ["pods","services","secrets","persistentvolumeclaims"]
+  verbs: ["get","list","watch","create","update","patch","delete"]
+- apiGroups: ["networking.k8s.io"]
+  resources: ["networkpolicies"]
+  verbs: ["get","list","watch","create","update","patch","delete"]
+- apiGroups: [""]
+  resources: ["events"]
+  verbs: ["create","patch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: devpod-controller
+  namespace: {{ .Values.namespaces.devpods }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: devpod-controller
+subjects:
+- kind: ServiceAccount
+  name: devpod-controller
+  namespace: {{ .Values.namespaces.system }}
+---
+# Leader-election lease lives in the controller's own namespace.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: devpod-controller-leader-election
+  namespace: {{ .Values.namespaces.system }}
+rules:
+- apiGroups: ["coordination.k8s.io"]
+  resources: ["leases"]
+  verbs: ["get","list","watch","create","update","patch","delete"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: devpod-controller-leader-election
+  namespace: {{ .Values.namespaces.system }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: devpod-controller-leader-election
+subjects:
+- kind: ServiceAccount
+  name: devpod-controller
+  namespace: {{ .Values.namespaces.system }}
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: devpod-gateway
+  namespace: {{ .Values.namespaces.system }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: devpod-gateway
+rules:
+- apiGroups: ["devpod.io"]
+  resources: ["users","devpods","gatewayconfigs"]
+  verbs: ["get","list","watch"]
+- apiGroups: ["devpod.io"]
+  resources: ["devpods/status"]
+  verbs: ["patch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: devpod-gateway
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: devpod-gateway
+subjects:
+- kind: ServiceAccount
+  name: devpod-gateway
+  namespace: {{ .Values.namespaces.system }}
+---
+# Spec §3: scope gateway Secret reads to a namespaced Role
+# restricted by resourceNames. The gateway reads only its host key,
+# its internal key, and (when LDAP is enabled) the operator-provided
+# CA + bind-password Secrets. Secret-as-volume mounts use this Role
+# at admission time (kubelet authorizes the Pod's ServiceAccount).
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: devpod-gateway-secrets
+  namespace: {{ .Values.namespaces.system }}
+rules:
+- apiGroups: [""]
+  resources: ["secrets"]
+  verbs: ["get","list","watch"]
+  resourceNames:
+  - devpod-gateway-host-key
+  - devpod-gateway-internal-key
+  {{- if .Values.gateway.ldap.enabled }}
+  {{- with .Values.gateway.ldap.caSecret.name }}
+  - {{ . | quote }}
+  {{- end }}
+  {{- with .Values.gateway.ldap.bindPasswordSecret.name }}
+  - {{ . | quote }}
+  {{- end }}
+  {{- end }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: devpod-gateway-secrets
+  namespace: {{ .Values.namespaces.system }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: devpod-gateway-secrets
+subjects:
+- kind: ServiceAccount
+  name: devpod-gateway
+  namespace: {{ .Values.namespaces.system }}

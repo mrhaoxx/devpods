@@ -1,0 +1,47 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: devpod-controller
+  namespace: {{ .Values.namespaces.system }}
+  labels: {{ include "devpod.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.controller.replicas }}
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: devpod-controller
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: devpod-controller
+    spec:
+      serviceAccountName: devpod-controller
+      containers:
+      - name: controller
+        image: "{{ .Values.image.controller.repository }}:{{ .Values.image.controller.tag }}"
+        imagePullPolicy: {{ .Values.image.controller.pullPolicy }}
+        args:
+        - --devpod-namespace={{ .Values.namespaces.devpods }}
+        - --gateway-namespace={{ .Values.namespaces.system }}
+        - --supervisor-image={{ .Values.image.supervisor.repository }}:{{ .Values.image.supervisor.tag }}
+        - --leader-elect=true
+        - --zap-devel=false
+        - --internal-pubkey-file=/etc/devpod/internal/ssh_host_ed25519_key.pub
+        ports:
+        - {name: metrics, containerPort: 8080}
+        - {name: probe,   containerPort: 8081}
+        livenessProbe:
+          httpGet: {path: /healthz, port: probe}
+        readinessProbe:
+          httpGet: {path: /readyz, port: probe}
+        resources: {{- toYaml .Values.controller.resources | nindent 10 }}
+        volumeMounts:
+        - name: internal-key-pub
+          mountPath: /etc/devpod/internal
+          readOnly: true
+      volumes:
+      - name: internal-key-pub
+        secret:
+          secretName: devpod-gateway-internal-key
+          items:
+          - key: ssh_host_ed25519_key.pub
+            path: ssh_host_ed25519_key.pub

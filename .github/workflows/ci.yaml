@@ -1,0 +1,55 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  build-test:
+    runs-on: ubuntu-22.04
+    steps:
+    - uses: actions/checkout@v4
+
+    - uses: actions/setup-go@v5
+      with:
+        go-version: "1.25.x"
+        cache: true
+
+    - name: Cache build deps
+      uses: actions/cache@v4
+      with:
+        path: |
+          ~/.cache/go-build
+          ~/go/pkg/mod
+        key: ${{ runner.os }}-go-${{ hashFiles('**/go.sum') }}
+
+    - name: Generate
+      run: |
+        go generate ./...
+        # Fail if go generate produced uncommitted changes
+        # (= someone forgot to commit regenerated code).
+        git diff --exit-code
+
+    - name: Vet
+      run: go vet ./...
+
+    - name: Lint
+      run: go run github.com/golangci/golangci-lint/cmd/golangci-lint@v1.62.0 run
+
+    - name: Build
+      run: go build ./...
+
+    - name: Test
+      run: bash hack/test.sh
+
+  helm-render:
+    runs-on: ubuntu-22.04
+    steps:
+    - uses: actions/checkout@v4
+    - uses: azure/setup-helm@v4
+      with: {version: v3.16.0}
+    - name: helm template
+      run: helm template devpod deploy/chart > /tmp/out.yaml && wc -l /tmp/out.yaml
+    - name: helm lint
+      run: helm lint deploy/chart
