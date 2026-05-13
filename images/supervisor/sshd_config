@@ -1,0 +1,14 @@
+Port 2222
+HostKey /etc/devpod/ssh_host_ed25519_key
+AuthorizedKeysFile /etc/devpod/authorized_keys
+PermitRootLogin prohibit-password
+PasswordAuthentication no
+ChallengeResponseAuthentication no
+# K8s mounts the host-key Secret with tmpfs perms sshd considers loose;
+# we control the mount path so the strict-modes check is noise here.
+StrictModes no
+PrintMotd no
+AllowAgentForwarding yes
+AllowTcpForwarding yes
+Subsystem sftp /opt/devpod/libexec/sftp-server
+LogLevel INFO

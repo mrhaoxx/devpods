@@ -1,0 +1,57 @@
+image:
+  controller:
+    repository: ghcr.io/mrhaoxx/devpod-controller
+    tag: dev
+    pullPolicy: IfNotPresent
+  gateway:
+    repository: ghcr.io/mrhaoxx/devpod-gateway
+    tag: dev
+    pullPolicy: IfNotPresent
+  supervisor:
+    repository: ghcr.io/mrhaoxx/devpod-supervisor
+    tag: dev
+
+namespaces:
+  system: devpod-system
+  devpods: devpods
+
+controller:
+  replicas: 1
+  resources:
+    requests: {cpu: 100m, memory: 128Mi}
+    limits:   {cpu: 500m, memory: 512Mi}
+
+gateway:
+  replicas: 2
+  resources:
+    requests: {cpu: 100m, memory: 128Mi}
+    limits:   {cpu: 500m, memory: 512Mi}
+  service:
+    type: ClusterIP
+    port: 22
+  ldap:
+    enabled: false
+    url: ""
+    bindDN: ""
+    baseDN: ""
+    userFilter: ""             # blank → controller default
+    pubkeyAttribute: sshPublicKey
+    requestTimeoutSeconds: 5
+    cacheTTLSeconds: 300
+    negativeCacheTTLSeconds: 30
+    staleGraceSeconds: 900
+    # Secrets MUST exist before the chart is installed. The chart
+    # only references them; it does not generate them. Operators
+    # create the Secrets out of band (or via a sealed-secret /
+    # external-secrets pipeline).
+    #
+    # IMPORTANT: both Secrets must live in the same namespace as the
+    # gateway Deployment (Values.namespaces.system). Cross-namespace
+    # Secret mounts are not supported.
+    caSecret:
+      name: ""                 # secretRef.name; key "ca.crt"
+      namespace: ""            # secretRef.namespace (informational; mount uses Pod's namespace)
+    bindPasswordSecret:
+      name: ""
+      namespace: ""            # secretRef.namespace (informational)
+

@@ -1,0 +1,26 @@
+# Binaries / test artifacts
+/bin/
+/dist/
+*.test
+*.out
+/cover.out
+/cover.html
+
+# Local env
+.env
+.envrc
+/kubeconfig
+
+# IDE
+.idea/
+.vscode/
+
+# OS
+.DS_Store
+
+# Helm output
+/deploy/chart/charts/
+/deploy/chart/Chart.lock
+
+# Claude Code per-project state
+.claude/

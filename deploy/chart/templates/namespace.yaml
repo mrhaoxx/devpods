@@ -1,0 +1,24 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: {{ .Values.namespaces.system }}
+  labels:
+    kubernetes.io/metadata.name: {{ .Values.namespaces.system }}
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: {{ .Values.namespaces.devpods }}
+  labels:
+    kubernetes.io/metadata.name: {{ .Values.namespaces.devpods }}
+    # Baseline blocks the obvious privilege escalations (privileged,
+    # hostNetwork, hostPID, hostIPC, most hostPath mounts, capabilities
+    # other than NET_BIND_SERVICE). Ordinary dev containers can still
+    # run as root inside their own container — a deliberate trade for
+    # multi-tenant DevPods that need e.g. `apt install`. Cluster
+    # operators who want stricter posture can override the enforce
+    # label on the namespace post-install.
+    pod-security.kubernetes.io/enforce: baseline
+    pod-security.kubernetes.io/enforce-version: latest
+    pod-security.kubernetes.io/warn: baseline
+    pod-security.kubernetes.io/audit: baseline

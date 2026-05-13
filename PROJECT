@@ -1,0 +1,6 @@
+domain: devpod.io
+layout:
+- go.kubebuilder.io/v4
+projectName: devpod
+repo: github.com/mrhaoxx/devpod
+version: "3"
