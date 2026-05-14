@@ -296,11 +296,19 @@ func (s *ldapSource) liveLookup(ctx context.Context, username string) ([]ssh.Pub
 	)
 	res, err := conn.Search(req)
 	if err != nil {
-		// On any LDAP error, drop the conn so the next call redials.
+		// Stale connection (idle timeout, server restart, etc.) —
+		// reset and retry once before surfacing the error.
 		s.resetConn()
-		werr := fmt.Errorf("ldap search: %w", err)
-		s.warnRateLimited(username, werr)
-		return nil, werr
+		conn, rerr := s.acquireConn()
+		if rerr == nil {
+			res, err = conn.Search(req)
+		}
+		if err != nil {
+			s.resetConn()
+			werr := fmt.Errorf("ldap search: %w", err)
+			s.warnRateLimited(username, werr)
+			return nil, werr
+		}
 	}
 	if len(res.Entries) == 0 {
 		return nil, nil
