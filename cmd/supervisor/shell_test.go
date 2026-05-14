@@ -163,7 +163,7 @@ func TestPrepareShellArgs_UnsetEnv_PasswdNoRootLine_FallsBackToBash(t *testing.T
 
 func TestRewriteRootShell_PatchesExistingRoot(t *testing.T) {
 	in := []byte("root:x:0:0:root:/root:/sbin/nologin\nnobody:x:65534:65534::/:/bin/false\n")
-	out, changed := rewriteRootShell(in, "/opt/devpod/bin/bash")
+	out, changed := rewriteRootPasswd(in, "/opt/devpod/bin/bash", "")
 	if !changed {
 		t.Fatalf("expected change, got changed=false")
 	}
@@ -177,7 +177,7 @@ func TestRewriteRootShell_PatchesExistingRoot(t *testing.T) {
 
 func TestRewriteRootShell_NoChangeWhenShellMatches(t *testing.T) {
 	in := []byte("root:x:0:0:root:/root:/opt/devpod/bin/bash\n")
-	_, changed := rewriteRootShell(in, "/opt/devpod/bin/bash")
+	_, changed := rewriteRootPasswd(in, "/opt/devpod/bin/bash", "")
 	if changed {
 		t.Errorf("expected changed=false when shell already matches")
 	}
@@ -185,7 +185,7 @@ func TestRewriteRootShell_NoChangeWhenShellMatches(t *testing.T) {
 
 func TestRewriteRootShell_PrependsWhenNoRootLine(t *testing.T) {
 	in := []byte("nobody:x:65534:65534::/:/bin/false\n")
-	out, changed := rewriteRootShell(in, "/opt/devpod/bin/bash")
+	out, changed := rewriteRootPasswd(in, "/opt/devpod/bin/bash", "")
 	if !changed {
 		t.Fatalf("expected change")
 	}
@@ -198,7 +198,7 @@ func TestRewriteRootShell_PrependsWhenNoRootLine(t *testing.T) {
 }
 
 func TestRewriteRootShell_EmptyInputWritesSynthetic(t *testing.T) {
-	out, changed := rewriteRootShell(nil, "/opt/devpod/bin/bash")
+	out, changed := rewriteRootPasswd(nil, "/opt/devpod/bin/bash", "")
 	if !changed {
 		t.Fatalf("expected change")
 	}
@@ -212,6 +212,7 @@ func TestPatchPasswdRootShell_NoOpWhenWantEmpty(t *testing.T) {
 	writer := func(b []byte) error { called = true; return nil }
 	err := patchPasswdRootShell(
 		"", // not forcing
+		"", // no home override
 		func() ([]byte, error) {
 			return []byte("root:x:0:0:root:/root:/bin/bash\n"), nil
 		},
@@ -230,6 +231,7 @@ func TestPatchPasswdRootShell_PatchesWhenForcing(t *testing.T) {
 	writer := func(b []byte) error { got = b; return nil }
 	err := patchPasswdRootShell(
 		"/opt/devpod/bin/zsh",
+		"",
 		func() ([]byte, error) {
 			return []byte("root:x:0:0:root:/root:/sbin/nologin\n"), nil
 		},
@@ -248,6 +250,7 @@ func TestPatchPasswdRootShell_NoChangeIfAlreadyCorrect(t *testing.T) {
 	writer := func(b []byte) error { called = true; return nil }
 	err := patchPasswdRootShell(
 		"/opt/devpod/bin/bash",
+		"",
 		func() ([]byte, error) {
 			return []byte("root:x:0:0:root:/root:/opt/devpod/bin/bash\n"), nil
 		},
@@ -295,6 +298,7 @@ func TestPatchPasswdRootShell_WritesSyntheticWhenPasswdMissing(t *testing.T) {
 	writer := func(b []byte) error { got = b; return nil }
 	err := patchPasswdRootShell(
 		"/opt/devpod/bin/fish",
+		"",
 		func() ([]byte, error) { return nil, os.ErrNotExist },
 		writer,
 	)
