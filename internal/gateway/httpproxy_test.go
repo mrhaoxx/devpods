@@ -5,6 +5,7 @@
 package gateway
 
 import (
+	"strings"
 	"testing"
 )
 
@@ -44,5 +45,31 @@ func TestParseSubdomain(t *testing.T) {
 				t.Errorf("got (%q, %d), want (%q, %d)", name, port, tc.wantName, tc.wantPort)
 			}
 		})
+	}
+}
+
+func TestHTTPProxy_SuffixStripping(t *testing.T) {
+	// Simulate the full host→subdomain→parse flow with suffix "-dev"
+	// Host: st43-dev-8080-dev.ktaas.approaching-ai.com
+	host := "st43-dev-8080-dev.ktaas.approaching-ai.com"
+	baseDomain := "ktaas.approaching-ai.com"
+	suffix := "-dev"
+
+	domainSuffix := "." + baseDomain
+	if !strings.HasSuffix(host, domainSuffix) {
+		t.Fatal("host does not match base domain")
+	}
+	subdomain := strings.TrimSuffix(host, domainSuffix)
+	if !strings.HasSuffix(subdomain, suffix) {
+		t.Fatalf("subdomain %q missing suffix %q", subdomain, suffix)
+	}
+	subdomain = strings.TrimSuffix(subdomain, suffix)
+
+	name, port, err := parseSubdomain(subdomain)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if name != "st43-dev" || port != 8080 {
+		t.Errorf("got (%q, %d), want (st43-dev, 8080)", name, port)
 	}
 }
