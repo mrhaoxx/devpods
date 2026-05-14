@@ -47,6 +47,7 @@ func shellArgsForChosen(chosen string) []string {
 		"PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/opt/devpod/bin",
 		"TERMINFO=/opt/devpod/share/terminfo",
 		"TERMINFO_DIRS=/opt/devpod/share/terminfo:/usr/share/terminfo:/etc/terminfo:/lib/terminfo",
+		"FPATH=/opt/devpod/share/zsh/5.9/functions:/usr/share/zsh/functions:/usr/local/share/zsh/site-functions",
 		"DEVPOD_ACTIVE_SHELL=" + chosen,
 	}, " ")
 	return []string{"-o", "SetEnv=" + setEnv}

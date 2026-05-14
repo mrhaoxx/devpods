@@ -64,10 +64,12 @@ RUN wget -qO zsh.tar.xz \
 WORKDIR /src/zsh-${ZSH_VERSION}
 RUN CFLAGS="-O2" LDFLAGS="-static" \
     ./configure \
+        --prefix=/opt/devpod \
         --disable-dynamic --enable-static \
         --disable-cap --disable-pcre \
         --without-tcsetpgrp && \
     make -j && \
+    make install DESTDIR=/zsh-install && \
     mkdir -p /out && cp Src/zsh /out/zsh && strip /out/zsh
 
 # --- Stage 5: fish 4.x (upstream prebuilt static-pie binary) -----------
@@ -146,6 +148,7 @@ COPY --from=sshd-build       /out/libexec/               /opt/devpod/libexec/
 COPY --from=supervisor-build /out/devpod-supervisor      /opt/devpod/devpod-supervisor
 COPY --from=bash-build       /out/bash                   /opt/devpod/bin/bash
 COPY --from=zsh-build        /out/zsh                    /opt/devpod/bin/zsh
+COPY --from=zsh-build        /zsh-install/opt/devpod/share/zsh/ /opt/devpod/share/zsh/
 COPY --from=fish-build       /out/fish                   /opt/devpod/bin/fish
 # Order matters: busybox first, GNU coreutils second — GNU OVERWRITES the
 # busybox symlinks for overlapping applet names (ls, cat, cp, ...).
