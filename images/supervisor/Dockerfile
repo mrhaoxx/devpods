@@ -68,13 +68,11 @@ RUN CFLAGS="-O2" LDFLAGS="-static" \
         --disable-dynamic --enable-static \
         --disable-cap --disable-pcre \
         --without-tcsetpgrp && \
-    for mod in \
-      zsh/regex zsh/system zsh/param/private \
-      zsh/zutil zsh/computil zsh/complist zsh/complete \
-      zsh/zle zsh/zleparameter \
-      zsh/datetime zsh/parameter zsh/langinfo zsh/terminfo zsh/mathfunc; do \
-      sed -i "\|^name=${mod} |s|link=no|link=static|" config.modules; \
-    done && \
+    sed -i 's|link=no|link=static|g' config.modules && \
+    sed -i "\|^name=zsh/cap |s|link=static|link=no|" config.modules && \
+    sed -i "\|^name=zsh/pcre |s|link=static|link=no|" config.modules && \
+    sed -i "\|^name=zsh/example |s|link=static|link=no|" config.modules && \
+    sed -i "\|^name=zsh/db/gdbm |s|link=static|link=no|" config.modules && \
     make -j && \
     make install DESTDIR=/zsh-install && \
     mkdir -p /out && cp Src/zsh /out/zsh && strip /out/zsh
