@@ -82,6 +82,28 @@ spec:
                 description: DevPodNamespace is where every DevPod-owned object lives.
                 minLength: 1
                 type: string
+              homeDir:
+                description: |-
+                  HomeDir, when set, injects a hostPath volume into every
+                  Pod-backed DevPod so each owner gets a persistent home
+                  directory from the node's shared filesystem.
+                properties:
+                  hostPathPrefix:
+                    description: |-
+                      HostPathPrefix is the base path on the node. The owner name is
+                      appended: {hostPathPrefix}/{owner}. Example: /data/afs/home
+                    minLength: 1
+                    type: string
+                  mountPrefix:
+                    default: /home
+                    description: |-
+                      MountPrefix is the base mount path inside the container. The
+                      owner name is appended: {mountPrefix}/{owner}.
+                      Example: /home → /home/alice
+                    type: string
+                required:
+                - hostPathPrefix
+                type: object
               hostKeyRef:
                 description: |-
                   HostKeyRef points to a Secret holding the gateway's externally
@@ -109,6 +131,15 @@ spec:
                 - name
                 - namespace
                 type: object
+              isolateNetwork:
+                description: |-
+                  IsolateNetwork enables tenant network isolation via
+                  NetworkPolicy. When true, the controller installs a
+                  namespace-wide default-deny policy and per-owner allow
+                  policies that restrict egress to DNS + public internet
+                  only. When false (default), no egress restrictions are
+                  applied — DevPod pods can reach any cluster service.
+                type: boolean
               ldap:
                 description: |-
                   LDAP, when non-nil, registers a secondary identity source
