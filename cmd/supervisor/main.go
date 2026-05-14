@@ -76,7 +76,7 @@ func main() {
 	// otherwise we'd clobber the host's /etc/passwd in unit tests.
 	chosen, force := resolveShell(os.Getenv, defaultPasswdReader, os.Stat)
 	if os.Getpid() == 1 {
-		if err := patchPasswdRootShell(force, defaultPasswdReader, defaultPasswdWriter); err != nil {
+		if err := patchPasswdRootShell(force, os.Getenv("HOME"), defaultPasswdReader, defaultPasswdWriter); err != nil {
 			fmt.Fprintf(os.Stderr, "supervisor: patch /etc/passwd: %v\n", err)
 		}
 		// Make /opt/devpod/bin reachable on PATH after /etc/profile

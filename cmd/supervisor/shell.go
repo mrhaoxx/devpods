@@ -118,10 +118,11 @@ func rootShellFromPasswd(data []byte) string {
 	return ""
 }
 
-// rewriteRootShell returns a new /etc/passwd byte slice with root's
-// shell field set to want. If no root line exists, one is prepended.
-// The second return value reports whether the file actually changed.
-func rewriteRootShell(data []byte, want string) ([]byte, bool) {
+// rewriteRootPasswd returns a new /etc/passwd byte slice with root's
+// shell field (index 6) set to wantShell and, when wantHome is non-empty,
+// home directory field (index 5) set to wantHome. If no root line exists,
+// one is prepended.
+func rewriteRootPasswd(data []byte, wantShell, wantHome string) ([]byte, bool) {
 	lines := strings.Split(string(data), "\n")
 	for i, line := range lines {
 		if !strings.HasPrefix(line, "root:") {
@@ -131,17 +132,30 @@ func rewriteRootShell(data []byte, want string) ([]byte, bool) {
 		if len(fields) < 7 {
 			continue
 		}
-		if fields[6] == want {
+		changed := false
+		if wantShell != "" && fields[6] != wantShell {
+			fields[6] = wantShell
+			changed = true
+		}
+		if wantHome != "" && fields[5] != wantHome {
+			fields[5] = wantHome
+			changed = true
+		}
+		if !changed {
 			return data, false
 		}
-		fields[6] = want
 		lines[i] = strings.Join(fields, ":")
 		return []byte(strings.Join(lines, "\n")), true
 	}
-	// No root line — prepend a synthetic one. We write back at least
-	// one trailing newline so sshd's pwd parser doesn't choke on a
-	// non-terminated final entry.
-	root := "root:x:0:0:root:/root:" + want
+	home := wantHome
+	if home == "" {
+		home = "/root"
+	}
+	shell := wantShell
+	if shell == "" {
+		shell = "/bin/bash"
+	}
+	root := "root:x:0:0:root:" + home + ":" + shell
 	if len(data) == 0 {
 		return []byte(root + "\n"), true
 	}
@@ -149,31 +163,27 @@ func rewriteRootShell(data []byte, want string) ([]byte, bool) {
 }
 
 // patchPasswdRootShell rewrites /etc/passwd so root's shell field is
-// `want`. sshd validates `pw_shell` existence at pre-auth time —
+// `wantShell` and (when non-empty) root's home directory field is
+// `wantHome`. sshd validates `pw_shell` existence at pre-auth time —
 // without this, a distroless image's `/sbin/nologin` (which is itself
-// absent on disk) causes sshd to reject the connection.
+// absent on disk) causes sshd to reject the connection. The home
+// field ensures sshd sets HOME correctly for login shells.
 //
-// No-op when want is empty (caller decided not to force a bundle
-// shell).
-//
-// readPasswd and writePasswd are injected for testability; production
-// callers pass defaultPasswdReader and defaultPasswdWriter.
+// No-op when both wantShell and wantHome are empty.
 func patchPasswdRootShell(
-	want string,
+	wantShell string,
+	wantHome string,
 	readPasswd func() ([]byte, error),
 	writePasswd func([]byte) error,
 ) error {
-	if want == "" {
+	if wantShell == "" && wantHome == "" {
 		return nil
 	}
 	data, err := readPasswd()
 	if err != nil {
-		// No /etc/passwd at all — write a synthetic one so sshd has
-		// something to read. Real distroless ships one; this branch
-		// covers the FROM-scratch user-image edge case.
 		data = nil
 	}
-	patched, changed := rewriteRootShell(data, want)
+	patched, changed := rewriteRootPasswd(data, wantShell, wantHome)
 	if !changed {
 		return nil
 	}
