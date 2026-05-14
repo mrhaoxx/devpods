@@ -31,6 +31,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
+	"k8s.io/client-go/kubernetes"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	"k8s.io/client-go/rest"
 	ctrl "sigs.k8s.io/controller-runtime"
@@ -55,6 +56,8 @@ func main() {
 		devpodNamespace string
 		metricsAddr     string
 		ldapSecretDir   string
+		httpListenAddr  string
+		httpBaseDomain  string
 	)
 	flag.StringVar(&listenAddr, "listen", ":22", "TCP address to listen on")
 	flag.StringVar(&hostKeyDir, "host-key-dir", "/etc/devpod/gateway",
@@ -65,6 +68,10 @@ func main() {
 		"address for the Prometheus /metrics endpoint")
 	flag.StringVar(&ldapSecretDir, "ldap-secret-dir", "/etc/devpod/gateway/ldap",
 		"directory holding the LDAP CA bundle ('ca.crt') and bind password ('password'). Required when GatewayConfig.spec.ldap is set.")
+	flag.StringVar(&httpListenAddr, "http-listen", "",
+		"HTTP reverse proxy listen address (e.g. :8090). Disabled when empty.")
+	flag.StringVar(&httpBaseDomain, "http-base-domain", "",
+		"base domain for HTTP proxy routing, e.g. dev.example.com. Host header {name}-{port}.{base} routes to the DevPod's pod IP.")
 	flag.Parse()
 
 	logger := slog.New(slog.NewJSONHandler(os.Stderr, &slog.HandlerOptions{
@@ -96,6 +103,12 @@ func main() {
 	cfg, err := ctrl.GetConfig()
 	if err != nil {
 		slog.Error("load_kubeconfig", "err", err)
+		os.Exit(1)
+	}
+
+	clientset, err := kubernetes.NewForConfig(cfg)
+	if err != nil {
+		slog.Error("create_clientset", "err", err)
 		os.Exit(1)
 	}
 
@@ -138,7 +151,28 @@ func main() {
 		os.Exit(1)
 	}
 
-	runErr := run(ctx, listenAddr, gw.Spec.Listen, hostSigner, authn, dialer, proxyKeys, bannerFn)
+	if httpListenAddr != "" && httpBaseDomain != "" {
+		hp := gateway.NewHTTPProxy(c, devpodNamespace, httpBaseDomain)
+		httpServer := &http.Server{
+			Addr:              httpListenAddr,
+			Handler:           hp,
+			ReadHeaderTimeout: 10 * time.Second,
+		}
+		go func() {
+			slog.Info("http_proxy_listening", "addr", httpListenAddr, "base_domain", httpBaseDomain)
+			if err := httpServer.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+				slog.Error("http_proxy", "err", err)
+			}
+		}()
+		go func() {
+			<-ctx.Done()
+			_ = httpServer.Close()
+		}()
+	}
+
+	recorder := gateway.NewEventRecorder(c, clientset, devpodNamespace)
+
+	runErr := run(ctx, listenAddr, gw.Spec.Listen, hostSigner, authn, dialer, proxyKeys, bannerFn, recorder)
 
 	// Drain identity sources on graceful shutdown so e.g. the LDAP
 	// pooled conn is closed cleanly (server sees a TCP FIN, not the
@@ -280,7 +314,7 @@ func loadGatewayConfig(ctx context.Context, r client.Reader) (*devpodv1alpha1.Ga
 	return &gc, nil
 }
 
-func run(ctx context.Context, addr string, listen devpodv1alpha1.ListenSpec, hostSigner ssh.Signer, authn *gateway.Authenticator, dialer *gateway.Dialer, proxyKeys map[string]string, bannerFn func(ssh.ConnMetadata) string) error {
+func run(ctx context.Context, addr string, listen devpodv1alpha1.ListenSpec, hostSigner ssh.Signer, authn *gateway.Authenticator, dialer *gateway.Dialer, proxyKeys map[string]string, bannerFn func(ssh.ConnMetadata) string, recorder *gateway.EventRecorder) error {
 	ln, err := net.Listen("tcp", addr)
 	if err != nil {
 		return fmt.Errorf("listen %s: %w", addr, err)
@@ -320,13 +354,13 @@ func run(ctx context.Context, addr string, listen devpodv1alpha1.ListenSpec, hos
 		id := connCount.Add(1)
 		slog.Info("accept", "id", id, "from", conn.RemoteAddr().String())
 		g.Go(func() error {
-			handle(ctx, id, conn, hostSigner, authn, dialer, proxyKeys, bannerFn)
+			handle(ctx, id, conn, hostSigner, authn, dialer, proxyKeys, bannerFn, recorder)
 			return nil
 		})
 	}
 }
 
-func handle(parent context.Context, id uint64, conn net.Conn, hostSigner ssh.Signer, authn *gateway.Authenticator, dialer *gateway.Dialer, proxyKeys map[string]string, bannerFn func(ssh.ConnMetadata) string) {
+func handle(parent context.Context, id uint64, conn net.Conn, hostSigner ssh.Signer, authn *gateway.Authenticator, dialer *gateway.Dialer, proxyKeys map[string]string, bannerFn func(ssh.ConnMetadata) string, recorder *gateway.EventRecorder) {
 	defer conn.Close()
 
 	cfg := &ssh.ServerConfig{
@@ -365,6 +399,9 @@ func handle(parent context.Context, id uint64, conn net.Conn, hostSigner ssh.Sig
 			slog.Warn("auth_rejected", "id", id, "login", meta.User(), "reason", err)
 			gateway.AuthFailure(slog.Default(), reason, ap, alias, fp, parsedUser, parsedPod, lastSourceErr)
 			gateway.AuthFailuresTotal.WithLabelValues(reason, ap).Inc()
+			if parsedPod != "" {
+				recorder.AuthRejected(parent, parsedPod, parsedUser, meta.RemoteAddr().String(), reason)
+			}
 			return nil, err
 		}
 		slog.Info("auth_ok", "id", id, "user", res.User, "pod", res.DevPodName, "endpoint", res.Endpoint)
@@ -409,6 +446,7 @@ func handle(parent context.Context, id uint64, conn net.Conn, hostSigner ssh.Sig
 			stats.BytesClientToBackend.Load(), stats.BytesBackendToClient.Load(), closeReason)
 		gateway.SessionsTotal.WithLabelValues(ap.User, ap.Pod, ap.Kind, sessionResult).Inc()
 		gateway.SessionDurationSeconds.WithLabelValues(ap.User, ap.Pod, ap.Kind).Observe(dur.Seconds())
+		recorder.SessionDisconnected(parent, ap.Pod, ap.User, closeReason)
 	}()
 
 	endpoint := srvConn.Permissions.Extensions["devpod.io/endpoint"]
@@ -418,12 +456,14 @@ func handle(parent context.Context, id uint64, conn net.Conn, hostSigner ssh.Sig
 	if err != nil {
 		slog.Warn("dial_failed", "id", id, "endpoint", endpoint, "err", err)
 		gateway.DialFailuresTotal.WithLabelValues(ap.Pod, classifyDialErr(err)).Inc()
+		recorder.DialFailed(parent, ap.Pod, endpoint, err.Error())
 		sessionResult = "error"
 		closeReason = "dial_failed"
 		return
 	}
 	defer cliConn.Close()
 
+	recorder.SessionConnected(parent, ap.Pod, ap.User, clientIP, ap.Kind)
 	slog.Info("proxy_start", "id", id)
 	if err := gateway.Proxy(srvConn, srvChans, srvReqs, cliConn, cliChans, cliReqs, stats); err != nil {
 		slog.Info("proxy_end", "id", id, "err", err)

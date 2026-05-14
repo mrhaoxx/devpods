@@ -204,6 +204,16 @@ type GatewayConfigSpec struct {
 	// +optional
 	Banner string `json:"banner,omitempty"`
 
+	// IsolateNetwork enables tenant network isolation via
+	// NetworkPolicy. When true, the controller installs a
+	// namespace-wide default-deny policy and per-owner allow
+	// policies that restrict egress to DNS + public internet
+	// only. When false (default), no egress restrictions are
+	// applied — DevPod pods can reach any cluster service.
+	//
+	// +optional
+	IsolateNetwork bool `json:"isolateNetwork,omitempty"`
+
 	// LDAP, when non-nil, registers a secondary identity source
 	// queried after the User CRD source. Disabled when nil.
 	//

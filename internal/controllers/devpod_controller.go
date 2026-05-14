@@ -159,18 +159,20 @@ func (r *DevPodReconciler) applyAll(ctx context.Context, dp *devpodv1alpha1.DevP
 		return fmt.Errorf("apply service: %w", err)
 	}
 
-	// 5. NetworkPolicies (default-deny + per-owner allow).
-	dd := render.DefaultDenyNetworkPolicy(r.GwConfig.Spec.DevPodNamespace)
-	if err := r.applyUnowned(ctx, dd); err != nil {
-		return fmt.Errorf("apply default-deny: %w", err)
-	}
-	gwNS := r.GatewayNamespace
-	if gwNS == "" {
-		gwNS = "devpod-system"
-	}
-	allow := render.OwnerAllowNetworkPolicy(r.GwConfig.Spec.DevPodNamespace, dp.Spec.Owner, gwNS, render.BackendPort(dp, r.GwConfig))
-	if err := r.applyUnowned(ctx, allow); err != nil {
-		return fmt.Errorf("apply allow: %w", err)
+	// 5. NetworkPolicies — only when IsolateNetwork is enabled.
+	if r.GwConfig.Spec.IsolateNetwork {
+		dd := render.DefaultDenyNetworkPolicy(r.GwConfig.Spec.DevPodNamespace)
+		if err := r.applyUnowned(ctx, dd); err != nil {
+			return fmt.Errorf("apply default-deny: %w", err)
+		}
+		gwNS := r.GatewayNamespace
+		if gwNS == "" {
+			gwNS = "devpod-system"
+		}
+		allow := render.OwnerAllowNetworkPolicy(r.GwConfig.Spec.DevPodNamespace, dp.Spec.Owner, gwNS, render.BackendPort(dp, r.GwConfig))
+		if err := r.applyUnowned(ctx, allow); err != nil {
+			return fmt.Errorf("apply allow: %w", err)
+		}
 	}
 
 	return r.updateStatus(ctx, dp)

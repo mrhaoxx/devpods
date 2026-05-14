@@ -33,14 +33,12 @@ func DefaultDenyNetworkPolicy(ns string) *networkingv1.NetworkPolicy {
 	}
 }
 
-// OwnerAllowNetworkPolicy returns the per-owner allow policy:
+// OwnerAllowNetworkPolicy returns the per-owner allow policy, installed
+// only when GatewayConfig.spec.isolateNetwork is true:
 //   - ingress from same-owner pods
 //   - ingress from the gateway namespace on the backend sshd port
-//   - egress to DNS (UDP 53)
-//   - egress to anywhere else not in the cluster (egress to 0.0.0.0/0 except RFC1918)
-//
-// gatewayNS is the namespace where the gateway runs (typically `devpod-system`).
-// backendPort is the TCP port the in-container sshd listens on (typically 2222).
+//   - egress to DNS (UDP/TCP 53)
+//   - egress to public internet (0.0.0.0/0 except RFC1918)
 func OwnerAllowNetworkPolicy(ns, owner, gatewayNS string, backendPort int32) *networkingv1.NetworkPolicy {
 	sshPort := port(corev1.ProtocolTCP, backendPort)
 	udp53 := port(corev1.ProtocolUDP, 53)
@@ -83,13 +81,11 @@ func OwnerAllowNetworkPolicy(ns, owner, gatewayNS string, backendPort int32) *ne
 			Egress: []networkingv1.NetworkPolicyEgressRule{
 				{
 					To: []networkingv1.NetworkPolicyPeer{{
-						NamespaceSelector: &metav1.LabelSelector{}, // any cluster namespace; reaches kube-dns
+						NamespaceSelector: &metav1.LabelSelector{},
 					}},
 					Ports: []networkingv1.NetworkPolicyPort{udp53, tcp53},
 				},
 				{
-					// Egress to anywhere outside the cluster; restricting
-					// further is a deployment-time decision.
 					To: []networkingv1.NetworkPolicyPeer{{
 						IPBlock: &networkingv1.IPBlock{
 							CIDR: "0.0.0.0/0",
