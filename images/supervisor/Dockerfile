@@ -73,7 +73,7 @@ RUN CFLAGS="-O2" LDFLAGS="-static" \
       zsh/zutil zsh/computil zsh/complist zsh/complete \
       zsh/zle zsh/zleparameter \
       zsh/datetime zsh/parameter zsh/langinfo zsh/terminfo zsh/mathfunc; do \
-      sed -i "s|^name=${mod} |name=${mod} link=static |" config.modules; \
+      sed -i "/^name=${mod} /s/link=no/link=static/" config.modules; \
     done && \
     make -j && \
     make install DESTDIR=/zsh-install && \
