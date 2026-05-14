@@ -54,6 +54,11 @@ func Pod(dp *devpodv1alpha1.DevPod, cfg *devpodv1alpha1.GatewayConfig) (*corev1.
 		}
 	}
 
+	// Optional hostPath home directory injection from shared filesystem.
+	if cfg.Spec.HomeDir != nil && dp.Spec.Persistence == nil {
+		injectHostPathHome(user, dp, cfg)
+	}
+
 	// Wrap the target container's command with the supervisor.
 	if err := wrapTargetWithSupervisor(user, dp, cfg); err != nil {
 		return nil, err
@@ -175,6 +180,33 @@ func homeVolume(dp *devpodv1alpha1.DevPod) corev1.Volume {
 			},
 		},
 	}
+}
+
+const VolumeHostHome = "devpod-host-home"
+
+// injectHostPathHome adds a hostPath volume + mount for the owner's
+// home directory from the node's shared filesystem.
+func injectHostPathHome(spec *corev1.PodSpec, dp *devpodv1alpha1.DevPod, cfg *devpodv1alpha1.GatewayConfig) {
+	dirOrCreate := corev1.HostPathDirectoryOrCreate
+	hostPath := cfg.Spec.HomeDir.HostPathPrefix + "/" + dp.Spec.Owner
+	mountPath := cfg.Spec.HomeDir.MountPrefix + "/" + dp.Spec.Owner
+	if cfg.Spec.HomeDir.MountPrefix == "" {
+		mountPath = "/home/" + dp.Spec.Owner
+	}
+
+	spec.Volumes = append(spec.Volumes, corev1.Volume{
+		Name: VolumeHostHome,
+		VolumeSource: corev1.VolumeSource{
+			HostPath: &corev1.HostPathVolumeSource{
+				Path: hostPath,
+				Type: &dirOrCreate,
+			},
+		},
+	})
+	spec.Containers[0].VolumeMounts = append(spec.Containers[0].VolumeMounts, corev1.VolumeMount{
+		Name:      VolumeHostHome,
+		MountPath: mountPath,
+	})
 }
 
 // injectHomeMount appends a volumeMount named VolumeHome at
