@@ -56,8 +56,9 @@ func main() {
 		devpodNamespace string
 		metricsAddr     string
 		ldapSecretDir   string
-		httpListenAddr  string
-		httpBaseDomain  string
+		httpListenAddr      string
+		httpBaseDomain      string
+		httpSubdomainSuffix string
 	)
 	flag.StringVar(&listenAddr, "listen", ":22", "TCP address to listen on")
 	flag.StringVar(&hostKeyDir, "host-key-dir", "/etc/devpod/gateway",
@@ -71,7 +72,9 @@ func main() {
 	flag.StringVar(&httpListenAddr, "http-listen", "",
 		"HTTP reverse proxy listen address (e.g. :8090). Disabled when empty.")
 	flag.StringVar(&httpBaseDomain, "http-base-domain", "",
-		"base domain for HTTP proxy routing, e.g. dev.example.com. Host header {name}-{port}.{base} routes to the DevPod's pod IP.")
+		"base domain for HTTP proxy routing, e.g. ktaas.approaching-ai.com")
+	flag.StringVar(&httpSubdomainSuffix, "http-subdomain-suffix", "",
+		"fixed suffix stripped from subdomain before parsing, e.g. -dev for {name}-{port}-dev.{base}")
 	flag.Parse()
 
 	logger := slog.New(slog.NewJSONHandler(os.Stderr, &slog.HandlerOptions{
@@ -152,7 +155,7 @@ func main() {
 	}
 
 	if httpListenAddr != "" && httpBaseDomain != "" {
-		hp := gateway.NewHTTPProxy(c, devpodNamespace, httpBaseDomain)
+		hp := gateway.NewHTTPProxy(c, devpodNamespace, httpBaseDomain, httpSubdomainSuffix)
 		httpServer := &http.Server{
 			Addr:              httpListenAddr,
 			Handler:           hp,

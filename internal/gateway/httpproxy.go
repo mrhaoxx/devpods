@@ -19,15 +19,20 @@ import (
 )
 
 // HTTPProxy is a reverse proxy that routes
-// {devpod-name}-{port}.{baseDomain} to the DevPod's pod IP.
+// {devpod-name}-{port}{suffix}.{baseDomain} to the DevPod's pod IP.
+//
+// Example with suffix="-dev", baseDomain="ktaas.approaching-ai.com":
+//
+//	st43-dev-8080-dev.ktaas.approaching-ai.com → DevPod "st43-dev", port 8080
 type HTTPProxy struct {
 	c          client.Reader
 	dpNS       string
 	baseDomain string
+	suffix     string
 }
 
-func NewHTTPProxy(c client.Reader, devpodNamespace, baseDomain string) *HTTPProxy {
-	return &HTTPProxy{c: c, dpNS: devpodNamespace, baseDomain: baseDomain}
+func NewHTTPProxy(c client.Reader, devpodNamespace, baseDomain, suffix string) *HTTPProxy {
+	return &HTTPProxy{c: c, dpNS: devpodNamespace, baseDomain: baseDomain, suffix: suffix}
 }
 
 func (p *HTTPProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -36,12 +41,19 @@ func (p *HTTPProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		host = h
 	}
 
-	suffix := "." + p.baseDomain
-	if !strings.HasSuffix(host, suffix) {
+	domainSuffix := "." + p.baseDomain
+	if !strings.HasSuffix(host, domainSuffix) {
 		http.Error(w, "invalid host", http.StatusBadRequest)
 		return
 	}
-	subdomain := strings.TrimSuffix(host, suffix)
+	subdomain := strings.TrimSuffix(host, domainSuffix)
+	if p.suffix != "" {
+		if !strings.HasSuffix(subdomain, p.suffix) {
+			http.Error(w, "invalid host", http.StatusBadRequest)
+			return
+		}
+		subdomain = strings.TrimSuffix(subdomain, p.suffix)
+	}
 
 	name, port, err := parseSubdomain(subdomain)
 	if err != nil {
