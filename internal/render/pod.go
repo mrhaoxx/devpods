@@ -207,6 +207,10 @@ func injectHostPathHome(spec *corev1.PodSpec, dp *devpodv1alpha1.DevPod, cfg *de
 		Name:      VolumeHostHome,
 		MountPath: mountPath,
 	})
+	spec.Containers[0].Env = append(spec.Containers[0].Env, corev1.EnvVar{
+		Name:  "HOME",
+		Value: mountPath,
+	})
 }
 
 // injectHomeMount appends a volumeMount named VolumeHome at
