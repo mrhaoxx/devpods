@@ -46,7 +46,7 @@ func TestDefaultDenyNetworkPolicy(t *testing.T) {
 }
 
 func TestOwnerAllowNetworkPolicy(t *testing.T) {
-	np := render.OwnerAllowNetworkPolicy("devpods", "alice", "devpod-system")
+	np := render.OwnerAllowNetworkPolicy("devpods", "alice", "devpod-system", 2222)
 	if got, want := np.Name, "devpod-allow-alice"; got != want {
 		t.Errorf("name = %q, want %q", got, want)
 	}
