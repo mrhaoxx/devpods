@@ -48,6 +48,8 @@ func main() {
 		gatewayNamespace     string
 		supervisorImage      string
 		internalPubFile      string
+		homeDirHostPath      string
+		homeDirMountPrefix   string
 	)
 
 	flag.StringVar(&metricsAddr, "metrics-bind-address", ":8080", "metrics endpoint bind address")
@@ -59,6 +61,10 @@ func main() {
 	flag.StringVar(&supervisorImage, "supervisor-image", "ghcr.io/mrhaoxx/devpod-supervisor:dev", "supervisor container image (initContainer payload: static sshd + supervisor binary)")
 	flag.StringVar(&internalPubFile, "internal-pubkey-file", "",
 		"path to the gateway internal public key (authorized_keys line); when set, embedded into per-DevPod host-key Secrets as the supervisor's authorized_keys entry")
+	flag.StringVar(&homeDirHostPath, "home-host-path", "",
+		"hostPath prefix for per-owner home directories (e.g. /mnt/afs/home); empty disables injection")
+	flag.StringVar(&homeDirMountPrefix, "home-mount-prefix", "/home",
+		"container mount prefix for home directories (e.g. /home → /home/{owner})")
 
 	opts := zap.Options{Development: true, Level: zapcore.InfoLevel}
 	opts.BindFlags(flag.CommandLine)
@@ -105,8 +111,14 @@ func main() {
 	gw := &devpodv1alpha1.GatewayConfig{
 		Spec: devpodv1alpha1.GatewayConfigSpec{
 			DevPodNamespace: devPodNamespace,
-			SupervisorImage:    supervisorImage,
+			SupervisorImage: supervisorImage,
 		},
+	}
+	if homeDirHostPath != "" {
+		gw.Spec.HomeDir = &devpodv1alpha1.HomeDirSpec{
+			HostPathPrefix: homeDirHostPath,
+			MountPrefix:    homeDirMountPrefix,
+		}
 	}
 
 	if err := (&controllers.DevPodReconciler{
