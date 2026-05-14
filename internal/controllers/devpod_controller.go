@@ -168,7 +168,7 @@ func (r *DevPodReconciler) applyAll(ctx context.Context, dp *devpodv1alpha1.DevP
 	if gwNS == "" {
 		gwNS = "devpod-system"
 	}
-	allow := render.OwnerAllowNetworkPolicy(r.GwConfig.Spec.DevPodNamespace, dp.Spec.Owner, gwNS)
+	allow := render.OwnerAllowNetworkPolicy(r.GwConfig.Spec.DevPodNamespace, dp.Spec.Owner, gwNS, render.BackendPort(dp, r.GwConfig))
 	if err := r.applyUnowned(ctx, allow); err != nil {
 		return fmt.Errorf("apply allow: %w", err)
 	}

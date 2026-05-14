@@ -35,13 +35,14 @@ func DefaultDenyNetworkPolicy(ns string) *networkingv1.NetworkPolicy {
 
 // OwnerAllowNetworkPolicy returns the per-owner allow policy:
 //   - ingress from same-owner pods
-//   - ingress from the gateway namespace on port 22
+//   - ingress from the gateway namespace on the backend sshd port
 //   - egress to DNS (UDP 53)
 //   - egress to anywhere else not in the cluster (egress to 0.0.0.0/0 except RFC1918)
 //
 // gatewayNS is the namespace where the gateway runs (typically `devpod-system`).
-func OwnerAllowNetworkPolicy(ns, owner, gatewayNS string) *networkingv1.NetworkPolicy {
-	tcp22 := port(corev1.ProtocolTCP, 22)
+// backendPort is the TCP port the in-container sshd listens on (typically 2222).
+func OwnerAllowNetworkPolicy(ns, owner, gatewayNS string, backendPort int32) *networkingv1.NetworkPolicy {
+	sshPort := port(corev1.ProtocolTCP, backendPort)
 	udp53 := port(corev1.ProtocolUDP, 53)
 	tcp53 := port(corev1.ProtocolTCP, 53)
 
@@ -76,7 +77,7 @@ func OwnerAllowNetworkPolicy(ns, owner, gatewayNS string) *networkingv1.NetworkP
 							MatchLabels: map[string]string{"kubernetes.io/metadata.name": gatewayNS},
 						},
 					}},
-					Ports: []networkingv1.NetworkPolicyPort{tcp22},
+					Ports: []networkingv1.NetworkPolicyPort{sshPort},
 				},
 			},
 			Egress: []networkingv1.NetworkPolicyEgressRule{
