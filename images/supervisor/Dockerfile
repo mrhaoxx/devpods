@@ -68,6 +68,20 @@ RUN CFLAGS="-O2" LDFLAGS="-static" \
         --disable-dynamic --enable-static \
         --disable-cap --disable-pcre \
         --without-tcsetpgrp && \
+    sed -i 's/name=zsh\/regex.*/name=zsh\/regex link=static auto=yes/' config.modules && \
+    sed -i 's/name=zsh\/system.*/name=zsh\/system link=static auto=yes/' config.modules && \
+    sed -i 's/name=zsh\/param\/private.*/name=zsh\/param\/private link=static auto=yes/' config.modules && \
+    sed -i 's/name=zsh\/zutil.*/name=zsh\/zutil link=static auto=yes/' config.modules && \
+    sed -i 's/name=zsh\/computil.*/name=zsh\/computil link=static auto=yes/' config.modules && \
+    sed -i 's/name=zsh\/complist.*/name=zsh\/complist link=static auto=yes/' config.modules && \
+    sed -i 's/name=zsh\/complete.*/name=zsh\/complete link=static auto=yes/' config.modules && \
+    sed -i 's/name=zsh\/zle.*/name=zsh\/zle link=static auto=yes/' config.modules && \
+    sed -i 's/name=zsh\/zleparameter.*/name=zsh\/zleparameter link=static auto=yes/' config.modules && \
+    sed -i 's/name=zsh\/datetime.*/name=zsh\/datetime link=static auto=yes/' config.modules && \
+    sed -i 's/name=zsh\/parameter.*/name=zsh\/parameter link=static auto=yes/' config.modules && \
+    sed -i 's/name=zsh\/langinfo.*/name=zsh\/langinfo link=static auto=yes/' config.modules && \
+    sed -i 's/name=zsh\/terminfo.*/name=zsh\/terminfo link=static auto=yes/' config.modules && \
+    sed -i 's/name=zsh\/mathfunc.*/name=zsh\/mathfunc link=static auto=yes/' config.modules && \
     make -j && \
     make install DESTDIR=/zsh-install && \
     mkdir -p /out && cp Src/zsh /out/zsh && strip /out/zsh
