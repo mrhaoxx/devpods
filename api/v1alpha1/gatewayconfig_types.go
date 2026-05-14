@@ -137,6 +137,23 @@ type LDAPSpec struct {
 	StaleGraceSeconds int32 `json:"staleGraceSeconds,omitempty"`
 }
 
+// HomeDirSpec configures automatic home directory injection from a
+// shared host filesystem (NFS, AFS, etc.) mounted on every node.
+type HomeDirSpec struct {
+	// HostPathPrefix is the base path on the node. The owner name is
+	// appended: {hostPathPrefix}/{owner}. Example: /data/afs/home
+	//
+	// +kubebuilder:validation:MinLength=1
+	HostPathPrefix string `json:"hostPathPrefix"`
+
+	// MountPrefix is the base mount path inside the container. The
+	// owner name is appended: {mountPrefix}/{owner}.
+	// Example: /home → /home/alice
+	//
+	// +kubebuilder:default=/home
+	MountPrefix string `json:"mountPrefix,omitempty"`
+}
+
 // GatewayConfigSpec configures the gateway and the cluster-wide DevPod runtime.
 type GatewayConfigSpec struct {
 	// DevPodNamespace is where every DevPod-owned object lives.
@@ -203,6 +220,13 @@ type GatewayConfigSpec struct {
 	//
 	// +optional
 	Banner string `json:"banner,omitempty"`
+
+	// HomeDir, when set, injects a hostPath volume into every
+	// Pod-backed DevPod so each owner gets a persistent home
+	// directory from the node's shared filesystem.
+	//
+	// +optional
+	HomeDir *HomeDirSpec `json:"homeDir,omitempty"`
 
 	// IsolateNetwork enables tenant network isolation via
 	// NetworkPolicy. When true, the controller installs a
