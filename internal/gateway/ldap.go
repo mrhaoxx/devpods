@@ -114,7 +114,7 @@ func NewLDAPSource(_ context.Context, cfg LDAPConfig) (IdentitySource, error) {
 	if pubkeyAttr == "" {
 		pubkeyAttr = defaultPubkeyAttribute
 	}
-	return &ldapSource{
+	src := &ldapSource{
 		cfg:        cfg,
 		bindPass:   bytes.TrimRight(pw, "\r\n"),
 		caPool:     pool,
@@ -123,7 +123,14 @@ func NewLDAPSource(_ context.Context, cfg LDAPConfig) (IdentitySource, error) {
 		clock:      time.Now,
 		cache:      make(map[string]*ldapCacheEntry),
 		lastWarn:   make(map[string]time.Time),
-	}, nil
+	}
+	// Pre-warm: dial + bind so the first Resolve doesn't pay the
+	// cold-start latency (TLS handshake + bind can exceed the 5s
+	// PublicKeyCallback timeout on slow links).
+	if _, err := src.acquireConn(); err != nil {
+		slog.Warn("ldap_prewarm_failed", "err", err)
+	}
+	return src, nil
 }
 
 func (s *ldapSource) Name() string { return "ldap" }
