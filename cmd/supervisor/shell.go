@@ -29,27 +29,30 @@ var nologinShells = map[string]struct{}{
 }
 
 // shellArgsForChosen returns the sshd `-o` flags that set PATH /
-// TERMINFO defaults and report the chosen shell via
-// DEVPOD_ACTIVE_SHELL for diagnostics. The chosen string is whatever
-// resolveShell decided — short name when forced, /etc/passwd path
-// when the user image's shell is being honored.
+// TERMINFO defaults, report the chosen shell via DEVPOD_ACTIVE_SHELL,
+// and forward container environment variables to SSH sessions.
 //
 // sshd accepts multiple env entries on ONE SetEnv line (space-
 // separated NAME=VALUE pairs). Multiple `-o SetEnv=...` flags are
 // NOT additive — only the first wins — so we merge.
-func shellArgsForChosen(chosen string) []string {
+//
+// containerEnv should be the filtered output of containerEnvForSetEnv;
+// pass nil to skip forwarding (e.g. in tests).
+func shellArgsForChosen(chosen string, containerEnv []string) []string {
 	// /opt/devpod/bin is appended (not prepended) so the user image's
 	// tools win whenever present — busybox / GNU coreutils only fill
 	// gaps (typical distroless case). Prepending would shadow Debian's
 	// /usr/bin/run-parts with busybox's incompatible run-parts and
 	// break Debian's login profile-d sourcing.
-	setEnv := strings.Join([]string{
+	envPairs := []string{
 		"PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/opt/devpod/bin",
 		"TERMINFO=/opt/devpod/share/terminfo",
 		"TERMINFO_DIRS=/opt/devpod/share/terminfo:/usr/share/terminfo:/etc/terminfo:/lib/terminfo",
 		"FPATH=/opt/devpod/share/zsh/5.9/functions:/usr/share/zsh/functions:/usr/local/share/zsh/site-functions",
 		"DEVPOD_ACTIVE_SHELL=" + chosen,
-	}, " ")
+	}
+	envPairs = append(envPairs, containerEnv...)
+	setEnv := strings.Join(envPairs, " ")
 	return []string{"-o", "SetEnv=" + setEnv}
 }
 
@@ -66,7 +69,55 @@ func prepareShellArgs(
 	stat func(string) (fs.FileInfo, error),
 ) []string {
 	chosen, _ := resolveShell(getenv, passwd, stat)
-	return shellArgsForChosen(chosen)
+	return shellArgsForChosen(chosen, nil)
+}
+
+// skipEnvExact lists environment variable names managed by the
+// supervisor or Kubernetes runtime that must not be forwarded.
+var skipEnvExact = map[string]bool{
+	"PATH": true, "TERMINFO": true, "TERMINFO_DIRS": true,
+	"FPATH": true, "HOME": true, "HOSTNAME": true,
+	"PWD": true, "SHLVL": true, "OLDPWD": true, "_": true,
+	"TERM": true,
+}
+
+// containerEnvForSetEnv filters os.Environ()-style KEY=VALUE entries,
+// removing supervisor-managed and Kubernetes-internal variables, and
+// returns the remainder as SetEnv-safe entries (values with spaces are
+// double-quoted for sshd's parser).
+func containerEnvForSetEnv(environ []string) []string {
+	var out []string
+	for _, kv := range environ {
+		k, v, ok := strings.Cut(kv, "=")
+		if !ok || k == "" {
+			continue
+		}
+		if skipEnvExact[k] {
+			continue
+		}
+		if strings.HasPrefix(k, "SUPERVISOR_") ||
+			strings.HasPrefix(k, "DEVPOD_") ||
+			strings.HasPrefix(k, "KUBERNETES_") {
+			continue
+		}
+		if strings.ContainsAny(v, "\n\r") {
+			continue
+		}
+		out = append(out, quoteSetEnvPair(k, v))
+	}
+	return out
+}
+
+// quoteSetEnvPair formats a single SetEnv entry KEY=VALUE, wrapping
+// the value in double quotes when it contains spaces or quotes so
+// sshd's space-delimited parser doesn't split it.
+func quoteSetEnvPair(k, v string) string {
+	if !strings.ContainsAny(v, " \t\"\\") {
+		return k + "=" + v
+	}
+	v = strings.ReplaceAll(v, "\\", "\\\\")
+	v = strings.ReplaceAll(v, "\"", "\\\"")
+	return k + "=\"" + v + "\""
 }
 
 // resolveShell decides what to advertise as the active shell, and

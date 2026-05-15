@@ -207,6 +207,88 @@ func TestRewriteRootShell_EmptyInputWritesSynthetic(t *testing.T) {
 	}
 }
 
+func TestContainerEnvForSetEnv_FiltersInternalVars(t *testing.T) {
+	environ := []string{
+		"DOCKER_HOST=tcp://localhost:2375",
+		"CUDA_VISIBLE_DEVICES=0,1",
+		"MY_VAR=hello",
+		"PATH=/usr/bin",
+		"HOME=/root",
+		"HOSTNAME=pod-abc",
+		"SUPERVISOR_SSHD_PORT=2222",
+		"DEVPOD_SHELL=zsh",
+		"KUBERNETES_SERVICE_HOST=10.0.0.1",
+		"TERMINFO=/usr/share/terminfo",
+		"TERMINFO_DIRS=/usr/share/terminfo",
+		"FPATH=/usr/share/zsh",
+		"PWD=/",
+		"SHLVL=1",
+		"_=/usr/bin/env",
+		"TERM=xterm",
+	}
+	got := containerEnvForSetEnv(environ)
+	want := map[string]bool{
+		"DOCKER_HOST=tcp://localhost:2375": true,
+		"CUDA_VISIBLE_DEVICES=0,1":        true,
+		"MY_VAR=hello":                    true,
+	}
+	if len(got) != len(want) {
+		t.Fatalf("expected %d entries, got %d: %v", len(want), len(got), got)
+	}
+	for _, kv := range got {
+		if !want[kv] {
+			t.Errorf("unexpected entry: %q", kv)
+		}
+	}
+}
+
+func TestContainerEnvForSetEnv_QuotesSpaces(t *testing.T) {
+	environ := []string{
+		"JAVA_OPTS=-Xmx2g -server",
+		`GREETING=hello "world"`,
+		"SIMPLE=value",
+	}
+	got := containerEnvForSetEnv(environ)
+	wantMap := map[string]bool{
+		`JAVA_OPTS="-Xmx2g -server"`:       true,
+		`GREETING="hello \"world\""`:        true,
+		"SIMPLE=value":                      true,
+	}
+	if len(got) != len(wantMap) {
+		t.Fatalf("expected %d entries, got %d: %v", len(wantMap), len(got), got)
+	}
+	for _, kv := range got {
+		if !wantMap[kv] {
+			t.Errorf("unexpected entry: %q", kv)
+		}
+	}
+}
+
+func TestContainerEnvForSetEnv_SkipsNewlines(t *testing.T) {
+	environ := []string{
+		"NORMAL=ok",
+		"MULTI=line1\nline2",
+	}
+	got := containerEnvForSetEnv(environ)
+	if len(got) != 1 || got[0] != "NORMAL=ok" {
+		t.Errorf("expected [NORMAL=ok], got %v", got)
+	}
+}
+
+func TestContainerEnvForSetEnv_EmptyEnv(t *testing.T) {
+	got := containerEnvForSetEnv(nil)
+	if len(got) != 0 {
+		t.Errorf("expected empty, got %v", got)
+	}
+}
+
+func TestShellArgsForChosen_WithContainerEnv(t *testing.T) {
+	args := shellArgsForChosen("bash", []string{"DOCKER_HOST=tcp://localhost:2375"})
+	mustContain(t, args, "DOCKER_HOST=tcp://localhost:2375")
+	mustContain(t, args, "DEVPOD_ACTIVE_SHELL=bash")
+	mustContain(t, args, "PATH=/usr/local/sbin:")
+}
+
 func TestPatchPasswdRootShell_NoOpWhenWantEmpty(t *testing.T) {
 	called := false
 	writer := func(b []byte) error { called = true; return nil }
