@@ -83,6 +83,12 @@ func setupSuite(t *testing.T) {
 	}).SetupWithManager(mgr); err != nil {
 		t.Fatalf("setup UserReconciler: %v", err)
 	}
+	if err := (&controllers.DevPodSnapshotReconciler{
+		Client: mgr.GetClient(),
+		Scheme: mgr.GetScheme(),
+	}).SetupWithManager(mgr); err != nil {
+		t.Fatalf("setup DevPodSnapshotReconciler: %v", err)
+	}
 
 	mgrCtx, mgrCancel := context.WithCancel(context.Background())
 	go func() {
