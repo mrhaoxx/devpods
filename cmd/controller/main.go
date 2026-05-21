@@ -136,6 +136,12 @@ func main() {
 	}).SetupWithManager(mgr); err != nil {
 		die(err, "set up UserReconciler")
 	}
+	if err := (&controllers.DevPodSnapshotReconciler{
+		Client: mgr.GetClient(),
+		Scheme: mgr.GetScheme(),
+	}).SetupWithManager(mgr); err != nil {
+		die(err, "set up DevPodSnapshotReconciler")
+	}
 
 	if err := mgr.AddHealthzCheck("ping", func(_ *http.Request) error { return nil }); err != nil {
 		die(err, "add healthz")
