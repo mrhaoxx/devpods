@@ -17,7 +17,7 @@ const (
 	LabelSnapshot = "devpod.io/snapshot"
 
 	snapshotJobImage = "docker:cli"
-	snapshotScript   = `docker commit "$CONTAINER_ID" "$TARGET_IMAGE" && docker push "$TARGET_IMAGE" 2>&1 | tee /tmp/push.log && grep -oP 'digest: \K\S+' /tmp/push.log > /dev/termination-log`
+	snapshotScript = `set -eo pipefail; docker commit "$CONTAINER_ID" "$TARGET_IMAGE" && docker push "$TARGET_IMAGE" 2>&1 | tee /tmp/push.log && sed -n 's/.*digest: \(\S\+\).*/\1/p' /tmp/push.log > /dev/termination-log`
 )
 
 // SnapshotJobName returns the deterministic Job name for a DevPodSnapshot.
