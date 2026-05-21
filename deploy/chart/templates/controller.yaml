@@ -25,6 +25,7 @@ spec:
         - --supervisor-image={{ .Values.image.supervisor.repository }}:{{ .Values.image.supervisor.tag }}
         - --leader-elect=true
         - --zap-devel=false
+        - --snapshot-image={{ .Values.image.snapshot.repository }}:{{ .Values.image.snapshot.tag }}
         - --internal-pubkey-file=/etc/devpod/internal/ssh_host_ed25519_key.pub
         ports:
         - {name: metrics, containerPort: 8080}
