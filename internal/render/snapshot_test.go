@@ -21,7 +21,7 @@ func TestSnapshotJob_BasicFields(t *testing.T) {
 	snap.Spec.DevPodName = "my-devpod"
 	snap.Spec.Image = "registry.example.com/repo:v1"
 
-	job := render.SnapshotJob(snap, "abc123def", "node-1", nil, "docker:cli")
+	job := render.SnapshotJob(snap, "abc123def", "node-1", nil, "docker:cli", true)
 
 	if job.Name != "snapshot-snap-1" {
 		t.Errorf("name = %q, want snapshot-snap-1", job.Name)
@@ -50,7 +50,7 @@ func TestSnapshotJob_ContainerEnv(t *testing.T) {
 	snap.Spec.DevPodName = "dp"
 	snap.Spec.Image = "reg/img:tag"
 
-	job := render.SnapshotJob(snap, "containerid123", "n1", nil, "docker:cli")
+	job := render.SnapshotJob(snap, "containerid123", "n1", nil, "docker:cli", true)
 	c := job.Spec.Template.Spec.Containers[0]
 
 	envMap := map[string]string{}
@@ -71,7 +71,7 @@ func TestSnapshotJob_DockerSocket(t *testing.T) {
 	snap.Namespace = "devpods"
 	snap.Spec.Image = "reg:tag"
 
-	job := render.SnapshotJob(snap, "cid", "n1", nil, "docker:cli")
+	job := render.SnapshotJob(snap, "cid", "n1", nil, "docker:cli", true)
 
 	found := false
 	for _, v := range job.Spec.Template.Spec.Volumes {
@@ -103,7 +103,7 @@ func TestSnapshotJob_WithPushSecret(t *testing.T) {
 	snap.Spec.PushSecretRef = &devpodv1alpha1.LocalObjectRef{Name: "my-creds"}
 
 	secretName := "my-creds"
-	job := render.SnapshotJob(snap, "cid", "n1", &secretName, "docker:cli")
+	job := render.SnapshotJob(snap, "cid", "n1", &secretName, "docker:cli", true)
 
 	var secretVol *corev1.Volume
 	for i := range job.Spec.Template.Spec.Volumes {
@@ -134,7 +134,7 @@ func TestSnapshotJob_WithoutPushSecret(t *testing.T) {
 	snap.Namespace = "devpods"
 	snap.Spec.Image = "reg:tag"
 
-	job := render.SnapshotJob(snap, "cid", "n1", nil, "docker:cli")
+	job := render.SnapshotJob(snap, "cid", "n1", nil, "docker:cli", true)
 
 	for _, v := range job.Spec.Template.Spec.Volumes {
 		if v.Name == "push-secret" {
@@ -157,7 +157,7 @@ func TestSnapshotJob_Labels(t *testing.T) {
 	snap.Spec.DevPodName = "my-dp"
 	snap.Spec.Image = "reg:tag"
 
-	job := render.SnapshotJob(snap, "cid", "n1", nil, "docker:cli")
+	job := render.SnapshotJob(snap, "cid", "n1", nil, "docker:cli", true)
 
 	if job.Labels["devpod.io/snapshot"] != "snap-6" {
 		t.Errorf("label devpod.io/snapshot = %q, want snap-6", job.Labels["devpod.io/snapshot"])
@@ -173,7 +173,7 @@ func TestSnapshotJob_TerminationMessage(t *testing.T) {
 	snap.Namespace = "devpods"
 	snap.Spec.Image = "reg:tag"
 
-	job := render.SnapshotJob(snap, "cid", "n1", nil, "docker:cli")
+	job := render.SnapshotJob(snap, "cid", "n1", nil, "docker:cli", true)
 	c := job.Spec.Template.Spec.Containers[0]
 
 	if c.TerminationMessagePath != "/dev/termination-log" {
@@ -190,5 +190,5 @@ func TestSnapshotJob_ReturnsJob(t *testing.T) {
 	snap.Namespace = "devpods"
 	snap.Spec.Image = "r:t"
 
-	var _ *batchv1.Job = render.SnapshotJob(snap, "c", "n", nil, "docker:cli")
+	var _ *batchv1.Job = render.SnapshotJob(snap, "c", "n", nil, "docker:cli", true)
 }

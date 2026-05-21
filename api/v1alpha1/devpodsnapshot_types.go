@@ -36,9 +36,16 @@ type DevPodSnapshotSpec struct {
 	// +kubebuilder:validation:Pattern=`^[a-zA-Z0-9][a-zA-Z0-9._/:@-]*$`
 	Image string `json:"image"`
 
+	// Push controls whether the committed image is pushed to the registry.
+	// Defaults to true. Set to false for local-only snapshots.
+	//
+	// +optional
+	// +kubebuilder:default=true
+	Push bool `json:"push"`
+
 	// PushSecretRef names a Secret of type kubernetes.io/dockerconfigjson
 	// used to authenticate the push. When nil, the Job relies on node-level
-	// registry credentials.
+	// registry credentials. Ignored when push is false.
 	//
 	// +optional
 	PushSecretRef *LocalObjectRef `json:"pushSecretRef,omitempty"`

@@ -16,7 +16,8 @@ import (
 const (
 	LabelSnapshot = "devpod.io/snapshot"
 
-	snapshotScript = `set -eo pipefail; docker commit "$CONTAINER_ID" "$TARGET_IMAGE" && docker push "$TARGET_IMAGE" 2>&1 | tee /tmp/push.log && sed -n 's/.*digest: \(\S\+\).*/\1/p' /tmp/push.log > /dev/termination-log`
+	snapshotCommitPush = `set -eo pipefail; docker commit "$CONTAINER_ID" "$TARGET_IMAGE" && docker push "$TARGET_IMAGE" 2>&1 | tee /tmp/push.log && sed -n 's/.*digest: \(\S\+\).*/\1/p' /tmp/push.log > /dev/termination-log`
+	snapshotCommitOnly = `docker commit "$CONTAINER_ID" "$TARGET_IMAGE" > /dev/termination-log`
 )
 
 // SnapshotJobName returns the deterministic Job name for a DevPodSnapshot.
@@ -24,13 +25,14 @@ func SnapshotJobName(snap *devpodv1alpha1.DevPodSnapshot) string {
 	return "snapshot-" + snap.Name
 }
 
-// SnapshotJob renders the batch/v1 Job that performs docker commit + push.
+// SnapshotJob renders the batch/v1 Job that performs docker commit (+ optional push).
 func SnapshotJob(
 	snap *devpodv1alpha1.DevPodSnapshot,
 	containerID string,
 	nodeName string,
 	pushSecret *string,
 	snapshotImage string,
+	push bool,
 ) *batchv1.Job {
 	labels := map[string]string{
 		LabelSnapshot: snap.Name,
@@ -54,12 +56,17 @@ func SnapshotJob(
 		MountPath: "/var/run/docker.sock",
 	}}
 
+	script := snapshotCommitOnly
+	if push {
+		script = snapshotCommitPush
+	}
+
 	env := []corev1.EnvVar{
 		{Name: "CONTAINER_ID", Value: containerID},
 		{Name: "TARGET_IMAGE", Value: snap.Spec.Image},
 	}
 
-	if pushSecret != nil {
+	if push && pushSecret != nil {
 		volumes = append(volumes, corev1.Volume{
 			Name: "push-secret",
 			VolumeSource: corev1.VolumeSource{
@@ -100,7 +107,7 @@ func SnapshotJob(
 						Name:                     "snapshot",
 						Image:                    snapshotImage,
 						Command:                  []string{"sh", "-c"},
-						Args:                     []string{snapshotScript},
+						Args:                     []string{script},
 						Env:                      env,
 						VolumeMounts:             mounts,
 						TerminationMessagePath:   "/dev/termination-log",
