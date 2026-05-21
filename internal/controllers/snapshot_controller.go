@@ -97,7 +97,7 @@ func (r *DevPodSnapshotReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 	if snap.Spec.PushSecretRef != nil {
 		pushSecret = &snap.Spec.PushSecretRef.Name
 	}
-	job := render.SnapshotJob(&snap, containerID, nodeName, pushSecret, r.SnapshotImage)
+	job := render.SnapshotJob(&snap, containerID, nodeName, pushSecret, r.SnapshotImage, snap.Spec.Push)
 
 	if err := controllerutil.SetControllerReference(&snap, job, r.Scheme); err != nil {
 		return ctrl.Result{}, fmt.Errorf("set ownerref on job: %w", err)
