@@ -50,6 +50,7 @@ func main() {
 		internalPubFile      string
 		homeDirHostPath      string
 		homeDirMountPrefix   string
+		snapshotImage        string
 	)
 
 	flag.StringVar(&metricsAddr, "metrics-bind-address", ":8080", "metrics endpoint bind address")
@@ -65,6 +66,8 @@ func main() {
 		"hostPath prefix for per-owner home directories (e.g. /mnt/afs/home); empty disables injection")
 	flag.StringVar(&homeDirMountPrefix, "home-mount-prefix", "/home",
 		"container mount prefix for home directories (e.g. /home → /home/{owner})")
+	flag.StringVar(&snapshotImage, "snapshot-image", "docker:cli",
+		"container image for snapshot Jobs (must contain docker CLI)")
 
 	opts := zap.Options{Development: true, Level: zapcore.InfoLevel}
 	opts.BindFlags(flag.CommandLine)
@@ -137,8 +140,9 @@ func main() {
 		die(err, "set up UserReconciler")
 	}
 	if err := (&controllers.DevPodSnapshotReconciler{
-		Client: mgr.GetClient(),
-		Scheme: mgr.GetScheme(),
+		Client:        mgr.GetClient(),
+		Scheme:        mgr.GetScheme(),
+		SnapshotImage: snapshotImage,
 	}).SetupWithManager(mgr); err != nil {
 		die(err, "set up DevPodSnapshotReconciler")
 	}

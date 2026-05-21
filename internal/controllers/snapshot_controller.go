@@ -28,7 +28,8 @@ import (
 // DevPodSnapshotReconciler reconciles DevPodSnapshot objects.
 type DevPodSnapshotReconciler struct {
 	client.Client
-	Scheme *runtime.Scheme
+	Scheme        *runtime.Scheme
+	SnapshotImage string
 }
 
 // +kubebuilder:rbac:groups=devpod.io,resources=devpodsnapshots,verbs=get;list;watch;patch
@@ -96,7 +97,7 @@ func (r *DevPodSnapshotReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 	if snap.Spec.PushSecretRef != nil {
 		pushSecret = &snap.Spec.PushSecretRef.Name
 	}
-	job := render.SnapshotJob(&snap, containerID, nodeName, pushSecret)
+	job := render.SnapshotJob(&snap, containerID, nodeName, pushSecret, r.SnapshotImage)
 
 	if err := controllerutil.SetControllerReference(&snap, job, r.Scheme); err != nil {
 		return ctrl.Result{}, fmt.Errorf("set ownerref on job: %w", err)

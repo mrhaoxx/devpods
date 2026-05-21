@@ -16,7 +16,6 @@ import (
 const (
 	LabelSnapshot = "devpod.io/snapshot"
 
-	snapshotJobImage = "docker:cli"
 	snapshotScript = `set -eo pipefail; docker commit "$CONTAINER_ID" "$TARGET_IMAGE" && docker push "$TARGET_IMAGE" 2>&1 | tee /tmp/push.log && sed -n 's/.*digest: \(\S\+\).*/\1/p' /tmp/push.log > /dev/termination-log`
 )
 
@@ -31,6 +30,7 @@ func SnapshotJob(
 	containerID string,
 	nodeName string,
 	pushSecret *string,
+	snapshotImage string,
 ) *batchv1.Job {
 	labels := map[string]string{
 		LabelSnapshot: snap.Name,
@@ -98,7 +98,7 @@ func SnapshotJob(
 					NodeName:      nodeName,
 					Containers: []corev1.Container{{
 						Name:                     "snapshot",
-						Image:                    snapshotJobImage,
+						Image:                    snapshotImage,
 						Command:                  []string{"sh", "-c"},
 						Args:                     []string{snapshotScript},
 						Env:                      env,

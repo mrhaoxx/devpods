@@ -84,8 +84,9 @@ func setupSuite(t *testing.T) {
 		t.Fatalf("setup UserReconciler: %v", err)
 	}
 	if err := (&controllers.DevPodSnapshotReconciler{
-		Client: mgr.GetClient(),
-		Scheme: mgr.GetScheme(),
+		Client:        mgr.GetClient(),
+		Scheme:        mgr.GetScheme(),
+		SnapshotImage: "docker:cli",
 	}).SetupWithManager(mgr); err != nil {
 		t.Fatalf("setup DevPodSnapshotReconciler: %v", err)
 	}
