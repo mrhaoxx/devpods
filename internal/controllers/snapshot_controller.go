@@ -6,6 +6,8 @@ package controllers
 
 import (
 	"context"
+	"encoding/base64"
+	"encoding/json"
 	"fmt"
 	"strings"
 
@@ -32,10 +34,11 @@ type DevPodSnapshotReconciler struct {
 	SnapshotImage string
 }
 
-// +kubebuilder:rbac:groups=devpod.io,resources=devpodsnapshots,verbs=get;list;watch;patch
+// +kubebuilder:rbac:groups=devpod.io,resources=devpodsnapshots,verbs=get;list;watch;update;patch
 // +kubebuilder:rbac:groups=devpod.io,resources=devpodsnapshots/status,verbs=patch
 // +kubebuilder:rbac:groups=devpod.io,resources=devpods,verbs=get;list;watch
 // +kubebuilder:rbac:groups=core,resources=pods,verbs=get;list;watch
+// +kubebuilder:rbac:groups=core,resources=secrets,verbs=get;create;update
 // +kubebuilder:rbac:groups=batch,resources=jobs,verbs=get;list;watch;create;patch;delete
 
 func (r *DevPodSnapshotReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
@@ -53,6 +56,17 @@ func (r *DevPodSnapshotReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 	if snap.Status.Phase == devpodv1alpha1.SnapshotSucceeded ||
 		snap.Status.Phase == devpodv1alpha1.SnapshotFailed {
 		return ctrl.Result{}, nil
+	}
+
+	// Convert inline pushAuth to a dockerconfigjson Secret, then clear
+	// the plaintext from the spec. This is an atomic read-modify-write:
+	// the controller creates the Secret, patches the CR to swap
+	// pushAuth → pushSecretRef, and requeues.
+	if snap.Spec.PushAuth != nil {
+		if err := r.materializePushAuth(ctx, &snap); err != nil {
+			return ctrl.Result{}, fmt.Errorf("materialize push auth: %w", err)
+		}
+		return ctrl.Result{Requeue: true}, nil
 	}
 
 	if snap.Status.JobRef != nil {
@@ -201,10 +215,73 @@ func (r *DevPodSnapshotReconciler) setSucceeded(ctx context.Context, snap *devpo
 	return r.Status().Patch(ctx, snap, patch)
 }
 
+// materializePushAuth creates a dockerconfigjson Secret from inline
+// credentials, sets pushSecretRef, and clears pushAuth in one update.
+func (r *DevPodSnapshotReconciler) materializePushAuth(ctx context.Context, snap *devpodv1alpha1.DevPodSnapshot) error {
+	auth := snap.Spec.PushAuth
+	registry := registryFromImage(snap.Spec.Image)
+
+	dockerCfg, err := buildDockerConfigJSON(registry, auth.Username, auth.Password)
+	if err != nil {
+		return fmt.Errorf("build docker config: %w", err)
+	}
+
+	secretName := snap.Name + "-auth"
+	sec := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      secretName,
+			Namespace: snap.Namespace,
+		},
+		Type: corev1.SecretTypeDockerConfigJson,
+		Data: map[string][]byte{
+			".dockerconfigjson": dockerCfg,
+		},
+	}
+	if err := controllerutil.SetControllerReference(snap, sec, r.Scheme); err != nil {
+		return fmt.Errorf("set ownerref on auth secret: %w", err)
+	}
+	if err := r.Create(ctx, sec); err != nil && !apierrors.IsAlreadyExists(err) {
+		return fmt.Errorf("create auth secret: %w", err)
+	}
+
+	snap.Spec.PushAuth = nil
+	snap.Spec.PushSecretRef = &devpodv1alpha1.LocalObjectRef{Name: secretName}
+	return r.Update(ctx, snap)
+}
+
+func registryFromImage(image string) string {
+	// "host:port/repo:tag" → "host:port"
+	// "repo:tag" (no slash) → "https://index.docker.io/v1/" (Docker Hub)
+	slash := strings.IndexByte(image, '/')
+	if slash < 0 {
+		return "https://index.docker.io/v1/"
+	}
+	host := image[:slash]
+	if !strings.ContainsAny(host, ".:") {
+		return "https://index.docker.io/v1/"
+	}
+	return host
+}
+
+func buildDockerConfigJSON(registry, username, password string) ([]byte, error) {
+	authStr := base64.StdEncoding.EncodeToString([]byte(username + ":" + password))
+	cfg := map[string]any{
+		"auths": map[string]any{
+			registry: map[string]string{
+				"username": username,
+				"password": password,
+				"auth":     authStr,
+			},
+		},
+	}
+	return json.Marshal(cfg)
+}
+
 // SetupWithManager registers the controller with mgr.
 func (r *DevPodSnapshotReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&devpodv1alpha1.DevPodSnapshot{}).
 		Owns(&batchv1.Job{}).
+		Owns(&corev1.Secret{}).
 		Complete(r)
 }

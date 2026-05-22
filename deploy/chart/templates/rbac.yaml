@@ -56,7 +56,7 @@ rules:
   verbs: ["update"]
 - apiGroups: ["devpod.io"]
   resources: ["devpodsnapshots"]
-  verbs: ["get","list","watch","patch"]
+  verbs: ["get","list","watch","update","patch"]
 - apiGroups: ["devpod.io"]
   resources: ["devpodsnapshots/status"]
   verbs: ["patch"]
