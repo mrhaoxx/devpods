@@ -20,10 +20,20 @@ const (
 	SnapshotFailed    DevPodSnapshotPhase = "Failed"
 )
 
-// DevPodSnapshotSpec defines the desired snapshot operation. Immutable
-// after creation.
+// PushAuthInline carries plaintext registry credentials. The controller
+// converts them to a dockerconfigjson Secret on the first reconcile,
+// then clears this field. Plaintext only exists in etcd for the
+// duration of one reconcile cycle (milliseconds to seconds).
+type PushAuthInline struct {
+	Username string `json:"username"`
+	Password string `json:"password"`
+}
+
+// DevPodSnapshotSpec defines the desired snapshot operation.
+// All fields except pushAuth are immutable after creation.
+// pushAuth is cleared by the controller after converting to a Secret.
 //
-// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="spec is immutable"
+// +kubebuilder:validation:XValidation:rule="self.devPodName == oldSelf.devPodName && self.image == oldSelf.image && self.push == oldSelf.push",message="spec fields (devPodName, image, push) are immutable"
 type DevPodSnapshotSpec struct {
 	// DevPodName is the name of the DevPod to snapshot (same namespace).
 	//
@@ -42,6 +52,14 @@ type DevPodSnapshotSpec struct {
 	// +optional
 	// +kubebuilder:default=true
 	Push bool `json:"push"`
+
+	// PushAuth carries inline registry credentials. The controller
+	// converts them to a dockerconfigjson Secret, sets pushSecretRef,
+	// and clears this field. Mutually exclusive with pushSecretRef
+	// at creation time.
+	//
+	// +optional
+	PushAuth *PushAuthInline `json:"pushAuth,omitempty"`
 
 	// PushSecretRef names a Secret of type kubernetes.io/dockerconfigjson
 	// used to authenticate the push. When nil, the Job relies on node-level

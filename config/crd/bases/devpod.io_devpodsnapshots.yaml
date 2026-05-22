@@ -54,8 +54,9 @@ spec:
             type: object
           spec:
             description: |-
-              DevPodSnapshotSpec defines the desired snapshot operation. Immutable
-              after creation.
+              DevPodSnapshotSpec defines the desired snapshot operation.
+              All fields except pushAuth are immutable after creation.
+              pushAuth is cleared by the controller after converting to a Secret.
             properties:
               devPodName:
                 description: DevPodName is the name of the DevPod to snapshot (same
@@ -73,6 +74,21 @@ spec:
                   Push controls whether the committed image is pushed to the registry.
                   Defaults to true. Set to false for local-only snapshots.
                 type: boolean
+              pushAuth:
+                description: |-
+                  PushAuth carries inline registry credentials. The controller
+                  converts them to a dockerconfigjson Secret, sets pushSecretRef,
+                  and clears this field. Mutually exclusive with pushSecretRef
+                  at creation time.
+                properties:
+                  password:
+                    type: string
+                  username:
+                    type: string
+                required:
+                - password
+                - username
+                type: object
               pushSecretRef:
                 description: |-
                   PushSecretRef names a Secret of type kubernetes.io/dockerconfigjson
@@ -89,8 +105,9 @@ spec:
             - image
             type: object
             x-kubernetes-validations:
-            - message: spec is immutable
-              rule: self == oldSelf
+            - message: spec fields (devPodName, image, push) are immutable
+              rule: self.devPodName == oldSelf.devPodName && self.image == oldSelf.image
+                && self.push == oldSelf.push
           status:
             description: DevPodSnapshotStatus reports observed state.
             properties:
