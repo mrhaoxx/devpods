@@ -34,7 +34,7 @@ func TestHostKeySecret_ProducesEd25519PEMAndPub(t *testing.T) {
 		t.Fatalf("HostKeySecret: %v", err)
 	}
 
-	if got, want := sec.Name, "alice-frontend-dev-hostkey"; got != want {
+	if got, want := sec.Name, "frontend-dev-hostkey"; got != want {
 		t.Errorf("name = %q, want %q", got, want)
 	}
 	priv, ok := sec.Data["ssh_host_ed25519_key"]

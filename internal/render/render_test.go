@@ -45,19 +45,30 @@ func TestObjectNames(t *testing.T) {
 		ObjectMeta: metav1.ObjectMeta{Name: "frontend-dev"},
 		Spec:       devpodv1alpha1.DevPodSpec{Owner: "alice"},
 	}
-	if got, want := render.PodName(dp), "alice-frontend-dev"; got != want {
+	if got, want := render.PodName(dp), "frontend-dev"; got != want {
 		t.Errorf("PodName = %q, want %q", got, want)
 	}
-	if got, want := render.ServiceName(dp), "alice-frontend-dev"; got != want {
+	if got, want := render.ServiceName(dp), "frontend-dev"; got != want {
 		t.Errorf("ServiceName = %q, want %q", got, want)
 	}
-	if got, want := render.HostKeySecretName(dp), "alice-frontend-dev-hostkey"; got != want {
+	if got, want := render.HostKeySecretName(dp), "frontend-dev-hostkey"; got != want {
 		t.Errorf("HostKeySecretName = %q, want %q", got, want)
 	}
-	if got, want := render.HomePVCName(dp), "alice-frontend-dev-home"; got != want {
+	if got, want := render.HomePVCName(dp), "frontend-dev-home"; got != want {
 		t.Errorf("HomePVCName = %q, want %q", got, want)
 	}
 	if got, want := render.OwnerNetPolName("alice"), "devpod-allow-alice"; got != want {
 		t.Errorf("OwnerNetPolName = %q, want %q", got, want)
+	}
+
+	dpScoped := &devpodv1alpha1.DevPod{
+		ObjectMeta: metav1.ObjectMeta{Name: "alice-day2"},
+		Spec:       devpodv1alpha1.DevPodSpec{Owner: "alice"},
+	}
+	if got, want := render.PodName(dpScoped), "alice-day2"; got != want {
+		t.Errorf("PodName = %q, want %q", got, want)
+	}
+	if got, want := render.HostKeySecretName(dpScoped), "alice-day2-hostkey"; got != want {
+		t.Errorf("HostKeySecretName = %q, want %q", got, want)
 	}
 }

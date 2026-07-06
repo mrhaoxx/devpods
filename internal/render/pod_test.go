@@ -132,7 +132,7 @@ func TestRenderPod_BinAndHostVolumes(t *testing.T) {
 			}
 		case render.VolumeSupervisorHost:
 			host = true
-			if v.Secret == nil || v.Secret.SecretName != "alice-frontend-dev-hostkey" {
+			if v.Secret == nil || v.Secret.SecretName != "frontend-dev-hostkey" {
 				t.Errorf("devpod-host volume wrong: %#v", v)
 			}
 		}
@@ -198,7 +198,7 @@ func TestRenderPod_HomeVolume_OnlyWhenPersistence(t *testing.T) {
 	for _, v := range pod.Spec.Volumes {
 		if v.Name == render.VolumeHome {
 			found = true
-			if v.PersistentVolumeClaim == nil || v.PersistentVolumeClaim.ClaimName != "alice-frontend-dev-home" {
+			if v.PersistentVolumeClaim == nil || v.PersistentVolumeClaim.ClaimName != "frontend-dev-home" {
 				t.Errorf("home volume PVC ref wrong: %#v", v)
 			}
 		}

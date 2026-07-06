@@ -56,7 +56,7 @@ func TestDevPodReconciler_CreatesPodWithBootstrap(t *testing.T) {
 	deadline := time.Now().Add(30 * time.Second)
 	for time.Now().Before(deadline) {
 		var got corev1.Pod
-		err := env.Client.Get(env.Ctx, types.NamespacedName{Name: "alice-frontend-dev", Namespace: "devpods"}, &got)
+		err := env.Client.Get(env.Ctx, types.NamespacedName{Name: "frontend-dev", Namespace: "devpods"}, &got)
 		if err == nil &&
 			len(got.Spec.InitContainers) == 1 &&
 			got.Spec.InitContainers[0].Name == "devpod-bootstrap" &&
@@ -99,7 +99,7 @@ func TestDevPodReconciler_CreatesHostKeySecret(t *testing.T) {
 	deadline := time.Now().Add(30 * time.Second)
 	for time.Now().Before(deadline) {
 		var sec corev1.Secret
-		if err := env.Client.Get(env.Ctx, types.NamespacedName{Name: "bob-backend-dev-hostkey", Namespace: "devpods"}, &sec); err == nil {
+		if err := env.Client.Get(env.Ctx, types.NamespacedName{Name: "backend-dev-hostkey", Namespace: "devpods"}, &sec); err == nil {
 			if len(sec.Data["ssh_host_ed25519_key"]) > 0 {
 				return
 			}
@@ -198,7 +198,7 @@ func TestDevPodReconciler_PersistenceCreatesPVC(t *testing.T) {
 		t.Fatalf("create devpod: %v", err)
 	}
 
-	pvcKey := types.NamespacedName{Name: "alice-persisted-home", Namespace: "devpods"}
+	pvcKey := types.NamespacedName{Name: "persisted-home", Namespace: "devpods"}
 	deadline := time.Now().Add(10 * time.Second)
 	var pvc corev1.PersistentVolumeClaim
 	for time.Now().Before(deadline) {
