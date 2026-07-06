@@ -39,8 +39,8 @@ func TestHomePVC_DefaultsToRWO(t *testing.T) {
 	if pvc == nil {
 		t.Fatal("expected non-nil PVC")
 	}
-	if pvc.Name != "alice-frontend-dev-home" {
-		t.Errorf("PVC name = %q, want alice-frontend-dev-home", pvc.Name)
+	if pvc.Name != "frontend-dev-home" {
+		t.Errorf("PVC name = %q, want frontend-dev-home", pvc.Name)
 	}
 	if got := pvc.Spec.AccessModes; len(got) != 1 || got[0] != corev1.ReadWriteOnce {
 		t.Errorf("access modes = %v, want [ReadWriteOnce]", got)

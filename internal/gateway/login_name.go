@@ -33,3 +33,11 @@ func ParseLoginName(s string) (owner, pod string, err error) {
 	}
 	return m[1], m[2], nil
 }
+
+// DevPodResourceName maps a login "<owner>+<pod>" to the DevPod resource
+// name "<owner>-<pod>". Scoping the resource name by owner lets pod names
+// (e.g. "day2") be unique per owner rather than cluster-wide, so every
+// user can have their own "day2" in the shared DevPod namespace.
+func DevPodResourceName(owner, pod string) string {
+	return owner + "-" + pod
+}

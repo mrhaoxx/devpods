@@ -86,6 +86,42 @@ func TestAuthenticate_OwnerSucceeds(t *testing.T) {
 	}
 }
 
+// Two owners each have a "day2" DevPod, stored as "<owner>-day2". The
+// login "<owner>+day2" must resolve to that owner's own DevPod — proving
+// pod names need only be unique per owner, not cluster-wide.
+func TestAuthenticate_OwnerScopedName(t *testing.T) {
+	pk, pkLine := ed25519Pubkey(t)
+	c := fakeClient(t,
+		&devpodv1alpha1.User{
+			ObjectMeta: metav1.ObjectMeta{Name: "alice"},
+			Spec:       devpodv1alpha1.UserSpec{Pubkeys: []string{pkLine}},
+		},
+		&devpodv1alpha1.User{
+			ObjectMeta: metav1.ObjectMeta{Name: "bob"},
+			Spec:       devpodv1alpha1.UserSpec{Pubkeys: []string{pkLine}},
+		},
+		runningDevPod("alice-day2", "alice"),
+		runningDevPod("bob-day2", "bob"),
+	)
+	a := gateway.NewAuthenticator(c, "devpods")
+
+	res, err := a.Authenticate(context.Background(), "alice+day2", pk)
+	if err != nil {
+		t.Fatalf("alice+day2: %v", err)
+	}
+	if res.DevPodName != "alice-day2" {
+		t.Errorf("alice+day2 resolved to %q, want alice-day2", res.DevPodName)
+	}
+
+	res, err = a.Authenticate(context.Background(), "bob+day2", pk)
+	if err != nil {
+		t.Fatalf("bob+day2: %v", err)
+	}
+	if res.DevPodName != "bob-day2" {
+		t.Errorf("bob+day2 resolved to %q, want bob-day2", res.DevPodName)
+	}
+}
+
 func TestAuthenticate_CollaboratorSucceeds(t *testing.T) {
 	pk, pkLine := ed25519Pubkey(t)
 	c := fakeClient(t,
