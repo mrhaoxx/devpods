@@ -93,7 +93,7 @@ func TestSmoke_ApplyDevPodProducesSidecaredPod(t *testing.T) {
 	deadline := time.Now().Add(3 * time.Minute)
 	for time.Now().Before(deadline) {
 		var pod corev1.Pod
-		err := c.Get(ctx, client.ObjectKey{Name: "alice-smoke", Namespace: "devpods"}, &pod)
+		err := c.Get(ctx, client.ObjectKey{Name: "smoke", Namespace: "devpods"}, &pod)
 		if err == nil && len(pod.Spec.Containers) == 2 {
 			if pod.Spec.Containers[1].Name == "devpod-sshd" {
 				return
@@ -101,5 +101,5 @@ func TestSmoke_ApplyDevPodProducesSidecaredPod(t *testing.T) {
 		}
 		time.Sleep(2 * time.Second)
 	}
-	t.Fatalf("Pod alice-smoke with sidecar never appeared")
+	t.Fatalf("Pod smoke with sidecar never appeared")
 }
