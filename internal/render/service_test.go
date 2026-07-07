@@ -18,7 +18,7 @@ func TestService_HeadlessOnSSHPort(t *testing.T) {
 		t.Fatalf("Service: %v", err)
 	}
 
-	if got, want := svc.Name, "alice-frontend-dev"; got != want {
+	if got, want := svc.Name, "frontend-dev"; got != want {
 		t.Errorf("name = %q, want %q", got, want)
 	}
 	if got, want := svc.Spec.ClusterIP, corev1.ClusterIPNone; got != want {

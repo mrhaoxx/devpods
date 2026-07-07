@@ -10,7 +10,6 @@
 package render
 
 import (
-	"fmt"
 	"hash/fnv"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -57,13 +56,8 @@ func DevPodLabels(dp *devpodv1alpha1.DevPod) map[string]string {
 // We prefix with owner so kubectl get pods is grouped by user even though
 // every DevPod shares the devpods namespace.
 //
-// Caveat: the encoding `<owner>-<dpName>` is ambiguous when both halves
-// contain `-`. For example, owner=alice / name=frontend-dev collides with
-// owner=alice-frontend / name=dev. The admission webhook (see
-// FOLLOWUPS.md) is responsible for rejecting DevPod creates whose
-// PodName(dp) would clash with an existing one in the namespace.
 func PodName(dp *devpodv1alpha1.DevPod) string {
-	return fmt.Sprintf("%s-%s", dp.Spec.Owner, dp.Name)
+	return dp.Name
 }
 
 // ServiceName mirrors PodName for the headless Service.

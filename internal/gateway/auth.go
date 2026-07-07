@@ -106,12 +106,21 @@ func (a *Authenticator) Authenticate(ctx context.Context, loginName string, key 
 
 	// Fetch DevPod up front so a bad pod name fails fast regardless
 	// of identity-source latency.
+	//
+	// The login is "<owner>+<pod>", but the DevPod resource is named
+	// "<owner>-<pod>" so pod names only need to be unique per owner, not
+	// cluster-wide (many users can each have a "day2"). Fall back to the
+	// bare "<pod>" name for DevPods created before owner-scoped naming.
 	var dp devpodv1alpha1.DevPod
-	if err := a.c.Get(ctx, types.NamespacedName{Name: pod, Namespace: a.dpNS}, &dp); err != nil {
-		if apierrors.IsNotFound(err) {
-			return nil, &AuthError{Err: fmt.Errorf("%w: %q in ns %q", ErrDevPodNotFound, pod, a.dpNS), AuthPath: ap}
+	getErr := a.c.Get(ctx, types.NamespacedName{Name: DevPodResourceName(user, pod), Namespace: a.dpNS}, &dp)
+	if apierrors.IsNotFound(getErr) {
+		getErr = a.c.Get(ctx, types.NamespacedName{Name: pod, Namespace: a.dpNS}, &dp)
+	}
+	if getErr != nil {
+		if apierrors.IsNotFound(getErr) {
+			return nil, &AuthError{Err: fmt.Errorf("%w: %q (owner %q) in ns %q", ErrDevPodNotFound, pod, user, a.dpNS), AuthPath: ap}
 		}
-		return nil, &AuthError{Err: fmt.Errorf("get devpod: %w", err), AuthPath: ap}
+		return nil, &AuthError{Err: fmt.Errorf("get devpod: %w", getErr), AuthPath: ap}
 	}
 
 	// Trusted-proxy short-circuit — fingerprint-only, identity
@@ -172,7 +181,7 @@ func (a *Authenticator) finalize(dp *devpodv1alpha1.DevPod, user, pod string, ap
 	}
 	return &AuthResult{
 		User:       user,
-		DevPodName: pod,
+		DevPodName: dp.Name,
 		Endpoint:   dp.Status.Endpoint,
 		AuthPath:   ap,
 	}, nil
