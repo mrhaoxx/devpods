@@ -230,6 +230,7 @@ type DevPodStatus struct {
 // +kubebuilder:printcolumn:name="Age",type=date,JSONPath=`.metadata.creationTimestamp`
 // +kubebuilder:validation:XValidation:rule="(has(self.spec.pod) ? 1 : 0) + (has(self.spec.vm) ? 1 : 0) == 1",message="exactly one of spec.pod or spec.vm must be set"
 // +kubebuilder:validation:XValidation:rule="size(self.metadata.name) <= 22",message="DevPod name must be at most 22 characters (length budget for derived Pod/PVC/Service names)"
+// +kubebuilder:validation:XValidation:rule="self.metadata.name.startsWith(self.spec.owner + '-')",message="DevPod name must start with '<owner>-'"
 type DevPod struct {
 	metav1.TypeMeta   `json:",inline"`
 	metav1.ObjectMeta `json:"metadata,omitempty"`
