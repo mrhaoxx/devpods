@@ -8315,6 +8315,8 @@ spec:
         - message: DevPod name must be at most 22 characters (length budget for derived
             Pod/PVC/Service names)
           rule: size(self.metadata.name) <= 22
+        - message: DevPod name must start with '<owner>-'
+          rule: "self.metadata.name.startsWith(self.spec.owner + '-')"
     served: true
     storage: true
     subresources:
