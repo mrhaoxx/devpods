@@ -11,6 +11,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"time"
 
 	corev1 "k8s.io/api/core/v1"
 	networkingv1 "k8s.io/api/networking/v1"
@@ -48,6 +49,11 @@ type DevPodReconciler struct {
 	// OpenSSH authorized_keys-line form, embedded into every per-DevPod
 	// host-key Secret as the sidecar's sole authorized key.
 	GatewayInternalPub []byte
+
+	// requeueAfter is set within a single reconcile pass when the
+	// controller wants to delay before retrying (e.g. failure backoff).
+	// Reconcile reads and clears it after applyAll returns.
+	requeueAfter time.Duration
 }
 
 // +kubebuilder:rbac:groups=devpod.io,resources=devpods,verbs=get;list;watch;create;update;patch;delete
@@ -116,8 +122,12 @@ func (r *DevPodReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 		return ctrl.Result{}, nil
 	}
 
+	r.requeueAfter = 0
 	if err := r.applyAll(ctx, &dp); err != nil {
 		return ctrl.Result{}, err
+	}
+	if r.requeueAfter > 0 {
+		return ctrl.Result{RequeueAfter: r.requeueAfter}, nil
 	}
 	return ctrl.Result{}, nil
 }
@@ -307,8 +317,14 @@ func (r *DevPodReconciler) updateStatus(ctx context.Context, dp *devpodv1alpha1.
 				port := render.BackendPort(dp, r.GwConfig)
 				desired.Phase = devpodv1alpha1.DevPodRunning
 				desired.Endpoint = fmt.Sprintf("%s:%d", pod.Status.PodIP, port)
+				desired.RetryCount = 0
+				desired.LastFailureAt = nil
+				desired.Message = ""
 			case pod.Status.Phase == corev1.PodFailed:
 				desired.Phase = devpodv1alpha1.DevPodFailed
+				desired.RetryCount = dp.Status.RetryCount
+				desired.LastFailureAt = dp.Status.LastFailureAt
+				desired.Message = dp.Status.Message
 			default:
 				desired.Phase = devpodv1alpha1.DevPodPending
 			}
@@ -326,15 +342,21 @@ func (r *DevPodReconciler) updateStatus(ctx context.Context, dp *devpodv1alpha1.
 	dp.Status.WorkloadRef = desired.WorkloadRef
 	dp.Status.PersistentVolumeClaimRef = desired.PersistentVolumeClaimRef
 	dp.Status.HibernatedAt = desired.HibernatedAt
+	dp.Status.RetryCount = desired.RetryCount
+	dp.Status.LastFailureAt = desired.LastFailureAt
+	dp.Status.Message = desired.Message
 	return r.Status().Patch(ctx, dp, patch)
 }
 
 func statusEqual(a, b devpodv1alpha1.DevPodStatus) bool {
 	return a.Phase == b.Phase &&
 		a.Endpoint == b.Endpoint &&
+		a.RetryCount == b.RetryCount &&
+		a.Message == b.Message &&
 		workloadRefEqual(a.WorkloadRef, b.WorkloadRef) &&
 		localRefEqual(a.PersistentVolumeClaimRef, b.PersistentVolumeClaimRef) &&
-		timePtrEqual(a.HibernatedAt, b.HibernatedAt)
+		timePtrEqual(a.HibernatedAt, b.HibernatedAt) &&
+		timePtrEqual(a.LastFailureAt, b.LastFailureAt)
 }
 
 func timePtrEqual(a, b *metav1.Time) bool {
@@ -432,18 +454,25 @@ func (r *DevPodReconciler) applyPodWithDriftRecreate(ctx context.Context, dp *de
 	err := r.Get(ctx, key, &live)
 	switch {
 	case err == nil:
+		if live.Status.Phase == corev1.PodFailed {
+			return r.handleFailedPod(ctx, dp, &live)
+		}
 		if live.Annotations[specHashAnnotation] != hash {
-			// Spec drifted; delete and let next reconcile recreate.
-			// Tolerate NotFound in case a concurrent delete won the race.
 			if delErr := r.Delete(ctx, &live); delErr != nil && !apierrors.IsNotFound(delErr) {
 				return fmt.Errorf("delete pod for drift recreate: %w", delErr)
 			}
 			return nil
 		}
-		// Hash matches — fall through to apply, which is a no-op for
-		// the spec but converges metadata (labels, ownerRefs).
 	case apierrors.IsNotFound(err):
-		// First create — fall through to apply.
+		// First create — check backoff before recreating.
+		if dp.Status.LastFailureAt != nil {
+			backoff := failureBackoff(int(dp.Status.RetryCount))
+			elapsed := time.Since(dp.Status.LastFailureAt.Time)
+			if elapsed < backoff {
+				r.requeueAfter = backoff - elapsed
+				return nil
+			}
+		}
 	default:
 		return fmt.Errorf("get live pod: %w", err)
 	}
@@ -503,6 +532,64 @@ func (r *DevPodReconciler) serverSideApply(ctx context.Context, obj client.Objec
 	// concurrency, but Apply does its own conflict resolution).
 	obj.SetResourceVersion("")
 	return r.Patch(ctx, obj, client.Apply, client.FieldOwner(fieldOwner), client.ForceOwnership)
+}
+
+// handleFailedPod implements CrashLoopBackOff-style retry for Failed pods.
+// It records the failure in status, deletes the Failed pod, and sets
+// requeueAfter so the next reconcile respects the backoff window.
+func (r *DevPodReconciler) handleFailedPod(ctx context.Context, dp *devpodv1alpha1.DevPod, pod *corev1.Pod) error {
+	log := log.FromContext(ctx)
+
+	msg := podFailureMessage(pod)
+	now := metav1.Now()
+	retryCount := dp.Status.RetryCount + 1
+
+	patch := client.MergeFrom(dp.DeepCopy())
+	dp.Status.Phase = devpodv1alpha1.DevPodFailed
+	dp.Status.RetryCount = retryCount
+	dp.Status.LastFailureAt = &now
+	dp.Status.Message = msg
+	if err := r.Status().Patch(ctx, dp, patch); err != nil {
+		return fmt.Errorf("patch failure status: %w", err)
+	}
+
+	if delErr := r.Delete(ctx, pod); delErr != nil && !apierrors.IsNotFound(delErr) {
+		return fmt.Errorf("delete failed pod: %w", delErr)
+	}
+
+	backoff := failureBackoff(int(retryCount))
+	log.Info("pod failed, backing off", "retryCount", retryCount, "backoff", backoff, "message", msg)
+	r.requeueAfter = backoff
+	return nil
+}
+
+func failureBackoff(retryCount int) time.Duration {
+	d := 10 * time.Second
+	for i := 0; i < retryCount-1 && d < 5*time.Minute; i++ {
+		d *= 2
+	}
+	if d > 5*time.Minute {
+		d = 5 * time.Minute
+	}
+	return d
+}
+
+func podFailureMessage(pod *corev1.Pod) string {
+	for _, cs := range pod.Status.ContainerStatuses {
+		if cs.State.Terminated != nil && cs.State.Terminated.Message != "" {
+			return cs.State.Terminated.Message
+		}
+		if cs.State.Terminated != nil && cs.State.Terminated.Reason != "" {
+			return cs.State.Terminated.Reason
+		}
+	}
+	if pod.Status.Message != "" {
+		return pod.Status.Message
+	}
+	if pod.Status.Reason != "" {
+		return pod.Status.Reason
+	}
+	return "pod failed"
 }
 
 // SetupWithManager registers the controller with mgr.
