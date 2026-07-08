@@ -240,6 +240,10 @@ func (in *DevPodStatus) DeepCopyInto(out *DevPodStatus) {
 		in, out := &in.HibernatedAt, &out.HibernatedAt
 		*out = (*in).DeepCopy()
 	}
+	if in.LastFailureAt != nil {
+		in, out := &in.LastFailureAt, &out.LastFailureAt
+		*out = (*in).DeepCopy()
+	}
 	if in.Conditions != nil {
 		in, out := &in.Conditions, &out.Conditions
 		*out = make([]metav1.Condition, len(*in))

@@ -222,6 +222,23 @@ type DevPodStatus struct {
 	// +optional
 	HibernatedAt *metav1.Time `json:"hibernatedAt,omitempty"`
 
+	// RetryCount tracks consecutive Pod failures for backoff. Reset to
+	// zero when the Pod reaches Running.
+	//
+	// +optional
+	RetryCount int32 `json:"retryCount,omitempty"`
+
+	// LastFailureAt records when the last Pod failure was observed.
+	//
+	// +optional
+	LastFailureAt *metav1.Time `json:"lastFailureAt,omitempty"`
+
+	// Message surfaces the last failure reason (e.g. Pod termination
+	// message) so the gateway/user can see why the DevPod is down.
+	//
+	// +optional
+	Message string `json:"message,omitempty"`
+
 	// +optional
 	// +patchStrategy=merge
 	// +patchMergeKey=type

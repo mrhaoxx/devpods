@@ -8290,6 +8290,15 @@ spec:
                   idle hibernation.
                 format: date-time
                 type: string
+              lastFailureAt:
+                description: LastFailureAt records when the last Pod failure was observed.
+                format: date-time
+                type: string
+              message:
+                description: |-
+                  Message surfaces the last failure reason (e.g. Pod termination
+                  message) so the gateway/user can see why the DevPod is down.
+                type: string
               persistentVolumeClaimRef:
                 description: PersistentVolumeClaimRef is set when Persistence is enabled.
                 properties:
@@ -8307,6 +8316,12 @@ spec:
                 - Stopped
                 - Failed
                 type: string
+              retryCount:
+                description: |-
+                  RetryCount tracks consecutive Pod failures for backoff. Reset to
+                  zero when the Pod reaches Running.
+                format: int32
+                type: integer
               workloadRef:
                 description: WorkloadRef points to the Pod or VirtualMachine the controller
                   created.
