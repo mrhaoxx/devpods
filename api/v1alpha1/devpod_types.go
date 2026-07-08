@@ -59,12 +59,23 @@ type PersistenceSpec struct {
 	TargetContainer string `json:"targetContainer,omitempty"`
 }
 
+// PodMetadata is the whitelisted metadata that may be set on the
+// rendered Pod. Using a small struct instead of metav1.ObjectMeta
+// because controller-gen strips the schema of an embedded ObjectMeta
+// to an empty object, causing strict field validation (k8s 1.25+) to
+// reject labels/annotations as unknown fields.
+type PodMetadata struct {
+	// +optional
+	Labels map[string]string `json:"labels,omitempty"`
+	// +optional
+	Annotations map[string]string `json:"annotations,omitempty"`
+}
+
 // PodWorkloadSpec carries a passthrough PodTemplateSpec. The controller
-// renders a Pod from this, overlaying the sshd sidecar and required
-// shareProcessNamespace.
+// renders a Pod from this, overlaying the supervisor and sshd entry point.
 type PodWorkloadSpec struct {
 	// +optional
-	ObjectMeta metav1.ObjectMeta `json:"metadata,omitempty"`
+	Metadata PodMetadata `json:"metadata,omitempty"`
 
 	Spec corev1.PodSpec `json:"spec"`
 }

@@ -74,8 +74,8 @@ func Pod(dp *devpodv1alpha1.DevPod, cfg *devpodv1alpha1.GatewayConfig) (*corev1.
 		ObjectMeta: ObjectMeta(PodName(dp), cfg.Spec.DevPodNamespace, dp),
 		Spec:       *user,
 	}
-	mergeStrings(pod.Labels, dp.Spec.Pod.ObjectMeta.Labels)
-	pod.Annotations = mergeStringsCopy(pod.Annotations, dp.Spec.Pod.ObjectMeta.Annotations)
+	mergeStrings(pod.Labels, dp.Spec.Pod.Metadata.Labels)
+	pod.Annotations = mergeStringsCopy(pod.Annotations, dp.Spec.Pod.Metadata.Annotations)
 	return pod, nil
 }
 

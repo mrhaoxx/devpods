@@ -151,6 +151,21 @@ spec:
                 description: Pod, if set, materializes the workload as a Pod.
                 properties:
                   metadata:
+                    description: |-
+                      PodMetadata is the whitelisted metadata that may be set on the
+                      rendered Pod. Using a small struct instead of metav1.ObjectMeta
+                      because controller-gen strips the schema of an embedded ObjectMeta
+                      to an empty object, causing strict field validation (k8s 1.25+) to
+                      reject labels/annotations as unknown fields.
+                    properties:
+                      annotations:
+                        additionalProperties:
+                          type: string
+                        type: object
+                      labels:
+                        additionalProperties:
+                          type: string
+                        type: object
                     type: object
                   spec:
                     description: PodSpec is a description of a pod.
@@ -8316,7 +8331,7 @@ spec:
             Pod/PVC/Service names)
           rule: size(self.metadata.name) <= 22
         - message: DevPod name must start with '<owner>-'
-          rule: "self.metadata.name.startsWith(self.spec.owner + '-')"
+          rule: self.metadata.name.startsWith(self.spec.owner + '-')
     served: true
     storage: true
     subresources:
