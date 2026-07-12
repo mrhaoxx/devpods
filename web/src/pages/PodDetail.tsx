@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import {
@@ -37,18 +37,33 @@ export default function PodDetail() {
   // often creates separate Event objects for what is logically the
   // same event across pod recreations) and keep the latest timestamp
   // and highest count.
+  // Batch incoming SSE events with a ref and flush once per animation
+  // frame — prevents 76+ synchronous React re-renders during the
+  // informer's initial backlog replay.
   const [eventsByUID, setEventsByUID] = useState<Record<string, K8sEvent>>({});
-  useEffect(() => {
-    setEventsByUID({});
-    return watchDevPodEvents(name, (type, ev) => {
-      setEventsByUID((m) => {
-        const next = { ...m };
+  const pendingRef = useRef<{ type: string; ev: K8sEvent }[]>([]);
+  const rafRef = useRef(0);
+  const flush = useCallback(() => {
+    rafRef.current = 0;
+    const batch = pendingRef.current.splice(0);
+    if (!batch.length) return;
+    setEventsByUID((m) => {
+      const next = { ...m };
+      for (const { type, ev } of batch) {
         if (type === "DELETED") delete next[ev.metadata.uid];
         else next[ev.metadata.uid] = ev;
-        return next;
-      });
+      }
+      return next;
     });
-  }, [name]);
+  }, []);
+  useEffect(() => {
+    setEventsByUID({});
+    pendingRef.current = [];
+    return watchDevPodEvents(name, (type, ev) => {
+      pendingRef.current.push({ type, ev });
+      if (!rafRef.current) rafRef.current = requestAnimationFrame(flush);
+    });
+  }, [name, flush]);
   const events = useMemo(() => {
     // Deduplicate: group by reason+message, keep latest timestamp and
     // sum counts. This collapses the "Created container dev" × 8
