@@ -37,6 +37,14 @@ type Server struct {
 	DefaultQuota devpodv1alpha1.UserQuota
 	KoreEnabled  bool
 	Origin       string // allowed Origin for mutating requests
+
+	// PubkeySelfService gates the pubkey management surface. Disable
+	// on deployments where LDAP (not the User CRD) owns SSH keys.
+	PubkeySelfService bool
+	// SSHHost/SSHPort are advertised to the frontend so it can render
+	// copy-pastable `ssh [-p port] user+pod@host` command lines.
+	SSHHost string
+	SSHPort int
 }
 
 type apiBody struct {

@@ -44,7 +44,9 @@ func TestWatchStreamsOwnedEvents(t *testing.T) {
 	}
 	t.Cleanup(func() { cleanupDevPods(t) })
 
-	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	// Generous: under the full -race suite several envtest apiservers
+	// run concurrently and informer delivery can lag.
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	lines := make(chan string, 16)
 	go func() {

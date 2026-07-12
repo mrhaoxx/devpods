@@ -12,9 +12,11 @@ import (
 	"flag"
 	"fmt"
 	"log/slog"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -55,6 +57,9 @@ func main() {
 		devpodNamespace  string
 		koreMode         string
 		tlsCert, tlsKey  string
+
+		pubkeySelfService bool
+		sshAdvertise      string
 	)
 	flag.StringVar(&listen, "listen", ":8080", "HTTP listen address")
 	flag.StringVar(&issuerURL, "gitlab-issuer-url", "", "GitLab OIDC issuer URL (required)")
@@ -69,6 +74,10 @@ func main() {
 	flag.StringVar(&koreMode, "kore", "auto", "Kore integration: auto|on|off")
 	flag.StringVar(&tlsCert, "tls-cert", "", "optional TLS certificate (default: TLS at the Ingress)")
 	flag.StringVar(&tlsKey, "tls-key", "", "optional TLS key")
+	flag.BoolVar(&pubkeySelfService, "pubkey-self-service", true,
+		"allow users to manage SSH pubkeys via the UI; disable when keys are managed externally (LDAP)")
+	flag.StringVar(&sshAdvertise, "ssh-advertise", "",
+		"gateway address shown in SSH command lines, host or host:port (e.g. devpod.example.com:2222)")
 	flag.Parse()
 
 	logger := slog.New(slog.NewJSONHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelInfo}))
@@ -131,6 +140,7 @@ func main() {
 			ByObject: map[client.Object]cache.ByObject{
 				&devpodv1alpha1.DevPod{}: {Namespaces: map[string]cache.Config{devpodNamespace: {}}},
 				&corev1.Pod{}:            {Namespaces: map[string]cache.Config{devpodNamespace: {}}},
+				&corev1.Event{}:          {Namespaces: map[string]cache.Config{devpodNamespace: {}}},
 			},
 		},
 	})
@@ -140,6 +150,14 @@ func main() {
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
+
+	sshHost, sshPort := sshAdvertise, 22
+	if h, p, err := net.SplitHostPort(sshAdvertise); err == nil {
+		sshHost = h
+		if n, perr := strconv.Atoi(p); perr == nil {
+			sshPort = n
+		}
+	}
 
 	sm := webui.NewSessionManager(sessionKey, 24*time.Hour)
 	srv := &webui.Server{
@@ -151,6 +169,10 @@ func main() {
 		DefaultQuota: defaultQuota,
 		KoreEnabled:  koreEnabled,
 		Origin:       originOf(redirectURL),
+
+		PubkeySelfService: pubkeySelfService,
+		SSHHost:           sshHost,
+		SSHPort:           sshPort,
 	}
 
 	go func() {

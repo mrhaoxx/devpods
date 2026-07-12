@@ -1,13 +1,56 @@
+import { useEffect, useMemo, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { getDevPod, getEvents, patchDevPod, deleteDevPod } from "../api";
+import {
+  getDevPod,
+  patchDevPod,
+  deleteDevPod,
+  me,
+  sshCommand,
+  watchDevPods,
+  watchDevPodEvents,
+  K8sEvent,
+} from "../api";
 
 export default function PodDetail() {
   const { name = "" } = useParams();
   const nav = useNavigate();
   const qc = useQueryClient();
-  const q = useQuery({ queryKey: ["devpod", name], queryFn: () => getDevPod(name), refetchInterval: 5000 });
-  const ev = useQuery({ queryKey: ["events", name], queryFn: () => getEvents(name), refetchInterval: 10000 });
+  const q = useQuery({ queryKey: ["devpod", name], queryFn: () => getDevPod(name) });
+  const meQ = useQuery({ queryKey: ["me"], queryFn: me });
+
+  // Live status: the owner's DevPod watch stream pushes phase/spec
+  // changes; refetch this pod whenever an event names it.
+  useEffect(
+    () =>
+      watchDevPods(
+        (_type, dp) => {
+          if (dp.metadata.name === name) qc.invalidateQueries({ queryKey: ["devpod", name] });
+        },
+        () => qc.invalidateQueries({ queryKey: ["devpod", name] }),
+      ),
+    [name, qc],
+  );
+
+  // Live events: the server replays the backlog on connect, then
+  // streams updates; merge by uid so MODIFIED bumps counts in place.
+  const [eventsByUID, setEventsByUID] = useState<Record<string, K8sEvent>>({});
+  useEffect(() => {
+    setEventsByUID({});
+    return watchDevPodEvents(name, (type, ev) => {
+      setEventsByUID((m) => {
+        const next = { ...m };
+        if (type === "DELETED") delete next[ev.metadata.uid];
+        else next[ev.metadata.uid] = ev;
+        return next;
+      });
+    });
+  }, [name]);
+  const events = useMemo(
+    () =>
+      Object.values(eventsByUID).sort((a, b) => (a.lastTimestamp ?? "").localeCompare(b.lastTimestamp ?? "")),
+    [eventsByUID],
+  );
 
   const toggle = useMutation({
     mutationFn: (running: boolean) => patchDevPod(name, running),
@@ -47,11 +90,9 @@ export default function PodDetail() {
       <dl className="mb-6 grid grid-cols-2 gap-x-8 gap-y-2 rounded-xl border bg-white p-4 text-sm">
         <dt className="text-slate-500">Phase</dt>
         <dd>{dp.status?.phase ?? "Pending"}</dd>
-        <dt className="text-slate-500">Endpoint</dt>
-        <dd className="font-mono">{dp.status?.endpoint ?? "—"}</dd>
         <dt className="text-slate-500">SSH</dt>
         <dd className="font-mono text-xs">
-          ssh {dp.spec.owner}+{dp.metadata.name.slice(dp.spec.owner.length + 1)}@&lt;gateway&gt;
+          {sshCommand(meQ.data, dp.spec.owner, dp.metadata.name.slice(dp.spec.owner.length + 1))}
         </dd>
         {dp.status?.message && (
           <>
@@ -96,14 +137,17 @@ export default function PodDetail() {
       )}
 
       <section className="rounded-xl border bg-white p-4 text-sm">
-        <h2 className="mb-2 font-medium">Events</h2>
+        <h2 className="mb-2 font-medium">
+          Events <span className="ml-1 align-middle text-[10px] text-green-600">● live</span>
+        </h2>
         <ul className="space-y-1 font-mono text-xs text-slate-600">
-          {((ev.data?.items ?? []) as { reason?: string; message?: string }[]).map((e, i) => (
-            <li key={i}>
-              {e.reason}: {e.message}
+          {events.map((e) => (
+            <li key={e.metadata.uid}>
+              {e.reason}
+              {e.count && e.count > 1 ? ` (×${e.count})` : ""}: {e.message}
             </li>
           ))}
-          {ev.data?.items?.length === 0 && <li className="text-slate-400">none</li>}
+          {events.length === 0 && <li className="text-slate-400">none</li>}
         </ul>
       </section>
     </main>
