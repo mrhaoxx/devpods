@@ -9,6 +9,12 @@ from a browser (create, hibernate/wake, snapshot, logs, terminal), and
 platform admins get a global view with per-user resource quotas. Login is
 OAuth against a self-hosted GitLab; ordinary users never touch kubectl.
 
+The UI also integrates with Kore (github.com/zjusct/kore), the cluster's
+CPU-pinning / NUMA-binding / CPU-pool system: the create form speaks
+Kore's annotation protocol, DevPod detail pages show actual core
+bindings, and the admin panel gets a per-core cluster topology
+visualization (a web `kubectl kore top`). See §7.
+
 The original design doc (2026-05-12) listed a web UI as a v1 non-goal.
 This spec lifts that non-goal now that persistence, hibernation, LDAP,
 and snapshots have shipped.
@@ -33,11 +39,16 @@ and snapshots have shipped.
   hibernate (M2).
 - Per-user aggregate resource quotas, stored on the `User` CRD, enforced
   by the webui backend at create/mutate/wake time.
+- Kore compatibility and visualization: form-level support for Kore
+  pinning/pool annotations with client-side mirrors of Kore's validation
+  rules, binding readback on the detail page, and a per-core topology
+  view fed by `KoreNodeTopology` CRs. All Kore features are gated and
+  degrade to hidden when Kore is not installed (`--kore=auto|on|off`).
 
 ### Non-goals
 
 - Quota enforcement below the UI layer. The controller does not read
-  quota; anyone with kubectl access bypasses it. See §8 Security
+  quota; anyone with kubectl access bypasses it. See §9 Security
   boundary.
 - OIDC/SSO for the SSH gateway (webui only).
 - Multi-IdP support. GitLab OIDC only; the provider surface is small
@@ -109,8 +120,11 @@ hack/e2e-webui.sh
 - `devpod.io` users: full verbs via ClusterRole — User is
   cluster-scoped, so this is unavoidably a cluster-wide grant; it is
   the webui's only cluster-scoped write.
-- core: `pods/log` (M2), `pods/exec` (M3), `events` (read) in the
-  devpods namespace.
+- core: `pods` (read — Kore binding readback lives in Pod annotations),
+  `pods/log` (M2), `pods/exec` (M3), `events` (read) in the devpods
+  namespace.
+- `kore.zjusct.io` korenodetopologies: get/list/watch via ClusterRole
+  (cluster-scoped, read-only; only bound when Kore integration is on).
 
 A NetworkPolicy restricts webui ingress to the Ingress controller and
 egress to the API server and GitLab.
@@ -207,8 +221,12 @@ type UserQuota struct {
    admins may submit VM DevPods via the YAML path.
 5. Enforcement points: `POST /api/devpods` (create), `PATCH` that
    changes the pod spec or sets `running: true`. Enforcement is
-   webui-only by design (§8).
+   webui-only by design (§9).
 6. Defaults for users with nil quota come from `--default-quota-file`.
+7. Kore interplay: pinned CPUs are ordinary integer `cpu` limits, so
+   quota needs no special casing. Kore's webhook injects its
+   `kore.zjusct.io/cpu` gate resource at Pod admission — it never
+   appears in the DevPod CR and is invisible to quota.
 
 ---
 
@@ -236,6 +254,8 @@ rejections return `409` with code `QUOTA_EXCEEDED` and a
 | `POST /api/snapshots`, `GET /api/snapshots?devpod=` | M2 |
 | `GET /api/admin/users`, `PATCH /api/admin/users/{name}` | M2, admin: users + usage, quota edit |
 | `GET /api/admin/devpods`, `POST /api/admin/devpods/{name}/stop` | M2, admin: global view, force hibernate |
+| `GET /api/kore/topology` (`?watch=true` → SSE) | M2, per-node core ledger from KoreNodeTopology CRs |
+| `GET /api/kore/pools` | M2, CPU pools + members |
 
 Watch streams are fed from the controller-runtime informer cache — no
 polling. On SSE reconnect the client does one full list refresh to
@@ -246,8 +266,9 @@ close event gaps.
 `--gitlab-issuer-url`, `--oauth-client-id`,
 `--oauth-client-secret-file`, `--redirect-url`, `--user-prefix`,
 `--admins`, `--session-key-file`, `--default-quota-file`,
-`--devpod-namespace`, `--listen`, optional `--tls-cert`/`--tls-key`
-(default: TLS terminated at the Ingress).
+`--devpod-namespace`, `--listen`, `--kore=auto|on|off` (auto = enable
+when the KoreNodeTopology CRD exists), optional
+`--tls-cert`/`--tls-key` (default: TLS terminated at the Ingress).
 
 ---
 
@@ -262,15 +283,91 @@ React Query + the SSE watch stream; no Redux.
 /login                  # "Sign in with GitLab" button
 /                       # my DevPods: status badges, endpoint, quick hibernate/wake
 /devpods/new            # create: form mode ⇄ YAML mode toggle
-/devpods/{name}         # detail: status, events, quota usage, snapshots (M2), logs (M2), terminal (M3)
+/devpods/{name}         # detail: status, events, quota usage, Kore binding,
+                        #   snapshots (M2), logs (M2), terminal (M3)
 /settings/pubkeys       # pubkey management + ssh command line display
 /admin/users            # (admin, M2) users, usage vs quota, edit
 /admin/devpods          # (admin, M2) global view, force hibernate
+/admin/topology         # (admin, M2) per-core cluster CPU map — web `kore top`
 ```
 
 ---
 
-## 7. Error handling
+## 7. Kore integration
+
+Kore (github.com/zjusct/kore) drives CPU pinning, NUMA binding, and CPU
+pools entirely through Pod annotations; DevPod's render layer already
+merges `spec.pod.metadata.annotations` into the rendered Pod
+(`internal/render/pod.go`), and Kore's own webhook injects
+`schedulerName` and its gate resource at Pod admission. Compatibility
+therefore requires **no controller or render changes** — the webui's job
+is to surface the annotation protocol ergonomically and mirror Kore's
+validation rules so users fail in the form, not at reconcile.
+
+### Create form: "CPU binding" section (M1)
+
+Three modes, mapped to annotations on `spec.pod.metadata.annotations`:
+
+- **None** (default) — no annotations; pod lands in Kore's shared pool.
+- **Exclusive pinning** — sets `kore.zjusct.io/pin: "true"`; optional
+  selects for `numa-policy` (single/preferred/spread), `memory-policy`
+  (strict/preferred), `placement` (pack/scatter), `smt-policy`
+  (full-core/logical). Form-side validation mirrors Kore's admission
+  rules: at least one container with integer CPU and requests == limits
+  (the form auto-syncs requests to limits when pinning is on).
+- **CPU pool** — sets `kore.zjusct.io/pool` + `pool-size`; mutually
+  exclusive with pinning (enforced by the form and re-checked
+  server-side). Pool oversubscription (Σlimits > pool-size ≥ Σrequests)
+  is allowed per Kore's model, and the form explains it inline.
+
+The explicit-cpuset escape hatch (`kore.zjusct.io/cpuset`) requires
+`nodeName` and exact core numbers — admin YAML path only, no form
+support.
+
+The YAML path accepts any Kore annotations verbatim; server-side
+validation runs the same mirrored rules for non-admins.
+
+### Binding readback: detail page (M1)
+
+Kore writes actual placement back onto the Pod:
+`kore.zjusct.io/reserved-numa` (scheduler) and
+`kore.zjusct.io/allocated-cpuset` (agent). The DevPod detail page reads
+the live Pod (hence `pods` read in RBAC) and shows the bound cores, NUMA
+zone, and — for pool members — the pool name, size, and co-members
+(cross-referenced from `KoreNodeTopology.status.pools`).
+
+### Topology visualization: web `kore top` (M2)
+
+`/admin/topology`, fed by an SSE watch on KoreNodeTopology CRs (one CR
+per node, `status`: zones with cpus/freeCpus/SMT-sibling pairs/memory/
+devices, allocations per container, pools):
+
+- One card per node; within it one block per NUMA zone; within that a
+  per-core grid, SMT siblings stacked as columns (same layout language
+  as `kubectl kore top`).
+- Cell color = occupant class (exclusive pod / pool / shared /
+  system-reserved); hover reveals pod/container/pool details; clicking a
+  DevPod-owned allocation deep-links to its detail page.
+- A pools table (name, cpuset, NUMA, members) sits below the grid.
+- Live updates ride the same SSE reconnect semantics as the DevPod list
+  (§8).
+
+The dataset (node names, all pods' placements) is operator-level
+information, so the page is admin-only; per-user binding info is
+already on the detail page.
+
+### Gating
+
+`--kore=auto|on|off`, auto = probe for the KoreNodeTopology CRD at
+startup. When off/absent: form section, detail panel, topology page,
+and `/api/kore/*` all disappear; the ClusterRole binding for
+korenodetopologies is chart-conditional on the same switch. DevPods
+that already carry Kore annotations still render/patch fine — the
+annotations are inert without Kore installed.
+
+---
+
+## 8. Error handling
 
 - API errors: uniform `{code, message, detail}`; k8s Status passthrough
   as above.
@@ -285,12 +382,14 @@ React Query + the SSE watch stream; no Redux.
 
 ---
 
-## 8. Security boundary (explicit)
+## 9. Security boundary (explicit)
 
 - **Quota is UI-layer policy, not a security barrier.** Anyone holding
   kubectl credentials for the devpods namespace bypasses it. The
   deployment model assumes ordinary users have no kubeconfig; admins
-  handing out kubeconfigs must know this.
+  handing out kubeconfigs must know this. (Kore's own admission rules
+  are NOT ours to enforce — the form mirrors them only for UX; Kore's
+  webhook/scheduler remain the real gate for binding validity.)
 - The webui SA holds full CRD rights in the devpods namespace plus a
   cluster-wide grant on the cluster-scoped User CRD, and is a
   high-value target: minimal RBAC (§2), NetworkPolicy on ingress and
@@ -300,12 +399,13 @@ React Query + the SSE watch stream; no Redux.
 
 ---
 
-## 9. Testing
+## 10. Testing
 
 | Layer | Method |
 |---|---|
-| quota aggregation, username mapping, cookie signing | table-driven unit tests |
+| quota aggregation, username mapping, cookie signing, Kore annotation validation mirrors | table-driven unit tests |
 | API handlers + ownership checks | envtest (existing `hack/test.sh` infra), forged sessions hit handlers directly |
+| Kore topology API | envtest with the KoreNodeTopology CRD applied and hand-crafted status fixtures (no live Kore needed) |
 | OAuth flow | httptest fake OIDC issuer signing test id_tokens |
 | frontend | Vitest component tests, thin — heavy logic stays in the backend |
 | e2e | `hack/e2e-webui.sh`: kind + fake IdP container; login → create → hibernate → delete |
@@ -315,17 +415,21 @@ project convention).
 
 ---
 
-## 10. Milestones
+## 11. Milestones
 
 - **M1 — skeleton + core self-service.** OAuth login, auto-provision,
   pubkey management, list/detail/hibernate/wake/delete, form + YAML
-  create, quota enforcement, chart + RBAC + e2e.
+  create (incl. the Kore CPU-binding form section and binding
+  readback, gated), quota enforcement, chart + RBAC + e2e.
   *Acceptance: a new GitLab user goes from login to
-  `ssh <prefix>xxx+pod@gateway` with zero admin involvement.*
+  `ssh <prefix>xxx+pod@gateway` with zero admin involvement — including
+  a pinned or pooled DevPod when Kore is installed.*
 - **M2 — observability + admin.** Snapshots (initiate/progress/
   history), log streaming, events, admin panel (global view, quota
-  editing, force hibernate).
-  *Acceptance: admins no longer need kubectl for day-to-day operations.*
+  editing, force hibernate), Kore topology visualization
+  (`/admin/topology` + pools).
+  *Acceptance: admins no longer need kubectl for day-to-day operations,
+  `kubectl kore top` included.*
 - **M3 — terminal.** xterm.js over `pods/exec` WebSocket, auto
   reconnect.
   *Acceptance: run commands in a DevPod container from the browser.*
