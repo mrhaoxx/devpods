@@ -122,7 +122,7 @@ function sse(url: string, onMessage: (data: string) => void, onResync?: () => vo
   };
 }
 
-// watchDevPods streams the caller's DevPod changes.
+// watchDevPods streams the caller's DevPod changes (list page).
 export function watchDevPods(onEvent: (type: string, dp: DevPod) => void, onResync: () => void): () => void {
   return sse(
     "/api/devpods?watch=true",
@@ -134,12 +134,26 @@ export function watchDevPods(onEvent: (type: string, dp: DevPod) => void, onResy
   );
 }
 
-// watchDevPodEvents streams the k8s Events of one DevPod. The server
-// replays the backlog on connect, so no separate initial fetch is
-// needed.
-export function watchDevPodEvents(name: string, onEvent: (type: string, ev: K8sEvent) => void): () => void {
-  return sse(`/api/devpods/${name}/events?watch=true`, (data) => {
-    const msg = JSON.parse(data) as { type: string; event: K8sEvent };
-    onEvent(msg.type, msg.event);
+export type DevPodDetail = { devpod: DevPod; binding?: BindingInfo };
+
+// watchDevPod opens ONE SSE connection carrying both this DevPod's
+// status (detail messages, with binding readback) and its k8s Events.
+// The server replays the current DevPod and event backlog on connect,
+// so no separate initial fetch is needed. Keeping the detail page to a
+// single connection avoids the browser's 6-conn HTTP/1.1 per-origin
+// cap.
+export function watchDevPod(
+  name: string,
+  handlers: { onDetail: (d: DevPodDetail) => void; onEvent: (type: string, ev: K8sEvent) => void },
+): () => void {
+  return sse(`/api/devpods/${name}/stream`, (data) => {
+    const m = JSON.parse(data) as {
+      kind: string;
+      type: string;
+      detail?: DevPodDetail;
+      event?: K8sEvent;
+    };
+    if (m.kind === "devpod" && m.detail) handlers.onDetail(m.detail);
+    else if (m.kind === "event" && m.event) handlers.onEvent(m.type, m.event);
   });
 }

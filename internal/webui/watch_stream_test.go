@@ -17,7 +17,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
-func TestWatchEventsStreams(t *testing.T) {
+func TestDevPodStream(t *testing.T) {
 	setupSuite(t)
 	s, sm := newServer(t)
 	alice := forge(sm, "gl-alice", false)
@@ -30,11 +30,11 @@ func TestWatchEventsStreams(t *testing.T) {
 
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		r.SetPathValue("name", "gl-alice-dev1")
-		s.HandleWatchDevPodEventsForTest()(w, r)
+		s.HandleDevPodStreamForTest()(w, r)
 	}))
 	t.Cleanup(srv.Close)
 
-	req, _ := http.NewRequest("GET", srv.URL+"/api/devpods/gl-alice-dev1/events?watch=true", nil)
+	req, _ := http.NewRequest("GET", srv.URL+"/api/devpods/gl-alice-dev1/stream", nil)
 	req.AddCookie(alice)
 	resp, err := srv.Client().Do(req)
 	if err != nil {
@@ -45,36 +45,7 @@ func TestWatchEventsStreams(t *testing.T) {
 		t.Fatalf("content-type = %q", ct)
 	}
 
-	// One event for alice's pod, one for an unrelated object.
-	ctx := context.Background()
-	mine := &corev1.Event{
-		ObjectMeta:     metav1.ObjectMeta{Name: "gl-alice-dev1.stream", Namespace: "devpods"},
-		InvolvedObject: corev1.ObjectReference{Kind: "Pod", Name: "gl-alice-dev1", Namespace: "devpods"},
-		Reason:         "StreamTest", Message: "hello from sse", Type: "Normal",
-		LastTimestamp: metav1.Now(),
-	}
-	other := &corev1.Event{
-		ObjectMeta:     metav1.ObjectMeta{Name: "other.stream", Namespace: "devpods"},
-		InvolvedObject: corev1.ObjectReference{Kind: "Pod", Name: "gl-bob-other", Namespace: "devpods"},
-		Reason:         "MustNotLeak", Message: "not yours", Type: "Normal",
-		LastTimestamp: metav1.Now(),
-	}
-	if err := k8sClient.Create(ctx, mine); err != nil {
-		t.Fatal(err)
-	}
-	if err := k8sClient.Create(ctx, other); err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() {
-		_ = k8sClient.Delete(ctx, mine)
-		_ = k8sClient.Delete(ctx, other)
-	})
-
-	// Generous: under the full -race suite several envtest apiservers
-	// run concurrently and informer delivery can lag.
-	deadline, cancel := context.WithTimeout(ctx, 30*time.Second)
-	defer cancel()
-	lines := make(chan string, 16)
+	lines := make(chan string, 32)
 	go func() {
 		scanner := bufio.NewScanner(resp.Body)
 		for scanner.Scan() {
@@ -83,17 +54,56 @@ func TestWatchEventsStreams(t *testing.T) {
 			}
 		}
 	}()
+
+	// The DevPod informer replays its cache on connect: we should get a
+	// "devpod" message for gl-alice-dev1 without doing anything.
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	gotDevPod := false
+	for !gotDevPod {
+		select {
+		case l := <-lines:
+			if strings.Contains(l, `"kind":"devpod"`) && strings.Contains(l, "gl-alice-dev1") {
+				gotDevPod = true
+			}
+		case <-ctx.Done():
+			t.Fatal("no devpod message on connect")
+		}
+	}
+
+	// Now create a related Event and an unrelated one; only ours streams.
+	mine := &corev1.Event{
+		ObjectMeta:     metav1.ObjectMeta{Name: "gl-alice-dev1.stream", Namespace: "devpods"},
+		InvolvedObject: corev1.ObjectReference{Kind: "Pod", Name: "gl-alice-dev1", Namespace: "devpods"},
+		Reason:         "StreamTest", Message: "hello", Type: "Normal", LastTimestamp: metav1.Now(),
+	}
+	other := &corev1.Event{
+		ObjectMeta:     metav1.ObjectMeta{Name: "other.stream", Namespace: "devpods"},
+		InvolvedObject: corev1.ObjectReference{Kind: "Pod", Name: "gl-bob-other", Namespace: "devpods"},
+		Reason:         "MustNotLeak", Message: "nope", Type: "Normal", LastTimestamp: metav1.Now(),
+	}
+	if err := k8sClient.Create(context.Background(), mine); err != nil {
+		t.Fatal(err)
+	}
+	if err := k8sClient.Create(context.Background(), other); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_ = k8sClient.Delete(context.Background(), mine)
+		_ = k8sClient.Delete(context.Background(), other)
+	})
+
 	for {
 		select {
 		case l := <-lines:
 			if strings.Contains(l, "MustNotLeak") {
 				t.Fatalf("leaked unrelated event: %s", l)
 			}
-			if strings.Contains(l, "StreamTest") {
+			if strings.Contains(l, `"kind":"event"`) && strings.Contains(l, "StreamTest") {
 				return // success
 			}
-		case <-deadline.Done():
-			t.Fatal("timed out waiting for event on stream")
+		case <-ctx.Done():
+			t.Fatal("no event message on stream")
 		}
 	}
 }
