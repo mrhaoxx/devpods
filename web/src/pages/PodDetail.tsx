@@ -29,8 +29,8 @@ export default function PodDetail() {
   const meQ = useQuery({ queryKey: ["me"], queryFn: me });
 
   // Live status: replace the cached data directly from the SSE
-  // payload instead of triggering a refetch — avoids an infinite
-  // invalidate→fetch→SSE→invalidate loop.
+  // payload — no refetch, no invalidation loop. The initial load is
+  // handled by useQuery above; SSE only pushes incremental updates.
   useEffect(
     () =>
       watchDevPods(
@@ -41,7 +41,7 @@ export default function PodDetail() {
             );
           }
         },
-        () => qc.invalidateQueries({ queryKey: ["devpod", name] }),
+        () => {}, // no-op: useQuery already fetched the initial state
       ),
     [name, qc],
   );
