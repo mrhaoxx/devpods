@@ -18,6 +18,7 @@ import (
 	"golang.org/x/oauth2"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	devpodv1alpha1 "github.com/mrhaoxx/devpod/api/v1alpha1"
@@ -158,7 +159,16 @@ func (o *OAuth) HandleCallback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	tok := o.sessions.Mint(mapped, o.admins[claims.PreferredUsername], time.Now())
+	// Admin = the allowlist (keyed by GitLab username) OR the User's
+	// kubectl-managed spec.admin.
+	admin := o.admins[claims.PreferredUsername]
+	if !admin {
+		var u devpodv1alpha1.User
+		if err := o.client.Get(r.Context(), types.NamespacedName{Name: mapped}, &u); err == nil && u.Spec.Admin {
+			admin = true
+		}
+	}
+	tok := o.sessions.Mint(mapped, admin, time.Now())
 	http.SetCookie(w, &http.Cookie{
 		Name: SessionCookie, Value: tok, Path: "/",
 		MaxAge: int(o.sessions.TTL().Seconds()), HttpOnly: true, Secure: o.secure,

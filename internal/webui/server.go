@@ -40,12 +40,21 @@ func (s *Server) Routes() http.Handler {
 	if s.OAuth != nil {
 		mux.HandleFunc("GET /auth/login", s.OAuth.HandleLogin)
 		mux.HandleFunc("GET /auth/callback", s.OAuth.HandleCallback)
-		mux.HandleFunc("POST /auth/logout", s.OAuth.HandleLogout)
 	}
+	// logout works for any login path; password login + config are
+	// always registered (they self-gate on s.PasswordAuth).
+	mux.HandleFunc("POST /auth/logout", s.handleLogout)
+	mux.HandleFunc("GET /api/auth/config", s.handleAuthConfig)
+	mux.HandleFunc("POST /api/auth/password", s.handlePasswordLogin)
 
 	mux.HandleFunc("GET /api/me", s.handleMe)
+	mux.HandleFunc("PUT /api/me/password", s.handleChangePassword)
 	mux.HandleFunc("GET /api/me/pubkeys", s.handleGetPubkeys)
 	mux.HandleFunc("PUT /api/me/pubkeys", s.handlePutPubkeys)
+	mux.HandleFunc("GET /api/admin/users", s.handleListUsers)
+	mux.HandleFunc("POST /api/admin/users", s.handleCreateUser)
+	mux.HandleFunc("PATCH /api/admin/users/{name}", s.handlePatchUser)
+	mux.HandleFunc("DELETE /api/admin/users/{name}", s.handleDeleteUser)
 	mux.HandleFunc("GET /api/templates", s.handleListTemplates)
 	mux.HandleFunc("GET /api/devpods", func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Query().Get("watch") == "true" {

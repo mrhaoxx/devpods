@@ -4,7 +4,11 @@
 
 package webui
 
-import "net/http"
+import (
+	"net/http"
+
+	devpodv1alpha1 "github.com/mrhaoxx/devpod/api/v1alpha1"
+)
 
 // Handler accessors for the external test package. Test-only file.
 func (s *Server) HandleCreateDevPodForTest() http.HandlerFunc { return s.handleCreateDevPod }
@@ -22,3 +26,13 @@ func (s *Server) HandlePutPubkeysForTest() http.HandlerFunc    { return s.handle
 func (s *Server) HandleListTemplatesForTest() http.HandlerFunc { return s.handleListTemplates }
 
 func (s *Server) HandleDevPodStreamForTest() http.HandlerFunc { return s.handleDevPodStream }
+
+func (s *Server) AdminForTest(username string, u *devpodv1alpha1.User) bool { return s.adminFor(username, u) }
+
+func (s *Server) HandleAuthConfigForTest() http.HandlerFunc   { return s.handleAuthConfig }
+func (s *Server) HandlePasswordLoginForTest() http.HandlerFunc { return s.handlePasswordLogin }
+func (s *Server) HandleChangePasswordForTest() http.HandlerFunc { return s.handleChangePassword }
+func (s *Server) HandleListUsersForTest() http.HandlerFunc    { return s.handleListUsers }
+func (s *Server) HandleCreateUserForTest() http.HandlerFunc   { return s.handleCreateUser }
+func (s *Server) HandlePatchUserForTest() http.HandlerFunc    { return s.handlePatchUser }
+func (s *Server) HandleDeleteUserForTest() http.HandlerFunc   { return s.handleDeleteUser }
