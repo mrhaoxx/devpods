@@ -15,3 +15,8 @@ func (s *Server) HandleDeleteDevPodForTest() http.HandlerFunc { return s.handleD
 func (s *Server) HandleDevPodEventsForTest() http.HandlerFunc { return s.handleDevPodEvents }
 
 func (s *Server) HandleWatchDevPodsForTest() http.HandlerFunc { return s.handleWatchDevPods }
+
+func (s *Server) HandleMeForTest() http.HandlerFunc            { return s.handleMe }
+func (s *Server) HandleGetPubkeysForTest() http.HandlerFunc    { return s.handleGetPubkeys }
+func (s *Server) HandlePutPubkeysForTest() http.HandlerFunc    { return s.handlePutPubkeys }
+func (s *Server) HandleListTemplatesForTest() http.HandlerFunc { return s.handleListTemplates }
