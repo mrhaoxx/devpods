@@ -55,7 +55,7 @@ RUN mkdir -p /out && cp /bin/bash-static /out/bash && strip /out/bash
 
 # --- Stage 4: zsh static (musl + ncurses-static) -----------------------
 FROM alpine:3.20 AS zsh-build
-ARG ZSH_VERSION=5.9
+ARG ZSH_VERSION=5.9.1
 RUN apk add --no-cache build-base ncurses-static ncurses-dev autoconf wget xz
 WORKDIR /src
 # zsh.org moves superseded releases into pub/old/; fall back through
