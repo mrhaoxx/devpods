@@ -61,6 +61,21 @@ type UserSpec struct {
 	//
 	// +optional
 	Quota *UserQuota `json:"quota,omitempty"`
+
+	// PasswordHash is a bcrypt hash of the user's password. Set = this
+	// user may log in to the web UI with a password. Never returned by
+	// the API. Written only by the webui (admin create/reset, or the
+	// user's own change). The controller and gateway ignore it.
+	//
+	// +optional
+	PasswordHash string `json:"passwordHash,omitempty"`
+
+	// Admin grants web UI admin rights on any login path. Written ONLY
+	// by an operator via kubectl — the webui treats it as read-only.
+	// Effective admin = the webui's --admins allowlist OR this field.
+	//
+	// +optional
+	Admin bool `json:"admin,omitempty"`
 }
 
 // UserStatus reports observed state.
