@@ -48,7 +48,7 @@ export default function PodDetail() {
   }, [name]);
   const events = useMemo(
     () =>
-      Object.values(eventsByUID).sort((a, b) => (a.lastTimestamp ?? "").localeCompare(b.lastTimestamp ?? "")),
+      Object.values(eventsByUID).sort((a, b) => (b.lastTimestamp ?? "").localeCompare(a.lastTimestamp ?? "")),
     [eventsByUID],
   );
 

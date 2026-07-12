@@ -445,7 +445,7 @@ func (s *Server) handleDevPodEvents(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	sort.Slice(events.Items, func(i, j int) bool {
-		return events.Items[i].LastTimestamp.Before(&events.Items[j].LastTimestamp)
+		return events.Items[j].LastTimestamp.Before(&events.Items[i].LastTimestamp)
 	})
 	s.writeJSON(w, http.StatusOK, map[string]any{"items": events.Items})
 }
