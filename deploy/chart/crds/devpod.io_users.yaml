@@ -58,14 +58,45 @@ spec:
                 type: string
               pubkeys:
                 description: |-
-                  Pubkeys is the list of OpenSSH-format authorized public keys for this
-                  user. At least one key is required.
+                  Pubkeys is the list of OpenSSH-format authorized public keys for
+                  this user. May be empty: the webui auto-provisions keyless Users
+                  on first OAuth login, and the gateway falls back to LDAP (or
+                  denies) when no key matches.
                 items:
                   type: string
-                minItems: 1
                 type: array
-            required:
-            - pubkeys
+              quota:
+                description: |-
+                  Quota caps this user's aggregate DevPod resources. nil = webui
+                  global defaults.
+                properties:
+                  compute:
+                    additionalProperties:
+                      anyOf:
+                      - type: integer
+                      - type: string
+                      pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                      x-kubernetes-int-or-string: true
+                    description: |-
+                      Compute caps the SUM of container resource limits (containers +
+                      initContainers) across the user's *running* DevPods. Keys: cpu,
+                      memory, and extended resources such as nvidia.com/gpu.
+                    type: object
+                  maxDevPods:
+                    description: MaxDevPods limits how many DevPod CRs the user may
+                      own.
+                    format: int32
+                    type: integer
+                  storage:
+                    anyOf:
+                    - type: integer
+                    - type: string
+                    description: |-
+                      Storage caps the SUM of spec.persistence.size across ALL of the
+                      user's DevPods, hibernated included (PVCs survive hibernation).
+                    pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                    x-kubernetes-int-or-string: true
+                type: object
             type: object
           status:
             description: UserStatus reports observed state.
