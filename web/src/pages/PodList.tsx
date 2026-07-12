@@ -15,10 +15,24 @@ export default function PodList() {
   const meQ = useQuery({ queryKey: ["me"], queryFn: me });
   const podsQ = useQuery({ queryKey: ["devpods"], queryFn: listDevPods });
 
+  // Update cached list directly from SSE payloads; only invalidate
+  // (full refetch) on reconnect to close event gaps.
   useEffect(
     () =>
       watchDevPods(
-        () => qc.invalidateQueries({ queryKey: ["devpods"] }),
+        (type, dp) => {
+          qc.setQueryData(["devpods"], (old: { items: DevPod[] } | undefined) => {
+            const items = old?.items ?? [];
+            if (type === "DELETED") return { items: items.filter((d) => d.metadata.name !== dp.metadata.name) };
+            const idx = items.findIndex((d) => d.metadata.name === dp.metadata.name);
+            if (idx >= 0) {
+              const next = [...items];
+              next[idx] = dp;
+              return { items: next };
+            }
+            return { items: [...items, dp] };
+          });
+        },
         () => qc.invalidateQueries({ queryKey: ["devpods"] }),
       ),
     [qc],
