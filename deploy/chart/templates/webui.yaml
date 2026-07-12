@@ -1,0 +1,101 @@
+{{- if .Values.webui.enabled }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: devpod-webui-quota
+  namespace: {{ .Values.namespaces.system }}
+  labels: {{ include "devpod.labels" . | nindent 4 }}
+data:
+  default-quota.yaml: |
+{{ toYaml .Values.webui.defaultQuota | indent 4 }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: devpod-webui
+  namespace: {{ .Values.namespaces.system }}
+  labels: {{ include "devpod.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.webui.replicas }}
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: devpod-webui
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: devpod-webui
+      annotations:
+        checksum/quota: {{ toYaml .Values.webui.defaultQuota | sha256sum }}
+    spec:
+      serviceAccountName: devpod-webui
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        seccompProfile: {type: RuntimeDefault}
+      containers:
+      - name: webui
+        image: "{{ .Values.image.webui.repository }}:{{ .Values.image.webui.tag }}"
+        imagePullPolicy: {{ .Values.image.webui.pullPolicy }}
+        args:
+        - --listen=:8080
+        - --gitlab-issuer-url={{ required "webui.gitlab.issuerURL is required" .Values.webui.gitlab.issuerURL }}
+        - --oauth-client-id={{ required "webui.gitlab.clientID is required" .Values.webui.gitlab.clientID }}
+        - --oauth-client-secret-file=/etc/devpod/webui/oauth/client-secret
+        - --redirect-url={{ required "webui.baseURL is required" .Values.webui.baseURL }}/auth/callback
+        - --user-prefix={{ .Values.webui.userPrefix }}
+        - --admins={{ join "," .Values.webui.admins }}
+        - --session-key-file=/etc/devpod/webui/session/session-key
+        - --default-quota-file=/etc/devpod/webui/default-quota.yaml
+        - --devpod-namespace={{ .Values.namespaces.devpods }}
+        - --kore={{ .Values.webui.kore }}
+        ports:
+        - {name: http, containerPort: 8080}
+        readinessProbe:
+          httpGet: {path: /healthz, port: http}
+        resources: {{- toYaml .Values.webui.resources | nindent 10 }}
+        securityContext:
+          allowPrivilegeEscalation: false
+          capabilities: {drop: [ALL]}
+          readOnlyRootFilesystem: true
+        volumeMounts:
+        - {name: oauth, mountPath: /etc/devpod/webui/oauth, readOnly: true}
+        - {name: session, mountPath: /etc/devpod/webui/session, readOnly: true}
+        - {name: quota, mountPath: /etc/devpod/webui/default-quota.yaml, subPath: default-quota.yaml, readOnly: true}
+      volumes:
+      - name: oauth
+        secret:
+          secretName: {{ required "webui.gitlab.clientSecretSecret.name is required" .Values.webui.gitlab.clientSecretSecret.name }}
+      - name: session
+        secret:
+          secretName: {{ required "webui.sessionKeySecret.name is required" .Values.webui.sessionKeySecret.name }}
+      - name: quota
+        configMap:
+          name: devpod-webui-quota
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: devpod-webui
+  namespace: {{ .Values.namespaces.system }}
+  labels: {{ include "devpod.labels" . | nindent 4 }}
+spec:
+  type: {{ .Values.webui.service.type }}
+  selector:
+    app.kubernetes.io/name: devpod-webui
+  ports:
+  - {name: http, port: {{ .Values.webui.service.port }}, targetPort: http}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: devpod-webui
+  namespace: {{ .Values.namespaces.system }}
+  labels: {{ include "devpod.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: devpod-webui
+  policyTypes: [Ingress]
+  ingress:
+  - ports: [{port: 8080}]
+{{- end }}
