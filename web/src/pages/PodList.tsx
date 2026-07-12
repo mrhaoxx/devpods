@@ -48,6 +48,16 @@ export default function PodList() {
       <header className="mb-6 flex items-center justify-between">
         <h1 className="text-xl font-semibold">My DevPods</h1>
         <nav className="flex items-center gap-3 text-sm">
+          {meQ.data?.admin && (
+            <Link className="text-blue-600 hover:underline" to="/admin/users">
+              Users
+            </Link>
+          )}
+          {meQ.data?.hasPassword && (
+            <Link className="text-blue-600 hover:underline" to="/settings/password">
+              Password
+            </Link>
+          )}
           {meQ.data?.features?.pubkeySelfService !== false && (
             <Link className="text-blue-600 hover:underline" to="/settings/pubkeys">
               SSH keys
