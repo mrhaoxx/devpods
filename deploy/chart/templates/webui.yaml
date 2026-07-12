@@ -38,16 +38,25 @@ spec:
         imagePullPolicy: {{ .Values.image.webui.pullPolicy }}
         args:
         - --listen=:8080
-        - --gitlab-issuer-url={{ required "webui.gitlab.issuerURL is required" .Values.webui.gitlab.issuerURL }}
-        - --oauth-client-id={{ required "webui.gitlab.clientID is required" .Values.webui.gitlab.clientID }}
-        - --oauth-client-secret-file=/etc/devpod/webui/oauth/client-secret
-        - --redirect-url={{ required "webui.baseURL is required" .Values.webui.baseURL }}/auth/callback
-        - --user-prefix={{ .Values.webui.userPrefix }}
-        - --admins={{ join "," .Values.webui.admins }}
         - --session-key-file=/etc/devpod/webui/session/session-key
         - --default-quota-file=/etc/devpod/webui/default-quota.yaml
         - --devpod-namespace={{ .Values.namespaces.devpods }}
         - --kore={{ .Values.webui.kore }}
+        - --admins={{ join "," .Values.webui.admins }}
+        {{- if .Values.webui.baseURL }}
+        - --external-url={{ .Values.webui.baseURL }}
+        {{- end }}
+        {{- if .Values.webui.passwordAuth }}
+        - --password-auth=true
+        - --password-min-length={{ .Values.webui.passwordMinLength }}
+        {{- end }}
+        {{- if .Values.webui.gitlab.issuerURL }}
+        - --gitlab-issuer-url={{ .Values.webui.gitlab.issuerURL }}
+        - --oauth-client-id={{ required "webui.gitlab.clientID is required when gitlab.issuerURL is set" .Values.webui.gitlab.clientID }}
+        - --oauth-client-secret-file=/etc/devpod/webui/oauth/client-secret
+        - --redirect-url={{ required "webui.baseURL is required for OAuth" .Values.webui.baseURL }}/auth/callback
+        - --user-prefix={{ .Values.webui.userPrefix }}
+        {{- end }}
         {{- if hasKey .Values.webui "pubkeySelfService" }}
         - --pubkey-self-service={{ .Values.webui.pubkeySelfService }}
         {{- end }}
@@ -64,13 +73,17 @@ spec:
           capabilities: {drop: [ALL]}
           readOnlyRootFilesystem: true
         volumeMounts:
+        {{- if .Values.webui.gitlab.issuerURL }}
         - {name: oauth, mountPath: /etc/devpod/webui/oauth, readOnly: true}
+        {{- end }}
         - {name: session, mountPath: /etc/devpod/webui/session, readOnly: true}
         - {name: quota, mountPath: /etc/devpod/webui/default-quota.yaml, subPath: default-quota.yaml, readOnly: true}
       volumes:
+      {{- if .Values.webui.gitlab.issuerURL }}
       - name: oauth
         secret:
-          secretName: {{ required "webui.gitlab.clientSecretSecret.name is required" .Values.webui.gitlab.clientSecretSecret.name }}
+          secretName: {{ required "webui.gitlab.clientSecretSecret.name is required for OAuth" .Values.webui.gitlab.clientSecretSecret.name }}
+      {{- end }}
       - name: session
         secret:
           secretName: {{ required "webui.sessionKeySecret.name is required" .Values.webui.sessionKeySecret.name }}
