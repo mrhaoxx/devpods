@@ -58,8 +58,11 @@ FROM alpine:3.20 AS zsh-build
 ARG ZSH_VERSION=5.9
 RUN apk add --no-cache build-base ncurses-static ncurses-dev autoconf wget xz
 WORKDIR /src
-RUN wget -qO zsh.tar.xz \
-    "https://www.zsh.org/pub/zsh-${ZSH_VERSION}.tar.xz" && \
+# zsh.org moves superseded releases into pub/old/; fall back through
+# the mirrors so a new upstream release doesn't break this build.
+RUN { wget -qO zsh.tar.xz "https://www.zsh.org/pub/zsh-${ZSH_VERSION}.tar.xz" \
+      || wget -qO zsh.tar.xz "https://www.zsh.org/pub/old/zsh-${ZSH_VERSION}.tar.xz" \
+      || wget -qO zsh.tar.xz "https://downloads.sourceforge.net/project/zsh/zsh/${ZSH_VERSION}/zsh-${ZSH_VERSION}.tar.xz"; } && \
     tar xJf zsh.tar.xz
 WORKDIR /src/zsh-${ZSH_VERSION}
 RUN CFLAGS="-O2" LDFLAGS="-static" \
