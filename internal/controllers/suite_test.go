@@ -109,6 +109,9 @@ func defaultGwConfig() *devpodv1alpha1.GatewayConfig {
 			SupervisorImage:    "ghcr.io/example/devpod-sshd:test",
 			HostKeyRef:      devpodv1alpha1.SecretRef{Name: "gw-host", Namespace: "devpod-system"},
 			InternalKeyRef:  devpodv1alpha1.SecretRef{Name: "gw-internal", Namespace: "devpod-system"},
+			// The netpol tests assert the isolation path; keep it on in
+			// the suite like production installs.
+			IsolateNetwork: true,
 		},
 	}
 }
