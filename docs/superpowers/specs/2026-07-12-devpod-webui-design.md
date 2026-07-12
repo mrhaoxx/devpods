@@ -10,10 +10,13 @@ platform admins get a global view with per-user resource quotas. Login is
 OAuth against a self-hosted GitLab; ordinary users never touch kubectl.
 
 The UI also integrates with Kore (github.com/zjusct/kore), the cluster's
-CPU-pinning / NUMA-binding / CPU-pool system: the create form speaks
-Kore's annotation protocol, DevPod detail pages show actual core
-bindings, and the admin panel gets a per-core cluster topology
-visualization (a web `kubectl kore top`). See §7.
+CPU-pinning / NUMA-binding / CPU-pool system. CPU bindings are
+**template-mediated**: admins curate `DevPodTemplate` CRs that carry the
+Kore binding block; ordinary users pick a template (and can see its
+binding) but can never author Kore annotations themselves. DevPod
+detail pages show actual core bindings, and admins get a per-core
+cluster topology visualization (a web `kubectl kore top`) that doubles
+as the template editor's visual aid. See §7.
 
 The original design doc (2026-05-12) listed a web UI as a v1 non-goal.
 This spec lifts that non-goal now that persistence, hibernation, LDAP,
@@ -39,11 +42,13 @@ and snapshots have shipped.
   hibernate (M2).
 - Per-user aggregate resource quotas, stored on the `User` CRD, enforced
   by the webui backend at create/mutate/wake time.
-- Kore compatibility and visualization: form-level support for Kore
-  pinning/pool annotations with client-side mirrors of Kore's validation
-  rules, binding readback on the detail page, and a per-core topology
-  view fed by `KoreNodeTopology` CRs. All Kore features are gated and
-  degrade to hidden when Kore is not installed (`--kore=auto|on|off`).
+- Kore compatibility and visualization, template-mediated: admin-curated
+  `DevPodTemplate` CRs are the only way bindings reach non-admin
+  DevPods; users get read-only template visibility and binding readback
+  on the detail page; admins get a per-core topology view fed by
+  `KoreNodeTopology` CRs, embedded in the template editor. All Kore
+  features are gated and degrade to hidden when Kore is not installed
+  (`--kore=auto|on|off`).
 
 ### Non-goals
 
@@ -61,9 +66,10 @@ and snapshots have shipped.
 
 Approach chosen: a fourth binary, `devpod-webui`, deployed as its own
 stateless Deployment in `devpod-system`. The gateway (security-critical
-SSH path) and controller are not modified, with one exception: the
-`User` CRD grows a `spec.quota` field that only the webui reads and
-writes.
+SSH path) and controller are not modified, with two API exceptions the
+controller never consumes: the `User` CRD grows a `spec.quota` field,
+and a new cluster-scoped `DevPodTemplate` CRD is added (§4). Both are
+read and written only by the webui.
 
 ```
 ┌──────────────────────────────────────────────────────────────┐
@@ -103,6 +109,8 @@ internal/webui/
   session.go                 # HMAC-signed cookie sessions (stateless)
   api_devpods.go             # list/get/create/patch/delete DevPods
   api_users.go               # pubkeys, auto-provision, (admin) quota
+  api_templates.go           # template list (all users), CRUD (admin, M2),
+                             #   server-side template application
   api_snapshots.go           # M2
   quota.go                   # quota aggregation and validation
   terminal.go                # M3: pods/exec ↔ WebSocket
@@ -117,9 +125,9 @@ hack/e2e-webui.sh
 
 - `devpod.io` devpods, devpodsnapshots: full verbs, namespaced Role in
   the devpods namespace only.
-- `devpod.io` users: full verbs via ClusterRole — User is
-  cluster-scoped, so this is unavoidably a cluster-wide grant; it is
-  the webui's only cluster-scoped write.
+- `devpod.io` users, devpodtemplates: full verbs via ClusterRole — both
+  CRDs are cluster-scoped, so these are unavoidably cluster-wide
+  grants; they are the webui's only cluster-scoped writes.
 - core: `pods` (read — Kore binding readback lives in Pod annotations),
   `pods/log` (M2), `pods/exec` (M3), `events` (read) in the devpods
   namespace.
@@ -177,9 +185,11 @@ GitLab group claim later; out of scope now.
 
 ---
 
-## 4. CRD change: `User.spec.quota`
+## 4. CRD changes
 
-The only API change in this project. The controller does not consume it.
+Two additions, neither consumed by the controller.
+
+### 4.1 `User.spec.quota`
 
 ```go
 // UserQuota caps aggregate resources across a User's DevPods.
@@ -224,9 +234,67 @@ type UserQuota struct {
    webui-only by design (§9).
 6. Defaults for users with nil quota come from `--default-quota-file`.
 7. Kore interplay: pinned CPUs are ordinary integer `cpu` limits, so
-   quota needs no special casing. Kore's webhook injects its
-   `kore.zjusct.io/cpu` gate resource at Pod admission — it never
-   appears in the DevPod CR and is invisible to quota.
+   quota needs no special casing — resources implied by a template's
+   binding count against the creating user like any others. Kore's
+   webhook injects its `kore.zjusct.io/cpu` gate resource at Pod
+   admission — it never appears in the DevPod CR and is invisible to
+   quota.
+
+### 4.2 `DevPodTemplate` (new, cluster-scoped)
+
+Admin-curated templates are the only path by which Kore bindings reach
+non-admin DevPods (§7). One CRD, two usages, composable:
+
+```go
+// DevPodTemplateSpec: at least one of Binding / PodPreset must be set.
+type DevPodTemplateSpec struct {
+    DisplayName string `json:"displayName"`
+    // +optional
+    Description string `json:"description,omitempty"`
+
+    // Binding, if set, is the Kore binding block stamped onto DevPods
+    // created from this template.
+    // +optional
+    Binding *BindingSpec `json:"binding,omitempty"`
+
+    // PodPreset, if set, makes this a full preset (one-click create).
+    // +optional
+    PodPreset *PodPresetSpec `json:"podPreset,omitempty"`
+}
+
+// BindingSpec carries Kore annotations plus the resources they imply.
+type BindingSpec struct {
+    // Annotations restricted to the kore.zjusct.io/* whitelist
+    // (pin, pool, pool-size, numa-policy, memory-policy, placement,
+    // smt-policy — NOT cpuset, which stays an admin escape hatch).
+    Annotations map[string]string `json:"annotations"`
+    // Resources the binding implies for the target container
+    // (pin: integer CPU with requests == limits).
+    Resources corev1.ResourceRequirements `json:"resources"`
+}
+
+// PodPresetSpec fixes the user-visible knobs of a full preset.
+type PodPresetSpec struct {
+    Image string `json:"image"`
+    // +optional
+    Resources corev1.ResourceRequirements `json:"resources,omitempty"`
+    // +optional
+    Persistence *PersistenceSpec `json:"persistence,omitempty"`
+    // +optional
+    Shell string `json:"shell,omitempty"`
+}
+```
+
+- **Binding-only** template = a binding overlay (e.g. "exclusive 8
+  cores, single NUMA") users attach to an otherwise custom DevPod.
+- **Binding + PodPreset** (or preset-only) = a one-click preset (e.g.
+  "GPU dev box 8C64G pinned"); the user supplies only the name suffix.
+- The webui validates a template's binding against the mirrored Kore
+  rules when an admin saves it — authoring errors surface at
+  template-save time, not when some user later instantiates it.
+- Templates are stamped at DevPod create time; editing a template never
+  retro-applies to existing DevPods. Live pool resizing and similar
+  operations are admin direct-patches on the DevPod.
 
 ---
 
@@ -244,7 +312,8 @@ rejections return `409` with code `QUOTA_EXCEEDED` and a
 | `GET /api/me` | identity, admin bit, quota + current usage |
 | `GET /api/me/pubkeys`, `PUT /api/me/pubkeys` | SSH pubkey self-service (writes User CR) |
 | `GET /api/devpods` (`?watch=true` → SSE) | own DevPods, live status |
-| `POST /api/devpods` | create; body is form-JSON or raw YAML — one validation + quota path |
+| `POST /api/devpods` | create; body: form-JSON or raw YAML + optional `templateRef` — one validation + quota + template-stamping path |
+| `GET /api/templates` | templates, binding details included (read-only for everyone) |
 | `GET /api/devpods/{name}` | detail |
 | `PATCH /api/devpods/{name}` | hibernate/wake (`running`), spec edits |
 | `DELETE /api/devpods/{name}` | delete |
@@ -254,6 +323,7 @@ rejections return `409` with code `QUOTA_EXCEEDED` and a
 | `POST /api/snapshots`, `GET /api/snapshots?devpod=` | M2 |
 | `GET /api/admin/users`, `PATCH /api/admin/users/{name}` | M2, admin: users + usage, quota edit |
 | `GET /api/admin/devpods`, `POST /api/admin/devpods/{name}/stop` | M2, admin: global view, force hibernate |
+| `POST/PUT/DELETE /api/admin/templates/{name}` | M2, admin: template CRUD (M1 seeds templates via kubectl/GitOps) |
 | `GET /api/kore/topology` (`?watch=true` → SSE) | M2, per-node core ledger from KoreNodeTopology CRs |
 | `GET /api/kore/pools` | M2, CPU pools + members |
 
@@ -282,13 +352,18 @@ React Query + the SSE watch stream; no Redux.
 ```
 /login                  # "Sign in with GitLab" button
 /                       # my DevPods: status badges, endpoint, quick hibernate/wake
-/devpods/new            # create: form mode ⇄ YAML mode toggle
+/devpods/new            # create: preset picker | custom form (+ optional
+                        #   binding-overlay template) | YAML. Binding is
+                        #   template-only for non-admins; template cards
+                        #   show their binding details
 /devpods/{name}         # detail: status, events, quota usage, Kore binding,
                         #   snapshots (M2), logs (M2), terminal (M3)
 /settings/pubkeys       # pubkey management + ssh command line display
 /admin/users            # (admin, M2) users, usage vs quota, edit
 /admin/devpods          # (admin, M2) global view, force hibernate
 /admin/topology         # (admin, M2) per-core cluster CPU map — web `kore top`
+/admin/templates        # (admin, M2) template CRUD; binding editor renders
+                        #   beside the live topology grid
 ```
 
 ---
@@ -301,31 +376,36 @@ merges `spec.pod.metadata.annotations` into the rendered Pod
 (`internal/render/pod.go`), and Kore's own webhook injects
 `schedulerName` and its gate resource at Pod admission. Compatibility
 therefore requires **no controller or render changes** — the webui's job
-is to surface the annotation protocol ergonomically and mirror Kore's
-validation rules so users fail in the form, not at reconcile.
+is to mediate the annotation protocol through admin-curated templates
+(§4.2) and mirror Kore's validation rules at template-save time, so
+binding errors surface at authoring, not at reconcile.
 
-### Create form: "CPU binding" section (M1)
+### Template-mediated binding (M1)
 
-Three modes, mapped to annotations on `spec.pod.metadata.annotations`:
+Ordinary users never author Kore annotations. The create flow is a
+three-way choice:
 
-- **None** (default) — no annotations; pod lands in Kore's shared pool.
-- **Exclusive pinning** — sets `kore.zjusct.io/pin: "true"`; optional
-  selects for `numa-policy` (single/preferred/spread), `memory-policy`
-  (strict/preferred), `placement` (pack/scatter), `smt-policy`
-  (full-core/logical). Form-side validation mirrors Kore's admission
-  rules: at least one container with integer CPU and requests == limits
-  (the form auto-syncs requests to limits when pinning is on).
-- **CPU pool** — sets `kore.zjusct.io/pool` + `pool-size`; mutually
-  exclusive with pinning (enforced by the form and re-checked
-  server-side). Pool oversubscription (Σlimits > pool-size ≥ Σrequests)
-  is allowed per Kore's model, and the form explains it inline.
+- **Full preset** — pick a preset template; the user supplies only the
+  DevPod name suffix.
+- **Custom + binding overlay** — user chooses image, persistence, etc.
+  freely and optionally attaches a binding-only template; the server
+  stamps the template's annotations and implied resources onto the
+  generated spec.
+- **Plain custom** (default) — no template, no annotations; the pod
+  lands in Kore's shared pool.
 
-The explicit-cpuset escape hatch (`kore.zjusct.io/cpuset`) requires
-`nodeName` and exact core numbers — admin YAML path only, no form
-support.
+**Stamping invariant:** any `kore.zjusct.io/*` annotation appearing in
+a non-admin submitted spec — form or YAML, create or patch — is
+rejected with an explicit error. Bindings enter DevPod specs only via
+server-side template application. (A PATCH that would drop or alter
+stamped annotations is likewise rejected for non-admins.)
 
-The YAML path accepts any Kore annotations verbatim; server-side
-validation runs the same mirrored rules for non-admins.
+Users have read-only visibility into templates: the picker and template
+cards show the binding in full (policy, core count, pool name/size).
+
+Admins are unrestricted: arbitrary YAML, including the explicit-cpuset
+escape hatch (`kore.zjusct.io/cpuset` + `nodeName`), which is never
+templated.
 
 ### Binding readback: detail page (M1)
 
@@ -351,6 +431,9 @@ devices, allocations per container, pools):
 - A pools table (name, cpuset, NUMA, members) sits below the grid.
 - Live updates ride the same SSE reconnect semantics as the DevPod list
   (§8).
+- The same grid component renders beside the template editor
+  (`/admin/templates`), so an admin adjusting a template's binding sees
+  current free cores and pool layout while making the call.
 
 The dataset (node names, all pods' placements) is operator-level
 information, so the page is admin-only; per-user binding info is
@@ -359,11 +442,12 @@ already on the detail page.
 ### Gating
 
 `--kore=auto|on|off`, auto = probe for the KoreNodeTopology CRD at
-startup. When off/absent: form section, detail panel, topology page,
-and `/api/kore/*` all disappear; the ClusterRole binding for
-korenodetopologies is chart-conditional on the same switch. DevPods
-that already carry Kore annotations still render/patch fine — the
-annotations are inert without Kore installed.
+startup. When off/absent: binding(-only) templates are hidden from the
+picker (presets without a binding remain usable), the detail binding
+panel, topology page, and `/api/kore/*` all disappear; the ClusterRole
+binding for korenodetopologies is chart-conditional on the same switch.
+DevPods that already carry Kore annotations still render/patch fine —
+the annotations are inert without Kore installed.
 
 ---
 
@@ -388,8 +472,13 @@ annotations are inert without Kore installed.
   kubectl credentials for the devpods namespace bypasses it. The
   deployment model assumes ordinary users have no kubeconfig; admins
   handing out kubeconfigs must know this. (Kore's own admission rules
-  are NOT ours to enforce — the form mirrors them only for UX; Kore's
-  webhook/scheduler remain the real gate for binding validity.)
+  are NOT ours to enforce — the webui mirrors them at template-save
+  time only for UX; Kore's webhook/scheduler remain the real gate for
+  binding validity.)
+- **Non-admin specs must never carry `kore.zjusct.io/*` annotations.**
+  The webui rejects them on every create and patch; bindings are
+  stamped server-side from templates only (§7). This keeps admission to
+  scarce exclusive cores an admin-curated decision.
 - The webui SA holds full CRD rights in the devpods namespace plus a
   cluster-wide grant on the cluster-scoped User CRD, and is a
   high-value target: minimal RBAC (§2), NetworkPolicy on ingress and
@@ -403,7 +492,7 @@ annotations are inert without Kore installed.
 
 | Layer | Method |
 |---|---|
-| quota aggregation, username mapping, cookie signing, Kore annotation validation mirrors | table-driven unit tests |
+| quota aggregation, username mapping, cookie signing, Kore annotation validation mirrors, template stamping + non-admin annotation rejection | table-driven unit tests |
 | API handlers + ownership checks | envtest (existing `hack/test.sh` infra), forged sessions hit handlers directly |
 | Kore topology API | envtest with the KoreNodeTopology CRD applied and hand-crafted status fixtures (no live Kore needed) |
 | OAuth flow | httptest fake OIDC issuer signing test id_tokens |
@@ -418,18 +507,21 @@ project convention).
 ## 11. Milestones
 
 - **M1 — skeleton + core self-service.** OAuth login, auto-provision,
-  pubkey management, list/detail/hibernate/wake/delete, form + YAML
-  create (incl. the Kore CPU-binding form section and binding
-  readback, gated), quota enforcement, chart + RBAC + e2e.
+  pubkey management, list/detail/hibernate/wake/delete, DevPodTemplate
+  CRD + three-way create (preset / custom + overlay / plain; form +
+  YAML) with server-side template stamping and the non-admin
+  Kore-annotation rejection rule, binding readback, quota enforcement,
+  chart + RBAC + e2e. Admins seed templates via kubectl/GitOps in M1.
   *Acceptance: a new GitLab user goes from login to
   `ssh <prefix>xxx+pod@gateway` with zero admin involvement — including
-  a pinned or pooled DevPod when Kore is installed.*
+  a pinned or pooled DevPod via template when Kore is installed.*
 - **M2 — observability + admin.** Snapshots (initiate/progress/
   history), log streaming, events, admin panel (global view, quota
   editing, force hibernate), Kore topology visualization
-  (`/admin/topology` + pools).
-  *Acceptance: admins no longer need kubectl for day-to-day operations,
-  `kubectl kore top` included.*
+  (`/admin/topology` + pools), template editor with the topology grid
+  embedded.
+  *Acceptance: admins no longer need kubectl for day-to-day operations —
+  `kubectl kore top` and template curation included.*
 - **M3 — terminal.** xterm.js over `pods/exec` WebSocket, auto
   reconnect.
   *Acceptance: run commands in a DevPod container from the browser.*
