@@ -24,3 +24,8 @@
 
 # Claude Code per-project state
 .claude/
+
+# Web UI: node deps + built assets (web/dist/index.html placeholder stays tracked)
+web/node_modules/
+web/dist/assets/
+web/tsconfig.tsbuildinfo
