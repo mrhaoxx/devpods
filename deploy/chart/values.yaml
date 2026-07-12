@@ -77,8 +77,14 @@ webui:
   # cookie attribute (dev/e2e only — use https in production).
   baseURL: ""
   userPrefix: ""                 # GitLab user xxxx → DevPod user <prefix>xxxx
-  admins: []                     # GitLab usernames granted admin
+  admins: []                     # usernames granted admin (also via User.spec.admin, kubectl)
   kore: auto                     # auto | on | off
+  # Built-in username+password login (independent of OAuth). Admins
+  # create users in the UI; who is an admin is set via kubectl
+  # (User.spec.admin). At least one of passwordAuth / gitlab.issuerURL
+  # must be enabled.
+  passwordAuth: false
+  passwordMinLength: 8
   # Let users edit User.spec.pubkeys via the UI. Disable when SSH keys
   # are managed externally (e.g. LDAP is the source of truth).
   pubkeySelfService: true

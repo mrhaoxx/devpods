@@ -60,14 +60,17 @@ func main() {
 
 		pubkeySelfService bool
 		sshAdvertise      string
+		passwordAuth      bool
+		passwordMinLength int
+		externalURL       string
 	)
 	flag.StringVar(&listen, "listen", ":8080", "HTTP listen address")
-	flag.StringVar(&issuerURL, "gitlab-issuer-url", "", "GitLab OIDC issuer URL (required)")
-	flag.StringVar(&clientID, "oauth-client-id", "", "OAuth application client id (required)")
-	flag.StringVar(&clientSecretFile, "oauth-client-secret-file", "", "file containing the OAuth client secret (required)")
-	flag.StringVar(&redirectURL, "redirect-url", "", "external callback URL, e.g. https://devpod.example.com/auth/callback (required)")
+	flag.StringVar(&issuerURL, "gitlab-issuer-url", "", "GitLab OIDC issuer URL (enables OAuth when set)")
+	flag.StringVar(&clientID, "oauth-client-id", "", "OAuth application client id (required for OAuth)")
+	flag.StringVar(&clientSecretFile, "oauth-client-secret-file", "", "file containing the OAuth client secret (required for OAuth)")
+	flag.StringVar(&redirectURL, "redirect-url", "", "external callback URL, e.g. https://devpod.example.com/auth/callback (required for OAuth)")
 	flag.StringVar(&userPrefix, "user-prefix", "", "prefix mapping GitLab usernames to DevPod users")
-	flag.StringVar(&admins, "admins", "", "comma-separated GitLab usernames granted admin")
+	flag.StringVar(&admins, "admins", "", "comma-separated usernames granted admin (in addition to User.spec.admin)")
 	flag.StringVar(&sessionKeyFile, "session-key-file", "", "file containing the session HMAC key, >= 32 bytes (required)")
 	flag.StringVar(&defaultQuotaFile, "default-quota-file", "", "YAML/JSON UserQuota applied to users without spec.quota")
 	flag.StringVar(&devpodNamespace, "devpod-namespace", "devpods", "namespace where DevPod objects live")
@@ -78,18 +81,33 @@ func main() {
 		"allow users to manage SSH pubkeys via the UI; disable when keys are managed externally (LDAP)")
 	flag.StringVar(&sshAdvertise, "ssh-advertise", "",
 		"gateway address shown in SSH command lines, host or host:port (e.g. devpod.example.com:2222)")
+	flag.BoolVar(&passwordAuth, "password-auth", false,
+		"enable built-in username+password login (independent of OAuth)")
+	flag.IntVar(&passwordMinLength, "password-min-length", 8, "minimum password length for create/reset/change")
+	flag.StringVar(&externalURL, "external-url", "",
+		"external base URL of the UI (https → Secure cookies + Origin check); defaults to the OAuth redirect's origin")
 	flag.Parse()
 
 	logger := slog.New(slog.NewJSONHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelInfo}))
 	slog.SetDefault(logger)
 
-	for name, v := range map[string]string{
-		"--gitlab-issuer-url": issuerURL, "--oauth-client-id": clientID,
-		"--oauth-client-secret-file": clientSecretFile, "--redirect-url": redirectURL,
-		"--session-key-file": sessionKeyFile,
-	} {
-		if v == "" {
-			fatal(fmt.Errorf("%s is required", name))
+	// OAuth is enabled when its issuer URL is set; password auth is an
+	// independent switch. At least one must be on.
+	oauthEnabled := issuerURL != ""
+	if !oauthEnabled && !passwordAuth {
+		fatal(fmt.Errorf("no login method enabled: set --password-auth and/or --gitlab-issuer-url"))
+	}
+	if sessionKeyFile == "" {
+		fatal(fmt.Errorf("--session-key-file is required"))
+	}
+	if oauthEnabled {
+		for name, v := range map[string]string{
+			"--oauth-client-id": clientID, "--oauth-client-secret-file": clientSecretFile,
+			"--redirect-url": redirectURL,
+		} {
+			if v == "" {
+				fatal(fmt.Errorf("%s is required when OAuth is enabled", name))
+			}
 		}
 	}
 
@@ -97,9 +115,12 @@ func main() {
 	if err != nil || len(sessionKey) < 32 {
 		fatal(fmt.Errorf("session key: need >= 32 bytes from %s (err=%v)", sessionKeyFile, err))
 	}
-	clientSecret, err := os.ReadFile(clientSecretFile)
-	if err != nil {
-		fatal(fmt.Errorf("client secret: %w", err))
+	var clientSecret []byte
+	if oauthEnabled {
+		clientSecret, err = os.ReadFile(clientSecretFile)
+		if err != nil {
+			fatal(fmt.Errorf("client secret: %w", err))
+		}
 	}
 
 	defaultQuota := devpodv1alpha1.UserQuota{}
@@ -159,6 +180,17 @@ func main() {
 		}
 	}
 
+	// Cookie Secure + CSRF Origin derive from the external URL (falls
+	// back to the OAuth redirect's origin).
+	origin := originOf(externalURL)
+	if origin == "" {
+		origin = originOf(redirectURL)
+	}
+	adminSet := map[string]bool{}
+	for _, a := range splitNonEmpty(admins) {
+		adminSet[a] = true
+	}
+
 	sm := webui.NewSessionManager(sessionKey, 24*time.Hour)
 	srv := &webui.Server{
 		Client:       mgr.GetClient(),
@@ -168,11 +200,16 @@ func main() {
 		Sessions:     sm,
 		DefaultQuota: defaultQuota,
 		KoreEnabled:  koreEnabled,
-		Origin:       originOf(redirectURL),
+		Origin:       origin,
 
 		PubkeySelfService: pubkeySelfService,
 		SSHHost:           sshHost,
 		SSHPort:           sshPort,
+
+		PasswordAuth:      passwordAuth,
+		PasswordMinLength: passwordMinLength,
+		Admins:            adminSet,
+		SecureCookies:     strings.HasPrefix(origin, "https://"),
 	}
 
 	go func() {
@@ -184,18 +221,21 @@ func main() {
 		fatal(fmt.Errorf("cache sync failed"))
 	}
 
-	oauth, err := webui.NewOAuth(ctx, webui.OAuthConfig{
-		IssuerURL:    issuerURL,
-		ClientID:     clientID,
-		ClientSecret: strings.TrimSpace(string(clientSecret)),
-		RedirectURL:  redirectURL,
-		UserPrefix:   userPrefix,
-		Admins:       splitNonEmpty(admins),
-	}, mgr.GetClient(), sm)
-	if err != nil {
-		fatal(err)
+	if oauthEnabled {
+		oauth, err := webui.NewOAuth(ctx, webui.OAuthConfig{
+			IssuerURL:    issuerURL,
+			ClientID:     clientID,
+			ClientSecret: strings.TrimSpace(string(clientSecret)),
+			RedirectURL:  redirectURL,
+			UserPrefix:   userPrefix,
+			Admins:       splitNonEmpty(admins),
+		}, mgr.GetClient(), sm)
+		if err != nil {
+			fatal(err)
+		}
+		srv.OAuth = oauth
 	}
-	srv.OAuth = oauth
+	slog.Info("auth methods", "password", passwordAuth, "oauth", oauthEnabled, "secureCookies", srv.SecureCookies)
 
 	httpSrv := &http.Server{Addr: listen, Handler: srv.Routes(), ReadHeaderTimeout: 5 * time.Second}
 	go func() {
