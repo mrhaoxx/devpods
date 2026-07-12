@@ -28,13 +28,18 @@ export default function PodDetail() {
   const q = useQuery({ queryKey: ["devpod", name], queryFn: () => getDevPod(name) });
   const meQ = useQuery({ queryKey: ["me"], queryFn: me });
 
-  // Live status: the owner's DevPod watch stream pushes phase/spec
-  // changes; refetch this pod whenever an event names it.
+  // Live status: replace the cached data directly from the SSE
+  // payload instead of triggering a refetch — avoids an infinite
+  // invalidate→fetch→SSE→invalidate loop.
   useEffect(
     () =>
       watchDevPods(
         (_type, dp) => {
-          if (dp.metadata.name === name) qc.invalidateQueries({ queryKey: ["devpod", name] });
+          if (dp.metadata.name === name) {
+            qc.setQueryData(["devpod", name], (old: any) =>
+              old ? { ...old, devpod: dp } : { devpod: dp },
+            );
+          }
         },
         () => qc.invalidateQueries({ queryKey: ["devpod", name] }),
       ),
