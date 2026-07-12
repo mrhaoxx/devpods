@@ -12,6 +12,15 @@ import {
   K8sEvent,
 } from "../api";
 
+function fmtTime(ts?: string): string {
+  if (!ts) return "";
+  const d = new Date(ts);
+  return d.toLocaleString(undefined, {
+    month: "short", day: "numeric",
+    hour: "2-digit", minute: "2-digit", second: "2-digit",
+  });
+}
+
 export default function PodDetail() {
   const { name = "" } = useParams();
   const nav = useNavigate();
@@ -173,6 +182,7 @@ export default function PodDetail() {
         <ul className="space-y-1 font-mono text-xs text-slate-600">
           {events.map((e, i) => (
             <li key={i}>
+              <span className="text-slate-400">{fmtTime(e.lastTimestamp)}</span>{" "}
               {e.reason}
               {e.totalCount > 1 ? ` (×${e.totalCount})` : ""}: {e.message}
             </li>
