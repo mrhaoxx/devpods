@@ -29,7 +29,7 @@ func TestUserReconciler_BlocksDeleteUntilDevPodsRemoved(t *testing.T) {
 	}
 
 	dp := &devpodv1alpha1.DevPod{
-		ObjectMeta: metav1.ObjectMeta{Name: "data-dev", Namespace: "devpods"},
+		ObjectMeta: metav1.ObjectMeta{Name: "carol-data-dev", Namespace: "devpods"},
 		Spec: devpodv1alpha1.DevPodSpec{
 			Owner:   "carol",
 			Running: true,
