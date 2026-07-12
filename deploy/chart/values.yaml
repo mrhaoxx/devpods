@@ -13,6 +13,10 @@ image:
   snapshot:
     repository: docker
     tag: cli
+  webui:
+    repository: ghcr.io/mrhaoxx/devpod-webui
+    tag: dev
+    pullPolicy: IfNotPresent
 
 namespaces:
   system: devpod-system
@@ -58,3 +62,32 @@ gateway:
       name: ""
       namespace: ""            # secretRef.namespace (informational)
 
+
+webui:
+  enabled: false
+  replicas: 2
+  resources:
+    requests: {cpu: 100m, memory: 128Mi}
+    limits:   {cpu: 500m, memory: 512Mi}
+  service:
+    type: ClusterIP
+    port: 80
+  # External URL of the UI; the OAuth redirect URL becomes
+  # baseURL + /auth/callback. An http:// baseURL disables the Secure
+  # cookie attribute (dev/e2e only — use https in production).
+  baseURL: ""
+  userPrefix: ""                 # GitLab user xxxx → DevPod user <prefix>xxxx
+  admins: []                     # GitLab usernames granted admin
+  kore: auto                     # auto | on | off
+  gitlab:
+    issuerURL: ""
+    clientID: ""
+    # Secret with key "client-secret"; must pre-exist in namespaces.system.
+    clientSecretSecret: {name: ""}
+  # Secret with key "session-key" (>= 32 random bytes); must pre-exist
+  # in namespaces.system. All replicas share it (stateless sessions).
+  sessionKeySecret: {name: ""}
+  defaultQuota:
+    maxDevPods: 3
+    compute: {cpu: "8", memory: "16Gi"}
+    storage: "50Gi"
