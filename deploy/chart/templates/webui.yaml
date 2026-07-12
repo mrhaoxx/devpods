@@ -48,7 +48,9 @@ spec:
         - --default-quota-file=/etc/devpod/webui/default-quota.yaml
         - --devpod-namespace={{ .Values.namespaces.devpods }}
         - --kore={{ .Values.webui.kore }}
+        {{- if hasKey .Values.webui "pubkeySelfService" }}
         - --pubkey-self-service={{ .Values.webui.pubkeySelfService }}
+        {{- end }}
         {{- if .Values.webui.sshAdvertise }}
         - --ssh-advertise={{ .Values.webui.sshAdvertise }}
         {{- end }}
