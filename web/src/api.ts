@@ -36,9 +36,32 @@ export interface Me {
   nameBudget: number;
   quota: { maxDevPods?: number; compute?: Record<string, string>; storage?: string };
   usage: { devpods: number; running: number; compute: Record<string, string>; storage: string };
-  features: { pubkeySelfService: boolean; kore: boolean };
+  features: { pubkeySelfService: boolean; kore: boolean; passwordAuth: boolean };
+  hasPassword: boolean;
   ssh: { host: string; port: number };
 }
+
+export type AuthConfig = { password: boolean; oauth: boolean };
+export type AdminUser = {
+  name: string;
+  displayName?: string;
+  admin: boolean;
+  hasPassword: boolean;
+  devpods: number;
+};
+
+export const authConfig = () => req<AuthConfig>("GET", "/api/auth/config");
+export const passwordLogin = (username: string, password: string) =>
+  req<{ user: string }>("POST", "/api/auth/password", { username, password });
+export const logout = () => req<void>("POST", "/auth/logout");
+export const changePassword = (oldPassword: string, newPassword: string) =>
+  req<void>("PUT", "/api/me/password", { oldPassword, newPassword });
+export const listUsers = () => req<{ items: AdminUser[] }>("GET", "/api/admin/users");
+export const createUser = (username: string, displayName: string, password: string) =>
+  req<AdminUser>("POST", "/api/admin/users", { username, displayName, password });
+export const resetUserPassword = (name: string, password: string) =>
+  req<void>("PATCH", `/api/admin/users/${name}`, { password });
+export const deleteUser = (name: string) => req<void>("DELETE", `/api/admin/users/${name}`);
 
 // sshCommand renders the copy-pastable login line using the
 // deployment's advertised gateway address (-p only when non-22).

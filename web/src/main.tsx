@@ -8,6 +8,8 @@ import PodList from "./pages/PodList";
 import PodDetail from "./pages/PodDetail";
 import PodCreate from "./pages/PodCreate";
 import Pubkeys from "./pages/Pubkeys";
+import Password from "./pages/Password";
+import AdminUsers from "./pages/AdminUsers";
 
 const qc = new QueryClient();
 const router = createBrowserRouter([
@@ -16,6 +18,8 @@ const router = createBrowserRouter([
   { path: "/devpods/new", element: <PodCreate /> },
   { path: "/devpods/:name", element: <PodDetail /> },
   { path: "/settings/pubkeys", element: <Pubkeys /> },
+  { path: "/settings/password", element: <Password /> },
+  { path: "/admin/users", element: <AdminUsers /> },
 ]);
 
 ReactDOM.createRoot(document.getElementById("root")!).render(
