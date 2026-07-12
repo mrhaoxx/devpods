@@ -32,8 +32,11 @@ func (s *Server) handleMe(w http.ResponseWriter, r *http.Request) {
 	}
 	var u devpodv1alpha1.User
 	userPtr := &u
+	hasPassword := false
 	if err := s.Client.Get(r.Context(), types.NamespacedName{Name: sess.User}, &u); err != nil {
 		userPtr = nil
+	} else {
+		hasPassword = u.Spec.PasswordHash != ""
 	}
 	owned, err := s.ownedDevPods(r, sess.User)
 	if err != nil {
@@ -72,8 +75,10 @@ func (s *Server) handleMe(w http.ResponseWriter, r *http.Request) {
 		"features": map[string]any{
 			"pubkeySelfService": s.PubkeySelfService,
 			"kore":              s.KoreEnabled,
+			"passwordAuth":      s.PasswordAuth,
 		},
-		"ssh": map[string]any{"host": s.SSHHost, "port": s.SSHPort},
+		"hasPassword": hasPassword,
+		"ssh":         map[string]any{"host": s.SSHHost, "port": s.SSHPort},
 	})
 }
 

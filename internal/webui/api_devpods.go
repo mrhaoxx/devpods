@@ -45,6 +45,17 @@ type Server struct {
 	// copy-pastable `ssh [-p port] user+pod@host` command lines.
 	SSHHost string
 	SSHPort int
+
+	// PasswordAuth enables the built-in username+password login path.
+	PasswordAuth bool
+	// PasswordMinLength gates password create/reset/change.
+	PasswordMinLength int
+	// Admins is the --admins username allowlist; effective admin also
+	// includes User.spec.admin (kubectl-managed).
+	Admins map[string]bool
+	// SecureCookies sets the Secure attribute on session cookies (https
+	// deployments true; plain-http dev/e2e false).
+	SecureCookies bool
 }
 
 type apiBody struct {
