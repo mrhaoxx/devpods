@@ -39,7 +39,10 @@ func newServer(t *testing.T) (*webui.Server, *webui.SessionManager) {
 				corev1.ResourceMemory: resource.MustParse("16Gi"),
 			},
 		},
-		KoreEnabled: true,
+		KoreEnabled:       true,
+		PubkeySelfService: true,
+		SSHHost:           "gw.example.com",
+		SSHPort:           2222,
 	}, sm
 }
 

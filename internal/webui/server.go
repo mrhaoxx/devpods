@@ -58,7 +58,13 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("GET /api/devpods/{name}", s.handleGetDevPod)
 	mux.HandleFunc("PATCH /api/devpods/{name}", s.handlePatchDevPod)
 	mux.HandleFunc("DELETE /api/devpods/{name}", s.handleDeleteDevPod)
-	mux.HandleFunc("GET /api/devpods/{name}/events", s.handleDevPodEvents)
+	mux.HandleFunc("GET /api/devpods/{name}/events", func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Query().Get("watch") == "true" {
+			s.handleWatchDevPodEvents(w, r)
+			return
+		}
+		s.handleDevPodEvents(w, r)
+	})
 	mux.HandleFunc("/api/", func(w http.ResponseWriter, r *http.Request) {
 		s.writeErr(w, http.StatusNotFound, "NOT_FOUND", "no such endpoint", nil)
 	})

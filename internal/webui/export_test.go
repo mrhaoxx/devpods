@@ -20,3 +20,5 @@ func (s *Server) HandleMeForTest() http.HandlerFunc            { return s.handle
 func (s *Server) HandleGetPubkeysForTest() http.HandlerFunc    { return s.handleGetPubkeys }
 func (s *Server) HandlePutPubkeysForTest() http.HandlerFunc    { return s.handlePutPubkeys }
 func (s *Server) HandleListTemplatesForTest() http.HandlerFunc { return s.handleListTemplates }
+
+func (s *Server) HandleWatchDevPodEventsForTest() http.HandlerFunc { return s.handleWatchDevPodEvents }

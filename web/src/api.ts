@@ -36,7 +36,26 @@ export interface Me {
   nameBudget: number;
   quota: { maxDevPods?: number; compute?: Record<string, string>; storage?: string };
   usage: { devpods: number; running: number; compute: Record<string, string>; storage: string };
+  features: { pubkeySelfService: boolean; kore: boolean };
+  ssh: { host: string; port: number };
 }
+
+// sshCommand renders the copy-pastable login line using the
+// deployment's advertised gateway address (-p only when non-22).
+export function sshCommand(me: Me | undefined, owner: string, pod: string): string {
+  const host = me?.ssh?.host || "<gateway>";
+  const port = me?.ssh?.port ?? 22;
+  const flag = host !== "<gateway>" && port !== 22 ? `-p ${port} ` : "";
+  return `ssh ${flag}${owner}+${pod}@${host}`;
+}
+
+export type K8sEvent = {
+  metadata: { uid: string };
+  reason?: string;
+  message?: string;
+  count?: number;
+  lastTimestamp?: string;
+};
 
 // DevPod objects are passed through as loosely-typed JSON; the UI
 // reads a handful of paths and must tolerate schema growth.
@@ -74,24 +93,20 @@ export const listTemplates = () => req<{ items: Template[] }>("GET", "/api/templ
 export const getPubkeys = () => req<{ pubkeys: string[] | null }>("GET", "/api/me/pubkeys");
 export const putPubkeys = (pubkeys: string[]) => req<{ pubkeys: string[] }>("PUT", "/api/me/pubkeys", { pubkeys });
 
-// watchDevPods opens the SSE stream; reconnects with backoff and
-// calls onResync after each (re)connect so the caller re-lists
-// (events may have been missed while disconnected).
-export function watchDevPods(onEvent: (type: string, dp: DevPod) => void, onResync: () => void): () => void {
+// sse opens an EventSource with backoff-reconnect; onResync fires on
+// each (re)connect so callers can refetch anything missed offline.
+function sse(url: string, onMessage: (data: string) => void, onResync?: () => void): () => void {
   let es: EventSource | null = null;
   let stopped = false;
   let delay = 1000;
   const connect = () => {
     if (stopped) return;
-    es = new EventSource("/api/devpods?watch=true");
+    es = new EventSource(url);
     es.onopen = () => {
       delay = 1000;
-      onResync();
+      onResync?.();
     };
-    es.onmessage = (m) => {
-      const ev = JSON.parse(m.data) as { type: string; devpod: DevPod };
-      onEvent(ev.type, ev.devpod);
-    };
+    es.onmessage = (m) => onMessage(m.data);
     es.onerror = () => {
       es?.close();
       if (!stopped) {
@@ -105,4 +120,26 @@ export function watchDevPods(onEvent: (type: string, dp: DevPod) => void, onResy
     stopped = true;
     es?.close();
   };
+}
+
+// watchDevPods streams the caller's DevPod changes.
+export function watchDevPods(onEvent: (type: string, dp: DevPod) => void, onResync: () => void): () => void {
+  return sse(
+    "/api/devpods?watch=true",
+    (data) => {
+      const ev = JSON.parse(data) as { type: string; devpod: DevPod };
+      onEvent(ev.type, ev.devpod);
+    },
+    onResync,
+  );
+}
+
+// watchDevPodEvents streams the k8s Events of one DevPod. The server
+// replays the backlog on connect, so no separate initial fetch is
+// needed.
+export function watchDevPodEvents(name: string, onEvent: (type: string, ev: K8sEvent) => void): () => void {
+  return sse(`/api/devpods/${name}/events?watch=true`, (data) => {
+    const msg = JSON.parse(data) as { type: string; event: K8sEvent };
+    onEvent(msg.type, msg.event);
+  });
 }

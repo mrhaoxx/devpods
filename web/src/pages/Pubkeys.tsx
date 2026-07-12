@@ -12,6 +12,21 @@ export default function Pubkeys() {
     getPubkeys().then((r) => setText((r.pubkeys ?? []).join("\n")));
   }, []);
 
+  if (meQ.data && meQ.data.features?.pubkeySelfService === false) {
+    return (
+      <main className="mx-auto max-w-2xl p-8">
+        <Link to="/" className="text-sm text-blue-600 hover:underline">
+          ← My DevPods
+        </Link>
+        <h1 className="mb-2 mt-2 text-xl font-semibold">SSH public keys</h1>
+        <p className="rounded bg-slate-50 p-4 text-sm text-slate-600">
+          SSH keys are managed externally on this deployment (e.g. via LDAP) — ask your administrator to
+          update them.
+        </p>
+      </main>
+    );
+  }
+
   const save = async () => {
     setMsg(null);
     try {

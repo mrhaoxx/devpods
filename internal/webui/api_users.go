@@ -69,6 +69,11 @@ func (s *Server) handleMe(w http.ResponseWriter, r *http.Request) {
 		"nameBudget": NameBudget(sess.User),
 		"quota":      EffectiveQuota(userPtr, s.DefaultQuota),
 		"usage":      usage,
+		"features": map[string]any{
+			"pubkeySelfService": s.PubkeySelfService,
+			"kore":              s.KoreEnabled,
+		},
+		"ssh": map[string]any{"host": s.SSHHost, "port": s.SSHPort},
 	})
 }
 
@@ -88,6 +93,11 @@ func (s *Server) handleGetPubkeys(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handlePutPubkeys(w http.ResponseWriter, r *http.Request) {
 	sess, ok := s.sessionFrom(w, r)
 	if !ok {
+		return
+	}
+	if !s.PubkeySelfService {
+		s.writeErr(w, http.StatusForbidden, "FORBIDDEN",
+			"pubkey self-service is disabled on this deployment (keys are managed externally)", nil)
 		return
 	}
 	var req struct {

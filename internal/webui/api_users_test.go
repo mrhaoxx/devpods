@@ -63,12 +63,36 @@ func TestMeAndPubkeys(t *testing.T) {
 				DevPods int               `json:"devpods"`
 				Compute map[string]string `json:"compute"`
 			} `json:"usage"`
+			Features struct {
+				PubkeySelfService bool `json:"pubkeySelfService"`
+				Kore              bool `json:"kore"`
+			} `json:"features"`
+			SSH struct {
+				Host string `json:"host"`
+				Port int    `json:"port"`
+			} `json:"ssh"`
 		}
 		if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
 			t.Fatal(err)
 		}
 		if body.User != "gl-alice" || body.NameBudget != 13 || body.Usage.DevPods != 1 || body.Usage.Compute["cpu"] != "2" {
 			t.Fatalf("body = %+v", body)
+		}
+		if !body.Features.PubkeySelfService || !body.Features.Kore {
+			t.Fatalf("features = %+v", body.Features)
+		}
+		if body.SSH.Host != "gw.example.com" || body.SSH.Port != 2222 {
+			t.Fatalf("ssh = %+v", body.SSH)
+		}
+	})
+
+	t.Run("pubkey self-service disabled", func(t *testing.T) {
+		s.PubkeySelfService = false
+		defer func() { s.PubkeySelfService = true }()
+		rec := doJSON(t, s.HandlePutPubkeysForTest(), "PUT", "/api/me/pubkeys", nil, alice,
+			`{"pubkeys":[]}`)
+		if rec.Code != http.StatusForbidden {
+			t.Fatalf("status = %d, want 403", rec.Code)
 		}
 	})
 

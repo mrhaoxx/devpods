@@ -48,6 +48,10 @@ spec:
         - --default-quota-file=/etc/devpod/webui/default-quota.yaml
         - --devpod-namespace={{ .Values.namespaces.devpods }}
         - --kore={{ .Values.webui.kore }}
+        - --pubkey-self-service={{ .Values.webui.pubkeySelfService }}
+        {{- if .Values.webui.sshAdvertise }}
+        - --ssh-advertise={{ .Values.webui.sshAdvertise }}
+        {{- end }}
         ports:
         - {name: http, containerPort: 8080}
         readinessProbe:
