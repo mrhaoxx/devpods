@@ -42,16 +42,8 @@ func (s *Server) handleWatchDevPods(w http.ResponseWriter, r *http.Request) {
 
 	events := make(chan watchEvent, 64)
 	push := func(typ string, obj any) {
-		dp, ok := obj.(*devpodv1alpha1.DevPod)
-		if !ok {
-			if tomb, isTomb := obj.(toolscache.DeletedFinalStateUnknown); isTomb {
-				dp, ok = tomb.Obj.(*devpodv1alpha1.DevPod)
-			}
-			if !ok {
-				return
-			}
-		}
-		if dp.Namespace != s.NS || dp.Spec.Owner != sess.User {
+		dp, ok := unwrap(obj).(*devpodv1alpha1.DevPod)
+		if !ok || dp.Namespace != s.NS || dp.Spec.Owner != sess.User {
 			return
 		}
 		select {

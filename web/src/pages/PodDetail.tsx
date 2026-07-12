@@ -1,14 +1,13 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
-import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { useQuery } from "@tanstack/react-query";
 import {
-  getDevPod,
   patchDevPod,
   deleteDevPod,
   me,
   sshCommand,
-  watchDevPods,
-  watchDevPodEvents,
+  watchDevPod,
+  DevPodDetail,
   K8sEvent,
 } from "../api";
 
@@ -16,48 +15,27 @@ function fmtTime(ts?: string): string {
   if (!ts) return "";
   const d = new Date(ts);
   return d.toLocaleString(undefined, {
-    month: "short", day: "numeric",
-    hour: "2-digit", minute: "2-digit", second: "2-digit",
+    month: "short",
+    day: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
   });
 }
 
 export default function PodDetail() {
   const { name = "" } = useParams();
   const nav = useNavigate();
-  const qc = useQueryClient();
-  const q = useQuery({ queryKey: ["devpod", name], queryFn: () => getDevPod(name) });
   const meQ = useQuery({ queryKey: ["me"], queryFn: me });
 
-  // Live status: replace the cached data directly from the SSE
-  // payload — no refetch, no invalidation loop. The initial load is
-  // handled by useQuery above; SSE only pushes incremental updates.
-  useEffect(
-    () =>
-      watchDevPods(
-        (_type, dp) => {
-          if (dp.metadata.name === name) {
-            qc.setQueryData(["devpod", name], (old: any) =>
-              old ? { ...old, devpod: dp } : { devpod: dp },
-            );
-          }
-        },
-        () => {}, // no-op: useQuery already fetched the initial state
-      ),
-    [name, qc],
-  );
-
-  // Live events: the server replays the backlog on connect, then
-  // streams updates. We deduplicate by reason+message (k8s itself
-  // often creates separate Event objects for what is logically the
-  // same event across pod recreations) and keep the latest timestamp
-  // and highest count.
-  // Batch incoming SSE events with a ref and flush once per animation
-  // frame — prevents 76+ synchronous React re-renders during the
-  // informer's initial backlog replay.
+  // A single SSE stream feeds both the DevPod detail (status + binding)
+  // and its events. No initial fetch, no polling, no second stream —
+  // the server replays the current state on connect.
+  const [detail, setDetail] = useState<DevPodDetail | null>(null);
   const [eventsByUID, setEventsByUID] = useState<Record<string, K8sEvent>>({});
   const pendingRef = useRef<{ type: string; ev: K8sEvent }[]>([]);
   const rafRef = useRef(0);
-  const flush = useCallback(() => {
+  const flushEvents = useCallback(() => {
     rafRef.current = 0;
     const batch = pendingRef.current.splice(0);
     if (!batch.length) return;
@@ -70,18 +48,26 @@ export default function PodDetail() {
       return next;
     });
   }, []);
+
   useEffect(() => {
+    setDetail(null);
     setEventsByUID({});
     pendingRef.current = [];
-    return watchDevPodEvents(name, (type, ev) => {
-      pendingRef.current.push({ type, ev });
-      if (!rafRef.current) rafRef.current = requestAnimationFrame(flush);
+    return watchDevPod(name, {
+      onDetail: (d) => setDetail(d),
+      // Batch events with a rAF flush so the initial backlog replay
+      // doesn't trigger one React render per event.
+      onEvent: (type, ev) => {
+        pendingRef.current.push({ type, ev });
+        if (!rafRef.current) rafRef.current = requestAnimationFrame(flushEvents);
+      },
     });
-  }, [name, flush]);
+  }, [name, flushEvents]);
+
+  // Deduplicate by reason+message (k8s creates separate Event objects
+  // for logically the same event across pod recreations); keep the
+  // latest timestamp and sum counts. Newest first.
   const events = useMemo(() => {
-    // Deduplicate: group by reason+message, keep latest timestamp and
-    // sum counts. This collapses the "Created container dev" × 8
-    // duplicates into a single line with a count badge.
     const byKey = new Map<string, K8sEvent & { totalCount: number }>();
     for (const ev of Object.values(eventsByUID)) {
       const key = `${ev.reason}:${ev.message}`;
@@ -96,18 +82,9 @@ export default function PodDetail() {
     return [...byKey.values()].sort((a, b) => (b.lastTimestamp ?? "").localeCompare(a.lastTimestamp ?? ""));
   }, [eventsByUID]);
 
-  const toggle = useMutation({
-    mutationFn: (running: boolean) => patchDevPod(name, running),
-    onSettled: () => qc.invalidateQueries({ queryKey: ["devpod", name] }),
-  });
-  const del = useMutation({
-    mutationFn: () => deleteDevPod(name),
-    onSuccess: () => nav("/"),
-  });
-
-  if (!q.data) return <main className="p-8 text-sm text-slate-400">Loading…</main>;
-  const dp = q.data.devpod;
-  const binding = q.data.binding;
+  if (!detail) return <main className="p-8 text-sm text-slate-400">Loading…</main>;
+  const dp = detail.devpod;
+  const binding = detail.binding;
 
   return (
     <main className="mx-auto max-w-3xl p-8">
@@ -117,13 +94,16 @@ export default function PodDetail() {
       <header className="mb-6 mt-2 flex items-center justify-between">
         <h1 className="text-xl font-semibold">{dp.metadata.name}</h1>
         <div className="flex gap-2">
-          <button className="rounded border px-3 py-1.5 text-sm" onClick={() => toggle.mutate(!dp.spec.running)}>
+          <button
+            className="rounded border px-3 py-1.5 text-sm"
+            onClick={() => patchDevPod(name, !dp.spec.running)}
+          >
             {dp.spec.running ? "Hibernate" : "Wake"}
           </button>
           <button
             className="rounded border border-red-300 px-3 py-1.5 text-sm text-red-700"
             onClick={() => {
-              if (confirm(`Delete ${dp.metadata.name}? PVC data is lost.`)) del.mutate();
+              if (confirm(`Delete ${dp.metadata.name}? PVC data is lost.`)) deleteDevPod(name).then(() => nav("/"));
             }}
           >
             Delete
@@ -187,8 +167,7 @@ export default function PodDetail() {
         <ul className="space-y-1 font-mono text-xs text-slate-600">
           {events.map((e, i) => (
             <li key={i}>
-              <span className="text-slate-400">{fmtTime(e.lastTimestamp)}</span>{" "}
-              {e.reason}
+              <span className="text-slate-400">{fmtTime(e.lastTimestamp)}</span> {e.reason}
               {e.totalCount > 1 ? ` (×${e.totalCount})` : ""}: {e.message}
             </li>
           ))}
