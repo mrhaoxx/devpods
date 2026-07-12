@@ -33,7 +33,10 @@ export default function PodDetail() {
   );
 
   // Live events: the server replays the backlog on connect, then
-  // streams updates; merge by uid so MODIFIED bumps counts in place.
+  // streams updates. We deduplicate by reason+message (k8s itself
+  // often creates separate Event objects for what is logically the
+  // same event across pod recreations) and keep the latest timestamp
+  // and highest count.
   const [eventsByUID, setEventsByUID] = useState<Record<string, K8sEvent>>({});
   useEffect(() => {
     setEventsByUID({});
@@ -46,11 +49,23 @@ export default function PodDetail() {
       });
     });
   }, [name]);
-  const events = useMemo(
-    () =>
-      Object.values(eventsByUID).sort((a, b) => (b.lastTimestamp ?? "").localeCompare(a.lastTimestamp ?? "")),
-    [eventsByUID],
-  );
+  const events = useMemo(() => {
+    // Deduplicate: group by reason+message, keep latest timestamp and
+    // sum counts. This collapses the "Created container dev" × 8
+    // duplicates into a single line with a count badge.
+    const byKey = new Map<string, K8sEvent & { totalCount: number }>();
+    for (const ev of Object.values(eventsByUID)) {
+      const key = `${ev.reason}:${ev.message}`;
+      const ts = ev.lastTimestamp ?? "";
+      const existing = byKey.get(key);
+      if (!existing || ts > (existing.lastTimestamp ?? "")) {
+        byKey.set(key, { ...ev, totalCount: (existing?.totalCount ?? 0) + (ev.count ?? 1) });
+      } else {
+        existing.totalCount += ev.count ?? 1;
+      }
+    }
+    return [...byKey.values()].sort((a, b) => (b.lastTimestamp ?? "").localeCompare(a.lastTimestamp ?? ""));
+  }, [eventsByUID]);
 
   const toggle = useMutation({
     mutationFn: (running: boolean) => patchDevPod(name, running),
@@ -141,10 +156,10 @@ export default function PodDetail() {
           Events <span className="ml-1 align-middle text-[10px] text-green-600">● live</span>
         </h2>
         <ul className="space-y-1 font-mono text-xs text-slate-600">
-          {events.map((e) => (
-            <li key={e.metadata.uid}>
+          {events.map((e, i) => (
+            <li key={i}>
               {e.reason}
-              {e.count && e.count > 1 ? ` (×${e.count})` : ""}: {e.message}
+              {e.totalCount > 1 ? ` (×${e.totalCount})` : ""}: {e.message}
             </li>
           ))}
           {events.length === 0 && <li className="text-slate-400">none</li>}
