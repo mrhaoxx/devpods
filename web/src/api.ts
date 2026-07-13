@@ -99,7 +99,7 @@ export type KoreZone = {
   memory?: string;
   devices?: { name: string; type: string }[];
 };
-export type KoreAlloc = { pod: string; container: string; cpuset: string };
+export type KoreAlloc = { pod: string; container: string; cpuset: string; devpod?: string };
 export type KorePool = { name: string; cpuset: string; numa?: number[]; members?: string[] };
 export type KoreNode = {
   node: string;

@@ -56,14 +56,15 @@ func TestKoreTopologyTransform(t *testing.T) {
 				},
 			},
 			"allocations": []any{
-				map[string]any{"pod": "star-a100", "container": "dev", "cpuset": "2-3"},
+				map[string]any{"pod": "devpods/star-a100", "container": "dev", "cpuset": "2-3"},
+				map[string]any{"pod": "other-ns/somepod", "container": "app", "cpuset": "6"},
 			},
 			"pools": []any{
 				map[string]any{"name": "team-hpl", "cpuset": "8-15", "numa": []any{float64(0)}, "members": []any{"h32-1", "h32-2"}},
 			},
 		},
 	}
-	nodes := webui.KoreTransformForTest([]map[string]any{item})
+	nodes := webui.KoreTransformForTest([]map[string]any{item}, "devpods")
 	if len(nodes) != 1 {
 		t.Fatalf("want 1 node, got %d", len(nodes))
 	}
@@ -77,8 +78,15 @@ func TestKoreTopologyTransform(t *testing.T) {
 	if len(n.Zones[0].SMTSiblings) != 2 || n.Zones[0].SMTSiblings[0][1] != 4 {
 		t.Fatalf("smt = %+v", n.Zones[0].SMTSiblings)
 	}
-	if len(n.Allocations) != 1 || n.Allocations[0].Pod != "star-a100" || n.Allocations[0].Cpuset != "2-3" {
-		t.Fatalf("alloc = %+v", n.Allocations)
+	// DevPod name extracted only for the devpods-namespace allocation.
+	if len(n.Allocations) != 2 {
+		t.Fatalf("alloc count = %d", len(n.Allocations))
+	}
+	if n.Allocations[0].Pod != "devpods/star-a100" || n.Allocations[0].DevPod != "star-a100" {
+		t.Fatalf("devpod alloc = %+v", n.Allocations[0])
+	}
+	if n.Allocations[1].DevPod != "" {
+		t.Fatalf("non-devpod alloc should have empty devpod: %+v", n.Allocations[1])
 	}
 	if len(n.Pools) != 1 || n.Pools[0].Name != "team-hpl" || len(n.Pools[0].Members) != 2 {
 		t.Fatalf("pools = %+v", n.Pools)
