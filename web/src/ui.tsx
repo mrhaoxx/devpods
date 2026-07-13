@@ -261,6 +261,7 @@ function IdentityMenu({ me }: { me?: Me }) {
           <nav className="py-1 text-sm">
             {me?.features?.pubkeySelfService !== false && <MenuLink to="/settings/pubkeys" label="SSH keys" onNav={() => setOpen(false)} />}
             {me?.hasPassword && <MenuLink to="/settings/password" label="Password" onNav={() => setOpen(false)} />}
+            {me?.admin && <MenuLink to="/admin/devpods" label="All DevPods" onNav={() => setOpen(false)} />}
             {me?.admin && <MenuLink to="/admin/users" label="Users" onNav={() => setOpen(false)} />}
             <button
               onClick={() => logout().finally(() => (window.location.href = "/login"))}

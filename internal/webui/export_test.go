@@ -36,3 +36,5 @@ func (s *Server) HandleListUsersForTest() http.HandlerFunc    { return s.handleL
 func (s *Server) HandleCreateUserForTest() http.HandlerFunc   { return s.handleCreateUser }
 func (s *Server) HandlePatchUserForTest() http.HandlerFunc    { return s.handlePatchUser }
 func (s *Server) HandleDeleteUserForTest() http.HandlerFunc   { return s.handleDeleteUser }
+
+func (s *Server) HandleAdminListDevPodsForTest() http.HandlerFunc { return s.handleAdminListDevPods }
