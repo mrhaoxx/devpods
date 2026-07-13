@@ -20,33 +20,37 @@ export function coreMap(node: KoreNode): Map<number, CoreInfo> {
 }
 
 // reveal=false anonymizes other tenants (owner view); mine = the
-// caller's own cores, always highlighted.
+// caller's own cores. "mine" adds an inset ring on top of the core's
+// base color, so pinned (accent) vs shared-pool (warm) stays visible.
 function Cell({ core, info, mine, reveal }: { core: number; info: CoreInfo; mine: Set<number>; reveal: boolean }) {
   const isMine = mine.has(core);
-  let cls: string;
-  let title: string;
+  let base: string;
+  let label: string;
   let pod: string | undefined;
-  if (isMine) {
-    cls = "bg-accent ring-2 ring-accent/30";
-    title = `cpu ${core} · your core`;
-  } else if (info.kind === "exclusive") {
-    cls = reveal ? "bg-accent" : "bg-idle";
-    title = `cpu ${core} · ${reveal ? info.label : "allocated"}`;
-    pod = reveal ? info.pod : undefined;
-  } else if (info.kind === "pool") {
-    cls = "bg-warm";
-    title = `cpu ${core} · ${reveal ? info.label : "pool"}`;
-  } else if (info.kind === "reserved") {
-    cls = "bg-idle";
-    title = `cpu ${core} · system reserved`;
-  } else if (info.kind === "shared") {
-    cls = "bg-idle/40";
-    title = `cpu ${core} · shared`;
-  } else {
-    cls = "border border-line-strong bg-transparent";
-    title = `cpu ${core} · free`;
+  switch (info.kind) {
+    case "exclusive":
+      base = isMine || reveal ? "bg-accent" : "bg-idle";
+      label = isMine ? "your core · pinned" : reveal ? info.label : "allocated";
+      pod = !isMine && reveal ? info.pod : undefined;
+      break;
+    case "pool":
+      base = "bg-warm";
+      label = isMine ? "your core · shared pool" : reveal ? info.label : "shared pool";
+      break;
+    case "reserved":
+      base = "bg-idle";
+      label = "system reserved";
+      break;
+    case "shared":
+      base = "bg-idle/40";
+      label = "shared";
+      break;
+    default:
+      base = "border border-line-strong bg-transparent";
+      label = "free";
   }
-  const box = <span title={title} className={cx("block size-3.5 rounded-[3px]", cls)} />;
+  const title = `cpu ${core} · ${label}`;
+  const box = <span title={title} className={cx("block size-3.5 rounded-[3px]", base, isMine && "ring-2 ring-inset ring-ink/70")} />;
   if (pod) return <Link to={`/devpods/${pod}`} title={title}>{box}</Link>;
   return box;
 }
@@ -96,7 +100,7 @@ export function NodeZones({ node, mine, reveal }: { node: KoreNode; mine?: Set<n
 
 export function TopologyLegend({ mine }: { mine?: boolean }) {
   const items: [string, string][] = mine
-    ? [["bg-accent ring-2 ring-accent/30", "your cores"], ["bg-warm", "shared pool"], ["bg-idle", "allocated"], ["bg-idle/40", "shared"], ["border border-line-strong bg-transparent", "free"]]
+    ? [["ring-2 ring-inset ring-ink/70", "your cores"], ["bg-accent", "pinned"], ["bg-warm", "shared pool"], ["bg-idle", "in use"], ["border border-line-strong bg-transparent", "free"]]
     : [["bg-accent", "pinned"], ["bg-warm", "shared pool"], ["bg-idle/40", "shared"], ["bg-idle", "reserved"], ["border border-line-strong bg-transparent", "free"]];
   return (
     <div className="flex flex-wrap gap-x-4 gap-y-1.5 text-xs text-muted">
