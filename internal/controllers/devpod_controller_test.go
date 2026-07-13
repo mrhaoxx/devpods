@@ -34,7 +34,7 @@ func TestDevPodReconciler_CreatesPodWithBootstrap(t *testing.T) {
 	}
 
 	dp := &devpodv1alpha1.DevPod{
-		ObjectMeta: metav1.ObjectMeta{Name: "frontend-dev", Namespace: "devpods"},
+		ObjectMeta: metav1.ObjectMeta{Name: "alice-frontend-dev", Namespace: "devpods"},
 		Spec: devpodv1alpha1.DevPodSpec{
 			Owner:   "alice",
 			Running: true,
@@ -56,7 +56,7 @@ func TestDevPodReconciler_CreatesPodWithBootstrap(t *testing.T) {
 	deadline := time.Now().Add(30 * time.Second)
 	for time.Now().Before(deadline) {
 		var got corev1.Pod
-		err := env.Client.Get(env.Ctx, types.NamespacedName{Name: "frontend-dev", Namespace: "devpods"}, &got)
+		err := env.Client.Get(env.Ctx, types.NamespacedName{Name: "alice-frontend-dev", Namespace: "devpods"}, &got)
 		if err == nil &&
 			len(got.Spec.InitContainers) == 1 &&
 			got.Spec.InitContainers[0].Name == "devpod-bootstrap" &&
@@ -83,7 +83,7 @@ func TestDevPodReconciler_CreatesHostKeySecret(t *testing.T) {
 	}
 
 	dp := &devpodv1alpha1.DevPod{
-		ObjectMeta: metav1.ObjectMeta{Name: "backend-dev", Namespace: "devpods"},
+		ObjectMeta: metav1.ObjectMeta{Name: "bob-backend-dev", Namespace: "devpods"},
 		Spec: devpodv1alpha1.DevPodSpec{
 			Owner:   "bob",
 			Running: true,
@@ -99,7 +99,7 @@ func TestDevPodReconciler_CreatesHostKeySecret(t *testing.T) {
 	deadline := time.Now().Add(30 * time.Second)
 	for time.Now().Before(deadline) {
 		var sec corev1.Secret
-		if err := env.Client.Get(env.Ctx, types.NamespacedName{Name: "backend-dev-hostkey", Namespace: "devpods"}, &sec); err == nil {
+		if err := env.Client.Get(env.Ctx, types.NamespacedName{Name: "bob-backend-dev-hostkey", Namespace: "devpods"}, &sec); err == nil {
 			if len(sec.Data["ssh_host_ed25519_key"]) > 0 {
 				return
 			}
@@ -122,7 +122,7 @@ func TestDevPodReconciler_WritesStatusEndpointAndPhase(t *testing.T) {
 	}
 
 	dp := &devpodv1alpha1.DevPod{
-		ObjectMeta: metav1.ObjectMeta{Name: "stat", Namespace: "devpods"},
+		ObjectMeta: metav1.ObjectMeta{Name: "diana-stat", Namespace: "devpods"},
 		Spec: devpodv1alpha1.DevPodSpec{
 			Owner:   "diana",
 			Running: true,
@@ -158,7 +158,7 @@ func TestDevPodReconciler_WritesStatusEndpointAndPhase(t *testing.T) {
 	deadline = time.Now().Add(30 * time.Second)
 	for time.Now().Before(deadline) {
 		var got devpodv1alpha1.DevPod
-		if err := env.Client.Get(env.Ctx, types.NamespacedName{Name: "stat", Namespace: "devpods"}, &got); err == nil {
+		if err := env.Client.Get(env.Ctx, types.NamespacedName{Name: "diana-stat", Namespace: "devpods"}, &got); err == nil {
 			if got.Status.Phase == devpodv1alpha1.DevPodRunning && got.Status.Endpoint == "10.1.2.3:2222" {
 				return
 			}
@@ -181,7 +181,7 @@ func TestDevPodReconciler_PersistenceCreatesPVC(t *testing.T) {
 	}
 
 	dp := &devpodv1alpha1.DevPod{
-		ObjectMeta: metav1.ObjectMeta{Name: "persisted", Namespace: "devpods"},
+		ObjectMeta: metav1.ObjectMeta{Name: "alice-persisted", Namespace: "devpods"},
 		Spec: devpodv1alpha1.DevPodSpec{
 			Owner:   "alice",
 			Running: true,
@@ -198,7 +198,7 @@ func TestDevPodReconciler_PersistenceCreatesPVC(t *testing.T) {
 		t.Fatalf("create devpod: %v", err)
 	}
 
-	pvcKey := types.NamespacedName{Name: "persisted-home", Namespace: "devpods"}
+	pvcKey := types.NamespacedName{Name: "alice-persisted-home", Namespace: "devpods"}
 	deadline := time.Now().Add(10 * time.Second)
 	var pvc corev1.PersistentVolumeClaim
 	for time.Now().Before(deadline) {
@@ -228,7 +228,7 @@ func TestDevPodReconciler_PersistencePopulatesStatusPVCRef(t *testing.T) {
 	}
 
 	dp := &devpodv1alpha1.DevPod{
-		ObjectMeta: metav1.ObjectMeta{Name: "statpvc", Namespace: "devpods"},
+		ObjectMeta: metav1.ObjectMeta{Name: "frank-statpvc", Namespace: "devpods"},
 		Spec: devpodv1alpha1.DevPodSpec{
 			Owner:   "frank",
 			Running: true,
@@ -246,7 +246,7 @@ func TestDevPodReconciler_PersistencePopulatesStatusPVCRef(t *testing.T) {
 	}
 
 	deadline := time.Now().Add(10 * time.Second)
-	dpKey := types.NamespacedName{Name: "statpvc", Namespace: "devpods"}
+	dpKey := types.NamespacedName{Name: "frank-statpvc", Namespace: "devpods"}
 	for time.Now().Before(deadline) {
 		var got devpodv1alpha1.DevPod
 		if err := env.Client.Get(env.Ctx, dpKey, &got); err == nil {
@@ -273,7 +273,7 @@ func TestDevPodReconciler_HibernateDeletesPod(t *testing.T) {
 	}
 
 	dp := &devpodv1alpha1.DevPod{
-		ObjectMeta: metav1.ObjectMeta{Name: "hibtest", Namespace: "devpods"},
+		ObjectMeta: metav1.ObjectMeta{Name: "grace-hibtest", Namespace: "devpods"},
 		Spec: devpodv1alpha1.DevPodSpec{
 			Owner:   "grace",
 			Running: true,
@@ -300,7 +300,7 @@ func TestDevPodReconciler_HibernateDeletesPod(t *testing.T) {
 	}
 
 	// Flip to running=false. Use a fresh Get for current ResourceVersion.
-	dpKey := types.NamespacedName{Name: "hibtest", Namespace: "devpods"}
+	dpKey := types.NamespacedName{Name: "grace-hibtest", Namespace: "devpods"}
 	var fresh devpodv1alpha1.DevPod
 	if err := env.Client.Get(env.Ctx, dpKey, &fresh); err != nil {
 		t.Fatalf("get dp before hibernate: %v", err)
@@ -339,7 +339,7 @@ func TestDevPodReconciler_HibernateStatusFields(t *testing.T) {
 	}
 
 	dp := &devpodv1alpha1.DevPod{
-		ObjectMeta: metav1.ObjectMeta{Name: "hibstat", Namespace: "devpods"},
+		ObjectMeta: metav1.ObjectMeta{Name: "henry-hibstat", Namespace: "devpods"},
 		Spec: devpodv1alpha1.DevPodSpec{
 			Owner:   "henry",
 			Running: true,
@@ -352,7 +352,7 @@ func TestDevPodReconciler_HibernateStatusFields(t *testing.T) {
 		t.Fatalf("create devpod: %v", err)
 	}
 
-	dpKey := types.NamespacedName{Name: "hibstat", Namespace: "devpods"}
+	dpKey := types.NamespacedName{Name: "henry-hibstat", Namespace: "devpods"}
 	podKey := types.NamespacedName{Name: "henry-hibstat", Namespace: "devpods"}
 
 	// Wait for Pod to appear (controller has acted).
@@ -427,7 +427,7 @@ func TestDevPodReconciler_DeleteDetachesPVC(t *testing.T) {
 	}
 
 	dp := &devpodv1alpha1.DevPod{
-		ObjectMeta: metav1.ObjectMeta{Name: "detach", Namespace: "devpods"},
+		ObjectMeta: metav1.ObjectMeta{Name: "ivy-detach", Namespace: "devpods"},
 		Spec: devpodv1alpha1.DevPodSpec{
 			Owner:   "ivy",
 			Running: true,
@@ -462,7 +462,7 @@ func TestDevPodReconciler_DeleteDetachesPVC(t *testing.T) {
 	}
 
 	// Wait for DevPod to vanish.
-	dpKey := types.NamespacedName{Name: "detach", Namespace: "devpods"}
+	dpKey := types.NamespacedName{Name: "ivy-detach", Namespace: "devpods"}
 	deadline = time.Now().Add(15 * time.Second)
 	for time.Now().Before(deadline) {
 		var got devpodv1alpha1.DevPod
@@ -495,7 +495,7 @@ func TestReconcile_OwnerWithoutUserCRD_StillMaterializesPod(t *testing.T) {
 	env := newTestEnv(t)
 
 	dp := &devpodv1alpha1.DevPod{
-		ObjectMeta: metav1.ObjectMeta{Name: "ldap-only", Namespace: "devpods"},
+		ObjectMeta: metav1.ObjectMeta{Name: "lonely-ldap-only", Namespace: "devpods"},
 		Spec: devpodv1alpha1.DevPodSpec{
 			Owner:   "lonely", // no User CRD exists
 			Running: true,
@@ -532,7 +532,7 @@ func TestReconcile_OwnerAllowNetPolCleanedOnLastDevPod(t *testing.T) {
 		t.Fatalf("create user: %v", err)
 	}
 	dp1 := &devpodv1alpha1.DevPod{
-		ObjectMeta: metav1.ObjectMeta{Name: "one", Namespace: "devpods"},
+		ObjectMeta: metav1.ObjectMeta{Name: "jules-one", Namespace: "devpods"},
 		Spec: devpodv1alpha1.DevPodSpec{
 			Owner: "jules", Running: true,
 			Pod: &devpodv1alpha1.PodWorkloadSpec{
@@ -541,7 +541,7 @@ func TestReconcile_OwnerAllowNetPolCleanedOnLastDevPod(t *testing.T) {
 		},
 	}
 	dp2 := dp1.DeepCopy()
-	dp2.Name = "two"
+	dp2.Name = "jules-two"
 	if err := env.Client.Create(env.Ctx, dp1); err != nil {
 		t.Fatal(err)
 	}
@@ -572,7 +572,7 @@ func TestReconcile_OwnerAllowNetPolCleanedOnLastDevPod(t *testing.T) {
 	deadline = time.Now().Add(10 * time.Second)
 	for time.Now().Before(deadline) {
 		var got devpodv1alpha1.DevPod
-		if apierrors.IsNotFound(env.Client.Get(env.Ctx, types.NamespacedName{Name: "one", Namespace: "devpods"}, &got)) {
+		if apierrors.IsNotFound(env.Client.Get(env.Ctx, types.NamespacedName{Name: "jules-one", Namespace: "devpods"}, &got)) {
 			break
 		}
 		time.Sleep(200 * time.Millisecond)

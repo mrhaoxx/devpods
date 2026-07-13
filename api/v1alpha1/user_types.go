@@ -5,16 +5,45 @@
 package v1alpha1
 
 import (
+	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
+// UserQuota caps aggregate resources across a User's DevPods. All
+// fields are optional; absent fields fall back to the webui's global
+// defaults. Enforced by the webui backend only — the controller and
+// gateway ignore it entirely (UI-layer policy, not a security
+// barrier; see the webui design spec §9).
+type UserQuota struct {
+	// MaxDevPods limits how many DevPod CRs the user may own.
+	//
+	// +optional
+	MaxDevPods *int32 `json:"maxDevPods,omitempty"`
+
+	// Compute caps the SUM of container resource limits (containers +
+	// initContainers) across the user's *running* DevPods. Keys: cpu,
+	// memory, and extended resources such as nvidia.com/gpu.
+	//
+	// +optional
+	Compute corev1.ResourceList `json:"compute,omitempty"`
+
+	// Storage caps the SUM of spec.persistence.size across ALL of the
+	// user's DevPods, hibernated included (PVCs survive hibernation).
+	//
+	// +optional
+	Storage *resource.Quantity `json:"storage,omitempty"`
+}
+
 // UserSpec defines the desired state of a DevPod user.
 type UserSpec struct {
-	// Pubkeys is the list of OpenSSH-format authorized public keys for this
-	// user. At least one key is required.
+	// Pubkeys is the list of OpenSSH-format authorized public keys for
+	// this user. May be empty: the webui auto-provisions keyless Users
+	// on first OAuth login, and the gateway falls back to LDAP (or
+	// denies) when no key matches.
 	//
-	// +kubebuilder:validation:MinItems=1
-	Pubkeys []string `json:"pubkeys"`
+	// +optional
+	Pubkeys []string `json:"pubkeys,omitempty"`
 
 	// OIDCSubject is reserved for a future OIDC binding. The v1alpha1
 	// controller does nothing with this value.
@@ -26,6 +55,27 @@ type UserSpec struct {
 	//
 	// +optional
 	DisplayName string `json:"displayName,omitempty"`
+
+	// Quota caps this user's aggregate DevPod resources. nil = webui
+	// global defaults.
+	//
+	// +optional
+	Quota *UserQuota `json:"quota,omitempty"`
+
+	// PasswordHash is a bcrypt hash of the user's password. Set = this
+	// user may log in to the web UI with a password. Never returned by
+	// the API. Written only by the webui (admin create/reset, or the
+	// user's own change). The controller and gateway ignore it.
+	//
+	// +optional
+	PasswordHash string `json:"passwordHash,omitempty"`
+
+	// Admin grants web UI admin rights on any login path. Written ONLY
+	// by an operator via kubectl — the webui treats it as read-only.
+	// Effective admin = the webui's --admins allowlist OR this field.
+	//
+	// +optional
+	Admin bool `json:"admin,omitempty"`
 }
 
 // UserStatus reports observed state.

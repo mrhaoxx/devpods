@@ -3,6 +3,7 @@ module github.com/mrhaoxx/devpod
 go 1.25.0
 
 require (
+	github.com/coreos/go-oidc/v3 v3.11.0
 	github.com/go-ldap/ldap/v3 v3.4.8
 	github.com/jimlambrt/gldap v0.1.10
 	github.com/pires/go-proxyproto v0.12.0
@@ -10,6 +11,7 @@ require (
 	github.com/prometheus/common v0.66.1
 	go.uber.org/zap v1.27.0
 	golang.org/x/crypto v0.51.0
+	golang.org/x/oauth2 v0.36.0
 	golang.org/x/sync v0.20.0
 	k8s.io/api v0.32.0
 	k8s.io/apimachinery v0.32.0
@@ -29,6 +31,7 @@ require (
 	github.com/fsnotify/fsnotify v1.7.0 // indirect
 	github.com/fxamacker/cbor/v2 v2.7.0 // indirect
 	github.com/go-asn1-ber/asn1-ber v1.5.8-0.20250403174932-29230038a667 // indirect
+	github.com/go-jose/go-jose/v4 v4.0.2 // indirect
 	github.com/go-logr/logr v1.4.2 // indirect
 	github.com/go-logr/zapr v1.3.0 // indirect
 	github.com/go-openapi/jsonpointer v0.21.0 // indirect
@@ -61,7 +64,6 @@ require (
 	go.uber.org/multierr v1.11.0 // indirect
 	go.yaml.in/yaml/v2 v2.4.2 // indirect
 	golang.org/x/net v0.53.0 // indirect
-	golang.org/x/oauth2 v0.30.0 // indirect
 	golang.org/x/sys v0.44.0 // indirect
 	golang.org/x/term v0.43.0 // indirect
 	golang.org/x/text v0.37.0 // indirect

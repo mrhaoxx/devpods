@@ -168,6 +168,65 @@ DevPod, the gateway will authenticate from LDAP.
 
 ---
 
+## 6b. (Optional) Enable the Web UI
+
+Browser self-service with GitLab OAuth login: list/create/hibernate/wake/
+delete DevPods, manage SSH pubkeys, per-user quotas. GitLab user `xxxx`
+acts as DevPod user `<prefix>xxxx` (prefix configurable).
+
+```bash
+# 1. Register an OAuth application in your GitLab instance:
+#    redirect URI = https://devpod.example.com/auth/callback
+#    scopes = openid profile   (confidential application)
+
+# 2. Provide the two Secrets
+kubectl -n devpod-system create secret generic devpod-webui-oauth \
+    --from-literal=client-secret='<gitlab application secret>'
+kubectl -n devpod-system create secret generic devpod-webui-session \
+    --from-literal=session-key="$(openssl rand -base64 48)"
+
+# 3. Re-helm with the webui enabled
+helm upgrade --install devpod ./deploy/chart \
+    --reuse-values \
+    --set webui.enabled=true \
+    --set webui.baseURL=https://devpod.example.com \
+    --set webui.userPrefix=gl- \
+    --set 'webui.admins={youradmin}' \
+    --set webui.gitlab.issuerURL=https://gitlab.example.com \
+    --set webui.gitlab.clientID=<application id> \
+    --set webui.gitlab.clientSecretSecret.name=devpod-webui-oauth \
+    --set webui.sessionKeySecret.name=devpod-webui-session
+```
+
+Expose `svc/devpod-webui` via your Ingress at `webui.baseURL` (TLS at
+the Ingress; an `http://` baseURL disables the Secure cookie attribute
+and is for dev/e2e only).
+
+CPU-binding (Kore) is template-mediated: ordinary users can only pick
+admin-curated `DevPodTemplate` CRs — raw `kore.zjusct.io/*` annotations
+are rejected. Seed templates with kubectl (admin UI comes in M2):
+
+```yaml
+apiVersion: devpod.io/v1alpha1
+kind: DevPodTemplate
+metadata: {name: pin8}
+spec:
+  displayName: "Exclusive 8 cores, single NUMA"
+  binding:
+    annotations:
+      kore.zjusct.io/pin: "true"
+      kore.zjusct.io/numa-policy: single
+    resources:
+      requests: {cpu: "8"}
+      limits:   {cpu: "8", memory: "16Gi"}
+```
+
+Per-user quotas live on `User.spec.quota` (defaults from
+`webui.defaultQuota`). Quota is webui-layer policy — anyone holding a
+kubeconfig bypasses it.
+
+---
+
 ## 7. Hibernate / persist / collaborate
 
 ```yaml
