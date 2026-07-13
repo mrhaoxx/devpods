@@ -262,6 +262,7 @@ function IdentityMenu({ me }: { me?: Me }) {
             {me?.features?.pubkeySelfService !== false && <MenuLink to="/settings/pubkeys" label="SSH keys" onNav={() => setOpen(false)} />}
             {me?.hasPassword && <MenuLink to="/settings/password" label="Password" onNav={() => setOpen(false)} />}
             {me?.admin && <MenuLink to="/admin/devpods" label="All DevPods" onNav={() => setOpen(false)} />}
+            {me?.admin && me?.features?.kore && <MenuLink to="/admin/topology" label="CPU topology" onNav={() => setOpen(false)} />}
             {me?.admin && <MenuLink to="/admin/users" label="Users" onNav={() => setOpen(false)} />}
             <button
               onClick={() => logout().finally(() => (window.location.href = "/login"))}

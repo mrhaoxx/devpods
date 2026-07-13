@@ -11,6 +11,7 @@ import Pubkeys from "./pages/Pubkeys";
 import Password from "./pages/Password";
 import AdminUsers from "./pages/AdminUsers";
 import AdminDevPods from "./pages/AdminDevPods";
+import AdminTopology from "./pages/AdminTopology";
 
 const qc = new QueryClient();
 const router = createBrowserRouter([
@@ -22,6 +23,7 @@ const router = createBrowserRouter([
   { path: "/settings/password", element: <Password /> },
   { path: "/admin/users", element: <AdminUsers /> },
   { path: "/admin/devpods", element: <AdminDevPods /> },
+  { path: "/admin/topology", element: <AdminTopology /> },
 ]);
 
 ReactDOM.createRoot(document.getElementById("root")!).render(
