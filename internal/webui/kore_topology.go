@@ -216,5 +216,11 @@ func (s *Server) handleDevPodTopology(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
+	// Only surface the layout for Kore-bound DevPods (pinned or pooled);
+	// a plain shared pod occupies no specific cores.
+	if mine == "" {
+		s.writeJSON(w, http.StatusOK, empty)
+		return
+	}
 	s.writeJSON(w, http.StatusOK, map[string]any{"node": node, "cpuset": mine})
 }
