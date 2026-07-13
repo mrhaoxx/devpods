@@ -1,22 +1,19 @@
 import { useEffect } from "react";
 import { Link } from "react-router-dom";
 import { useQuery, useQueryClient, useMutation } from "@tanstack/react-query";
-import { me, listDevPods, patchDevPod, watchDevPods, DevPod } from "../api";
+import { me, listDevPods, patchDevPod, watchDevPods, sshCommand, DevPod } from "../api";
+import { Button, CopyRow, PhaseLabel, Shell, StatusCell } from "../ui";
 
-const phaseColor: Record<string, string> = {
-  Running: "bg-green-100 text-green-800",
-  Pending: "bg-yellow-100 text-yellow-800",
-  Stopped: "bg-slate-100 text-slate-600",
-  Failed: "bg-red-100 text-red-800",
-};
+function suffixOf(dp: DevPod) {
+  const p = dp.spec.owner + "-";
+  return dp.metadata.name.startsWith(p) ? dp.metadata.name.slice(p.length) : dp.metadata.name;
+}
 
 export default function PodList() {
   const qc = useQueryClient();
   const meQ = useQuery({ queryKey: ["me"], queryFn: me });
   const podsQ = useQuery({ queryKey: ["devpods"], queryFn: listDevPods });
 
-  // Update cached list directly from SSE payloads; only invalidate
-  // (full refetch) on reconnect to close event gaps.
   useEffect(
     () =>
       watchDevPods(
@@ -43,62 +40,78 @@ export default function PodList() {
     onSettled: () => qc.invalidateQueries({ queryKey: ["devpods"] }),
   });
 
+  const items = podsQ.data?.items ?? [];
+  const u = meQ.data?.usage;
+
   return (
-    <main className="mx-auto max-w-4xl p-8">
-      <header className="mb-6 flex items-center justify-between">
-        <h1 className="text-xl font-semibold">My DevPods</h1>
-        <nav className="flex items-center gap-3 text-sm">
-          {meQ.data?.admin && (
-            <Link className="text-blue-600 hover:underline" to="/admin/users">
-              Users
-            </Link>
-          )}
-          {meQ.data?.hasPassword && (
-            <Link className="text-blue-600 hover:underline" to="/settings/password">
-              Password
-            </Link>
-          )}
-          {meQ.data?.features?.pubkeySelfService !== false && (
-            <Link className="text-blue-600 hover:underline" to="/settings/pubkeys">
-              SSH keys
-            </Link>
-          )}
-          <Link className="rounded bg-blue-600 px-3 py-1.5 text-white" to="/devpods/new">
-            New DevPod
-          </Link>
-        </nav>
-      </header>
-      {meQ.data && (
-        <p className="mb-4 text-sm text-slate-500">
-          {meQ.data.user} · {meQ.data.usage.devpods} pods ({meQ.data.usage.running} running)
-          {meQ.data.usage.compute.cpu && ` · cpu ${meQ.data.usage.compute.cpu}/${meQ.data.quota.compute?.cpu ?? "∞"}`}
-        </p>
-      )}
-      <ul className="divide-y rounded-xl border bg-white">
-        {(podsQ.data?.items ?? []).map((dp: DevPod) => (
-          <li key={dp.metadata.name} className="flex items-center justify-between p-4">
-            <div>
-              <Link className="font-medium text-blue-700 hover:underline" to={`/devpods/${dp.metadata.name}`}>
-                {dp.metadata.name}
-              </Link>
-              <span
-                className={`ml-3 rounded-full px-2 py-0.5 text-xs ${phaseColor[dp.status?.phase ?? "Pending"]}`}
-              >
-                {dp.status?.phase ?? "Pending"}
-              </span>
-            </div>
-            <button
-              className="rounded border px-3 py-1 text-sm hover:bg-slate-50"
-              onClick={() => toggle.mutate({ name: dp.metadata.name, running: !dp.spec.running })}
-            >
-              {dp.spec.running ? "Hibernate" : "Wake"}
-            </button>
-          </li>
-        ))}
-        {podsQ.data?.items?.length === 0 && (
-          <li className="p-8 text-center text-sm text-slate-400">No DevPods yet — create one.</li>
+    <Shell>
+      <header className="mb-6 flex flex-wrap items-end justify-between gap-2">
+        <div>
+          <p className="eyebrow mb-1">Environments</p>
+          <h1 className="mono text-2xl font-semibold tracking-tight">DevPods</h1>
+        </div>
+        {u && (
+          <p className="mono text-xs text-muted">
+            {u.devpods} total · <span className="text-run">{u.running} running</span>
+            {u.compute.cpu && (
+              <>
+                {" "}· {u.compute.cpu}
+                <span className="text-faint">/{meQ.data?.quota.compute?.cpu ?? "∞"}</span> cpu
+              </>
+            )}
+          </p>
         )}
-      </ul>
-    </main>
+      </header>
+
+      {items.length === 0 ? (
+        <div className="rounded-2xl border border-dashed border-line-strong bg-surface px-6 py-16 text-center">
+          <StatusCell phase="Stopped" className="mx-auto mb-3 !size-3" />
+          <p className="text-sm text-muted">No environments yet.</p>
+          <Link to="/devpods/new" className="mt-3 inline-flex rounded-lg bg-accent px-4 py-2 text-sm font-medium text-white hover:bg-accent-hi">
+            Create your first
+          </Link>
+        </div>
+      ) : (
+        <ul className="overflow-hidden rounded-2xl border border-line bg-surface">
+          {items.map((dp, i) => {
+            const phase = dp.status?.phase;
+            return (
+              <li
+                key={dp.metadata.name}
+                className={cxRow(i)}
+              >
+                <div className="flex items-start gap-3">
+                  <StatusCell phase={phase} className="mt-1.5" />
+                  <div className="min-w-0 flex-1">
+                    <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+                      <Link to={`/devpods/${dp.metadata.name}`} className="mono truncate text-sm font-medium text-ink hover:text-accent">
+                        {dp.metadata.name}
+                      </Link>
+                      <PhaseLabel phase={phase} />
+                    </div>
+                    {dp.status?.phase === "Running" && meQ.data && (
+                      <div className="mt-2">
+                        <CopyRow value={sshCommand(meQ.data, dp.spec.owner, suffixOf(dp))} />
+                      </div>
+                    )}
+                  </div>
+                  <Button
+                    size="sm"
+                    onClick={() => toggle.mutate({ name: dp.metadata.name, running: !dp.spec.running })}
+                    disabled={toggle.isPending}
+                  >
+                    {dp.spec.running ? "Hibernate" : "Wake"}
+                  </Button>
+                </div>
+              </li>
+            );
+          })}
+        </ul>
+      )}
+    </Shell>
   );
+}
+
+function cxRow(i: number) {
+  return "px-4 py-4 sm:px-5" + (i > 0 ? " border-t border-line" : "");
 }
