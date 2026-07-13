@@ -43,17 +43,29 @@ function Zone({ zone, cores }: { zone: KoreZone; cores: Map<number, CoreInfo> })
   const info = (c: number): CoreInfo =>
     cores.get(c) ?? (free.has(c) ? { kind: "free", label: "free" } : { kind: "shared", label: "shared" });
 
+  // Each column is a physical core; stacked cells are its SMT siblings
+  // (hyperthreads). No SMT info → one cell per column.
+  const groups = zone.smtSiblings?.length
+    ? zone.smtSiblings.map((g) => [...g].sort((a, b) => a - b)).sort((a, b) => a[0] - b[0])
+    : all.map((c) => [c]);
+  const smt = zone.smtSiblings?.length ? Math.max(...zone.smtSiblings.map((g) => g.length)) : 1;
+
   return (
     <div>
       <div className="mb-2 flex items-baseline gap-2">
         <span className="eyebrow">numa {zone.id}</span>
         <span className="mono text-xs text-faint">
           {all.length} cores{zone.memory ? ` · ${zone.memory}` : ""} · {free.size} free
+          {smt > 1 ? ` · ${smt}-way SMT` : ""}
         </span>
       </div>
       <div className="flex flex-wrap gap-[3px]">
-        {all.map((c) => (
-          <Cell key={c} core={c} info={info(c)} />
+        {groups.map((g, i) => (
+          <div key={i} className="flex flex-col gap-[3px]">
+            {g.map((c) => (
+              <Cell key={c} core={c} info={info(c)} />
+            ))}
+          </div>
         ))}
       </div>
     </div>
@@ -86,10 +98,13 @@ export default function AdminTopology() {
   return (
     <Shell>
       <BackLink />
-      <header className="mb-4 mt-3 flex flex-wrap items-center justify-between gap-3">
+      <header className="mb-1 mt-3 flex flex-wrap items-center justify-between gap-3">
         <h1 className="mono text-xl font-semibold tracking-tight">CPU topology</h1>
         <Legend />
       </header>
+      <p className="mb-5 text-xs text-faint">
+        Each column is one physical core; stacked cells are its hyperthreads (SMT siblings).
+      </p>
 
       {q.isError && <Card className="p-5"><p className="text-sm text-muted">Kore topology is unavailable.</p></Card>}
       {nodes.length === 0 && !q.isError && <Card className="p-5"><p className="text-sm text-faint">No node topology reported yet.</p></Card>}
