@@ -51,3 +51,5 @@ func KoreTransformForTest(items []map[string]any, devpodNS string) []nodeTopolog
 	}
 	return koreTopologyFromList(&list, devpodNS)
 }
+
+func (s *Server) HandleDevPodTopologyForTest() http.HandlerFunc { return s.handleDevPodTopology }

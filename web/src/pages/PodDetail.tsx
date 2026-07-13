@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
-import { patchDevPod, deleteDevPod, me, sshCommand, sshConfig, watchDevPod, DevPodDetail, K8sEvent } from "../api";
+import { patchDevPod, deleteDevPod, me, sshCommand, sshConfig, watchDevPod, devpodTopology, parseCpuList, DevPodDetail, K8sEvent } from "../api";
 import { BackLink, Button, Card, CopyBlock, CopyRow, CoreMeter, PhaseLabel, Shell, cx } from "../ui";
+import { NodeZones, TopologyLegend } from "../kore";
 
 function fmtTime(ts?: string): string {
   if (!ts) return "";
@@ -22,6 +23,7 @@ export default function PodDetail() {
   const { name = "" } = useParams();
   const nav = useNavigate();
   const meQ = useQuery({ queryKey: ["me"], queryFn: me });
+  const topoQ = useQuery({ queryKey: ["devpod-topo", name], queryFn: () => devpodTopology(name), refetchInterval: 6000 });
 
   const [detail, setDetail] = useState<DevPodDetail | null>(null);
   const [eventsByUID, setEventsByUID] = useState<Record<string, K8sEvent>>({});
@@ -154,6 +156,19 @@ export default function PodDetail() {
               </>
             )}
           </dl>
+        </Card>
+      )}
+
+      {topoQ.data?.node && (
+        <Card className="mb-4 p-5">
+          <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+            <div className="flex items-baseline gap-2">
+              <p className="eyebrow">Node layout</p>
+              <span className="mono text-xs text-faint">{topoQ.data.node.node}</span>
+            </div>
+            <TopologyLegend mine />
+          </div>
+          <NodeZones node={topoQ.data.node} reveal={false} mine={parseCpuList(topoQ.data.cpuset)} />
         </Card>
       )}
 

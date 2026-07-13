@@ -61,10 +61,10 @@ export type AdminUser = {
   hasPassword: boolean;
   devpods: number;
   running: number;
-  usage: { cpu?: string; memory?: string; storage?: string };
+  usage: { cpu?: string; memory?: string; gpu?: string; storage?: string };
   quota?: UserQuota;
 };
-export type QuotaPatch = { maxDevPods?: number | null; cpu?: string; memory?: string; storage?: string };
+export type QuotaPatch = { maxDevPods?: number | null; cpu?: string; memory?: string; gpu?: string; storage?: string };
 export type AdminDevPod = {
   name: string;
   owner: string;
@@ -109,6 +109,8 @@ export type KoreNode = {
   pools: KorePool[];
 };
 export const koreTopology = () => req<{ nodes: KoreNode[] }>("GET", "/api/kore/topology");
+export const devpodTopology = (name: string) =>
+  req<{ node: KoreNode | null; cpuset?: string }>("GET", `/api/devpods/${name}/topology`);
 
 // parseCpuList expands "8-15,40-47" into a set of core numbers.
 export function parseCpuList(s?: string): Set<number> {

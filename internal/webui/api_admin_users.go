@@ -35,9 +35,12 @@ func (s *Server) requireAdmin(w http.ResponseWriter, r *http.Request) (Session, 
 	return sess, true
 }
 
+const resourceGPU = "nvidia.com/gpu"
+
 type adminUsage struct {
 	CPU     string `json:"cpu,omitempty"`
 	Memory  string `json:"memory,omitempty"`
+	GPU     string `json:"gpu,omitempty"`
 	Storage string `json:"storage,omitempty"`
 }
 
@@ -110,6 +113,9 @@ func (s *Server) handleListUsers(w http.ResponseWriter, r *http.Request) {
 			}
 			if m := a.compute.Memory(); !m.IsZero() {
 				au.Usage.Memory = m.String()
+			}
+			if g, ok := a.compute[resourceGPU]; ok && !g.IsZero() {
+				au.Usage.GPU = g.String()
 			}
 			if !a.storage.IsZero() {
 				au.Usage.Storage = a.storage.String()
@@ -230,6 +236,7 @@ type quotaPatch struct {
 	MaxDevPods *int32 `json:"maxDevPods,omitempty"`
 	CPU        string `json:"cpu,omitempty"`
 	Memory     string `json:"memory,omitempty"`
+	GPU        string `json:"gpu,omitempty"`
 	Storage    string `json:"storage,omitempty"`
 }
 
@@ -241,7 +248,11 @@ func (p *quotaPatch) build() (*devpodv1alpha1.UserQuota, error) {
 		empty = false
 	}
 	compute := corev1.ResourceList{}
-	for name, val := range map[corev1.ResourceName]string{corev1.ResourceCPU: p.CPU, corev1.ResourceMemory: p.Memory} {
+	for name, val := range map[corev1.ResourceName]string{
+		corev1.ResourceCPU:    p.CPU,
+		corev1.ResourceMemory: p.Memory,
+		resourceGPU:           p.GPU,
+	} {
 		if val == "" {
 			continue
 		}
