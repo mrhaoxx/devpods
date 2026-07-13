@@ -7,6 +7,7 @@ package gateway
 import (
 	"context"
 	"fmt"
+	"log/slog"
 
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -36,6 +37,7 @@ func (r *EventRecorder) record(ctx context.Context, podName, eventType, reason, 
 	}
 	var dp devpodv1alpha1.DevPod
 	if err := r.reader.Get(ctx, types.NamespacedName{Name: podName, Namespace: r.dpNS}, &dp); err != nil {
+		slog.Debug("event skipped: devpod not found", "devpod", podName, "reason", reason, "err", err)
 		return
 	}
 	now := metav1.Now()
@@ -61,7 +63,9 @@ func (r *EventRecorder) record(ctx context.Context, podName, eventType, reason, 
 		FirstTimestamp:      now,
 		LastTimestamp:        now,
 	}
-	_, _ = r.clientset.CoreV1().Events(dp.Namespace).Create(ctx, event, metav1.CreateOptions{})
+	if _, err := r.clientset.CoreV1().Events(dp.Namespace).Create(ctx, event, metav1.CreateOptions{}); err != nil {
+		slog.Warn("failed to record devpod event", "devpod", dp.Name, "reason", reason, "err", err)
+	}
 }
 
 // SessionConnected records a successful SSH session.
