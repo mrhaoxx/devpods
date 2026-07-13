@@ -45,6 +45,10 @@ type Server struct {
 	// copy-pastable `ssh [-p port] user+pod@host` command lines.
 	SSHHost string
 	SSHPort int
+	// SSHLoginSuffix, when set, is appended to the login as
+	// "<owner>+<pod>+<suffix>" (e.g. a proxy/routing token). Empty =
+	// the plain "<owner>+<pod>" form.
+	SSHLoginSuffix string
 
 	// PasswordAuth enables the built-in username+password login path.
 	PasswordAuth bool

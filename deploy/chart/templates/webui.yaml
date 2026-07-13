@@ -63,6 +63,9 @@ spec:
         {{- if .Values.webui.sshAdvertise }}
         - --ssh-advertise={{ .Values.webui.sshAdvertise }}
         {{- end }}
+        {{- if .Values.webui.sshLoginSuffix }}
+        - --ssh-login-suffix={{ .Values.webui.sshLoginSuffix }}
+        {{- end }}
         ports:
         - {name: http, containerPort: 8080}
         readinessProbe:
