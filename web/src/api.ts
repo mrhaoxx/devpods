@@ -38,7 +38,14 @@ export interface Me {
   usage: { devpods: number; running: number; compute: Record<string, string>; storage: string };
   features: { pubkeySelfService: boolean; kore: boolean; passwordAuth: boolean };
   hasPassword: boolean;
-  ssh: { host: string; port: number };
+  ssh: { host: string; port: number; loginSuffix?: string };
+}
+
+// sshUser builds the login string: "<owner>+<pod>" plus an optional
+// deployment-configured suffix (e.g. "+hpc101" for a proxy route).
+export function sshUser(me: Me | undefined, owner: string, pod: string): string {
+  const suffix = me?.ssh?.loginSuffix;
+  return `${owner}+${pod}${suffix ? `+${suffix}` : ""}`;
 }
 
 export type AuthConfig = { password: boolean; oauth: boolean };
@@ -69,7 +76,7 @@ export function sshCommand(me: Me | undefined, owner: string, pod: string): stri
   const host = me?.ssh?.host || "<gateway>";
   const port = me?.ssh?.port ?? 22;
   const flag = host !== "<gateway>" && port !== 22 ? `-p ${port} ` : "";
-  return `ssh ${flag}${owner}+${pod}@${host}`;
+  return `ssh ${flag}${sshUser(me, owner, pod)}@${host}`;
 }
 
 // sshConfig renders a ~/.ssh/config block so the user can shortcut the
@@ -78,7 +85,7 @@ export function sshConfig(me: Me | undefined, owner: string, pod: string): strin
   const host = me?.ssh?.host || "<gateway>";
   const port = me?.ssh?.port ?? 22;
   const alias = `${owner}-${pod}`;
-  return `Host ${alias}\n    HostName ${host}\n    Port ${port}\n    User ${owner}+${pod}`;
+  return `Host ${alias}\n    HostName ${host}\n    Port ${port}\n    User ${sshUser(me, owner, pod)}`;
 }
 
 export type K8sEvent = {

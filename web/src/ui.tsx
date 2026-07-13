@@ -7,6 +7,36 @@ export function cx(...parts: (string | false | null | undefined)[]) {
   return parts.filter(Boolean).join(" ");
 }
 
+/* Robust copy: navigator.clipboard needs a secure context (https or
+   localhost); fall back to execCommand so copy works over plain http
+   behind an ingress too. */
+export async function copyText(text: string): Promise<boolean> {
+  try {
+    if (navigator.clipboard && window.isSecureContext) {
+      await navigator.clipboard.writeText(text);
+      return true;
+    }
+  } catch {
+    /* fall through to legacy path */
+  }
+  try {
+    const ta = document.createElement("textarea");
+    ta.value = text;
+    ta.setAttribute("readonly", "");
+    ta.style.position = "fixed";
+    ta.style.top = "-1000px";
+    ta.style.opacity = "0";
+    document.body.appendChild(ta);
+    ta.select();
+    ta.setSelectionRange(0, ta.value.length);
+    const ok = document.execCommand("copy");
+    document.body.removeChild(ta);
+    return ok;
+  } catch {
+    return false;
+  }
+}
+
 /* ─── Phase → tone ─────────────────────────────────────────────────── */
 export type Tone = "run" | "warm" | "idle" | "fail";
 export function phaseTone(phase?: string): Tone {
@@ -136,11 +166,11 @@ export function CopyRow({ value }: { value: string }) {
   const [done, setDone] = useState(false);
   return (
     <button
-      onClick={() => {
-        navigator.clipboard?.writeText(value).then(() => {
+      onClick={async () => {
+        if (await copyText(value)) {
           setDone(true);
           setTimeout(() => setDone(false), 1200);
-        });
+        }
       }}
       className="group inline-flex max-w-full items-center gap-2 rounded-lg border border-line bg-sunk px-2.5 py-1.5 text-left transition-colors hover:border-line-strong"
       title="Copy"
@@ -159,11 +189,11 @@ export function CopyBlock({ value }: { value: string }) {
   return (
     <div className="relative overflow-hidden rounded-lg border border-line bg-sunk">
       <button
-        onClick={() => {
-          navigator.clipboard?.writeText(value).then(() => {
+        onClick={async () => {
+          if (await copyText(value)) {
             setDone(true);
             setTimeout(() => setDone(false), 1200);
-          });
+          }
         }}
         className="absolute right-2 top-2 rounded-md border border-line bg-surface px-2 py-1 text-[10px] uppercase tracking-wider text-faint transition-colors hover:text-accent"
         title="Copy"

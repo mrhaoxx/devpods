@@ -106,6 +106,21 @@ func waitDevPod(t *testing.T, name string) devpodv1alpha1.DevPod {
 	return dp
 }
 
+// waitTemplate polls the cached client until the informer has the
+// template — the create handler resolves templateRef through the cache.
+func waitTemplate(t *testing.T, name string) {
+	t.Helper()
+	deadline := time.Now().Add(10 * time.Second)
+	for time.Now().Before(deadline) {
+		var tpl devpodv1alpha1.DevPodTemplate
+		if err := k8sClient.Get(context.Background(), types.NamespacedName{Name: name}, &tpl); err == nil {
+			return
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	t.Fatalf("template %s never appeared in cache", name)
+}
+
 // waitRunning polls until the cached object reports the wanted
 // running state (post-PATCH visibility for subsequent quota reads).
 func waitRunning(t *testing.T, name string, want bool) {
@@ -176,6 +191,7 @@ spec:
 			t.Fatal(err)
 		}
 		t.Cleanup(func() { _ = k8sClient.Delete(context.Background(), tpl) })
+		waitTemplate(t, "pin8")
 
 		body := `{"name":"pinned","image":"ubuntu:24.04","cpu":"2","memory":"4Gi","templateRef":"pin8"}`
 		rec := doJSON(t, s.HandleCreateDevPodForTest(), "POST", "/api/devpods", nil, alice, body)
@@ -212,6 +228,7 @@ spec:
 			t.Fatal(err)
 		}
 		t.Cleanup(func() { _ = k8sClient.Delete(context.Background(), tpl) })
+		waitTemplate(t, "preset1")
 
 		rec := doJSON(t, s.HandleCreateDevPodForTest(), "POST", "/api/devpods", nil, alice,
 			`{"name":"fromtpl","templateRef":"preset1"}`)
