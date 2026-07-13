@@ -153,6 +153,28 @@ export function CopyRow({ value }: { value: string }) {
   );
 }
 
+/* Multi-line copyable block (ssh config, manifests…). */
+export function CopyBlock({ value }: { value: string }) {
+  const [done, setDone] = useState(false);
+  return (
+    <div className="relative overflow-hidden rounded-lg border border-line bg-sunk">
+      <button
+        onClick={() => {
+          navigator.clipboard?.writeText(value).then(() => {
+            setDone(true);
+            setTimeout(() => setDone(false), 1200);
+          });
+        }}
+        className="absolute right-2 top-2 rounded-md border border-line bg-surface px-2 py-1 text-[10px] uppercase tracking-wider text-faint transition-colors hover:text-accent"
+        title="Copy"
+      >
+        {done ? "copied" : "copy"}
+      </button>
+      <pre className="mono overflow-x-auto p-3 pr-16 text-xs leading-relaxed text-ink">{value}</pre>
+    </div>
+  );
+}
+
 /* ─── App shell: top command bar + identity menu ───────────────────── */
 function IdentityMenu({ me }: { me?: Me }) {
   const [open, setOpen] = useState(false);

@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
-import { patchDevPod, deleteDevPod, me, sshCommand, watchDevPod, DevPodDetail, K8sEvent } from "../api";
-import { BackLink, Button, Card, CopyRow, CoreMeter, PhaseLabel, Shell, cx } from "../ui";
+import { patchDevPod, deleteDevPod, me, sshCommand, sshConfig, watchDevPod, DevPodDetail, K8sEvent } from "../api";
+import { BackLink, Button, Card, CopyBlock, CopyRow, CoreMeter, PhaseLabel, Shell, cx } from "../ui";
 
 function fmtTime(ts?: string): string {
   if (!ts) return "";
@@ -109,6 +109,15 @@ export default function PodDetail() {
             <>
               <dt className="text-sm text-muted">Message</dt>
               <dd className="text-sm text-fail">{dp.status.message}</dd>
+            </>
+          )}
+          {meQ.data && (
+            <>
+              <dt className="text-sm text-muted">
+                SSH config
+                <span className="mt-0.5 block text-xs text-faint">→ ssh {dp.metadata.name}</span>
+              </dt>
+              <dd><CopyBlock value={sshConfig(meQ.data, owner, suffix)} /></dd>
             </>
           )}
         </dl>
