@@ -5,6 +5,7 @@
 package webui
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"sort"
@@ -13,6 +14,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
@@ -134,24 +136,85 @@ func (s *Server) handleKoreTopology(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	nodes := koreTopologyFromList(&list, s.NS)
+	s.resolvePoolMembers(r.Context(), nodes)
+	s.writeJSON(w, http.StatusOK, map[string]any{"nodes": nodes})
+}
 
-	// Kore records pool members as pod UIDs; resolve them to pod names
-	// (= DevPod names in our namespace). Unresolvable UIDs stay as-is.
+// resolvePoolMembers rewrites Kore's pod-UID pool members to pod names
+// (= DevPod names in our namespace). Unresolvable UIDs stay as-is.
+func (s *Server) resolvePoolMembers(ctx context.Context, nodes []nodeTopology) {
 	var pods corev1.PodList
-	if err := s.Reader.List(r.Context(), &pods, client.InNamespace(s.NS)); err == nil {
-		uid2name := make(map[string]string, len(pods.Items))
-		for i := range pods.Items {
-			uid2name[string(pods.Items[i].UID)] = pods.Items[i].Name
-		}
-		for ni := range nodes {
-			for pi := range nodes[ni].Pools {
-				for mi, m := range nodes[ni].Pools[pi].Members {
-					if name, ok := uid2name[m]; ok {
-						nodes[ni].Pools[pi].Members[mi] = name
-					}
+	if err := s.Reader.List(ctx, &pods, client.InNamespace(s.NS)); err != nil {
+		return
+	}
+	uid2name := make(map[string]string, len(pods.Items))
+	for i := range pods.Items {
+		uid2name[string(pods.Items[i].UID)] = pods.Items[i].Name
+	}
+	for ni := range nodes {
+		for pi := range nodes[ni].Pools {
+			for mi, m := range nodes[ni].Pools[pi].Members {
+				if name, ok := uid2name[m]; ok {
+					nodes[ni].Pools[pi].Members[mi] = name
 				}
 			}
 		}
 	}
-	s.writeJSON(w, http.StatusOK, map[string]any{"nodes": nodes})
+}
+
+// handleDevPodTopology returns the physical layout of the node a
+// DevPod runs on, plus the cores this DevPod occupies — for the
+// OWNER (not just admins). Other pods' identities are not exposed;
+// the SPA renders them anonymously.
+func (s *Server) handleDevPodTopology(w http.ResponseWriter, r *http.Request) {
+	sess, ok := s.sessionFrom(w, r)
+	if !ok {
+		return
+	}
+	dp, ok := s.getOwned(w, r, sess, r.PathValue("name"))
+	if !ok {
+		return
+	}
+	empty := map[string]any{"node": nil}
+	if !s.KoreEnabled || dp.Status.WorkloadRef == nil || dp.Status.WorkloadRef.Kind != "Pod" {
+		s.writeJSON(w, http.StatusOK, empty)
+		return
+	}
+	var pod corev1.Pod
+	if err := s.Reader.Get(r.Context(), types.NamespacedName{Name: dp.Status.WorkloadRef.Name, Namespace: s.NS}, &pod); err != nil || pod.Spec.NodeName == "" {
+		s.writeJSON(w, http.StatusOK, empty)
+		return
+	}
+	var obj unstructured.Unstructured
+	obj.SetGroupVersionKind(schema.GroupVersionKind{Group: "kore.zjusct.io", Version: "v1alpha1", Kind: "KoreNodeTopology"})
+	if err := s.Reader.Get(r.Context(), types.NamespacedName{Name: pod.Spec.NodeName}, &obj); err != nil {
+		s.writeJSON(w, http.StatusOK, empty)
+		return
+	}
+	list := &unstructured.UnstructuredList{Items: []unstructured.Unstructured{obj}}
+	nodes := koreTopologyFromList(list, s.NS)
+	s.resolvePoolMembers(r.Context(), nodes)
+	if len(nodes) == 0 {
+		s.writeJSON(w, http.StatusOK, empty)
+		return
+	}
+	node := nodes[0]
+
+	// This DevPod's cores: an exclusive allocation, else a pool it joins.
+	mine := ""
+	for _, a := range node.Allocations {
+		if a.DevPod == dp.Name {
+			mine = a.Cpuset
+		}
+	}
+	if mine == "" {
+		for _, p := range node.Pools {
+			for _, m := range p.Members {
+				if m == dp.Name {
+					mine = p.Cpuset
+				}
+			}
+		}
+	}
+	s.writeJSON(w, http.StatusOK, map[string]any{"node": node, "cpuset": mine})
 }

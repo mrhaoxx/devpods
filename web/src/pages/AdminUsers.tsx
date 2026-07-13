@@ -22,9 +22,11 @@ function QuotaEditor({
   onDone: () => void;
 }) {
   const q = user.quota;
+  const gpuKey = "nvidia.com/gpu";
   const [maxDevPods, setMax] = useState(q?.maxDevPods != null ? String(q.maxDevPods) : "");
   const [cpu, setCpu] = useState(q?.compute?.cpu ?? "");
   const [memory, setMemory] = useState(q?.compute?.memory ?? "");
+  const [gpu, setGpu] = useState(q?.compute?.[gpuKey] ?? "");
   const [storage, setStorage] = useState(q?.storage ?? "");
   const [err, setErr] = useState<string | null>(null);
 
@@ -35,6 +37,7 @@ function QuotaEditor({
         maxDevPods: maxDevPods === "" ? undefined : Number(maxDevPods),
         cpu,
         memory,
+        gpu,
         storage,
       });
       onDone();
@@ -49,7 +52,7 @@ function QuotaEditor({
       <p className="mb-2 text-xs text-muted">
         Empty = the global default. Clear every field to remove this user&rsquo;s override.
       </p>
-      <div className="grid gap-3 sm:grid-cols-4">
+      <div className="grid grid-cols-2 gap-3 sm:grid-cols-5">
         <Field label="Max DevPods">
           <Input value={maxDevPods} onChange={(e) => setMax(e.target.value)} placeholder={ph(defaults.maxDevPods?.toString())} className="mono" inputMode="numeric" />
         </Field>
@@ -58,6 +61,9 @@ function QuotaEditor({
         </Field>
         <Field label="Memory">
           <Input value={memory} onChange={(e) => setMemory(e.target.value)} placeholder={ph(defaults.compute?.memory)} className="mono" />
+        </Field>
+        <Field label="GPU">
+          <Input value={gpu} onChange={(e) => setGpu(e.target.value)} placeholder={ph(defaults.compute?.[gpuKey])} className="mono" inputMode="numeric" />
         </Field>
         <Field label="Storage">
           <Input value={storage} onChange={(e) => setStorage(e.target.value)} placeholder={ph(defaults.storage)} className="mono" />
@@ -123,7 +129,11 @@ export default function AdminUsers() {
 
   const quotaSummary = (u: AdminUser) => {
     const cpuLim = u.quota?.compute?.cpu ?? defaults.compute?.cpu;
-    return `${u.usage.cpu ?? "0"}/${cpuLim ?? "∞"} cpu · ${u.devpods}/${u.quota?.maxDevPods ?? defaults.maxDevPods ?? "∞"}`;
+    const gpuLim = u.quota?.compute?.["nvidia.com/gpu"] ?? defaults.compute?.["nvidia.com/gpu"];
+    let s = `${u.usage.cpu ?? "0"}/${cpuLim ?? "∞"} cpu`;
+    if (u.usage.gpu || gpuLim) s += ` · ${u.usage.gpu ?? "0"}/${gpuLim ?? "∞"} gpu`;
+    s += ` · ${u.devpods}/${u.quota?.maxDevPods ?? defaults.maxDevPods ?? "∞"} pods`;
+    return s;
   };
 
   return (

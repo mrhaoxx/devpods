@@ -72,6 +72,7 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("GET /api/devpods/{name}/events", s.handleDevPodEvents)
 	// Single SSE connection carrying both DevPod status and its events.
 	mux.HandleFunc("GET /api/devpods/{name}/stream", s.handleDevPodStream)
+	mux.HandleFunc("GET /api/devpods/{name}/topology", s.handleDevPodTopology)
 	mux.HandleFunc("/api/", func(w http.ResponseWriter, r *http.Request) {
 		s.writeErr(w, http.StatusNotFound, "NOT_FOUND", "no such endpoint", nil)
 	})
