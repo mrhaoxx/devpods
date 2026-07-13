@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"sort"
+	"strings"
 
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
@@ -32,9 +33,12 @@ type koreZone struct {
 }
 
 type koreAlloc struct {
-	Pod       string `json:"pod"`
+	Pod       string `json:"pod"` // "<namespace>/<name>" as Kore reports it
 	Container string `json:"container"`
 	Cpuset    string `json:"cpuset"`
+	// DevPod is the bare name, set only when the pod lives in the
+	// webui's devpod namespace (so the UI links to its detail page).
+	DevPod string `json:"devpod,omitempty"`
 }
 
 type korePool struct {
@@ -68,8 +72,9 @@ type koreStatusRaw struct {
 }
 
 // koreTopologyFromList transforms the raw CR list into the clean shape
-// the SPA renders. Pure — unit-testable without a live cluster.
-func koreTopologyFromList(list *unstructured.UnstructuredList) []nodeTopology {
+// the SPA renders. devpodNS marks which allocations are DevPods (so the
+// UI can deep-link). Pure — unit-testable without a live cluster.
+func koreTopologyFromList(list *unstructured.UnstructuredList, devpodNS string) []nodeTopology {
 	out := make([]nodeTopology, 0, len(list.Items))
 	for i := range list.Items {
 		item := &list.Items[i]
@@ -80,6 +85,11 @@ func koreTopologyFromList(list *unstructured.UnstructuredList) []nodeTopology {
 		var st koreStatusRaw
 		if err := json.Unmarshal(raw, &st); err != nil {
 			continue
+		}
+		for j := range st.Allocations {
+			if ns, name, ok := strings.Cut(st.Allocations[j].Pod, "/"); ok && ns == devpodNS {
+				st.Allocations[j].DevPod = name
+			}
 		}
 		n := nodeTopology{
 			Node:         item.GetName(),
@@ -121,5 +131,5 @@ func (s *Server) handleKoreTopology(w http.ResponseWriter, r *http.Request) {
 		s.writeErr(w, http.StatusInternalServerError, "INTERNAL", err.Error(), nil)
 		return
 	}
-	s.writeJSON(w, http.StatusOK, map[string]any{"nodes": koreTopologyFromList(&list)})
+	s.writeJSON(w, http.StatusOK, map[string]any{"nodes": koreTopologyFromList(&list, s.NS)})
 }

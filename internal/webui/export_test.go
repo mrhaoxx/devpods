@@ -44,10 +44,10 @@ func (s *Server) HandleAdminListDevPodsForTest() http.HandlerFunc { return s.han
 func (s *Server) HandleKoreTopologyForTest() http.HandlerFunc { return s.handleKoreTopology }
 
 // KoreTransformForTest exercises the topology transform on synthetic CRs.
-func KoreTransformForTest(items []map[string]any) []nodeTopology {
+func KoreTransformForTest(items []map[string]any, devpodNS string) []nodeTopology {
 	var list unstructured.UnstructuredList
 	for _, it := range items {
 		list.Items = append(list.Items, unstructured.Unstructured{Object: it})
 	}
-	return koreTopologyFromList(&list)
+	return koreTopologyFromList(&list, devpodNS)
 }

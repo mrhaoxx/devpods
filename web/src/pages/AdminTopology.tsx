@@ -22,7 +22,8 @@ function coreMap(node: KoreNode): Map<number, CoreInfo> {
     for (const c of parseCpuList(p.cpuset)) m.set(c, { kind: "pool", label: `pool ${p.name}` });
   }
   for (const a of node.allocations) {
-    for (const c of parseCpuList(a.cpuset)) m.set(c, { kind: "exclusive", label: `${a.pod} / ${a.container}`, pod: a.pod });
+    const name = a.devpod ?? (a.pod.includes("/") ? a.pod.split("/").pop()! : a.pod);
+    for (const c of parseCpuList(a.cpuset)) m.set(c, { kind: "exclusive", label: `${name} / ${a.container}`, pod: a.devpod });
   }
   return m;
 }
@@ -42,10 +43,6 @@ function Zone({ zone, cores }: { zone: KoreZone; cores: Map<number, CoreInfo> })
   const info = (c: number): CoreInfo =>
     cores.get(c) ?? (free.has(c) ? { kind: "free", label: "free" } : { kind: "shared", label: "shared" });
 
-  const groups = zone.smtSiblings?.length
-    ? zone.smtSiblings.map((g) => [...g].sort((a, b) => a - b)).sort((a, b) => a[0] - b[0])
-    : all.map((c) => [c]);
-
   return (
     <div>
       <div className="mb-2 flex items-baseline gap-2">
@@ -55,12 +52,8 @@ function Zone({ zone, cores }: { zone: KoreZone; cores: Map<number, CoreInfo> })
         </span>
       </div>
       <div className="flex flex-wrap gap-[3px]">
-        {groups.map((g, i) => (
-          <div key={i} className="flex flex-col gap-[3px]">
-            {g.map((c) => (
-              <Cell key={c} core={c} info={info(c)} />
-            ))}
-          </div>
+        {all.map((c) => (
+          <Cell key={c} core={c} info={info(c)} />
         ))}
       </div>
     </div>
