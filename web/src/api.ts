@@ -49,12 +49,30 @@ export function sshUser(me: Me | undefined, owner: string, pod: string): string 
 }
 
 export type AuthConfig = { password: boolean; oauth: boolean };
+export type UserQuota = {
+  maxDevPods?: number;
+  compute?: Record<string, string>;
+  storage?: string;
+};
 export type AdminUser = {
   name: string;
   displayName?: string;
   admin: boolean;
   hasPassword: boolean;
   devpods: number;
+  running: number;
+  usage: { cpu?: string; memory?: string; gpu?: string; storage?: string };
+  quota?: UserQuota;
+};
+export type QuotaPatch = { maxDevPods?: number | null; cpu?: string; memory?: string; gpu?: string; storage?: string };
+export type AdminDevPod = {
+  name: string;
+  owner: string;
+  phase: string;
+  running: boolean;
+  cpu?: string;
+  memory?: string;
+  storage?: string;
 };
 
 export const authConfig = () => req<AuthConfig>("GET", "/api/auth/config");
@@ -63,12 +81,48 @@ export const passwordLogin = (username: string, password: string) =>
 export const logout = () => req<void>("POST", "/auth/logout");
 export const changePassword = (oldPassword: string, newPassword: string) =>
   req<void>("PUT", "/api/me/password", { oldPassword, newPassword });
-export const listUsers = () => req<{ items: AdminUser[] }>("GET", "/api/admin/users");
+export const listUsers = () => req<{ items: AdminUser[]; defaultQuota: UserQuota }>("GET", "/api/admin/users");
 export const createUser = (username: string, displayName: string, password: string) =>
   req<AdminUser>("POST", "/api/admin/users", { username, displayName, password });
 export const resetUserPassword = (name: string, password: string) =>
   req<void>("PATCH", `/api/admin/users/${name}`, { password });
+export const setUserQuota = (name: string, quota: QuotaPatch) =>
+  req<void>("PATCH", `/api/admin/users/${name}`, { quota });
 export const deleteUser = (name: string) => req<void>("DELETE", `/api/admin/users/${name}`);
+export const listAllDevPods = () => req<{ items: AdminDevPod[] }>("GET", "/api/admin/devpods");
+
+export type KoreZone = {
+  id: number;
+  cpus: string;
+  freeCpus: string;
+  smtSiblings?: number[][];
+  memory?: string;
+  devices?: { name: string; type: string }[];
+};
+export type KoreAlloc = { pod: string; container: string; cpuset: string; devpod?: string };
+export type KorePool = { name: string; cpuset: string; numa?: number[]; members?: string[] };
+export type KoreNode = {
+  node: string;
+  reservedCpus?: string;
+  zones: KoreZone[];
+  allocations: KoreAlloc[];
+  pools: KorePool[];
+};
+export const koreTopology = () => req<{ nodes: KoreNode[] }>("GET", "/api/kore/topology");
+export const devpodTopology = (name: string) =>
+  req<{ node: KoreNode | null; cpuset?: string }>("GET", `/api/devpods/${name}/topology`);
+
+// parseCpuList expands "8-15,40-47" into a set of core numbers.
+export function parseCpuList(s?: string): Set<number> {
+  const set = new Set<number>();
+  if (!s) return set;
+  for (const part of s.split(",")) {
+    if (!part) continue;
+    const [a, b] = part.split("-").map(Number);
+    for (let i = a; i <= (b ?? a); i++) set.add(i);
+  }
+  return set;
+}
 
 // sshCommand renders the copy-pastable login line using the
 // deployment's advertised gateway address (-p only when non-22).
