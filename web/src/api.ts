@@ -76,6 +76,7 @@ export type K8sEvent = {
   metadata: { uid: string };
   reason?: string;
   message?: string;
+  type?: string; // Normal | Warning
   count?: number;
   lastTimestamp?: string;
 };
