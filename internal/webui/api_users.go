@@ -78,7 +78,7 @@ func (s *Server) handleMe(w http.ResponseWriter, r *http.Request) {
 			"passwordAuth":      s.PasswordAuth,
 		},
 		"hasPassword": hasPassword,
-		"ssh":         map[string]any{"host": s.SSHHost, "port": s.SSHPort},
+		"ssh":         map[string]any{"host": s.SSHHost, "port": s.SSHPort, "loginSuffix": s.SSHLoginSuffix},
 	})
 }
 
