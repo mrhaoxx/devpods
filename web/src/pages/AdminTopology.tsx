@@ -111,10 +111,25 @@ export default function AdminTopology() {
               {node.pools.length > 0 && (
                 <div className="mt-4 border-t border-line pt-3">
                   <p className="eyebrow mb-2">pools</p>
-                  <ul className="space-y-1 text-xs">
+                  <ul className="space-y-2.5 text-xs">
                     {node.pools.map((p) => (
-                      <li key={p.name} className="mono text-muted">
-                        <span className="text-warm">{p.name}</span> · {p.cpuset} · {p.members?.length ?? 0} members
+                      <li key={p.name}>
+                        <div className="mono text-muted">
+                          <span className="text-warm">{p.name}</span> · {p.cpuset}
+                          {p.numa?.length ? ` · numa ${p.numa.join(",")}` : ""} · {p.members?.length ?? 0} members
+                        </div>
+                        {p.members && p.members.length > 0 && (
+                          <div className="mt-1 flex flex-wrap gap-1">
+                            {p.members.map((m) => {
+                              const name = m.includes("/") ? m.split("/").pop()! : m;
+                              return (
+                                <span key={m} className="mono rounded bg-warm-soft px-1.5 py-0.5 text-[11px] text-warm" title={m}>
+                                  {name}
+                                </span>
+                              );
+                            })}
+                          </div>
+                        )}
                       </li>
                     ))}
                   </ul>
