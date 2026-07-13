@@ -7,6 +7,8 @@ package webui
 import (
 	"net/http"
 
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+
 	devpodv1alpha1 "github.com/mrhaoxx/devpod/api/v1alpha1"
 )
 
@@ -36,3 +38,18 @@ func (s *Server) HandleListUsersForTest() http.HandlerFunc    { return s.handleL
 func (s *Server) HandleCreateUserForTest() http.HandlerFunc   { return s.handleCreateUser }
 func (s *Server) HandlePatchUserForTest() http.HandlerFunc    { return s.handlePatchUser }
 func (s *Server) HandleDeleteUserForTest() http.HandlerFunc   { return s.handleDeleteUser }
+
+func (s *Server) HandleAdminListDevPodsForTest() http.HandlerFunc { return s.handleAdminListDevPods }
+
+func (s *Server) HandleKoreTopologyForTest() http.HandlerFunc { return s.handleKoreTopology }
+
+// KoreTransformForTest exercises the topology transform on synthetic CRs.
+func KoreTransformForTest(items []map[string]any, devpodNS string) []nodeTopology {
+	var list unstructured.UnstructuredList
+	for _, it := range items {
+		list.Items = append(list.Items, unstructured.Unstructured{Object: it})
+	}
+	return koreTopologyFromList(&list, devpodNS)
+}
+
+func (s *Server) HandleDevPodTopologyForTest() http.HandlerFunc { return s.handleDevPodTopology }

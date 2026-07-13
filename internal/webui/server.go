@@ -55,6 +55,8 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("POST /api/admin/users", s.handleCreateUser)
 	mux.HandleFunc("PATCH /api/admin/users/{name}", s.handlePatchUser)
 	mux.HandleFunc("DELETE /api/admin/users/{name}", s.handleDeleteUser)
+	mux.HandleFunc("GET /api/admin/devpods", s.handleAdminListDevPods)
+	mux.HandleFunc("GET /api/kore/topology", s.handleKoreTopology)
 	mux.HandleFunc("GET /api/templates", s.handleListTemplates)
 	mux.HandleFunc("GET /api/devpods", func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Query().Get("watch") == "true" {
@@ -70,6 +72,7 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("GET /api/devpods/{name}/events", s.handleDevPodEvents)
 	// Single SSE connection carrying both DevPod status and its events.
 	mux.HandleFunc("GET /api/devpods/{name}/stream", s.handleDevPodStream)
+	mux.HandleFunc("GET /api/devpods/{name}/topology", s.handleDevPodTopology)
 	mux.HandleFunc("/api/", func(w http.ResponseWriter, r *http.Request) {
 		s.writeErr(w, http.StatusNotFound, "NOT_FOUND", "no such endpoint", nil)
 	})
