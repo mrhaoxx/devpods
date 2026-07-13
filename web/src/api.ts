@@ -91,6 +91,37 @@ export const setUserQuota = (name: string, quota: QuotaPatch) =>
 export const deleteUser = (name: string) => req<void>("DELETE", `/api/admin/users/${name}`);
 export const listAllDevPods = () => req<{ items: AdminDevPod[] }>("GET", "/api/admin/devpods");
 
+export type KoreZone = {
+  id: number;
+  cpus: string;
+  freeCpus: string;
+  smtSiblings?: number[][];
+  memory?: string;
+  devices?: { name: string; type: string }[];
+};
+export type KoreAlloc = { pod: string; container: string; cpuset: string };
+export type KorePool = { name: string; cpuset: string; numa?: number[]; members?: string[] };
+export type KoreNode = {
+  node: string;
+  reservedCpus?: string;
+  zones: KoreZone[];
+  allocations: KoreAlloc[];
+  pools: KorePool[];
+};
+export const koreTopology = () => req<{ nodes: KoreNode[] }>("GET", "/api/kore/topology");
+
+// parseCpuList expands "8-15,40-47" into a set of core numbers.
+export function parseCpuList(s?: string): Set<number> {
+  const set = new Set<number>();
+  if (!s) return set;
+  for (const part of s.split(",")) {
+    if (!part) continue;
+    const [a, b] = part.split("-").map(Number);
+    for (let i = a; i <= (b ?? a); i++) set.add(i);
+  }
+  return set;
+}
+
 // sshCommand renders the copy-pastable login line using the
 // deployment's advertised gateway address (-p only when non-22).
 export function sshCommand(me: Me | undefined, owner: string, pod: string): string {
