@@ -72,6 +72,15 @@ export function sshCommand(me: Me | undefined, owner: string, pod: string): stri
   return `ssh ${flag}${owner}+${pod}@${host}`;
 }
 
+// sshConfig renders a ~/.ssh/config block so the user can shortcut the
+// full login to `ssh <alias>`. The alias is the DevPod name.
+export function sshConfig(me: Me | undefined, owner: string, pod: string): string {
+  const host = me?.ssh?.host || "<gateway>";
+  const port = me?.ssh?.port ?? 22;
+  const alias = `${owner}-${pod}`;
+  return `Host ${alias}\n    HostName ${host}\n    Port ${port}\n    User ${owner}+${pod}`;
+}
+
 export type K8sEvent = {
   metadata: { uid: string };
   reason?: string;

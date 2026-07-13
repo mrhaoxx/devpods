@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { me, getPubkeys, putPubkeys, ApiFailure } from "../api";
-import { BackLink, Button, Card, Notice, Shell } from "../ui";
+import { me, getPubkeys, putPubkeys, sshConfig, ApiFailure } from "../api";
+import { BackLink, Button, Card, CopyBlock, Notice, Shell } from "../ui";
 
 export default function Pubkeys() {
   const meQ = useQuery({ queryKey: ["me"], queryFn: me });
@@ -55,6 +55,15 @@ export default function Pubkeys() {
           </div>
         </Card>
       )}
+
+      <div className="mt-8">
+        <p className="eyebrow mb-2">SSH config</p>
+        <p className="mb-3 text-sm text-muted">
+          Add one block per environment to <code className="mono text-xs">~/.ssh/config</code>, then connect with{" "}
+          <code className="mono text-xs">ssh &lt;name&gt;</code>. Each environment&rsquo;s page has a ready-made block.
+        </p>
+        <CopyBlock value={sshConfig(meQ.data, meQ.data?.user ?? "you", "pod")} />
+      </div>
     </Shell>
   );
 }
