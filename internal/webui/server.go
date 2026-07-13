@@ -55,6 +55,7 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("POST /api/admin/users", s.handleCreateUser)
 	mux.HandleFunc("PATCH /api/admin/users/{name}", s.handlePatchUser)
 	mux.HandleFunc("DELETE /api/admin/users/{name}", s.handleDeleteUser)
+	mux.HandleFunc("GET /api/admin/devpods", s.handleAdminListDevPods)
 	mux.HandleFunc("GET /api/templates", s.handleListTemplates)
 	mux.HandleFunc("GET /api/devpods", func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Query().Get("watch") == "true" {

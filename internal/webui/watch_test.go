@@ -46,7 +46,7 @@ func TestWatchStreamsOwnedEvents(t *testing.T) {
 
 	// Generous: under the full -race suite several envtest apiservers
 	// run concurrently and informer delivery can lag.
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 	lines := make(chan string, 16)
 	go func() {
