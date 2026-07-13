@@ -10,8 +10,10 @@ import (
 	"sort"
 	"strings"
 
+	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
 // The webui reads KoreNodeTopology as unstructured and json-round-trips
@@ -131,5 +133,25 @@ func (s *Server) handleKoreTopology(w http.ResponseWriter, r *http.Request) {
 		s.writeErr(w, http.StatusInternalServerError, "INTERNAL", err.Error(), nil)
 		return
 	}
-	s.writeJSON(w, http.StatusOK, map[string]any{"nodes": koreTopologyFromList(&list, s.NS)})
+	nodes := koreTopologyFromList(&list, s.NS)
+
+	// Kore records pool members as pod UIDs; resolve them to pod names
+	// (= DevPod names in our namespace). Unresolvable UIDs stay as-is.
+	var pods corev1.PodList
+	if err := s.Reader.List(r.Context(), &pods, client.InNamespace(s.NS)); err == nil {
+		uid2name := make(map[string]string, len(pods.Items))
+		for i := range pods.Items {
+			uid2name[string(pods.Items[i].UID)] = pods.Items[i].Name
+		}
+		for ni := range nodes {
+			for pi := range nodes[ni].Pools {
+				for mi, m := range nodes[ni].Pools[pi].Members {
+					if name, ok := uid2name[m]; ok {
+						nodes[ni].Pools[pi].Members[mi] = name
+					}
+				}
+			}
+		}
+	}
+	s.writeJSON(w, http.StatusOK, map[string]any{"nodes": nodes})
 }
