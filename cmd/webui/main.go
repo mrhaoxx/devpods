@@ -63,6 +63,7 @@ func main() {
 		passwordAuth      bool
 		passwordMinLength int
 		externalURL       string
+		sshLoginSuffix    string
 	)
 	flag.StringVar(&listen, "listen", ":8080", "HTTP listen address")
 	flag.StringVar(&issuerURL, "gitlab-issuer-url", "", "GitLab OIDC issuer URL (enables OAuth when set)")
@@ -81,6 +82,8 @@ func main() {
 		"allow users to manage SSH pubkeys via the UI; disable when keys are managed externally (LDAP)")
 	flag.StringVar(&sshAdvertise, "ssh-advertise", "",
 		"gateway address shown in SSH command lines, host or host:port (e.g. devpod.example.com:2222)")
+	flag.StringVar(&sshLoginSuffix, "ssh-login-suffix", "",
+		"appended to the SSH login as <owner>+<pod>+<suffix> (e.g. a proxy/routing token)")
 	flag.BoolVar(&passwordAuth, "password-auth", false,
 		"enable built-in username+password login (independent of OAuth)")
 	flag.IntVar(&passwordMinLength, "password-min-length", 8, "minimum password length for create/reset/change")
@@ -205,6 +208,7 @@ func main() {
 		PubkeySelfService: pubkeySelfService,
 		SSHHost:           sshHost,
 		SSHPort:           sshPort,
+		SSHLoginSuffix:    sshLoginSuffix,
 
 		PasswordAuth:      passwordAuth,
 		PasswordMinLength: passwordMinLength,

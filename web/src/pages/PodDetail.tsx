@@ -1,26 +1,21 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Link, useNavigate, useParams } from "react-router-dom";
+import { useNavigate, useParams } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
-import {
-  patchDevPod,
-  deleteDevPod,
-  me,
-  sshCommand,
-  watchDevPod,
-  DevPodDetail,
-  K8sEvent,
-} from "../api";
+import { patchDevPod, deleteDevPod, me, sshCommand, sshConfig, watchDevPod, DevPodDetail, K8sEvent } from "../api";
+import { BackLink, Button, Card, CopyBlock, CopyRow, CoreMeter, PhaseLabel, Shell, cx } from "../ui";
 
 function fmtTime(ts?: string): string {
   if (!ts) return "";
-  const d = new Date(ts);
-  return d.toLocaleString(undefined, {
-    month: "short",
-    day: "numeric",
-    hour: "2-digit",
-    minute: "2-digit",
-    second: "2-digit",
-  });
+  return new Date(ts).toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit", second: "2-digit" });
+}
+
+// Count cores in a cpuset like "8-15,40-47" for the cell display.
+function countCpus(s?: string): number {
+  if (!s) return 0;
+  return s.split(",").reduce((n, part) => {
+    const [a, b] = part.split("-");
+    return n + (b ? Number(b) - Number(a) + 1 : 1);
+  }, 0);
 }
 
 export default function PodDetail() {
@@ -28,9 +23,6 @@ export default function PodDetail() {
   const nav = useNavigate();
   const meQ = useQuery({ queryKey: ["me"], queryFn: me });
 
-  // A single SSE stream feeds both the DevPod detail (status + binding)
-  // and its events. No initial fetch, no polling, no second stream —
-  // the server replays the current state on connect.
   const [detail, setDetail] = useState<DevPodDetail | null>(null);
   const [eventsByUID, setEventsByUID] = useState<Record<string, K8sEvent>>({});
   const pendingRef = useRef<{ type: string; ev: K8sEvent }[]>([]);
@@ -55,8 +47,6 @@ export default function PodDetail() {
     pendingRef.current = [];
     return watchDevPod(name, {
       onDetail: (d) => setDetail(d),
-      // Batch events with a rAF flush so the initial backlog replay
-      // doesn't trigger one React render per event.
       onEvent: (type, ev) => {
         pendingRef.current.push({ type, ev });
         if (!rafRef.current) rafRef.current = requestAnimationFrame(flushEvents);
@@ -64,9 +54,6 @@ export default function PodDetail() {
     });
   }, [name, flushEvents]);
 
-  // Deduplicate by reason+message (k8s creates separate Event objects
-  // for logically the same event across pod recreations); keep the
-  // latest timestamp and sum counts. Newest first.
   const events = useMemo(() => {
     const byKey = new Map<string, K8sEvent & { totalCount: number }>();
     for (const ev of Object.values(eventsByUID)) {
@@ -82,98 +69,115 @@ export default function PodDetail() {
     return [...byKey.values()].sort((a, b) => (b.lastTimestamp ?? "").localeCompare(a.lastTimestamp ?? ""));
   }, [eventsByUID]);
 
-  if (!detail) return <main className="p-8 text-sm text-slate-400">Loading…</main>;
+  if (!detail) return <Shell><p className="mono py-16 text-center text-sm text-faint">loading…</p></Shell>;
   const dp = detail.devpod;
   const binding = detail.binding;
+  const owner = dp.spec.owner;
+  const suffix = dp.metadata.name.startsWith(owner + "-") ? dp.metadata.name.slice(owner.length + 1) : dp.metadata.name;
+  const cpuCores = countCpus(binding?.allocatedCpuset);
 
   return (
-    <main className="mx-auto max-w-3xl p-8">
-      <Link to="/" className="text-sm text-blue-600 hover:underline">
-        ← My DevPods
-      </Link>
-      <header className="mb-6 mt-2 flex items-center justify-between">
-        <h1 className="text-xl font-semibold">{dp.metadata.name}</h1>
+    <Shell>
+      <BackLink />
+      <header className="mb-6 mt-3 flex flex-wrap items-center justify-between gap-3">
+        <div className="flex items-center gap-3">
+          <h1 className="mono text-xl font-semibold tracking-tight">{dp.metadata.name}</h1>
+          <PhaseLabel phase={dp.status?.phase} />
+        </div>
         <div className="flex gap-2">
-          <button
-            className="rounded border px-3 py-1.5 text-sm"
-            onClick={() => patchDevPod(name, !dp.spec.running)}
-          >
+          <Button size="sm" onClick={() => patchDevPod(name, !dp.spec.running)}>
             {dp.spec.running ? "Hibernate" : "Wake"}
-          </button>
-          <button
-            className="rounded border border-red-300 px-3 py-1.5 text-sm text-red-700"
+          </Button>
+          <Button
+            size="sm"
+            variant="danger"
             onClick={() => {
-              if (confirm(`Delete ${dp.metadata.name}? PVC data is lost.`)) deleteDevPod(name).then(() => nav("/"));
+              if (confirm(`Delete ${dp.metadata.name}? The home volume is lost.`)) deleteDevPod(name).then(() => nav("/"));
             }}
           >
             Delete
-          </button>
+          </Button>
         </div>
       </header>
 
-      <dl className="mb-6 grid grid-cols-2 gap-x-8 gap-y-2 rounded-xl border bg-white p-4 text-sm">
-        <dt className="text-slate-500">Phase</dt>
-        <dd>{dp.status?.phase ?? "Pending"}</dd>
-        <dt className="text-slate-500">SSH</dt>
-        <dd className="font-mono text-xs">
-          {sshCommand(meQ.data, dp.spec.owner, dp.metadata.name.slice(dp.spec.owner.length + 1))}
-        </dd>
-        {dp.status?.message && (
-          <>
-            <dt className="text-slate-500">Message</dt>
-            <dd className="text-red-700">{dp.status.message}</dd>
-          </>
-        )}
-      </dl>
+      <Card className="mb-4 p-5">
+        <p className="eyebrow mb-3">Access</p>
+        <dl className="grid gap-x-6 gap-y-3 sm:grid-cols-[7rem_1fr]">
+          <dt className="text-sm text-muted">SSH</dt>
+          <dd>{meQ.data ? <CopyRow value={sshCommand(meQ.data, owner, suffix)} /> : <span className="text-faint">—</span>}</dd>
+          {dp.status?.message && (
+            <>
+              <dt className="text-sm text-muted">Message</dt>
+              <dd className="text-sm text-fail">{dp.status.message}</dd>
+            </>
+          )}
+          {meQ.data && (
+            <>
+              <dt className="text-sm text-muted">
+                SSH config
+                <span className="mt-0.5 block text-xs text-faint">→ ssh {dp.metadata.name}</span>
+              </dt>
+              <dd><CopyBlock value={sshConfig(meQ.data, owner, suffix)} /></dd>
+            </>
+          )}
+        </dl>
+      </Card>
 
       {binding && (
-        <section className="mb-6 rounded-xl border bg-white p-4 text-sm">
-          <h2 className="mb-2 font-medium">CPU binding (Kore)</h2>
-          <dl className="grid grid-cols-2 gap-x-8 gap-y-2">
-            {binding.allocatedCpuset && (
+        <Card className="mb-4 p-5">
+          <p className="eyebrow mb-3">Compute · Kore</p>
+          <dl className="grid gap-x-6 gap-y-3 sm:grid-cols-[7rem_1fr]">
+            {binding.allocatedCpuset ? (
               <>
-                <dt className="text-slate-500">Allocated cores</dt>
-                <dd className="font-mono">{binding.allocatedCpuset}</dd>
+                <dt className="text-sm text-muted">Cores</dt>
+                <dd className="flex flex-wrap items-center gap-2">
+                  <CoreMeter used={cpuCores} limit={cpuCores} />
+                  <code className="mono text-xs text-ink">{binding.allocatedCpuset}</code>
+                </dd>
+              </>
+            ) : (
+              <>
+                <dt className="text-sm text-muted">State</dt>
+                <dd className="text-sm text-warm">binding pending</dd>
               </>
             )}
             {binding.reservedNuma && (
               <>
-                <dt className="text-slate-500">NUMA zone</dt>
-                <dd>{binding.reservedNuma}</dd>
+                <dt className="text-sm text-muted">NUMA</dt>
+                <dd className="mono text-sm text-ink">zone {binding.reservedNuma}</dd>
               </>
             )}
             {binding.pool && (
               <>
-                <dt className="text-slate-500">Pool</dt>
-                <dd>
-                  {binding.pool} ({binding.poolSize} cores)
-                </dd>
-              </>
-            )}
-            {!binding.allocatedCpuset && !binding.pool && (
-              <>
-                <dt className="text-slate-500">State</dt>
-                <dd>binding pending</dd>
+                <dt className="text-sm text-muted">Pool</dt>
+                <dd className="mono text-sm text-ink">{binding.pool} · {binding.poolSize} cores</dd>
               </>
             )}
           </dl>
-        </section>
+        </Card>
       )}
 
-      <section className="rounded-xl border bg-white p-4 text-sm">
-        <h2 className="mb-2 font-medium">
-          Events <span className="ml-1 align-middle text-[10px] text-green-600">● live</span>
-        </h2>
-        <ul className="space-y-1 font-mono text-xs text-slate-600">
+      <Card className="p-5">
+        <div className="mb-3 flex items-center gap-2">
+          <p className="eyebrow">Events</p>
+          <span className="inline-flex items-center gap-1 text-[10px] text-run">
+            <span className="size-1.5 rounded-full bg-run pulse" /> live
+          </span>
+        </div>
+        <ul className="space-y-1.5">
           {events.map((e, i) => (
-            <li key={i}>
-              <span className="text-slate-400">{fmtTime(e.lastTimestamp)}</span> {e.reason}
-              {e.totalCount > 1 ? ` (×${e.totalCount})` : ""}: {e.message}
+            <li key={i} className="flex gap-2 text-xs">
+              <time className="mono shrink-0 text-faint">{fmtTime(e.lastTimestamp)}</time>
+              <span className={cx("shrink-0 font-medium", e.type === "Warning" ? "text-fail" : "text-muted")}>
+                {e.reason}
+                {e.totalCount > 1 ? ` ×${e.totalCount}` : ""}
+              </span>
+              <span className="min-w-0 text-ink/80">{e.message}</span>
             </li>
           ))}
-          {events.length === 0 && <li className="text-slate-400">none</li>}
+          {events.length === 0 && <li className="text-xs text-faint">no events yet</li>}
         </ul>
-      </section>
-    </main>
+      </Card>
+    </Shell>
   );
 }

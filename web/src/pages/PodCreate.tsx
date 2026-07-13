@@ -2,24 +2,32 @@ import { useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import { me, listTemplates, createDevPod, ApiFailure, Template } from "../api";
+import { BackLink, Button, CoreMeter, Field, Input, Notice, Shell, cx } from "../ui";
 
 type Mode = "preset" | "custom" | "yaml";
 
-function TemplateCard({ tpl, selected, onClick }: { tpl: Template; selected: boolean; onClick: () => void }) {
+function TemplateTile({ tpl, selected, onClick }: { tpl: Template; selected: boolean; onClick: () => void }) {
   const b = tpl.spec.binding;
+  const pinned = b?.annotations["kore.zjusct.io/pin"] === "true";
   return (
     <button
       type="button"
       onClick={onClick}
-      className={`rounded-lg border p-3 text-left text-sm ${selected ? "border-blue-600 ring-1 ring-blue-600" : "hover:border-slate-400"}`}
+      className={cx(
+        "rounded-xl border p-3 text-left transition-colors",
+        selected ? "border-accent bg-accent-soft" : "border-line bg-surface hover:border-line-strong",
+      )}
     >
-      <div className="font-medium">{tpl.spec.displayName}</div>
-      {tpl.spec.description && <div className="text-xs text-slate-500">{tpl.spec.description}</div>}
+      <div className="text-sm font-medium text-ink">{tpl.spec.displayName}</div>
+      {tpl.spec.description && <div className="mt-0.5 text-xs text-muted">{tpl.spec.description}</div>}
       {b && (
-        <div className="mt-1 text-xs text-slate-600">
-          {b.annotations["kore.zjusct.io/pin"] === "true"
-            ? `pinned · ${b.annotations["kore.zjusct.io/numa-policy"] ?? "single"} NUMA`
-            : `pool ${b.annotations["kore.zjusct.io/pool"]} (${b.annotations["kore.zjusct.io/pool-size"]} cores)`}
+        <div className="mt-2 flex items-center gap-2">
+          {pinned ? <CoreMeter used={0} limit={8} /> : null}
+          <span className="mono text-[11px] text-faint">
+            {pinned
+              ? `pinned · ${b.annotations["kore.zjusct.io/numa-policy"] ?? "single"} numa`
+              : `pool ${b.annotations["kore.zjusct.io/pool"]} · ${b.annotations["kore.zjusct.io/pool-size"]} cores`}
+          </span>
         </div>
       )}
     </button>
@@ -74,9 +82,11 @@ export default function PodCreate() {
   };
 
   return (
-    <main className="mx-auto max-w-2xl p-8">
-      <h1 className="mb-6 text-xl font-semibold">New DevPod</h1>
-      <div className="mb-4 flex gap-2 text-sm">
+    <Shell>
+      <BackLink />
+      <h1 className="mono mb-5 mt-3 text-xl font-semibold tracking-tight">New DevPod</h1>
+
+      <div className="mb-5 inline-flex rounded-lg border border-line bg-sunk p-0.5 text-sm">
         {(["preset", "custom", "yaml"] as Mode[]).map((m) => (
           <button
             key={m}
@@ -84,120 +94,91 @@ export default function PodCreate() {
               setMode(m);
               setTplRef("");
             }}
-            className={`rounded px-3 py-1 ${mode === m ? "bg-blue-600 text-white" : "border"}`}
+            className={cx(
+              "rounded-md px-3 py-1.5 font-medium transition-colors",
+              mode === m ? "bg-surface text-ink shadow-sm" : "text-muted hover:text-ink",
+            )}
           >
             {m === "preset" ? "Preset" : m === "custom" ? "Custom" : "YAML"}
           </button>
         ))}
       </div>
 
-      <form onSubmit={submit} className="space-y-4">
+      <form onSubmit={submit} className="space-y-5">
         {mode !== "yaml" && (
-          <label className="block text-sm">
-            Name suffix ({budget - name.length} chars left)
-            <input
-              value={name}
-              onChange={(e) => setName(e.target.value)}
-              maxLength={budget}
-              className="mt-1 w-full rounded border px-2 py-1"
-              required
-            />
-            <span className="text-xs text-slate-400">
-              {meQ.data?.user}-{name || "…"}
-            </span>
-          </label>
+          <Field label="Name" hint={`${budget - name.length} left`}>
+            <div className="flex items-center rounded-lg border border-line-strong bg-surface focus-within:border-accent">
+              <span className="mono py-2 pl-3 text-sm text-faint">{meQ.data?.user}-</span>
+              <input
+                value={name}
+                onChange={(e) => setName(e.target.value)}
+                maxLength={budget}
+                className="mono w-full bg-transparent py-2 pr-3 text-sm text-ink focus:outline-none"
+                required
+              />
+            </div>
+          </Field>
         )}
 
         {mode === "preset" && (
-          <div className="grid grid-cols-2 gap-2">
+          <div className="grid gap-2 sm:grid-cols-2">
             {presets.map((t) => (
-              <TemplateCard
-                key={t.metadata.name}
-                tpl={t}
-                selected={tplRef === t.metadata.name}
-                onClick={() => setTplRef(t.metadata.name)}
-              />
+              <TemplateTile key={t.metadata.name} tpl={t} selected={tplRef === t.metadata.name} onClick={() => setTplRef(t.metadata.name)} />
             ))}
-            {presets.length === 0 && <p className="col-span-2 text-sm text-slate-400">No presets published.</p>}
+            {presets.length === 0 && <p className="text-sm text-faint">No presets published.</p>}
           </div>
         )}
 
         {mode === "custom" && (
           <>
-            <label className="block text-sm">
-              Image
-              <input
-                value={image}
-                onChange={(e) => setImage(e.target.value)}
-                className="mt-1 w-full rounded border px-2 py-1"
-                required
-              />
-            </label>
-            <div className="grid grid-cols-2 gap-3">
-              <label className="block text-sm">
-                CPU limit
-                <input
-                  value={cpu}
-                  onChange={(e) => setCpu(e.target.value)}
-                  className="mt-1 w-full rounded border px-2 py-1"
-                  required
-                />
-              </label>
-              <label className="block text-sm">
-                Memory limit
-                <input
-                  value={memory}
-                  onChange={(e) => setMemory(e.target.value)}
-                  className="mt-1 w-full rounded border px-2 py-1"
-                  required
-                />
-              </label>
+            <Field label="Image">
+              <Input value={image} onChange={(e) => setImage(e.target.value)} className="mono" required />
+            </Field>
+            <div className="grid gap-4 sm:grid-cols-2">
+              <Field label="CPU limit">
+                <Input value={cpu} onChange={(e) => setCpu(e.target.value)} className="mono" required />
+              </Field>
+              <Field label="Memory limit">
+                <Input value={memory} onChange={(e) => setMemory(e.target.value)} className="mono" required />
+              </Field>
             </div>
-            <div className="grid grid-cols-2 gap-3">
-              <label className="block text-sm">
-                Shell (optional)
+            <div className="grid gap-4 sm:grid-cols-2">
+              <Field label="Shell" hint="optional">
                 <select
                   value={shell}
                   onChange={(e) => setShell(e.target.value)}
-                  className="mt-1 w-full rounded border px-2 py-1"
+                  className="w-full rounded-lg border border-line-strong bg-surface px-3 py-2 text-sm text-ink focus:border-accent focus-visible:outline-none"
                 >
                   <option value="">image default</option>
                   <option>bash</option>
                   <option>zsh</option>
                   <option>fish</option>
                 </select>
-              </label>
-              <label className="block text-sm">
-                Home volume (optional, e.g. 20Gi)
-                <input
-                  value={persist}
-                  onChange={(e) => setPersist(e.target.value)}
-                  className="mt-1 w-full rounded border px-2 py-1"
-                />
-              </label>
+              </Field>
+              <Field label="Home volume" hint="optional">
+                <Input value={persist} onChange={(e) => setPersist(e.target.value)} placeholder="e.g. 20Gi" className="mono" />
+              </Field>
             </div>
             {overlays.length > 0 && (
-              <fieldset className="text-sm">
-                <legend className="mb-1">CPU binding (admin-curated)</legend>
-                <div className="grid grid-cols-2 gap-2">
+              <div>
+                <p className="eyebrow mb-2">CPU binding · admin-curated</p>
+                <div className="grid gap-2 sm:grid-cols-2">
                   <button
                     type="button"
                     onClick={() => setTplRef("")}
-                    className={`rounded-lg border p-3 text-left ${tplRef === "" ? "border-blue-600 ring-1 ring-blue-600" : ""}`}
+                    className={cx(
+                      "rounded-xl border p-3 text-left transition-colors",
+                      tplRef === "" ? "border-accent bg-accent-soft" : "border-line bg-surface hover:border-line-strong",
+                    )}
                   >
-                    <div className="font-medium">None</div>
-                    <div className="text-xs text-slate-500">shared cores</div>
+                    <div className="text-sm font-medium text-ink">None</div>
+                    <div className="mt-0.5 text-xs text-muted">shared cores</div>
                   </button>
                   {overlays.map((t) => (
-                    <TemplateCard
-                      key={t.metadata.name}
-                      tpl={t}
-                      selected={tplRef === t.metadata.name}
-                      onClick={() => setTplRef(t.metadata.name)}
-                    />
+                    <TemplateTile key={t.metadata.name} tpl={t} selected={tplRef === t.metadata.name} onClick={() => setTplRef(t.metadata.name)} />
                   ))}
                 </div>
-              </fieldset>
+              </div>
             )}
           </>
         )}
@@ -207,20 +188,17 @@ export default function PodCreate() {
             value={yamlText}
             onChange={(e) => setYamlText(e.target.value)}
             rows={16}
-            className="w-full rounded border p-2 font-mono text-xs"
+            spellCheck={false}
+            className="mono w-full rounded-lg border border-line-strong bg-sunk p-3 text-xs text-ink focus:border-accent focus-visible:outline-none"
             placeholder={"apiVersion: devpod.io/v1alpha1\nkind: DevPod\n..."}
           />
         )}
 
-        {err && <p className="rounded bg-red-50 p-3 text-sm text-red-700">{err}</p>}
-        <button
-          className="rounded bg-blue-600 px-4 py-2 text-sm text-white disabled:opacity-50"
-          type="submit"
-          disabled={mode === "preset" && !tplRef}
-        >
-          Create
-        </button>
+        {err && <Notice>{err}</Notice>}
+        <Button type="submit" variant="accent" disabled={mode === "preset" && !tplRef}>
+          Create environment
+        </Button>
       </form>
-    </main>
+    </Shell>
   );
 }

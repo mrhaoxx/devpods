@@ -1,69 +1,69 @@
 import { useEffect, useState } from "react";
-import { Link } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
-import { me, getPubkeys, putPubkeys, ApiFailure } from "../api";
+import { me, getPubkeys, putPubkeys, sshConfig, ApiFailure } from "../api";
+import { BackLink, Button, Card, CopyBlock, Notice, Shell } from "../ui";
 
 export default function Pubkeys() {
   const meQ = useQuery({ queryKey: ["me"], queryFn: me });
   const [text, setText] = useState("");
   const [msg, setMsg] = useState<string | null>(null);
+  const [err, setErr] = useState(false);
 
   useEffect(() => {
     getPubkeys().then((r) => setText((r.pubkeys ?? []).join("\n")));
   }, []);
 
-  if (meQ.data && meQ.data.features?.pubkeySelfService === false) {
-    return (
-      <main className="mx-auto max-w-2xl p-8">
-        <Link to="/" className="text-sm text-blue-600 hover:underline">
-          ← My DevPods
-        </Link>
-        <h1 className="mb-2 mt-2 text-xl font-semibold">SSH public keys</h1>
-        <p className="rounded bg-slate-50 p-4 text-sm text-slate-600">
-          SSH keys are managed externally on this deployment (e.g. via LDAP) — ask your administrator to
-          update them.
-        </p>
-      </main>
-    );
-  }
-
   const save = async () => {
     setMsg(null);
     try {
-      const keys = text
-        .split("\n")
-        .map((l) => l.trim())
-        .filter(Boolean);
+      const keys = text.split("\n").map((l) => l.trim()).filter(Boolean);
       await putPubkeys(keys);
-      setMsg(`Saved ${keys.length} key(s).`);
+      setErr(false);
+      setMsg(`Saved ${keys.length} key${keys.length === 1 ? "" : "s"}.`);
     } catch (e) {
+      setErr(true);
       setMsg(e instanceof ApiFailure ? e.body.message : String(e));
     }
   };
 
   return (
-    <main className="mx-auto max-w-2xl p-8">
-      <Link to="/" className="text-sm text-blue-600 hover:underline">
-        ← My DevPods
-      </Link>
-      <h1 className="mb-2 mt-2 text-xl font-semibold">SSH public keys</h1>
-      <p className="mb-4 text-sm text-slate-500">
-        One key per line. Then connect with{" "}
-        <code className="rounded bg-slate-100 px-1">ssh {meQ.data?.user}+&lt;pod&gt;@&lt;gateway&gt;</code>
+    <Shell>
+      <BackLink />
+      <h1 className="mono mb-1 mt-3 text-xl font-semibold tracking-tight">SSH keys</h1>
+      <p className="mb-5 text-sm text-muted">
+        One key per line. Connect with{" "}
+        <code className="mono rounded bg-sunk px-1.5 py-0.5 text-xs text-ink">ssh {meQ.data?.user}+&lt;pod&gt;@&lt;gateway&gt;</code>
       </p>
-      <textarea
-        value={text}
-        onChange={(e) => setText(e.target.value)}
-        rows={8}
-        className="w-full rounded border p-2 font-mono text-xs"
-        placeholder="ssh-ed25519 AAAA… laptop"
-      />
-      <div className="mt-3 flex items-center gap-3">
-        <button onClick={save} className="rounded bg-blue-600 px-4 py-2 text-sm text-white">
-          Save
-        </button>
-        {msg && <span className="text-sm text-slate-600">{msg}</span>}
+
+      {meQ.data?.features?.pubkeySelfService === false ? (
+        <Notice tone="idle">SSH keys are managed externally on this deployment — ask an administrator to update them.</Notice>
+      ) : (
+        <Card className="p-5">
+          <textarea
+            value={text}
+            onChange={(e) => setText(e.target.value)}
+            rows={8}
+            spellCheck={false}
+            className="mono w-full rounded-lg border border-line-strong bg-sunk p-3 text-xs text-ink focus:border-accent focus-visible:outline-none"
+            placeholder="ssh-ed25519 AAAA… laptop"
+          />
+          <div className="mt-3 flex items-center gap-3">
+            <Button variant="accent" size="sm" onClick={save}>
+              Save keys
+            </Button>
+            {msg && <span className={err ? "text-sm text-fail" : "text-sm text-run"}>{msg}</span>}
+          </div>
+        </Card>
+      )}
+
+      <div className="mt-8">
+        <p className="eyebrow mb-2">SSH config</p>
+        <p className="mb-3 text-sm text-muted">
+          Add one block per environment to <code className="mono text-xs">~/.ssh/config</code>, then connect with{" "}
+          <code className="mono text-xs">ssh &lt;name&gt;</code>. Each environment&rsquo;s page has a ready-made block.
+        </p>
+        <CopyBlock value={sshConfig(meQ.data, meQ.data?.user ?? "you", "pod")} />
       </div>
-    </main>
+    </Shell>
   );
 }

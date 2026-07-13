@@ -91,6 +91,9 @@ webui:
   # Gateway address rendered into `ssh [-p port] user+pod@host` command
   # lines, host or host:port. Empty → a <gateway> placeholder is shown.
   sshAdvertise: ""
+  # Appended to the SSH login as <owner>+<pod>+<suffix> (e.g. a proxy /
+  # routing token). Empty → the plain <owner>+<pod> form.
+  sshLoginSuffix: ""
   gitlab:
     issuerURL: ""
     clientID: ""

@@ -1,1 +1,120 @@
 @import "tailwindcss";
+
+/* ─── Console: design tokens ──────────────────────────────────────────
+   A precision control panel for cluster dev environments. Status is the
+   color system; monospace is the content voice; discrete "cells" (cores)
+   are the signature. */
+@theme {
+  --color-paper: #fbfaf8;
+  --color-surface: #ffffff;
+  --color-sunk: #f3f1ec;
+  --color-ink: #16181d;
+  --color-muted: #6a7180;
+  --color-faint: #9aa1ae;
+  --color-line: #e7e3db;
+  --color-line-strong: #d8d3c9;
+
+  --color-accent: #4338ca;
+  --color-accent-hi: #4f46e5;
+  --color-accent-soft: #eeecfb;
+
+  --color-run: #17976a;
+  --color-run-soft: #e2f2ea;
+  --color-warm: #b6791f;
+  --color-warm-soft: #f6ecd8;
+  --color-idle: #8b93a2;
+  --color-idle-soft: #eeeff2;
+  --color-fail: #c8443b;
+  --color-fail-soft: #f8e6e4;
+
+  --font-sans: system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial,
+    sans-serif;
+  --font-mono: ui-monospace, "JetBrains Mono", "SF Mono", "Cascadia Code",
+    "Roboto Mono", Menlo, Consolas, monospace;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --color-paper: #0d0f14;
+    --color-surface: #14171d;
+    --color-sunk: #1a1e26;
+    --color-ink: #e9eaee;
+    --color-muted: #949bab;
+    --color-faint: #646b7a;
+    --color-line: #262a33;
+    --color-line-strong: #333844;
+
+    --color-accent: #8079ff;
+    --color-accent-hi: #948dff;
+    --color-accent-soft: #201f38;
+
+    --color-run: #34c691;
+    --color-run-soft: #10261e;
+    --color-warm: #d69b3f;
+    --color-warm-soft: #2a2113;
+    --color-idle: #7c8493;
+    --color-idle-soft: #1c2029;
+    --color-fail: #e46a60;
+    --color-fail-soft: #2a1614;
+  }
+}
+
+html {
+  -webkit-text-size-adjust: 100%;
+}
+
+body {
+  background: var(--color-paper);
+  color: var(--color-ink);
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+.mono,
+code,
+kbd {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  font-variant-ligatures: none;
+}
+
+::selection {
+  background: var(--color-accent-soft);
+}
+
+*:focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 2px;
+  border-radius: 3px;
+}
+
+/* Structural eyebrow — a real system domain, not decoration. */
+.eyebrow {
+  font-family: var(--font-mono);
+  font-size: 0.6875rem;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--color-faint);
+  font-weight: 500;
+}
+
+/* The one live moment: a Running environment breathes. */
+@keyframes cell-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.4;
+  }
+}
+.pulse {
+  animation: cell-pulse 2.4s ease-in-out infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .pulse {
+    animation: none;
+  }
+}

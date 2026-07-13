@@ -1,7 +1,7 @@
 import { useState } from "react";
-import { Link } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import { me, changePassword, ApiFailure } from "../api";
+import { BackLink, Button, Card, Field, Input, Notice, Shell } from "../ui";
 
 export default function Password() {
   const meQ = useQuery({ queryKey: ["me"], queryFn: me });
@@ -26,43 +26,28 @@ export default function Password() {
   };
 
   return (
-    <main className="mx-auto max-w-md p-8">
-      <Link to="/" className="text-sm text-blue-600 hover:underline">
-        ← My DevPods
-      </Link>
-      <h1 className="mb-4 mt-2 text-xl font-semibold">Change password</h1>
+    <Shell>
+      <BackLink />
+      <h1 className="mono mb-5 mt-3 text-xl font-semibold tracking-tight">Password</h1>
+
       {meQ.data && !meQ.data.hasPassword ? (
-        <p className="rounded bg-slate-50 p-4 text-sm text-slate-600">
-          Your account signs in via GitLab — there is no password to change.
-        </p>
+        <Notice tone="idle">You sign in via GitLab — there is no password to change.</Notice>
       ) : (
-        <form onSubmit={save} className="space-y-3">
-          <input
-            type="password"
-            value={oldPassword}
-            onChange={(e) => setOld(e.target.value)}
-            placeholder="Current password"
-            autoComplete="current-password"
-            className="w-full rounded border px-3 py-2 text-sm"
-            required
-          />
-          <input
-            type="password"
-            value={newPassword}
-            onChange={(e) => setNew(e.target.value)}
-            placeholder="New password"
-            autoComplete="new-password"
-            className="w-full rounded border px-3 py-2 text-sm"
-            required
-          />
-          <div className="flex items-center gap-3">
-            <button className="rounded bg-blue-600 px-4 py-2 text-sm text-white" type="submit">
-              Save
-            </button>
-            {msg && <span className={`text-sm ${err ? "text-red-700" : "text-slate-600"}`}>{msg}</span>}
-          </div>
-        </form>
+        <Card className="max-w-sm p-5">
+          <form onSubmit={save} className="space-y-4">
+            <Field label="Current password">
+              <Input type="password" value={oldPassword} onChange={(e) => setOld(e.target.value)} autoComplete="current-password" required />
+            </Field>
+            <Field label="New password">
+              <Input type="password" value={newPassword} onChange={(e) => setNew(e.target.value)} autoComplete="new-password" required />
+            </Field>
+            {msg && <Notice tone={err ? "fail" : "run"}>{msg}</Notice>}
+            <Button type="submit" variant="accent" size="sm">
+              Change password
+            </Button>
+          </form>
+        </Card>
       )}
-    </main>
+    </Shell>
   );
 }
