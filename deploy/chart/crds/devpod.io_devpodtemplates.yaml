@@ -1,0 +1,277 @@
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.16.5
+  name: devpodtemplates.devpod.io
+spec:
+  group: devpod.io
+  names:
+    kind: DevPodTemplate
+    listKind: DevPodTemplateList
+    plural: devpodtemplates
+    shortNames:
+    - dpt
+    singular: devpodtemplate
+  scope: Cluster
+  versions:
+  - additionalPrinterColumns:
+    - jsonPath: .spec.displayName
+      name: Display
+      type: string
+    - jsonPath: .metadata.creationTimestamp
+      name: Age
+      type: date
+    name: v1alpha1
+    schema:
+      openAPIV3Schema:
+        description: |-
+          DevPodTemplate is an admin-curated create template. Cluster-scoped;
+          read-only for ordinary users (via the webui), CRUD for admins.
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: |-
+              DevPodTemplateSpec defines an admin-curated template. At least one
+              of Binding / PodPreset must be set: binding-only templates act as
+              overlays users attach to custom DevPods; templates with PodPreset
+              are one-click presets.
+            properties:
+              binding:
+                description: |-
+                  BindingSpec carries the Kore binding block a template stamps onto
+                  DevPods created from it: the kore.zjusct.io/* annotations plus the
+                  container resources the binding implies. The webui validates the
+                  block against Kore's admission rules at template-save time and is
+                  the only writer of these annotations on non-admin DevPods.
+                properties:
+                  annotations:
+                    additionalProperties:
+                      type: string
+                    description: |-
+                      Annotations restricted to the kore.zjusct.io/* whitelist
+                      (pin, pool, pool-size, numa-policy, memory-policy, placement,
+                      smt-policy — NOT cpuset, which stays an admin escape hatch).
+                    type: object
+                  resources:
+                    description: |-
+                      Resources the binding implies for the target container. For
+                      pin templates: integer CPU with requests == limits.
+                    properties:
+                      claims:
+                        description: |-
+                          Claims lists the names of resources, defined in spec.resourceClaims,
+                          that are used by this container.
+
+                          This is an alpha field and requires enabling the
+                          DynamicResourceAllocation feature gate.
+
+                          This field is immutable. It can only be set for containers.
+                        items:
+                          description: ResourceClaim references one entry in PodSpec.ResourceClaims.
+                          properties:
+                            name:
+                              description: |-
+                                Name must match the name of one entry in pod.spec.resourceClaims of
+                                the Pod where this field is used. It makes that resource available
+                                inside a container.
+                              type: string
+                            request:
+                              description: |-
+                                Request is the name chosen for a request in the referenced claim.
+                                If empty, everything from the claim is made available, otherwise
+                                only the result of this request.
+                              type: string
+                          required:
+                          - name
+                          type: object
+                        type: array
+                        x-kubernetes-list-map-keys:
+                        - name
+                        x-kubernetes-list-type: map
+                      limits:
+                        additionalProperties:
+                          anyOf:
+                          - type: integer
+                          - type: string
+                          pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                          x-kubernetes-int-or-string: true
+                        description: |-
+                          Limits describes the maximum amount of compute resources allowed.
+                          More info: https://kubernetes.io/docs/concepts/configuration/manage-resources-containers/
+                        type: object
+                      requests:
+                        additionalProperties:
+                          anyOf:
+                          - type: integer
+                          - type: string
+                          pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                          x-kubernetes-int-or-string: true
+                        description: |-
+                          Requests describes the minimum amount of compute resources required.
+                          If Requests is omitted for a container, it defaults to Limits if that is explicitly specified,
+                          otherwise to an implementation-defined value. Requests cannot exceed Limits.
+                          More info: https://kubernetes.io/docs/concepts/configuration/manage-resources-containers/
+                        type: object
+                    type: object
+                required:
+                - annotations
+                - resources
+                type: object
+              description:
+                type: string
+              displayName:
+                description: DisplayName is the human-readable name shown in the picker.
+                minLength: 1
+                type: string
+              podPreset:
+                description: PodPresetSpec fixes the user-visible knobs of a one-click
+                  preset.
+                properties:
+                  image:
+                    description: Image for the single "dev" container.
+                    minLength: 1
+                    type: string
+                  persistence:
+                    description: Persistence default for DevPods created from this
+                      preset.
+                    properties:
+                      accessModes:
+                        default:
+                        - ReadWriteOnce
+                        description: |-
+                          AccessModes for the home PVC. Defaults to [ReadWriteOnce]. The
+                          chosen StorageClass must support every mode listed here; otherwise
+                          PVC binding fails and the DevPod stays in Pending.
+                        items:
+                          type: string
+                        type: array
+                        x-kubernetes-list-type: set
+                      mountPath:
+                        description: |-
+                          MountPath is where the PVC is mounted inside the target container.
+                          Required when persistence is set. Must be absolute and must not
+                          collide with any user-supplied volumeMount.mountPath on the target
+                          container — the validating webhook enforces this.
+                        pattern: ^/[^\s]*$
+                        type: string
+                      size:
+                        anyOf:
+                        - type: integer
+                        - type: string
+                        description: Size of the home PVC.
+                        pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                        x-kubernetes-int-or-string: true
+                      storageClassName:
+                        description: StorageClassName for the home PVC. Empty string
+                          uses the cluster default.
+                        type: string
+                      targetContainer:
+                        description: |-
+                          TargetContainer names which container in spec.pod.spec.containers
+                          receives the home mount. Defaults to
+                          spec.pod.spec.containers[0].name. Must reference an existing
+                          container; the webhook enforces this.
+                        type: string
+                    required:
+                    - mountPath
+                    - size
+                    type: object
+                  resources:
+                    description: |-
+                      Resources for the "dev" container. A Binding on the same
+                      template overrides overlapping keys.
+                    properties:
+                      claims:
+                        description: |-
+                          Claims lists the names of resources, defined in spec.resourceClaims,
+                          that are used by this container.
+
+                          This is an alpha field and requires enabling the
+                          DynamicResourceAllocation feature gate.
+
+                          This field is immutable. It can only be set for containers.
+                        items:
+                          description: ResourceClaim references one entry in PodSpec.ResourceClaims.
+                          properties:
+                            name:
+                              description: |-
+                                Name must match the name of one entry in pod.spec.resourceClaims of
+                                the Pod where this field is used. It makes that resource available
+                                inside a container.
+                              type: string
+                            request:
+                              description: |-
+                                Request is the name chosen for a request in the referenced claim.
+                                If empty, everything from the claim is made available, otherwise
+                                only the result of this request.
+                              type: string
+                          required:
+                          - name
+                          type: object
+                        type: array
+                        x-kubernetes-list-map-keys:
+                        - name
+                        x-kubernetes-list-type: map
+                      limits:
+                        additionalProperties:
+                          anyOf:
+                          - type: integer
+                          - type: string
+                          pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                          x-kubernetes-int-or-string: true
+                        description: |-
+                          Limits describes the maximum amount of compute resources allowed.
+                          More info: https://kubernetes.io/docs/concepts/configuration/manage-resources-containers/
+                        type: object
+                      requests:
+                        additionalProperties:
+                          anyOf:
+                          - type: integer
+                          - type: string
+                          pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                          x-kubernetes-int-or-string: true
+                        description: |-
+                          Requests describes the minimum amount of compute resources required.
+                          If Requests is omitted for a container, it defaults to Limits if that is explicitly specified,
+                          otherwise to an implementation-defined value. Requests cannot exceed Limits.
+                          More info: https://kubernetes.io/docs/concepts/configuration/manage-resources-containers/
+                        type: object
+                    type: object
+                  shell:
+                    description: Shell passed through to DevPodSpec.Shell.
+                    enum:
+                    - bash
+                    - zsh
+                    - fish
+                    type: string
+                required:
+                - image
+                type: object
+            required:
+            - displayName
+            type: object
+            x-kubernetes-validations:
+            - message: at least one of binding or podPreset must be set
+              rule: has(self.binding) || has(self.podPreset)
+        type: object
+    served: true
+    storage: true
+    subresources: {}

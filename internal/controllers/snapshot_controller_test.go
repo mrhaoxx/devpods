@@ -59,7 +59,7 @@ func TestSnapshotReconciler_FailsForNonRunningDevPod(t *testing.T) {
 	}
 
 	dp := &devpodv1alpha1.DevPod{
-		ObjectMeta: metav1.ObjectMeta{Name: "snapdp2", Namespace: "devpods"},
+		ObjectMeta: metav1.ObjectMeta{Name: "snapuser2-dp", Namespace: "devpods"},
 		Spec: devpodv1alpha1.DevPodSpec{
 			Owner:   "snapuser2",
 			Running: true,
@@ -86,7 +86,7 @@ func TestSnapshotReconciler_FailsForNonRunningDevPod(t *testing.T) {
 	snap := &devpodv1alpha1.DevPodSnapshot{
 		ObjectMeta: metav1.ObjectMeta{Name: "nonrun-snap", Namespace: "devpods"},
 		Spec: devpodv1alpha1.DevPodSnapshotSpec{
-			DevPodName: "snapdp2",
+			DevPodName: "snapuser2-dp",
 			Image:      "registry.example.com/test:v2",
 		},
 	}
