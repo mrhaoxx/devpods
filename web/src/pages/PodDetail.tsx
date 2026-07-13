@@ -2,21 +2,12 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import { patchDevPod, deleteDevPod, me, sshCommand, sshConfig, watchDevPod, devpodTopology, parseCpuList, DevPodDetail, K8sEvent } from "../api";
-import { BackLink, Button, Card, CopyBlock, CopyRow, CoreMeter, PhaseLabel, Shell, cx } from "../ui";
+import { BackLink, Button, Card, CopyBlock, CopyRow, PhaseLabel, Shell, cx } from "../ui";
 import { NodeZones, TopologyLegend } from "../kore";
 
 function fmtTime(ts?: string): string {
   if (!ts) return "";
   return new Date(ts).toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit", second: "2-digit" });
-}
-
-// Count cores in a cpuset like "8-15,40-47" for the cell display.
-function countCpus(s?: string): number {
-  if (!s) return 0;
-  return s.split(",").reduce((n, part) => {
-    const [a, b] = part.split("-");
-    return n + (b ? Number(b) - Number(a) + 1 : 1);
-  }, 0);
 }
 
 export default function PodDetail() {
@@ -76,7 +67,6 @@ export default function PodDetail() {
   const binding = detail.binding;
   const owner = dp.spec.owner;
   const suffix = dp.metadata.name.startsWith(owner + "-") ? dp.metadata.name.slice(owner.length + 1) : dp.metadata.name;
-  const cpuCores = countCpus(binding?.allocatedCpuset);
 
   return (
     <Shell>
@@ -125,50 +115,29 @@ export default function PodDetail() {
         </dl>
       </Card>
 
-      {binding && (
-        <Card className="mb-4 p-5">
-          <p className="eyebrow mb-3">Compute · Kore</p>
-          <dl className="grid gap-x-6 gap-y-3 sm:grid-cols-[7rem_1fr]">
-            {binding.allocatedCpuset ? (
-              <>
-                <dt className="text-sm text-muted">Cores</dt>
-                <dd className="flex flex-wrap items-center gap-2">
-                  <CoreMeter used={cpuCores} limit={cpuCores} />
-                  <code className="mono text-xs text-ink">{binding.allocatedCpuset}</code>
-                </dd>
-              </>
-            ) : (
-              <>
-                <dt className="text-sm text-muted">State</dt>
-                <dd className="text-sm text-warm">binding pending</dd>
-              </>
-            )}
-            {binding.reservedNuma && (
-              <>
-                <dt className="text-sm text-muted">NUMA</dt>
-                <dd className="mono text-sm text-ink">zone {binding.reservedNuma}</dd>
-              </>
-            )}
-            {binding.pool && (
-              <>
-                <dt className="text-sm text-muted">Pool</dt>
-                <dd className="mono text-sm text-ink">{binding.pool} · {binding.poolSize} cores</dd>
-              </>
-            )}
-          </dl>
-        </Card>
-      )}
-
       {topoQ.data?.node && (
         <Card className="mb-4 p-5">
-          <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+          <div className="mb-1 flex flex-wrap items-center justify-between gap-2">
             <div className="flex items-baseline gap-2">
               <p className="eyebrow">Node layout</p>
               <span className="mono text-xs text-faint">{topoQ.data.node.node}</span>
             </div>
             <TopologyLegend mine />
           </div>
+          <p className="mb-3 text-xs text-muted">
+            {binding?.pool
+              ? `Shared pool ${binding.pool} · ${binding.poolSize} cores`
+              : binding?.allocatedCpuset
+                ? `Pinned · cores ${binding.allocatedCpuset}${binding.reservedNuma ? ` · NUMA ${binding.reservedNuma}` : ""}`
+                : "Your cores are highlighted."}
+          </p>
           <NodeZones node={topoQ.data.node} reveal={false} mine={parseCpuList(topoQ.data.cpuset)} />
+        </Card>
+      )}
+      {topoQ.data?.node === null && binding?.allocatedCpuset === undefined && binding?.pool === undefined && binding && (
+        <Card className="mb-4 p-5">
+          <p className="eyebrow mb-1">Compute · Kore</p>
+          <p className="text-sm text-warm">binding pending</p>
         </Card>
       )}
 

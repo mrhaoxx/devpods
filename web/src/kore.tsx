@@ -96,8 +96,8 @@ export function NodeZones({ node, mine, reveal }: { node: KoreNode; mine?: Set<n
 
 export function TopologyLegend({ mine }: { mine?: boolean }) {
   const items: [string, string][] = mine
-    ? [["bg-accent ring-2 ring-accent/30", "your cores"], ["bg-idle", "allocated"], ["bg-warm", "pool"], ["bg-idle/40", "shared"], ["border border-line-strong bg-transparent", "free"]]
-    : [["bg-accent", "pinned"], ["bg-warm", "pool"], ["bg-idle/40", "shared"], ["bg-idle", "reserved"], ["border border-line-strong bg-transparent", "free"]];
+    ? [["bg-accent ring-2 ring-accent/30", "your cores"], ["bg-warm", "shared pool"], ["bg-idle", "allocated"], ["bg-idle/40", "shared"], ["border border-line-strong bg-transparent", "free"]]
+    : [["bg-accent", "pinned"], ["bg-warm", "shared pool"], ["bg-idle/40", "shared"], ["bg-idle", "reserved"], ["border border-line-strong bg-transparent", "free"]];
   return (
     <div className="flex flex-wrap gap-x-4 gap-y-1.5 text-xs text-muted">
       {items.map(([c, label]) => (
