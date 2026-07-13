@@ -433,6 +433,14 @@ func handle(parent context.Context, id uint64, conn net.Conn, hostSigner ssh.Sig
 	if raw := srvConn.Permissions.Extensions["devpod.io/auth-path"]; raw != "" {
 		_ = json.Unmarshal([]byte(raw), &ap)
 	}
+	// The DevPod resource name is owner-scoped ("<owner>-<pod>"), while
+	// ap.Pod is the bare pod segment from the login. Events must
+	// reference the resolved resource name or the recorder's DevPod
+	// lookup misses and silently drops the event.
+	devpodName := srvConn.Permissions.Extensions["devpod.io/devpod"]
+	if devpodName == "" {
+		devpodName = ap.Pod // pre-owner-scoped fallback
+	}
 	clientIP := conn.RemoteAddr().String()
 	fp := srvConn.Permissions.Extensions["devpod.io/pubkey-fp"]
 	sessionID := fmt.Sprintf("sid-%d", id)
@@ -449,7 +457,7 @@ func handle(parent context.Context, id uint64, conn net.Conn, hostSigner ssh.Sig
 			stats.BytesClientToBackend.Load(), stats.BytesBackendToClient.Load(), closeReason)
 		gateway.SessionsTotal.WithLabelValues(ap.User, ap.Pod, ap.Kind, sessionResult).Inc()
 		gateway.SessionDurationSeconds.WithLabelValues(ap.User, ap.Pod, ap.Kind).Observe(dur.Seconds())
-		recorder.SessionDisconnected(parent, ap.Pod, ap.User, closeReason)
+		recorder.SessionDisconnected(parent, devpodName, ap.User, closeReason)
 	}()
 
 	endpoint := srvConn.Permissions.Extensions["devpod.io/endpoint"]
@@ -459,14 +467,14 @@ func handle(parent context.Context, id uint64, conn net.Conn, hostSigner ssh.Sig
 	if err != nil {
 		slog.Warn("dial_failed", "id", id, "endpoint", endpoint, "err", err)
 		gateway.DialFailuresTotal.WithLabelValues(ap.Pod, classifyDialErr(err)).Inc()
-		recorder.DialFailed(parent, ap.Pod, endpoint, err.Error())
+		recorder.DialFailed(parent, devpodName, endpoint, err.Error())
 		sessionResult = "error"
 		closeReason = "dial_failed"
 		return
 	}
 	defer cliConn.Close()
 
-	recorder.SessionConnected(parent, ap.Pod, ap.User, clientIP, ap.Kind)
+	recorder.SessionConnected(parent, devpodName, ap.User, clientIP, ap.Kind)
 	slog.Info("proxy_start", "id", id)
 	if err := gateway.Proxy(srvConn, srvChans, srvReqs, cliConn, cliChans, cliReqs, stats); err != nil {
 		slog.Info("proxy_end", "id", id, "err", err)
