@@ -48,6 +48,18 @@ type PodPresetSpec struct {
 	// +optional
 	// +kubebuilder:validation:Enum=bash;zsh;fish
 	Shell string `json:"shell,omitempty"`
+
+	// Tolerations added to the dev pod, e.g. to schedule onto a tainted
+	// (experimental) node or into a partition guarded by a taint.
+	//
+	// +optional
+	Tolerations []corev1.Toleration `json:"tolerations,omitempty"`
+
+	// NodeSelector added to the dev pod, e.g. to pin a preset to a
+	// specific node class.
+	//
+	// +optional
+	NodeSelector map[string]string `json:"nodeSelector,omitempty"`
 }
 
 // DevPodTemplateSpec defines an admin-curated template. At least one
