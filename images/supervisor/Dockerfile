@@ -47,7 +47,7 @@ RUN CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} \
 # Debian ships `bash-static`, a fully-static bash binary linked against glibc
 # at /bin/bash-static. Alpine has no equivalent prebuilt package (its `bash`
 # is dynamically linked to musl), so we pull from Debian here.
-FROM debian:bookworm-slim AS bash-build
+FROM debian:trixie-slim AS bash-build
 RUN apt-get update && \
     apt-get install -y --no-install-recommends bash-static binutils && \
     rm -rf /var/lib/apt/lists/*
@@ -90,18 +90,24 @@ ARG FISH_VERSION=4.7.1
 ARG FISH_SHA256_x86_64=345388add316b94a847b08cef01f1b46e85b98215328271ee22a21555a3204df
 ARG FISH_SHA256_aarch64=72957265b8629fbb3cdb215260c302f6154403dbaf35d38103aac6af689fb7f6
 ARG TARGETARCH
-RUN apk add --no-cache wget xz binutils
+RUN apk add --no-cache wget xz binutils busybox-static
 WORKDIR /src
-RUN case "$TARGETARCH" in \
+# Upstream fish ships prebuilt binaries only for x86_64/aarch64. On riscv64
+# there is no release binary (and a Rust source build is ~10min under qemu),
+# so fish is skipped: /out/fish falls back to static busybox. The devpod
+# presets use the image-default shell, not fish, on that arch.
+RUN mkdir -p /out && \
+    case "$TARGETARCH" in \
         amd64) FISH_ARCH=x86_64;  FISH_SHA="$FISH_SHA256_x86_64" ;; \
         arm64) FISH_ARCH=aarch64; FISH_SHA="$FISH_SHA256_aarch64" ;; \
+        riscv64) cp /bin/busybox.static /out/fish; exit 0 ;; \
         *) echo "fish-build: unsupported TARGETARCH=$TARGETARCH" >&2; exit 1 ;; \
     esac && \
     wget -qO fish.tar.xz \
         "https://github.com/fish-shell/fish-shell/releases/download/${FISH_VERSION}/fish-${FISH_VERSION}-linux-${FISH_ARCH}.tar.xz" && \
     echo "${FISH_SHA}  fish.tar.xz" | sha256sum -c - && \
     tar xJf fish.tar.xz && \
-    mkdir -p /out && cp fish /out/fish && strip /out/fish
+    cp fish /out/fish && strip /out/fish
 
 # --- Stage 6: GNU coreutils (static musl from source) + busybox --------
 # GNU coreutils statically linked against musl. Each utility (ls, cat,
