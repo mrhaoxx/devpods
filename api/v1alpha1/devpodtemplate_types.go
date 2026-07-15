@@ -60,6 +60,14 @@ type PodPresetSpec struct {
 	//
 	// +optional
 	NodeSelector map[string]string `json:"nodeSelector,omitempty"`
+
+	// AutomountServiceAccountToken opts the preset's pod into mounting the
+	// namespace's ServiceAccount token. Absent (nil) means the platform's
+	// secure default (no token in the container); set true only for presets
+	// whose workload genuinely needs API access.
+	//
+	// +optional
+	AutomountServiceAccountToken *bool `json:"automountServiceAccountToken,omitempty"`
 }
 
 // DevPodTemplateSpec defines an admin-curated template. At least one
