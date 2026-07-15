@@ -145,6 +145,13 @@ spec:
                 description: PodPresetSpec fixes the user-visible knobs of a one-click
                   preset.
                 properties:
+                  automountServiceAccountToken:
+                    description: |-
+                      AutomountServiceAccountToken opts the preset's pod into mounting the
+                      namespace's ServiceAccount token. Absent (nil) means the platform's
+                      secure default (no token in the container); set true only for presets
+                      whose workload genuinely needs API access.
+                    type: boolean
                   image:
                     description: Image for the single "dev" container.
                     minLength: 1
