@@ -145,10 +145,24 @@ spec:
                 description: PodPresetSpec fixes the user-visible knobs of a one-click
                   preset.
                 properties:
+                  automountServiceAccountToken:
+                    description: |-
+                      AutomountServiceAccountToken opts the preset's pod into mounting the
+                      namespace's ServiceAccount token. Absent (nil) means the platform's
+                      secure default (no token in the container); set true only for presets
+                      whose workload genuinely needs API access.
+                    type: boolean
                   image:
                     description: Image for the single "dev" container.
                     minLength: 1
                     type: string
+                  nodeSelector:
+                    additionalProperties:
+                      type: string
+                    description: |-
+                      NodeSelector added to the dev pod, e.g. to pin a preset to a
+                      specific node class.
+                    type: object
                   persistence:
                     description: Persistence default for DevPods created from this
                       preset.
@@ -262,6 +276,47 @@ spec:
                     - zsh
                     - fish
                     type: string
+                  tolerations:
+                    description: |-
+                      Tolerations added to the dev pod, e.g. to schedule onto a tainted
+                      (experimental) node or into a partition guarded by a taint.
+                    items:
+                      description: |-
+                        The pod this Toleration is attached to tolerates any taint that matches
+                        the triple <key,value,effect> using the matching operator <operator>.
+                      properties:
+                        effect:
+                          description: |-
+                            Effect indicates the taint effect to match. Empty means match all taint effects.
+                            When specified, allowed values are NoSchedule, PreferNoSchedule and NoExecute.
+                          type: string
+                        key:
+                          description: |-
+                            Key is the taint key that the toleration applies to. Empty means match all taint keys.
+                            If the key is empty, operator must be Exists; this combination means to match all values and all keys.
+                          type: string
+                        operator:
+                          description: |-
+                            Operator represents a key's relationship to the value.
+                            Valid operators are Exists and Equal. Defaults to Equal.
+                            Exists is equivalent to wildcard for value, so that a pod can
+                            tolerate all taints of a particular category.
+                          type: string
+                        tolerationSeconds:
+                          description: |-
+                            TolerationSeconds represents the period of time the toleration (which must be
+                            of effect NoExecute, otherwise this field is ignored) tolerates the taint. By default,
+                            it is not set, which means tolerate the taint forever (do not evict). Zero and
+                            negative values will be treated as 0 (evict immediately) by the system.
+                          format: int64
+                          type: integer
+                        value:
+                          description: |-
+                            Value is the taint value the toleration matches to.
+                            If the operator is Exists, the value should be empty, otherwise just a regular string.
+                          type: string
+                      type: object
+                    type: array
                 required:
                 - image
                 type: object
