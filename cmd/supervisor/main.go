@@ -85,7 +85,7 @@ func main() {
 			fmt.Fprintf(os.Stderr, "supervisor: install profile scripts: %v\n", err)
 		}
 	}
-	sshdArgs = append(sshdArgs, shellArgsForChosen(chosen, containerEnvForSetEnv(os.Environ()))...)
+	sshdArgs = append(sshdArgs, shellArgsForChosen(chosen, containerEnvForSetEnv(os.Environ()), filepath.Glob)...)
 	sshdCmd := exec.Command(sshdPath, sshdArgs...)
 	sshdCmd.Stdout = os.Stdout
 	sshdCmd.Stderr = os.Stderr
