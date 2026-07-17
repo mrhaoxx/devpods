@@ -7,6 +7,7 @@ package main
 import (
 	"io/fs"
 	"os"
+	"path/filepath"
 	"strings"
 )
 
@@ -38,7 +39,10 @@ var nologinShells = map[string]struct{}{
 //
 // containerEnv should be the filtered output of containerEnvForSetEnv;
 // pass nil to skip forwarding (e.g. in tests).
-func shellArgsForChosen(chosen string, containerEnv []string) []string {
+//
+// glob resolves the bundled zsh functions directory (production callers
+// pass filepath.Glob); it is injected for testability.
+func shellArgsForChosen(chosen string, containerEnv []string, glob func(string) ([]string, error)) []string {
 	// /opt/devpod/bin is appended (not prepended) so the user image's
 	// tools win whenever present — busybox / GNU coreutils only fill
 	// gaps (typical distroless case). Prepending would shadow Debian's
@@ -48,12 +52,39 @@ func shellArgsForChosen(chosen string, containerEnv []string) []string {
 		"PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/opt/devpod/bin",
 		"TERMINFO=/opt/devpod/share/terminfo",
 		"TERMINFO_DIRS=/opt/devpod/share/terminfo:/usr/share/terminfo:/etc/terminfo:/lib/terminfo",
-		"FPATH=/opt/devpod/share/zsh/5.9/functions:/usr/share/zsh/functions:/usr/local/share/zsh/site-functions",
-		"DEVPOD_ACTIVE_SHELL=" + chosen,
 	}
+	// Only set FPATH when the bundled functions dir is actually present.
+	// FPATH overrides zsh's compiled-in fpath, which already points at
+	// the bundle — so a wrong or bundle-less FPATH breaks every autoload
+	// (add-zsh-hook, is-at-least, ...) rather than merely adding nothing.
+	if dir := bundledZshFunctionsDir(glob); dir != "" {
+		envPairs = append(envPairs,
+			"FPATH="+dir+":/usr/share/zsh/functions:/usr/local/share/zsh/site-functions")
+	}
+	envPairs = append(envPairs, "DEVPOD_ACTIVE_SHELL="+chosen)
 	envPairs = append(envPairs, containerEnv...)
 	setEnv := strings.Join(envPairs, " ")
 	return []string{"-o", "SetEnv=" + setEnv}
+}
+
+// zshFunctionsGlob matches the zsh functions directory bundled in the
+// supervisor image. The version segment is whatever the Dockerfile's
+// ZSH_VERSION produced — deliberately NOT hardcoded here, because the
+// two live in different files and silently drift apart (a hardcoded
+// "5.9" survived the Dockerfile's bump to 5.9.1 and broke autoload).
+const zshFunctionsGlob = "/opt/devpod/share/zsh/*/functions"
+
+// bundledZshFunctionsDir returns the bundled zsh functions directory,
+// or "" when the bundle is absent. The image ships exactly one version
+// directory; when several somehow match, the last of filepath.Glob's
+// sorted output is taken purely for determinism (lexicographic, not
+// semver).
+func bundledZshFunctionsDir(glob func(string) ([]string, error)) string {
+	matches, err := glob(zshFunctionsGlob)
+	if err != nil || len(matches) == 0 {
+		return ""
+	}
+	return matches[len(matches)-1]
 }
 
 // prepareShellArgs is the convenience entry point used by tests: it
@@ -69,7 +100,7 @@ func prepareShellArgs(
 	stat func(string) (fs.FileInfo, error),
 ) []string {
 	chosen, _ := resolveShell(getenv, passwd, stat)
-	return shellArgsForChosen(chosen, nil)
+	return shellArgsForChosen(chosen, nil, filepath.Glob)
 }
 
 // skipEnvExact lists environment variable names managed by the

@@ -283,10 +283,48 @@ func TestContainerEnvForSetEnv_EmptyEnv(t *testing.T) {
 }
 
 func TestShellArgsForChosen_WithContainerEnv(t *testing.T) {
-	args := shellArgsForChosen("bash", []string{"DOCKER_HOST=tcp://localhost:2375"})
+	args := shellArgsForChosen("bash", []string{"DOCKER_HOST=tcp://localhost:2375"}, noZshBundle)
 	mustContain(t, args, "DOCKER_HOST=tcp://localhost:2375")
 	mustContain(t, args, "DEVPOD_ACTIVE_SHELL=bash")
 	mustContain(t, args, "PATH=/usr/local/sbin:")
+}
+
+// noZshBundle is a glob stub for tests that don't care about FPATH.
+func noZshBundle(string) ([]string, error) { return nil, nil }
+
+// FPATH must be derived from whatever zsh version the image actually
+// bundles. A hardcoded version silently skews when the Dockerfile's
+// ZSH_VERSION is bumped, and because FPATH overrides zsh's compiled-in
+// fpath, every autoload (add-zsh-hook, is-at-least, ...) then fails.
+func TestShellArgsForChosen_FPATHUsesBundledZshFunctionsDir(t *testing.T) {
+	glob := func(string) ([]string, error) {
+		return []string{"/opt/devpod/share/zsh/5.9.1/functions"}, nil
+	}
+	args := shellArgsForChosen("zsh", nil, glob)
+	mustContain(t, args, "FPATH=/opt/devpod/share/zsh/5.9.1/functions:/usr/share/zsh/functions")
+}
+
+// When the bundle is absent we must leave FPATH unset entirely: setting
+// it without the bundled dir would still override zsh's correct
+// compiled-in fpath and break autoload.
+func TestShellArgsForChosen_FPATHOmittedWhenBundleMissing(t *testing.T) {
+	args := shellArgsForChosen("zsh", nil, noZshBundle)
+	mustNotContainSubstr(t, args, "FPATH=")
+}
+
+// The image ships exactly one zsh version dir, so multiple matches are
+// not expected; assert only that the pick is deterministic (last of
+// filepath.Glob's sorted output). This is a lexicographic tiebreak, NOT
+// semver ordering — "5.10" would sort below "5.9".
+func TestShellArgsForChosen_FPATHPickIsDeterministicWhenMultiple(t *testing.T) {
+	glob := func(string) ([]string, error) {
+		return []string{
+			"/opt/devpod/share/zsh/5.8/functions",
+			"/opt/devpod/share/zsh/5.9.1/functions",
+		}, nil
+	}
+	args := shellArgsForChosen("zsh", nil, glob)
+	mustContain(t, args, "FPATH=/opt/devpod/share/zsh/5.9.1/functions:")
 }
 
 func TestPatchPasswdRootShell_NoOpWhenWantEmpty(t *testing.T) {
