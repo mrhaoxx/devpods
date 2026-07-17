@@ -1,0 +1,8 @@
+# Scoped to images/supervisor/Dockerfile — the supervisor image needs only the
+# Go source (cmd/supervisor + its deps) and images/supervisor/sshd_config.
+# Patterns are relative to the build context root (the repo root).
+.git
+bin
+web
+controller
+cover.out
