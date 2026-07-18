@@ -64,13 +64,16 @@ func TestApplyBindingNeedsPod(t *testing.T) {
 func TestApplyPreset(t *testing.T) {
 	tpl := pinTemplate()
 	tpl.Spec.PodPreset = &devpodv1alpha1.PodPresetSpec{
-		Image: "ghcr.io/example/cuda-dev:12",
-		Resources: corev1.ResourceRequirements{
-			Limits: corev1.ResourceList{
-				corev1.ResourceCPU:    resource.MustParse("4"),
-				corev1.ResourceMemory: resource.MustParse("8Gi"),
+		Pod: devpodv1alpha1.PodWorkloadSpec{Spec: corev1.PodSpec{Containers: []corev1.Container{{
+			Name:  "dev",
+			Image: "ghcr.io/example/cuda-dev:12",
+			Resources: corev1.ResourceRequirements{
+				Limits: corev1.ResourceList{
+					corev1.ResourceCPU:    resource.MustParse("4"),
+					corev1.ResourceMemory: resource.MustParse("8Gi"),
+				},
 			},
-		},
+		}}}},
 		Persistence: &devpodv1alpha1.PersistenceSpec{Size: resource.MustParse("20Gi"), MountPath: "/home/dev"},
 		Shell:       "zsh",
 	}
@@ -93,7 +96,7 @@ func TestApplyPreset(t *testing.T) {
 func TestApplyPresetKeepsUserFields(t *testing.T) {
 	tpl := &devpodv1alpha1.DevPodTemplate{Spec: devpodv1alpha1.DevPodTemplateSpec{
 		DisplayName: "plain",
-		PodPreset:   &devpodv1alpha1.PodPresetSpec{Image: "ubuntu:24.04", Shell: "bash"},
+		PodPreset:   &devpodv1alpha1.PodPresetSpec{Pod: devpodv1alpha1.PodWorkloadSpec{Spec: corev1.PodSpec{Containers: []corev1.Container{{Name: "dev", Image: "ubuntu:24.04"}}}}, Shell: "bash"},
 	}}
 	dp := devpodv1alpha1.DevPod{Spec: devpodv1alpha1.DevPodSpec{Owner: "gl-alice", Shell: "fish"}}
 	if err := webui.ApplyTemplate(&dp, tpl); err != nil {

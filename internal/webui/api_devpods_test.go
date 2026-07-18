@@ -214,13 +214,16 @@ spec:
 		tpl.Spec = devpodv1alpha1.DevPodTemplateSpec{
 			DisplayName: "Plain Ubuntu 4C8G",
 			PodPreset: &devpodv1alpha1.PodPresetSpec{
-				Image: "ubuntu:24.04",
-				Resources: corev1.ResourceRequirements{
-					Limits: corev1.ResourceList{
-						corev1.ResourceCPU:    resource.MustParse("4"),
-						corev1.ResourceMemory: resource.MustParse("8Gi"),
+				Pod: devpodv1alpha1.PodWorkloadSpec{Spec: corev1.PodSpec{Containers: []corev1.Container{{
+					Name:  "dev",
+					Image: "ubuntu:24.04",
+					Resources: corev1.ResourceRequirements{
+						Limits: corev1.ResourceList{
+							corev1.ResourceCPU:    resource.MustParse("4"),
+							corev1.ResourceMemory: resource.MustParse("8Gi"),
+						},
 					},
-				},
+				}}}},
 				Shell: "zsh",
 			},
 		}
