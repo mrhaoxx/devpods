@@ -29,15 +29,9 @@ func ApplyTemplate(dp *devpodv1alpha1.DevPod, tpl *devpodv1alpha1.DevPodTemplate
 		if dp.Spec.Pod != nil {
 			return fmt.Errorf("template %q is a full preset; the request must not carry its own pod spec", tpl.Name)
 		}
-		dp.Spec.Pod = &devpodv1alpha1.PodWorkloadSpec{
-			Spec: corev1.PodSpec{
-				Containers: []corev1.Container{{
-					Name:      "dev",
-					Image:     p.Image,
-					Resources: *p.Resources.DeepCopy(),
-				}},
-			},
-		}
+		// Passthrough: the preset carries a full pod spec (image, resources,
+		// securityContext, volumes, extra containers, …). Stamp it verbatim.
+		dp.Spec.Pod = p.Pod.DeepCopy()
 		if dp.Spec.Persistence == nil && p.Persistence != nil {
 			dp.Spec.Persistence = p.Persistence.DeepCopy()
 		}

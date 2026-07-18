@@ -25,23 +25,16 @@ type BindingSpec struct {
 	Resources corev1.ResourceRequirements `json:"resources"`
 }
 
-// PodPresetSpec fixes the user-visible knobs of a one-click preset.
+// PodPresetSpec is a one-click preset's workload: a full pod (passthrough,
+// the same shape as a custom DevPod's spec.pod) plus DevPod-level defaults.
+// Because the pod is a passthrough PodSpec, any container/pod field is
+// expressible — image, resources, tolerations, nodeSelector,
+// automountServiceAccountToken, securityContext, volumes, extra containers —
+// so a preset never needs a new knob added here per pod feature.
 type PodPresetSpec struct {
-	// Image for the single "dev" container.
-	//
-	// +kubebuilder:validation:MinLength=1
-	Image string `json:"image"`
-
-	// Resources for the "dev" container. A Binding on the same
-	// template overrides overlapping keys.
-	//
-	// +optional
-	Resources corev1.ResourceRequirements `json:"resources,omitempty"`
-
-	// Persistence default for DevPods created from this preset.
-	//
-	// +optional
-	Persistence *PersistenceSpec `json:"persistence,omitempty"`
+	// Pod is the workload stamped onto DevPods created from this preset. Same
+	// shape as a custom DevPod's spec.pod (a passthrough pod template).
+	Pod PodWorkloadSpec `json:"pod"`
 
 	// Shell passed through to DevPodSpec.Shell.
 	//
@@ -49,25 +42,10 @@ type PodPresetSpec struct {
 	// +kubebuilder:validation:Enum=bash;zsh;fish
 	Shell string `json:"shell,omitempty"`
 
-	// Tolerations added to the dev pod, e.g. to schedule onto a tainted
-	// (experimental) node or into a partition guarded by a taint.
+	// Persistence default for DevPods created from this preset.
 	//
 	// +optional
-	Tolerations []corev1.Toleration `json:"tolerations,omitempty"`
-
-	// NodeSelector added to the dev pod, e.g. to pin a preset to a
-	// specific node class.
-	//
-	// +optional
-	NodeSelector map[string]string `json:"nodeSelector,omitempty"`
-
-	// AutomountServiceAccountToken opts the preset's pod into mounting the
-	// namespace's ServiceAccount token. Absent (nil) means the platform's
-	// secure default (no token in the container); set true only for presets
-	// whose workload genuinely needs API access.
-	//
-	// +optional
-	AutomountServiceAccountToken *bool `json:"automountServiceAccountToken,omitempty"`
+	Persistence *PersistenceSpec `json:"persistence,omitempty"`
 }
 
 // DevPodTemplateSpec defines an admin-curated template. At least one

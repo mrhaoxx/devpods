@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"golang.org/x/crypto/ssh"
+	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 
@@ -137,7 +138,7 @@ func TestTemplateList(t *testing.T) {
 		ObjectMeta: metav1.ObjectMeta{Name: "plain-preset"},
 		Spec: devpodv1alpha1.DevPodTemplateSpec{
 			DisplayName: "Plain Ubuntu",
-			PodPreset:   &devpodv1alpha1.PodPresetSpec{Image: "ubuntu:24.04"},
+			PodPreset:   &devpodv1alpha1.PodPresetSpec{Pod: devpodv1alpha1.PodWorkloadSpec{Spec: corev1.PodSpec{Containers: []corev1.Container{{Name: "dev", Image: "ubuntu:24.04"}}}}},
 		},
 	}
 	ctx := context.Background()
