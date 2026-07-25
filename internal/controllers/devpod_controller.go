@@ -481,8 +481,26 @@ func (r *DevPodReconciler) applyPodWithDriftRecreate(ctx context.Context, dp *de
 
 // podSpecHash returns a hex SHA256 over the rendered Pod's spec.
 // Stable across reconciles for the same render output.
+// podSpecHash fingerprints the parts of the rendered spec whose drift justifies
+// recreating the Pod — i.e. everything that can actually change a RUNNING pod.
+//
+// The controller-injected bootstrap initContainer is deliberately excluded: it
+// has already completed on a live Pod, so changing its image (the operator-side
+// --supervisor-image lever) cannot affect that Pod at all. Hashing it meant a
+// supervisor bump deleted and recreated every DevPod in the fleet — dropping
+// everyone's SSH sessions — to deliver exactly nothing; the new image takes
+// effect naturally the next time the Pod is created for any other reason.
+//
+// Only that one container is skipped. Everything the user or template author
+// wrote — including their own initContainers — keeps counting as drift, so
+// editing a DevPod still applies with the restart the UI already warns about.
 func podSpecHash(pod *corev1.Pod) string {
-	b, _ := json.Marshal(pod.Spec)
+	spec := pod.Spec.DeepCopy()
+	if len(spec.InitContainers) > 0 &&
+		spec.InitContainers[0].Name == render.SupervisorBootstrapContainerName {
+		spec.InitContainers = spec.InitContainers[1:]
+	}
+	b, _ := json.Marshal(spec)
 	sum := sha256.Sum256(b)
 	return hex.EncodeToString(sum[:])
 }
