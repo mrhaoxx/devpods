@@ -229,8 +229,8 @@ func TestContainerEnvForSetEnv_FiltersInternalVars(t *testing.T) {
 	got := containerEnvForSetEnv(environ)
 	want := map[string]bool{
 		"DOCKER_HOST=tcp://localhost:2375": true,
-		"CUDA_VISIBLE_DEVICES=0,1":        true,
-		"MY_VAR=hello":                    true,
+		"CUDA_VISIBLE_DEVICES=0,1":         true,
+		"MY_VAR=hello":                     true,
 	}
 	if len(got) != len(want) {
 		t.Fatalf("expected %d entries, got %d: %v", len(want), len(got), got)
@@ -250,9 +250,9 @@ func TestContainerEnvForSetEnv_QuotesSpaces(t *testing.T) {
 	}
 	got := containerEnvForSetEnv(environ)
 	wantMap := map[string]bool{
-		`JAVA_OPTS="-Xmx2g -server"`:       true,
-		`GREETING="hello \"world\""`:        true,
-		"SIMPLE=value":                      true,
+		`JAVA_OPTS="-Xmx2g -server"`: true,
+		`GREETING="hello \"world\""`: true,
+		"SIMPLE=value":               true,
 	}
 	if len(got) != len(wantMap) {
 		t.Fatalf("expected %d entries, got %d: %v", len(wantMap), len(got), got)
@@ -395,7 +395,8 @@ func TestInstallProfileScripts_WritesBothFiles(t *testing.T) {
 		files[p] = string(b)
 		return nil
 	}
-	if err := installProfileScripts(mkdir, write); err != nil {
+	read := func(p string) ([]byte, error) { return []byte(files[p]), nil }
+	if err := installProfileScripts(mkdir, read, write); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if !dirs["/etc/profile.d"] || !dirs["/etc/fish/conf.d"] {
@@ -427,5 +428,69 @@ func TestPatchPasswdRootShell_WritesSyntheticWhenPasswdMissing(t *testing.T) {
 	}
 	if string(got) != "root:x:0:0:root:/root:/opt/devpod/bin/fish\n" {
 		t.Errorf("synthetic line wrong:\n%q", got)
+	}
+}
+
+// zsh has no conf.d and never reads /etc/profile, so the supervisor must bridge
+// /etc/zsh/zprofile → /etc/profile; otherwise zsh logins skip ALL of
+// /etc/profile.d (the bundle's PATH hook, and the image's oneAPI/spack/module
+// scripts) while bash logins work — the failure that looks random per user.
+func TestEnsureZshProfileHook(t *testing.T) {
+	run := func(initial string, present bool) (map[string]string, map[string]bool) {
+		files, dirs := map[string]string{}, map[string]bool{}
+		if present {
+			for _, p := range zprofilePaths {
+				files[p] = initial
+			}
+		}
+		mkdir := func(p string, _ os.FileMode) error { dirs[p] = true; return nil }
+		read := func(p string) ([]byte, error) {
+			v, ok := files[p]
+			if !ok {
+				return nil, os.ErrNotExist
+			}
+			return []byte(v), nil
+		}
+		write := func(p string, b []byte, _ os.FileMode) error { files[p] = string(b); return nil }
+		if err := ensureZshProfileHook(mkdir, read, write); err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		return files, dirs
+	}
+
+	// absent file → created with the bridge
+	files, dirs := run("", false)
+	if !dirs["/etc/zsh"] {
+		t.Errorf("expected /etc/zsh created")
+	}
+	if !strings.Contains(files["/etc/zsh/zprofile"], "source /etc/profile") {
+		t.Errorf("bridge not written: %q", files["/etc/zsh/zprofile"])
+	}
+
+	// comments-only file (the real breakage: Debian's line got stripped) →
+	// bridge appended, existing content preserved
+	comments := "# /etc/zsh/zprofile: system-wide .zprofile file for zsh(1).\n# Global Order: zshenv, zprofile, zshrc, zlogin\n"
+	files, _ = run(comments, true)
+	got := files["/etc/zprofile"]
+	if !strings.HasPrefix(got, comments) {
+		t.Errorf("existing content not preserved: %q", got)
+	}
+	if !strings.Contains(got, "source /etc/profile") {
+		t.Errorf("bridge not appended: %q", got)
+	}
+
+	// already bridged → untouched (idempotent across restarts)
+	already := "emulate sh -c 'source /etc/profile'\n"
+	files, _ = run(already, true)
+	if files["/etc/zsh/zprofile"] != already {
+		t.Errorf("should not touch an already-bridged file, got: %q", files["/etc/zsh/zprofile"])
+	}
+
+	// a second pass over our own output must not append twice
+	files, _ = run(zprofileHook, true)
+	for _, p := range zprofilePaths {
+		if strings.Count(files[p], "source /etc/profile") != 1 {
+			t.Errorf("duplicate bridge appended to %s: %q", p, files[p])
+		}
 	}
 }

@@ -81,7 +81,7 @@ func main() {
 		}
 		// Make /opt/devpod/bin reachable on PATH after /etc/profile
 		// resets it (typical Debian/Ubuntu/Kali behaviour). Non-fatal.
-		if err := installProfileScripts(os.MkdirAll, os.WriteFile); err != nil {
+		if err := installProfileScripts(os.MkdirAll, os.ReadFile, os.WriteFile); err != nil {
 			fmt.Fprintf(os.Stderr, "supervisor: install profile scripts: %v\n", err)
 		}
 	}

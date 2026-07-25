@@ -312,6 +312,77 @@ if not contains /opt/devpod/share/terminfo $TERMINFO_DIRS
 end
 `
 
+// zprofilePaths are the system zprofile locations a zsh may read. Which one is
+// live depends on the BINARY the login shell ends up being, and the two differ:
+// our bundled zsh is built with sysconfdir=/etc, so it reads /etc/zprofile,
+// while a distro zsh (Debian et al.) is built with etcdir=/etc/zsh and reads
+// /etc/zsh/zprofile. sshd execs whatever /etc/passwd names, so bridge both —
+// each zsh reads exactly one, and each file is bridged idempotently.
+//
+// (Getting this wrong is easy to miss: `command -v zsh` in a session resolves
+// to the distro zsh via PATH, so testing through it "passes" while the login
+// shell — the bundled zsh — still never sources /etc/profile.)
+var zprofilePaths = []string{"/etc/zprofile", "/etc/zsh/zprofile"}
+
+// zprofileHook bridges zsh to /etc/profile. zsh never reads /etc/profile on its
+// own — Debian's zsh package ships exactly this line for that purpose — so an
+// image whose /etc/zsh/zprofile lost it (or that never had one) silently skips
+// ALL of /etc/profile.d for zsh logins: our own PATH hook, and anything the
+// user image drops there (oneAPI/vtune, spack, modules...). bash logins are
+// unaffected, which is what makes the breakage look random per user.
+const zprofileHook = `
+# DevPod supervisor: zsh does not read /etc/profile on its own; bridge to it so
+# /etc/profile.d/*.sh applies to zsh logins exactly as it does to bash ones.
+emulate sh -c 'source /etc/profile'
+`
+
+// zprofileSourcesProfile reports whether the file already pulls /etc/profile in.
+// Any non-comment mention counts: a zprofile naming /etc/profile is sourcing it,
+// and erring this way means we never append a second source line.
+func zprofileSourcesProfile(b []byte) bool {
+	for _, line := range strings.Split(string(b), "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		if strings.Contains(line, "/etc/profile") {
+			return true
+		}
+	}
+	return false
+}
+
+// ensureZshProfileHook makes /etc/zsh/zprofile source /etc/profile, appending
+// the hook only when it isn't already there — idempotent across restarts, and
+// non-destructive to whatever else the distro put in that file. zsh has no
+// conf.d, so its system files are the only hook available.
+func ensureZshProfileHook(
+	mkdirAll func(string, os.FileMode) error,
+	readFile func(string) ([]byte, error),
+	writeFile func(string, []byte, os.FileMode) error,
+) error {
+	var firstErr error
+	for _, p := range zprofilePaths {
+		if err := mkdirAll(filepath.Dir(p), 0o755); err != nil {
+			if firstErr == nil {
+				firstErr = err
+			}
+			continue
+		}
+		cur, err := readFile(p)
+		if err != nil {
+			cur = nil // absent → we create it
+		}
+		if zprofileSourcesProfile(cur) {
+			continue
+		}
+		if err := writeFile(p, append(cur, []byte(zprofileHook)...), 0o644); err != nil && firstErr == nil {
+			firstErr = err
+		}
+	}
+	return firstErr
+}
+
 // installProfileScripts writes /etc/profile.d/devpod.sh and
 // /etc/fish/conf.d/devpod.fish so PATH supplementation survives the
 // shell's login-time profile sourcing. Failures are non-fatal — the
@@ -321,6 +392,7 @@ end
 // writeFile and mkdirAll are injected for testability.
 func installProfileScripts(
 	mkdirAll func(string, os.FileMode) error,
+	readFile func(string) ([]byte, error),
 	writeFile func(string, []byte, os.FileMode) error,
 ) error {
 	type entry struct {
@@ -344,6 +416,11 @@ func installProfileScripts(
 				firstErr = err
 			}
 		}
+	}
+	// zsh needs a different bridge: it has no conf.d and never reads
+	// /etc/profile, so /etc/profile.d/devpod.sh above would never run for it.
+	if err := ensureZshProfileHook(mkdirAll, readFile, writeFile); err != nil && firstErr == nil {
+		firstErr = err
 	}
 	return firstErr
 }
