@@ -30,7 +30,7 @@ type SessionRow struct {
 	BytesOut         int64      `ch:"bytes_out" json:"bytes_out"`
 	PolicySnapshot   string     `ch:"policy_snapshot" json:"policy_snapshot"`
 	Gaps             uint32     `ch:"gaps" json:"gaps"`
-	Version          uint64     `ch:"version" json:"-"`
+	Version          uint64     `ch:"version" json:"version"`
 }
 
 // ChannelRow is one SSH channel of a session (versioned like SessionRow).
@@ -49,7 +49,7 @@ type ChannelRow struct {
 	BytesIn     int64      `ch:"bytes_in" json:"bytes_in"`
 	BytesOut    int64      `ch:"bytes_out" json:"bytes_out"`
 	RawRecorded bool       `ch:"raw_recorded" json:"raw_recorded"`
-	Version     uint64     `ch:"version" json:"-"`
+	Version     uint64     `ch:"version" json:"version"`
 }
 
 // CommandRow is one command: an exec request (gateway) or a shell-hook
@@ -68,7 +68,7 @@ type CommandRow struct {
 	ExitCode    *int32    `ch:"exit_code" json:"exit_code"`
 	DurationMS  int64     `ch:"duration_ms" json:"duration_ms"`
 	Attribution string    `ch:"attribution" json:"attribution"`
-	Version     uint64    `ch:"version" json:"-"`
+	Version     uint64    `ch:"version" json:"version"`
 }
 
 // FileEventRow is one file transfer or file operation.
