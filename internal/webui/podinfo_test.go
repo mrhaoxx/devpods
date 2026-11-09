@@ -38,7 +38,7 @@ func twoContainerDevPod(name, owner string, target string) *devpodv1alpha1.DevPo
 func runningPod(name string, started map[string]time.Time) *corev1.Pod {
 	p := &corev1.Pod{
 		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "devpods", Labels: map[string]string{"devpod.io/devpod": name}},
-		Spec: corev1.PodSpec{NodeName: "node-a", Containers: []corev1.Container{{Name: "side", Image: "busybox"}, {Name: "dev", Image: "busybox"}}},
+		Spec:       corev1.PodSpec{NodeName: "node-a", Containers: []corev1.Container{{Name: "side", Image: "busybox"}, {Name: "dev", Image: "busybox"}}},
 	}
 	p.Status.PodIP = "10.1.2.3"
 	for _, c := range []string{"side", "dev"} {
@@ -173,5 +173,29 @@ func TestWatchDevPods_PodUpdatePushesOwningDevPod(t *testing.T) {
 		case <-deadline:
 			t.Fatal("no MODIFIED event carrying the new startedAt")
 		}
+	}
+}
+
+func TestGetDevPod_IncludesPodInfo(t *testing.T) {
+	setupSuite(t)
+	s, sm := newServer(t)
+	ctx := context.Background()
+	if err := k8sClient.Create(ctx, twoContainerDevPod("gl-fay-d", "gl-fay", "")); err != nil {
+		t.Fatal(err)
+	}
+	started := time.Unix(1794210460, 0).UTC()
+	createPodWithStatus(t, runningPod("gl-fay-d", map[string]time.Time{"side": started}))
+	waitDevPod(t, "gl-fay-d")
+	waitFor(t, func() bool {
+		var p corev1.Pod
+		return k8sClient.Get(ctx, clientKeyNS("gl-fay-d"), &p) == nil && p.Status.PodIP != ""
+	})
+	rec := doJSON(t, s.HandleGetDevPodForTest(), "GET", "/api/devpods/gl-fay-d", map[string]string{"name": "gl-fay-d"}, forge(sm, "gl-fay", false), "")
+	var body struct {
+		Pod *webui.PodInfo `json:"pod"`
+	}
+	_ = json.Unmarshal(rec.Body.Bytes(), &body)
+	if body.Pod == nil || body.Pod.Node != "node-a" || body.Pod.IP != "10.1.2.3" || body.Pod.StartedAt == nil || !body.Pod.StartedAt.Time.Equal(started) {
+		t.Fatalf("%d %s", rec.Code, rec.Body)
 	}
 }

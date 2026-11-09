@@ -1,9 +1,25 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
-import { patchDevPod, deleteDevPod, me, sshCommand, sshConfig, watchDevPod, devpodTopology, parseCpuList, DevPodDetail, K8sEvent } from "../api";
-import { BackLink, Button, Card, CopyBlock, CopyRow, PhaseLabel, Shell, cx } from "../ui";
+import {
+  patchDevPod,
+  deleteDevPod,
+  me,
+  sshCommand,
+  sshConfig,
+  watchDevPod,
+  devpodTopology,
+  parseCpuList,
+  listAuditSessions,
+  DevPodDetail,
+  K8sEvent,
+} from "../api";
+import { BackLink, Button, Card, CopyBlock, CopyRow, PhaseLabel, Shell, cx, copyText } from "../ui";
 import { NodeZones, TopologyLegend } from "../kore";
+import { useNow } from "../components/DevPodTable";
+import { SessionsTable } from "../components/SessionsTable";
+import { fmtDuration } from "../format";
+import { tabFromHash } from "../tabs";
 
 function fmtTime(ts?: string): string {
   if (!ts) return "";
@@ -17,6 +33,21 @@ export default function PodDetail() {
   const topoQ = useQuery({ queryKey: ["devpod-topo", name], queryFn: () => devpodTopology(name), refetchInterval: 6000 });
 
   const [detail, setDetail] = useState<DevPodDetail | null>(null);
+  const now = useNow();
+  const tabs = ["overview", ...(meQ.data?.features.audit ? ["sessions"] : []), "events"];
+  const [hash, setHash] = useState(() => window.location.hash);
+  useEffect(() => {
+    const h = () => setHash(window.location.hash);
+    window.addEventListener("hashchange", h);
+    return () => window.removeEventListener("hashchange", h);
+  }, []);
+  const tab = tabFromHash(hash, tabs);
+  const sessionsQ = useQuery({
+    queryKey: ["devpod-sessions", name],
+    queryFn: () => listAuditSessions({ devpod: name }),
+    enabled: tab === "sessions",
+    refetchInterval: 10_000,
+  });
   const [eventsByUID, setEventsByUID] = useState<Record<string, K8sEvent>>({});
   const pendingRef = useRef<{ type: string; ev: K8sEvent }[]>([]);
   const rafRef = useRef(0);
@@ -68,30 +99,86 @@ export default function PodDetail() {
   const owner = dp.spec.owner;
   const suffix = dp.metadata.name.startsWith(owner + "-") ? dp.metadata.name.slice(owner.length + 1) : dp.metadata.name;
 
-  return (
-    <Shell>
-      <BackLink />
-      <header className="mb-6 mt-3 flex flex-wrap items-center justify-between gap-3">
-        <div className="flex items-center gap-3">
-          <h1 className="mono text-xl font-semibold tracking-tight">{dp.metadata.name}</h1>
-          <PhaseLabel phase={dp.status?.phase} />
-        </div>
-        <div className="flex gap-2">
-          <Button size="sm" onClick={() => patchDevPod(name, !dp.spec.running)}>
-            {dp.spec.running ? "Hibernate" : "Wake"}
-          </Button>
-          <Button
-            size="sm"
-            variant="danger"
-            onClick={() => {
-              if (confirm(`Delete ${dp.metadata.name}? The home volume is lost.`)) deleteDevPod(name).then(() => nav("/"));
-            }}
-          >
-            Delete
-          </Button>
-        </div>
-      </header>
+  const pod = detail.pod;
+  const image = dp.spec.pod?.spec?.containers?.[0]?.image;
+  const meta: [string, string | undefined][] = [
+    ["owner", owner],
+    ["node", pod?.node],
+    ["pod IP", pod?.ip],
+    ["image", image],
+    ["up", pod?.startedAt ? fmtDuration(now.getTime() - new Date(pod.startedAt).getTime()) : undefined],
+    ["shell", dp.spec.shell],
+    ["home", dp.spec.persistence ? `PVC ${dp.spec.persistence.size}` : undefined],
+    [
+      "Kore",
+      binding?.pool
+        ? `pool ${binding.pool}`
+        : binding?.allocatedCpuset
+          ? `pin ${binding.allocatedCpuset}${binding.reservedNuma ? ` · NUMA ${binding.reservedNuma}` : ""}`
+          : undefined,
+    ],
+    ["collaborators", dp.spec.collaborators?.join(", ")],
+  ];
 
+  return (
+    <Shell wide>
+      <BackLink />
+      <header className="mt-3 flex flex-wrap items-center gap-3">
+        <h1 className="mono text-xl font-semibold tracking-tight">{dp.metadata.name}</h1>
+        <PhaseLabel phase={dp.status?.phase} />
+        <span className="ml-auto" />
+        {meQ.data && dp.status?.phase === "Running" && (
+          <button
+            className="mono rounded-md border border-line bg-surface px-2 py-1 text-xs text-muted hover:border-line-strong hover:text-ink"
+            onClick={() => copyText(sshCommand(meQ.data, owner, suffix))}
+          >
+            ⧉ {sshCommand(meQ.data, owner, suffix)}
+          </button>
+        )}
+        <Button size="sm" onClick={() => patchDevPod(name, !dp.spec.running)}>
+          {dp.spec.running ? "Hibernate" : "Wake"}
+        </Button>
+        <Button
+          size="sm"
+          variant="danger"
+          onClick={() => {
+            if (confirm(`Delete ${dp.metadata.name}? The home volume is lost.`)) deleteDevPod(name).then(() => nav("/"));
+          }}
+        >
+          Delete
+        </Button>
+      </header>
+      <dl className="mono mb-4 mt-2 flex flex-wrap gap-x-4 gap-y-1 text-xs text-muted">
+        {meta
+          .filter(([, v]) => v)
+          .map(([k, v]) => (
+            <div key={k}>
+              {k} <dd className="inline font-medium text-ink">{v}</dd>
+            </div>
+          ))}
+      </dl>
+
+      <nav className="mb-4 flex gap-1 border-b border-line text-sm">
+        {tabs.map((t) => (
+          <a
+            key={t}
+            href={`#${t}`}
+            className={cx(
+              "-mb-px border-b-2 px-3 py-1.5 capitalize",
+              tab === t ? "border-accent font-semibold text-accent" : "border-transparent text-muted hover:text-ink",
+            )}
+          >
+            {t}
+          </a>
+        ))}
+      </nav>
+
+      {tab === "sessions" && (
+        <SessionsTable items={sessionsQ.data?.items ?? []} now={now} />
+      )}
+
+      {tab === "overview" && (
+      <>
       <Card className="mb-4 p-5">
         <p className="eyebrow mb-3">Access</p>
         <dl className="grid gap-x-6 gap-y-3 sm:grid-cols-[7rem_1fr]">
@@ -141,6 +228,10 @@ export default function PodDetail() {
         </Card>
       )}
 
+      </>
+      )}
+
+      {tab === "events" && (
       <Card className="p-5">
         <div className="mb-3 flex items-center gap-2">
           <p className="eyebrow">Events</p>
@@ -162,6 +253,7 @@ export default function PodDetail() {
           {events.length === 0 && <li className="text-xs text-faint">no events yet</li>}
         </ul>
       </Card>
+      )}
     </Shell>
   );
 }

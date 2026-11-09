@@ -250,7 +250,7 @@ export function watchDevPods(onEvent: (type: string, dp: DevPod, pod?: PodInfo) 
   );
 }
 
-export type DevPodDetail = { devpod: DevPod; binding?: BindingInfo };
+export type DevPodDetail = { devpod: DevPod; binding?: BindingInfo; pod?: PodInfo };
 
 // watchDevPod opens ONE SSE connection carrying both this DevPod's
 // status (detail messages, with binding readback) and its k8s Events.
@@ -273,3 +273,117 @@ export function watchDevPod(
     else if (m.kind === "event" && m.event) handlers.onEvent(m.type, m.event);
   });
 }
+
+/* ─── Audit ───────────────────────────────────────────────────────── */
+export type SessionRow = {
+  session_id: string;
+  user: string;
+  devpod: string;
+  devpod_uid: string;
+  owner: string;
+  gateway_pod: string;
+  client_ip: string;
+  pubkey_fp: string;
+  auth_kind: string;
+  proxy_alias: string;
+  backend_local_addr: string;
+  opened_at: string;
+  closed_at: string | null;
+  close_reason: string;
+  bytes_in: number;
+  bytes_out: number;
+  policy_snapshot: string;
+  gaps: number;
+};
+export type SessionSummary = SessionRow & { commands: number; files: number; policy_hits: number; alerts: number };
+export type ChannelRow = {
+  session_id: string;
+  channel_id: number;
+  type: string;
+  command: string;
+  subsystem: string;
+  target: string;
+  pty: boolean;
+  term: string;
+  opened_at: string;
+  closed_at: string | null;
+  exit_status: number | null;
+  bytes_in: number;
+  bytes_out: number;
+  raw_recorded: boolean;
+};
+export type CommandRow = {
+  event_id: string;
+  ts: string;
+  session_id: string;
+  user: string;
+  source: string;
+  channel_id: number;
+  cwd: string;
+  cmdline: string;
+  exit_code: number | null;
+  duration_ms: number;
+  attribution: string;
+};
+export type FileEventRow = {
+  event_id: string;
+  ts: string;
+  session_id: string;
+  channel_id: number;
+  user: string;
+  protocol: string;
+  op: string;
+  path: string;
+  path2: string;
+  size: number;
+  sha256: string;
+  complete: boolean;
+  blocked: boolean;
+  s3_key: string;
+};
+export type PolicyEventRow = { ts: string; session_id: string; user: string; rule: string; action: string; detail: string };
+export type AlertRow = { ts: string; devpod_uid: string; session_id: string; kind: string; source: string; detail: string };
+export type AccessLogRow = { ts: string; viewer: string; action: string; target_session: string; target_file: string; client_ip: string };
+export type SessionDetail = {
+  session: SessionRow;
+  channels: ChannelRow[] | null;
+  commands: CommandRow[] | null;
+  files: FileEventRow[] | null;
+  policy: PolicyEventRow[] | null;
+  alerts: AlertRow[] | null;
+};
+export type Page<T> = { items: T[]; next: string };
+
+const qs = (q: Record<string, string | undefined>) =>
+  new URLSearchParams(Object.entries(q).filter(([, v]) => v) as [string, string][]).toString();
+
+export const listAuditSessions = (q: Record<string, string | undefined>) =>
+  req<Page<SessionSummary>>("GET", `/api/audit/sessions?${qs(q)}`);
+export const getAuditSession = (id: string) => req<SessionDetail>("GET", `/api/audit/sessions/${id}`);
+export const searchCommands = (q: Record<string, string | undefined>) => req<Page<CommandRow>>("GET", `/api/audit/commands?${qs(q)}`);
+export const searchFiles = (q: Record<string, string | undefined>) => req<Page<FileEventRow>>("GET", `/api/audit/files?${qs(q)}`);
+export const listAlerts = (q: Record<string, string | undefined>) => req<Page<AlertRow>>("GET", `/api/audit/alerts?${qs(q)}`);
+export const listAccessLog = (q: Record<string, string | undefined>) => req<Page<AccessLogRow>>("GET", `/api/audit/access-log?${qs(q)}`);
+export const castURL = (id: string, ch: number) => `/api/audit/sessions/${id}/channels/${ch}/cast`;
+export const rawURL = (id: string, ch: number, stream: "in" | "out" | "err") =>
+  `/api/audit/sessions/${id}/channels/${ch}/raw?stream=${stream}`;
+export const fileContentURL = (eventId: string) => `/api/audit/files/${eventId}/content`;
+
+export type PolicyAction = "Allow" | "Deny";
+export type AuditPolicy = {
+  download?: PolicyAction;
+  upload?: PolicyAction;
+  maxFileSize?: string;
+  forwarding?: { local?: PolicyAction; remote?: PolicyAction; recordContent?: boolean };
+  agentForwarding?: PolicyAction;
+  x11Forwarding?: PolicyAction;
+  failMode?: "Open" | "Closed";
+};
+export type EffectivePolicy = Record<string, boolean | number>;
+export const getUserAuditPolicy = (name: string) =>
+  req<{ default: AuditPolicy; user: AuditPolicy | null; effective: EffectivePolicy; warnings: string[] }>(
+    "GET",
+    `/api/admin/users/${name}/audit-policy`,
+  );
+export const putUserAuditPolicy = (name: string, p: AuditPolicy | null) =>
+  req<AuditPolicy | null>("PUT", `/api/admin/users/${name}/audit-policy`, p ?? {}); // {} = inherit every field

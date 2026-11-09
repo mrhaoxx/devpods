@@ -221,6 +221,7 @@ type BindingInfo struct {
 type DevPodDetail struct {
 	DevPod  devpodv1alpha1.DevPod `json:"devpod"`
 	Binding *BindingInfo          `json:"binding,omitempty"`
+	Pod     *PodInfo              `json:"pod,omitempty"`
 }
 
 func (s *Server) bindingInfo(r *http.Request, dp *devpodv1alpha1.DevPod) *BindingInfo {
@@ -254,7 +255,7 @@ func (s *Server) handleGetDevPod(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	s.writeJSON(w, http.StatusOK, DevPodDetail{DevPod: *dp, Binding: s.bindingInfo(r, dp)})
+	s.writeJSON(w, http.StatusOK, DevPodDetail{DevPod: *dp, Binding: s.bindingInfo(r, dp), Pod: s.podInfo(r.Context(), dp)})
 }
 
 func (s *Server) handleCreateDevPod(w http.ResponseWriter, r *http.Request) {
