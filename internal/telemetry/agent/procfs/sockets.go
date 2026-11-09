@@ -109,33 +109,59 @@ func (m *SocketMap) Inodes(p PID) []uint64 { return m.byPID[p] }
 // BuildSocketMap reads /proc/<pid>/fd links of every process. Unreadable
 // fd directories (another user's process) are skipped.
 func BuildSocketMap(root string, procs map[PID]*Proc) (*SocketMap, error) {
-	m := &SocketMap{byInode: map[uint64]PID{}, byPID: map[PID][]uint64{}}
+	m := NewSocketMap(nil)
+	WalkFDs(root, procs, m.Add)
+	return m, nil
+}
+
+// SocketInode parses an fd target "socket:[inode]".
+func SocketInode(t string) (uint64, bool) {
+	v, ok := strings.CutPrefix(t, "socket:[")
+	if !ok {
+		return 0, false
+	}
+	inode, err := strconv.ParseUint(strings.TrimSuffix(v, "]"), 10, 64)
+	return inode, err == nil
+}
+
+// Add records fd target t ("socket:[inode]") of process id; other
+// targets are ignored.
+func (m *SocketMap) Add(id PID, t string) {
+	if inode, ok := SocketInode(t); ok {
+		m.AddInode(id, inode)
+	}
+}
+
+// AddInode records that process id holds socket inode (the first holder
+// owns it).
+func (m *SocketMap) AddInode(id PID, inode uint64) {
+	if _, dup := m.byInode[inode]; !dup {
+		m.byInode[inode] = id
+	}
+	m.byPID[id] = append(m.byPID[id], inode)
+}
+
+// WalkFDs calls visit with every readable fd target of every process:
+// one pass over /proc/*/fd serves the socket map and the GPU and RDMA
+// holders.
+func WalkFDs(root string, procs map[PID]*Proc, visit func(id PID, target string)) {
 	for id := range procs {
-		dir := filepath.Join(root, strconv.Itoa(id.Pid), "fd")
-		ents, err := os.ReadDir(dir)
-		if err != nil {
-			continue
-		}
-		for _, e := range ents {
-			target, err := os.Readlink(filepath.Join(dir, e.Name()))
-			if err != nil {
-				continue
-			}
-			v, ok := strings.CutPrefix(target, "socket:[")
-			if !ok {
-				continue
-			}
-			inode, err := strconv.ParseUint(strings.TrimSuffix(v, "]"), 10, 64)
-			if err != nil {
-				continue
-			}
-			if _, dup := m.byInode[inode]; !dup {
-				m.byInode[inode] = id
-			}
-			m.byPID[id] = append(m.byPID[id], inode)
+		WalkProcFDs(root, id, visit)
+	}
+}
+
+// WalkProcFDs calls visit with each readable fd target of process id.
+func WalkProcFDs(root string, id PID, visit func(id PID, target string)) {
+	dir := filepath.Join(root, strconv.Itoa(id.Pid), "fd")
+	ents, err := os.ReadDir(dir)
+	if err != nil {
+		return
+	}
+	for _, e := range ents {
+		if target, err := os.Readlink(filepath.Join(dir, e.Name())); err == nil {
+			visit(id, target)
 		}
 	}
-	return m, nil
 }
 
 // SSHConns returns each session's established TCP peer, read from that

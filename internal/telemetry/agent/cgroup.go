@@ -13,7 +13,10 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
+
+	"github.com/mrhaoxx/devpod/internal/telemetry/agent/procfs"
 )
 
 // unlimitedV1 is the smallest value cgroup v1 uses to mean "no limit".
@@ -83,12 +86,18 @@ func exists(p string) bool {
 
 // read returns a file's trimmed content; a missing directory or file is
 // "absent" (empty string), never an error (spec §11.2).
+// readBufs: cgroup files (memory.stat is the largest, ~2 KiB) are read
+// several times a second.
+var readBufs = sync.Pool{New: func() any { b := make([]byte, 16<<10); return &b }}
+
 func read(dir, name string) string {
 	if dir == "" {
 		return ""
 	}
-	b, err := os.ReadFile(filepath.Join(dir, name))
-	if err != nil {
+	bp := readBufs.Get().(*[]byte)
+	defer readBufs.Put(bp)
+	b, ok := procfs.ReadSmall(filepath.Join(dir, name), *bp)
+	if !ok {
 		return ""
 	}
 	return string(bytes.TrimSpace(b))

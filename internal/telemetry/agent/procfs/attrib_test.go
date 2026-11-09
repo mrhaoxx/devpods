@@ -5,9 +5,11 @@
 package procfs
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 )
 
 const sessExe = "/opt/devpod/libexec/sshd-session"
@@ -161,13 +163,13 @@ func TestAttributor_UntrackedEntry(t *testing.T) {
 
 func TestScanner_PerProcessMetrics(t *testing.T) {
 	root := t.TempDir()
-	writeProc(t, root, fp{pid: 5, ppid: 1, sid: 5, start: 42, exe: "/bin/x", cmd: "x --flag", schedNs: 123456789, rssPages: 10, ioR: 4096, ioW: 8192, uid: 1000, threads: 4, state: "Z"})
+	writeProc(t, root, fp{pid: 5, ppid: 1, sid: 5, start: 42, exe: "/bin/x", cmd: "x --flag", cpuTicks: 12, rssPages: 10, ioR: 4096, ioW: 8192, uid: 1000, threads: 4, state: "Z"})
 	procs, err := (&Scanner{Root: root, PageSize: 4096}).Scan()
 	if err != nil {
 		t.Fatal(err)
 	}
 	p := procs[PID{5, 42}]
-	if p == nil || p.CPUNs != 123456789 || p.RSS != 40960 || p.IORead != 4096 || p.IOWrite != 8192 ||
+	if p == nil || p.CPUNs != 120_000_000 || p.RSS != 40960 || p.IORead != 4096 || p.IOWrite != 8192 ||
 		p.UID != 1000 || p.Cmdline != "x --flag" || p.Exe != "/bin/x" || p.Threads != 4 || p.State != "Z" || p.Parent.Pid != 1 {
 		t.Fatalf("%+v", p)
 	}
@@ -201,5 +203,220 @@ func TestAttributor_InfrastructureIsSystem(t *testing.T) {
 	// one live connection: the re-parented daemon is inferred, not system
 	if attr[PID{81, 150}].How != "inferred" {
 		t.Fatalf("orphan of PID 1 must not inherit system: %+v", attr[PID{81, 150}])
+	}
+}
+
+// Each scan reads only stat for an unchanged process: exe/cmdline/environ/
+// status once per process (again after an exec, seen as a new comm), io
+// only when its CPU time moved (spec §14 item 4: < 2 % of a core).
+func TestScanner_ReadsLittlePerScan(t *testing.T) {
+	root := t.TempDir()
+	writeProc(t, root, fp{pid: 5, ppid: 1, start: 42, exe: "/bin/bash", cmd: "bash", cpuTicks: 1, ioR: 100})
+	s := &Scanner{Root: root, PageSize: 4096}
+	scan := func() *Proc {
+		t.Helper()
+		procs, err := s.Scan()
+		if err != nil {
+			t.Fatal(err)
+		}
+		return procs[PID{5, 42}]
+	}
+	if p := scan(); p.Cmdline != "bash" || p.IORead != 100 {
+		t.Fatalf("first scan %+v", p)
+	}
+	dir := filepath.Join(root, "5")
+	must := func(name, body string) {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	must("cmdline", "changed\x00")
+	must("io", "read_bytes: 900\nwrite_bytes: 0\n")
+	if p := scan(); p.Cmdline != "bash" || p.IORead != 100 {
+		t.Fatalf("idle process re-read: %+v", p)
+	}
+	writeProc(t, root, fp{pid: 5, ppid: 1, start: 42, exe: "/bin/bash", cmd: "bash", cpuTicks: 2, ioR: 900})
+	if p := scan(); p.IORead != 900 || p.Cmdline != "bash" {
+		t.Fatalf("CPU moved → io re-read, static kept: %+v", p)
+	}
+	writeProc(t, root, fp{pid: 5, ppid: 1, start: 42, exe: "/usr/bin/python3", cmd: "python3 train.py", cpuTicks: 3, ioR: 900})
+	if p := scan(); p.Cmdline != "python3 train.py" || p.Exe != "/usr/bin/python3" {
+		t.Fatalf("exec (new comm) → static re-read: %+v", p)
+	}
+}
+
+func TestScanner_ScanNewReadsOnlyNewPids(t *testing.T) {
+	root := t.TempDir()
+	writeProc(t, root, fp{pid: 5, ppid: 1, start: 42, exe: "/bin/bash", cmd: "bash", cpuTicks: 1})
+	s := &Scanner{Root: root}
+	if _, err := s.Scan(); err != nil {
+		t.Fatal(err)
+	}
+	writeProc(t, root, fp{pid: 5, ppid: 1, start: 42, exe: "/bin/bash", cmd: "bash", cpuTicks: 9})
+	writeProc(t, root, fp{pid: 6, ppid: 5, start: 50, exe: "/bin/ls", cmd: "ls"})
+	procs, err := s.ScanNew()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p := procs[PID{5, 42}]; p == nil || p.CPUNs != 10_000_000 {
+		t.Fatalf("a known pid keeps its last reading in a light scan: %+v", p)
+	}
+	if p := procs[PID{6, 50}]; p == nil || p.Cmdline != "ls" || p.Parent != (PID{5, 42}) {
+		t.Fatalf("a new pid is read: %+v", p)
+	}
+	if err := os.RemoveAll(filepath.Join(root, "6")); err != nil {
+		t.Fatal(err)
+	}
+	procs, _ = s.ScanNew()
+	if _, ok := procs[PID{6, 50}]; ok || len(procs) != 1 {
+		t.Fatalf("an exited pid disappears in a light scan: %v", procs)
+	}
+	procs, _ = s.Scan()
+	if p := procs[PID{5, 42}]; p.CPUNs != 90_000_000 {
+		t.Fatalf("a full scan refreshes: %+v", p)
+	}
+}
+
+// A process whose CPU and RSS did not move for 3 full scans is re-read
+// only every 10th full scan; ReadAt says when its numbers are from.
+func TestScanner_IdleProcessesReadLessOften(t *testing.T) {
+	root := t.TempDir()
+	writeProc(t, root, fp{pid: 7, ppid: 1, start: 70, exe: "/bin/sleep", cmd: "sleep 1000", cpuTicks: 1})
+	writeProc(t, root, fp{pid: 8, ppid: 1, start: 80, exe: "/bin/yes", cmd: "yes", cpuTicks: 1})
+	now := time.Unix(1000, 0)
+	s := &Scanner{Root: root, Clock: func() time.Time { return now }}
+	reads := 0
+	var sleeper *Proc
+	for i := 0; i < 12; i++ {
+		now = now.Add(time.Second)
+		writeProc(t, root, fp{pid: 8, ppid: 1, start: 80, exe: "/bin/yes", cmd: "yes", cpuTicks: uint64(2 + i)}) // busy
+		procs, err := s.Scan()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if busy := procs[PID{8, 80}]; !busy.ReadAt.Equal(now) {
+			t.Fatalf("scan %d: a busy process is read every scan: %v", i, busy.ReadAt)
+		}
+		sleeper = procs[PID{7, 70}]
+		if sleeper.ReadAt.Equal(now) {
+			reads++
+		}
+	}
+	if reads < 3 || reads > 5 {
+		t.Fatalf("idle process read %d times in 12 scans, want 3 (to go idle) + ~1", reads)
+	}
+	// it wakes up: seen within 10 scans, with the read time of that reading
+	writeProc(t, root, fp{pid: 7, ppid: 1, start: 70, exe: "/bin/sleep", cmd: "sleep 1000", cpuTicks: 51})
+	for i := 0; i < 10; i++ {
+		now = now.Add(time.Second)
+		procs, _ := s.Scan()
+		if p := procs[PID{7, 70}]; p.CPUNs == 510_000_000 {
+			if !p.ReadAt.Equal(now) {
+				t.Fatalf("ReadAt %v, want %v", p.ReadAt, now)
+			}
+			return
+		}
+	}
+	t.Fatal("a woken process was not re-read within 10 scans")
+}
+
+func TestScanner_ChangedOnMembershipOnly(t *testing.T) {
+	root := t.TempDir()
+	writeProc(t, root, fp{pid: 5, ppid: 1, start: 42, exe: "/bin/bash", cmd: "bash"})
+	s := &Scanner{Root: root}
+	if _, _ = s.Scan(); !s.Changed() {
+		t.Fatal("first scan is a change")
+	}
+	writeProc(t, root, fp{pid: 5, ppid: 1, start: 42, exe: "/bin/bash", cmd: "bash", cpuTicks: 5})
+	if _, _ = s.Scan(); s.Changed() {
+		t.Fatal("new numbers are not a membership change")
+	}
+	writeProc(t, root, fp{pid: 6, ppid: 5, start: 43, exe: "/bin/ls", cmd: "ls"})
+	if _, _ = s.ScanNew(); !s.Changed() {
+		t.Fatal("a new process is a change")
+	}
+	writeProc(t, root, fp{pid: 6, ppid: 5, start: 99, exe: "/bin/ls", cmd: "ls"}) // pid reused
+	if _, _ = s.Scan(); !s.Changed() {
+		t.Fatal("a reused pid is a change")
+	}
+}
+
+// /proc/loadavg's last field is the last pid created in the reader's pid
+// namespace: unchanged means no process was born, so a light scan need
+// not list /proc (exits are caught by the next full scan).
+func TestScanner_ScanNewSkipsListingWithoutNewPid(t *testing.T) {
+	root := t.TempDir()
+	loadavg := func(last int) {
+		if err := os.WriteFile(filepath.Join(root, "loadavg"), []byte(fmt.Sprintf("0.10 0.20 0.30 1/312 %d\n", last)), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	writeProc(t, root, fp{pid: 5, ppid: 1, start: 42, exe: "/bin/bash", cmd: "bash"})
+	loadavg(5)
+	s := &Scanner{Root: root}
+	if _, err := s.Scan(); err != nil {
+		t.Fatal(err)
+	}
+	writeProc(t, root, fp{pid: 6, ppid: 5, start: 43, exe: "/bin/ls", cmd: "ls"}) // appears, loadavg not updated
+	procs, _ := s.ScanNew()
+	if _, seen := procs[PID{6, 43}]; seen || s.Changed() {
+		t.Fatal("listed /proc although no pid was created")
+	}
+	loadavg(6)
+	procs, _ = s.ScanNew()
+	if _, seen := procs[PID{6, 43}]; !seen || !s.Changed() {
+		t.Fatal("a new last pid must trigger a listing")
+	}
+}
+
+// When pids were created, a light scan probes just the new range
+// (pids are allocated in order) instead of listing /proc; thread ids
+// share the range and are skipped.
+func TestScanner_ScanNewProbesNewPids(t *testing.T) {
+	root := t.TempDir()
+	loadavg := func(last int) {
+		if err := os.WriteFile(filepath.Join(root, "loadavg"), []byte(fmt.Sprintf("0 0 0 1/9 %d\n", last)), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	writeProc(t, root, fp{pid: 5, ppid: 1, start: 42, exe: "/bin/bash", cmd: "bash"})
+	loadavg(5)
+	s := &Scanner{Root: root}
+	if _, err := s.Scan(); err != nil {
+		t.Fatal(err)
+	}
+	writeProc(t, root, fp{pid: 6, ppid: 5, start: 43, exe: "/bin/make", cmd: "make"})
+	writeProc(t, root, fp{pid: 7, ppid: 5, start: 44, exe: "/bin/make", cmd: "make", tgid: 6}) // a thread of 6
+	writeProc(t, root, fp{pid: 30, ppid: 5, start: 45, exe: "/bin/x", cmd: "x"})               // outside the range
+	loadavg(8)
+	procs, _ := s.ScanNew()
+	_, has6 := procs[PID{6, 43}]
+	_, has7 := procs[PID{7, 44}]
+	_, has30 := procs[PID{30, 45}]
+	if !has6 || has7 || has30 || len(procs) != 2 {
+		t.Fatalf("probe (5, 8]: got %v", procs)
+	}
+	loadavg(200) // a jump: list /proc
+	procs, _ = s.ScanNew()
+	if _, ok := procs[PID{30, 45}]; !ok {
+		t.Fatalf("after a large jump the listing finds everything: %v", procs)
+	}
+}
+
+func TestReadSmall(t *testing.T) {
+	dir := t.TempDir()
+	buf := make([]byte, 8)
+	for _, tc := range []struct{ body, want string }{{"", ""}, {"abc", "abc"}, {"12345678", "12345678"}, {"123456789", "12345678"}} {
+		p := filepath.Join(dir, "f")
+		if err := os.WriteFile(p, []byte(tc.body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		got, ok := ReadSmall(p, buf)
+		if !ok || string(got) != tc.want {
+			t.Errorf("%q: got %q %v", tc.body, got, ok)
+		}
+	}
+	if _, ok := ReadSmall(filepath.Join(dir, "missing"), buf); ok {
+		t.Error("missing file reported ok")
 	}
 }

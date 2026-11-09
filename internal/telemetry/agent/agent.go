@@ -8,6 +8,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"maps"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -87,11 +88,23 @@ type agent struct {
 	prevTCP          map[uint64]procfs.TCPBytes
 	tcpRates         map[procfs.PID]procfs.TCPRate
 	reportedConns    map[procfs.PID]string
-	life             *lifecycle
-	net              NetCounters
-	rdma             []RDMADev
-	rdmaPrev         map[string]RDMACounters
-	lastCollect      time.Time
+	lastTCP          time.Time
+	scanNow          time.Time // stamps the scanner's readings
+	lastFullScan     time.Time
+	tcpGate          costGate
+	listenGate       costGate
+	listenSocks      map[string][]procfs.TCPSock // /proc/net/tcp{,6}, refreshed by listenGate
+	connCache        map[procfs.PID]string       // session → peer, resolved once
+	lastConns        map[procfs.PID]string
+	fdCache          map[procfs.PID]fdEntry
+	// seams (tests count calls)
+	sshConns    func(root string, sm *procfs.SocketMap, sessions []procfs.PID) map[procfs.PID]string
+	walkFDs     func(root string, id procfs.PID, visit func(procfs.PID, string))
+	life        *lifecycle
+	net         NetCounters
+	rdma        []RDMADev
+	rdmaPrev    map[string]RDMACounters
+	lastCollect time.Time
 
 	pendingAudit, pendingMetric []wire.Record
 	cmds                        chan wire.Command
@@ -116,6 +129,11 @@ func newAgent(cfg config.Config, env Env) *agent {
 		alerts:        make(chan wire.Alert, 64),
 		collectors:    map[string]*collectorState{},
 	}
+	a.scanner.Clock = func() time.Time { return a.scanNow }
+	a.sshConns, a.walkFDs = procfs.SSHConns, procfs.WalkProcFDs
+	a.tcpGate = costGate{min: time.Second, max: 30 * time.Second}
+	a.listenGate = costGate{min: snapshotEvery, max: 5 * time.Minute}
+	a.connCache, a.fdCache = map[procfs.PID]string{}, map[procfs.PID]fdEntry{}
 	if cg, err := OpenCgroup(env.CgroupRoot); err == nil {
 		a.cg = cg
 	} else {
@@ -166,13 +184,34 @@ func (a *agent) header() wire.Header {
 	return wire.Header{V: wire.Version, DevPodUID: a.cfg.DevPodUID, BootID: a.bootID, AgentVersion: Version}
 }
 
-// scanProcs runs every ProcScanInterval: scan, sessions, attribution.
+// scanProcs runs every ProcScanInterval with a light scan (new and
+// exited pids), and before every collect with a full one (fresh CPU and
+// RSS): sessions, attribution, events.
 func (a *agent) scanProcs(now time.Time) {
+	// a full scan runs with every collect: skip light scans next to one
+	if !a.lastFullScan.IsZero() {
+		since := now.Sub(a.lastFullScan)
+		if since < a.cfg.ProcScanInterval/2 || a.cfg.MetricsInterval-since < a.cfg.ProcScanInterval/2 {
+			return
+		}
+	}
+	a.scan(now, false)
+}
+
+func (a *agent) scan(now time.Time, full bool) {
 	if !a.cfg.ProcessTracking {
 		return
 	}
+	a.scanNow = now
+	if full {
+		a.lastFullScan = now
+	}
 	a.safe("procs", func() {
-		procs, err := a.scanner.Scan()
+		scan := a.scanner.ScanNew
+		if full {
+			scan = a.scanner.Scan
+		}
+		procs, err := scan()
 		if err != nil {
 			return
 		}
@@ -184,20 +223,39 @@ func (a *agent) scanProcs(now time.Time) {
 				sessions = append(sessions, id)
 			}
 		}
-		refresh := a.sockets == nil || now.Sub(a.lastSockMap) >= a.cfg.SocketMapInterval
+		// A session's peer never changes: resolve each once (reading its
+		// net/tcp walks the node's whole TCP table).
 		conns := map[procfs.PID]string{}
-		if !refresh {
-			conns = procfs.SSHConns(a.env.ProcRoot, a.sockets, sessions)
-			// A new session is not in the map yet: refresh early (≥ 1 s).
-			refresh = len(conns) < len(sessions) && now.Sub(a.lastSockMap) >= time.Second
+		var unresolved []procfs.PID
+		for _, sid := range sessions {
+			if peer, ok := a.connCache[sid]; ok {
+				conns[sid] = peer
+			} else {
+				unresolved = append(unresolved, sid)
+			}
 		}
+		for sid := range a.connCache {
+			if _, alive := procs[sid]; !alive {
+				delete(a.connCache, sid)
+			}
+		}
+		refresh := a.sockets == nil || now.Sub(a.lastSockMap) >= a.cfg.SocketMapInterval ||
+			(len(unresolved) > 0 && now.Sub(a.lastSockMap) >= time.Second) // a new session: refresh early
 		if refresh {
-			a.sockets, _ = procfs.BuildSocketMap(a.env.ProcRoot, procs)
-			a.gpuProcs = ProcGPUs(a.env.ProcRoot, procs)
-			a.rdmaProcs = ProcRDMA(a.env.ProcRoot, procs)
+			a.refreshFDs(procs)
 			a.lastSockMap = now
-			conns = procfs.SSHConns(a.env.ProcRoot, a.sockets, sessions)
 		}
+		if len(unresolved) > 0 && refresh {
+			for sid, peer := range a.sshConns(a.env.ProcRoot, a.sockets, unresolved) {
+				conns[sid], a.connCache[sid] = peer, peer
+			}
+		}
+		// Attribution depends only on which processes exist and on the
+		// sessions' peers.
+		if !a.scanner.Changed() && a.attrib != nil && maps.Equal(conns, a.lastConns) {
+			return
+		}
+		a.lastConns = conns
 		events, attrib := a.attr.Update(procs, conns)
 		a.attrib = attrib
 		for i := range events {
@@ -229,6 +287,7 @@ func (a *agent) collect(now time.Time) {
 	if !a.lastCollect.IsZero() {
 		dt = now.Sub(a.lastCollect)
 	}
+	a.scan(now, true)
 	c := wire.Container{TS: now.UTC()}
 	if a.cg != nil {
 		a.safe("cgroup", func() {
@@ -240,15 +299,28 @@ func (a *agent) collect(now time.Time) {
 		})
 	}
 	a.safe("tcp", func() {
+		// The dump walks the node's whole TCP hash table (shared by every
+		// network namespace): ~18 ms on a big node, so it is spaced to
+		// cost ≤ 0.1 % of a core; per-process TCP rates are averages
+		// over that interval.
+		if !a.tcpGate.due(now) {
+			return // keep the last rates
+		}
+		start := time.Now()
 		cur, err := a.env.TCP.Bytes()
+		a.tcpGate.done(now, time.Since(start))
 		if err != nil {
 			a.tcpRates = nil
 			return
 		}
-		if a.sockets != nil {
-			a.tcpRates = procfs.PerProcessTCP(a.prevTCP, cur, a.sockets, dt)
+		var tdt time.Duration
+		if !a.lastTCP.IsZero() {
+			tdt = now.Sub(a.lastTCP)
 		}
-		a.prevTCP = cur
+		if a.sockets != nil {
+			a.tcpRates = procfs.PerProcessTCP(a.prevTCP, cur, a.sockets, tdt)
+		}
+		a.prevTCP, a.lastTCP = cur, now
 	})
 	a.safe("net", func() {
 		ns, nc, err := NetTotals(a.env.ProcRoot, a.cfg.HostNetwork, a.tcpRates, &a.net, dt)
@@ -323,60 +395,67 @@ drain:
 // changed) plus the top N per metric; everything else is summed into
 // one row with Pid 0 (spec §6.2).
 func (a *agent) procRecords(now time.Time, dt time.Duration) []wire.Record {
+	// Rates first on a small row per process; wire records only for the
+	// reported ones (most processes sleep and fold into "other").
 	type row struct {
-		id     procfs.PID
-		p      wire.Proc
-		active bool
+		id             procfs.PID
+		p              *procfs.Proc
+		cpu, ior, iow  float64
+		tcpRx, tcpTx   float64
+		active, report bool
 	}
 	rows := make([]row, 0, len(a.procs))
-	a.cpuRates = map[procfs.PID]float64{}
+	a.cpuRates = make(map[procfs.PID]float64, len(a.procs))
 	for id, p := range a.procs {
-		r := row{id: id, p: wire.Proc{TS: now.UTC(), Pid: id.Pid, Start: id.Start, RSS: p.RSS, PSS: a.pss[id], GPU: a.gpuProcs[id], RDMA: a.rdmaProcs[id]}}
-		if at, ok := a.attrib[id]; ok {
-			r.p.Attr = at.Wire()
-		}
+		r := row{id: id, p: p}
 		if t, ok := a.tcpRates[id]; ok {
-			r.p.TCPRx, r.p.TCPTx = t.Rx, t.Tx
+			r.tcpRx, r.tcpTx = t.Rx, t.Tx
 		}
-		if prev := a.prevProcs[id]; prev != nil && dt > 0 {
-			secs := dt.Seconds()
+		// rates over the time between the two readings: an idle process
+		// is re-read only every few seconds (procfs.Scanner)
+		if prev := a.prevProcs[id]; prev != nil && p.ReadAt.After(prev.ReadAt) {
+			secs := p.ReadAt.Sub(prev.ReadAt).Seconds()
 			if p.CPUNs >= prev.CPUNs {
-				r.p.CPU = float64(p.CPUNs-prev.CPUNs) / secs / 1e9
+				r.cpu = float64(p.CPUNs-prev.CPUNs) / secs / 1e9
 			}
 			if p.IORead >= prev.IORead {
-				r.p.IOR = float64(p.IORead-prev.IORead) / secs
+				r.ior = float64(p.IORead-prev.IORead) / secs
 			}
 			if p.IOWrite >= prev.IOWrite {
-				r.p.IOW = float64(p.IOWrite-prev.IOWrite) / secs
+				r.iow = float64(p.IOWrite-prev.IOWrite) / secs
 			}
-			r.active = r.p.CPU > 0 || r.p.IOR > 0 || r.p.IOW > 0 || r.p.TCPRx > 0 || r.p.TCPTx > 0 || p.RSS != prev.RSS
+			r.active = r.cpu > 0 || r.ior > 0 || r.iow > 0 || r.tcpRx > 0 || r.tcpTx > 0 || p.RSS != prev.RSS
 		}
-		a.cpuRates[id] = r.p.CPU
+		a.cpuRates[id] = r.cpu
 		rows = append(rows, r)
 	}
-	keep := map[procfs.PID]bool{}
-	for _, key := range []func(r row) float64{
-		func(r row) float64 { return r.p.CPU },
-		func(r row) float64 { return float64(r.p.RSS) },
-		func(r row) float64 { return r.p.IOR + r.p.IOW },
+	for _, key := range []func(r *row) float64{
+		func(r *row) float64 { return r.cpu },
+		func(r *row) float64 { return float64(r.p.RSS) },
+		func(r *row) float64 { return r.ior + r.iow },
 	} {
-		sort.Slice(rows, func(i, j int) bool { return key(rows[i]) > key(rows[j]) })
-		for i := 0; i < len(rows) && i < a.cfg.TopN && key(rows[i]) > 0; i++ {
-			keep[rows[i].id] = true
+		sort.Slice(rows, func(i, j int) bool { return key(&rows[i]) > key(&rows[j]) })
+		for i := 0; i < len(rows) && i < a.cfg.TopN && key(&rows[i]) > 0; i++ {
+			rows[i].report = true
 		}
 	}
 	var out []wire.Record
 	other := wire.Proc{TS: now.UTC()}
 	for i := range rows {
-		r := rows[i]
-		if r.active || keep[r.id] {
-			out = append(out, wire.Record{K: wire.KProc, P: &r.p})
+		r := &rows[i]
+		if !r.active && !r.report {
+			other.CPU += r.cpu
+			other.RSS += r.p.RSS
+			other.IOR += r.ior
+			other.IOW += r.iow
 			continue
 		}
-		other.CPU += r.p.CPU
-		other.RSS += r.p.RSS
-		other.IOR += r.p.IOR
-		other.IOW += r.p.IOW
+		wp := &wire.Proc{TS: now.UTC(), Pid: r.id.Pid, Start: r.id.Start, CPU: r.cpu, RSS: r.p.RSS, PSS: a.pss[r.id],
+			IOR: r.ior, IOW: r.iow, TCPRx: r.tcpRx, TCPTx: r.tcpTx, GPU: a.gpuProcs[r.id], RDMA: a.rdmaProcs[r.id]}
+		if at, ok := a.attrib[r.id]; ok {
+			wp.Attr = at.Wire()
+		}
+		out = append(out, wire.Record{K: wire.KProc, P: wp})
 	}
 	if len(rows) > 0 {
 		out = append(out, wire.Record{K: wire.KProc, P: &other})
@@ -401,7 +480,15 @@ func (a *agent) fullProcs(now time.Time) {
 
 func (a *agent) snapshot(now time.Time) {
 	a.safe("snapshot", func() {
-		s := CollectSnapshot(a.snapshotInput())
+		in := a.snapshotInput()
+		// listening ports change rarely; the read walks the node's TCP table
+		if a.listenSocks == nil || a.listenGate.due(now) {
+			start := time.Now()
+			a.listenSocks = ReadTCPSocks(a.env.ProcRoot)
+			a.listenGate.done(now, time.Since(start))
+		}
+		in.TCPSocks = a.listenSocks
+		s := CollectSnapshot(in)
 		s.TS = now.UTC()
 		a.pendingMetric = append(a.pendingMetric, wire.Record{K: wire.KSnapshot, Snap: &s})
 	})

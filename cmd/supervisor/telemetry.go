@@ -11,6 +11,7 @@ import (
 	"os/exec"
 	"os/signal"
 	"strconv"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -23,6 +24,7 @@ const (
 	telemetryMaxBackoff = 60 * time.Second
 	telemetryStableRun  = 10 * time.Minute
 	telemetryMemLimit   = "24MiB"
+	telemetryMaxProcs   = "2"
 )
 
 // telemetrySup keeps the `telemetry` child running. PID 1's reap loop
@@ -54,7 +56,17 @@ func newTelemetrySup(sshdPid int) *telemetrySup {
 	if d, err := time.ParseDuration(os.Getenv("SUPERVISOR_TELEMETRY_BACKOFF")); err == nil && d > 0 {
 		initial = d
 	}
-	env := append(os.Environ(), "GOMEMLIMIT="+telemetryMemLimit, "SUPERVISOR_SSHD_PID="+strconv.Itoa(sshdPid))
+	// The agent is sequential: without a cap Go uses one P per core, and
+	// on a 104-core node each GC cycle fanned out over all of them.
+	ours := []string{"GOMEMLIMIT=" + telemetryMemLimit, "GOMAXPROCS=" + telemetryMaxProcs, "SUPERVISOR_SSHD_PID=" + strconv.Itoa(sshdPid)}
+	var env []string
+	for _, kv := range os.Environ() {
+		k, _, _ := strings.Cut(kv, "=")
+		if k != "GOMEMLIMIT" && k != "GOMAXPROCS" && k != "SUPERVISOR_SSHD_PID" {
+			env = append(env, kv)
+		}
+	}
+	env = append(env, ours...)
 	return &telemetrySup{argv: argv, env: env, initial: initial, early: map[int]int{}, stopCh: make(chan struct{})}
 }
 
