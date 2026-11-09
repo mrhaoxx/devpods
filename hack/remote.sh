@@ -21,7 +21,7 @@ K=(kubectl --context "$KUBE_CONTEXT" -n "$NS")
 
 case "${1:-}" in
 down) "${K[@]}" delete pod "$POD" --ignore-not-found --wait=false; exit 0 ;;
-fetch) "${K[@]}" exec "$POD" -- cat "$2" >"$3"; exit 0 ;;
+fetch) "${K[@]}" cp "$POD:$2" "$3" >/dev/null; exit 0 ;;
 esac
 
 if ! "${K[@]}" get pod "$POD" >/dev/null 2>&1; then
