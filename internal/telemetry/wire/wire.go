@@ -28,10 +28,13 @@ var ErrTooLarge = errors.New("telemetry batch too large")
 
 // Header identifies one batch: (DevPodUID, BootID, Seq) is unique.
 type Header struct {
-	V            int       `json:"v"`
-	DevPodUID    string    `json:"devpod_uid"`
-	BootID       string    `json:"boot_id"`
-	Seq          uint64    `json:"seq"`
+	V         int    `json:"v"`
+	DevPodUID string `json:"devpod_uid"`
+	BootID    string `json:"boot_id"`
+	Seq       uint64 `json:"seq"`
+	// FromSeq is the first second in this batch when an agent catching
+	// up sends several at once (FromSeq..Seq); 0 means just Seq.
+	FromSeq      uint64    `json:"from_seq,omitempty"`
 	TS           time.Time `json:"ts"`
 	AgentVersion string    `json:"agent_version,omitempty"`
 }
