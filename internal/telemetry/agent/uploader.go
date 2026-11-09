@@ -24,7 +24,9 @@ const (
 	// Catch-up after an outage goes in 1 MiB requests: the leader holds
 	// every decoded request until its write, for ~400 agents at once.
 	uploadMaxBytes = 1 << 20
-	uploadMaxDelay = 30 * time.Second
+	// After a leader failover the new leader is reachable within seconds:
+	// a short cap finds it quickly (retries are cheap connection attempts).
+	uploadMaxDelay = 8 * time.Second
 	unauthDelay    = 60 * time.Second
 )
 
