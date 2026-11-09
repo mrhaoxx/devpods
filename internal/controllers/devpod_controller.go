@@ -5,6 +5,7 @@
 package controllers
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -44,6 +45,10 @@ type DevPodReconciler struct {
 	// runs. Per-owner NetworkPolicy uses it as the trusted source for
 	// ingress on port 22.
 	GatewayNamespace string
+
+	// Telemetry hands each DevPod its ingest token and telemetry.json
+	// through the host-key Secret; nil = telemetry off.
+	Telemetry *render.TelemetrySettings
 
 	// GatewayInternalPub is the gateway's internal public key in
 	// OpenSSH authorized_keys-line form, embedded into every per-DevPod
@@ -179,7 +184,11 @@ func (r *DevPodReconciler) applyAll(ctx context.Context, dp *devpodv1alpha1.DevP
 		if gwNS == "" {
 			gwNS = "devpod-system"
 		}
-		allow := render.OwnerAllowNetworkPolicy(r.GwConfig.Spec.DevPodNamespace, dp.Spec.Owner, gwNS, render.BackendPort(dp, r.GwConfig))
+		var ingestPort int32
+		if r.Telemetry != nil {
+			ingestPort = render.IngestPort
+		}
+		allow := render.OwnerAllowNetworkPolicy(r.GwConfig.Spec.DevPodNamespace, dp.Spec.Owner, gwNS, render.BackendPort(dp, r.GwConfig), ingestPort)
 		if err := r.applyUnowned(ctx, allow); err != nil {
 			return fmt.Errorf("apply allow: %w", err)
 		}
@@ -409,7 +418,7 @@ func (r *DevPodReconciler) ensureHostKeySecret(ctx context.Context, dp *devpodv1
 		if len(existing.Data["ssh_host_ed25519_key"]) == 0 {
 			return fmt.Errorf("host-key Secret %q exists but is missing ssh_host_ed25519_key", key)
 		}
-		return nil
+		return r.syncTelemetryKeys(ctx, dp, &existing)
 	}
 	if !apierrors.IsNotFound(err) {
 		return fmt.Errorf("get host key secret: %w", err)
@@ -418,11 +427,50 @@ func (r *DevPodReconciler) ensureHostKeySecret(ctx context.Context, dp *devpodv1
 	if err != nil {
 		return err
 	}
+	if r.Telemetry != nil {
+		data, err := render.TelemetrySecretData(dp, r.Telemetry)
+		if err != nil {
+			return err
+		}
+		for k, v := range data {
+			sec.Data[k] = v
+		}
+	}
 	if err := controllerutil.SetControllerReference(dp, sec, r.Scheme); err != nil {
 		return fmt.Errorf("set ownerref on secret: %w", err)
 	}
 	if err := r.Create(ctx, sec); err != nil && !apierrors.IsAlreadyExists(err) {
 		return fmt.Errorf("create host key secret: %w", err)
+	}
+	return nil
+}
+
+// syncTelemetryKeys keeps the Secret's ingest-token / telemetry.json in
+// step with the controller's settings (spec §10.3: reconciled, not only
+// written at creation). The SSH keys are never touched.
+func (r *DevPodReconciler) syncTelemetryKeys(ctx context.Context, dp *devpodv1alpha1.DevPod, sec *corev1.Secret) error {
+	if r.Telemetry == nil {
+		return nil
+	}
+	want, err := render.TelemetrySecretData(dp, r.Telemetry)
+	if err != nil {
+		return err
+	}
+	changed := false
+	for k, v := range want {
+		if !bytes.Equal(sec.Data[k], v) {
+			if sec.Data == nil {
+				sec.Data = map[string][]byte{}
+			}
+			sec.Data[k] = v
+			changed = true
+		}
+	}
+	if !changed {
+		return nil
+	}
+	if err := r.Update(ctx, sec); err != nil {
+		return fmt.Errorf("update telemetry keys: %w", err)
 	}
 	return nil
 }

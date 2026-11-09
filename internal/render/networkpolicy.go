@@ -39,12 +39,14 @@ func DefaultDenyNetworkPolicy(ns string) *networkingv1.NetworkPolicy {
 //   - ingress from the gateway namespace on the backend sshd port
 //   - egress to DNS (UDP/TCP 53)
 //   - egress to public internet (0.0.0.0/0 except RFC1918)
-func OwnerAllowNetworkPolicy(ns, owner, gatewayNS string, backendPort int32) *networkingv1.NetworkPolicy {
+//   - egress to the webui's telemetry ingest port (when ingestPort > 0;
+//     the pod network is RFC1918, so it needs its own rule)
+func OwnerAllowNetworkPolicy(ns, owner, gatewayNS string, backendPort, ingestPort int32) *networkingv1.NetworkPolicy {
 	sshPort := port(corev1.ProtocolTCP, backendPort)
 	udp53 := port(corev1.ProtocolUDP, 53)
 	tcp53 := port(corev1.ProtocolTCP, 53)
 
-	return &networkingv1.NetworkPolicy{
+	np := &networkingv1.NetworkPolicy{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      OwnerNetPolName(owner),
 			Namespace: ns,
@@ -98,6 +100,20 @@ func OwnerAllowNetworkPolicy(ns, owner, gatewayNS string, backendPort int32) *ne
 			},
 		},
 	}
+	if ingestPort > 0 {
+		np.Spec.Egress = append(np.Spec.Egress, networkingv1.NetworkPolicyEgressRule{
+			To: []networkingv1.NetworkPolicyPeer{{
+				NamespaceSelector: &metav1.LabelSelector{
+					MatchLabels: map[string]string{"kubernetes.io/metadata.name": gatewayNS},
+				},
+				PodSelector: &metav1.LabelSelector{
+					MatchLabels: map[string]string{"app.kubernetes.io/name": "devpod-webui"},
+				},
+			}},
+			Ports: []networkingv1.NetworkPolicyPort{port(corev1.ProtocolTCP, ingestPort)},
+		})
+	}
+	return np
 }
 
 // port is a small helper that returns a NetworkPolicyPort value for clean
