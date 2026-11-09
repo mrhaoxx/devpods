@@ -1,0 +1,100 @@
+<style>
+  .shot { border-radius: 10px; overflow: hidden; border: 1px solid var(--border); margin: 0.5rem 0 1.5rem; font-size: 12px; line-height: 1.35; background: #0d1014; color: #c9d1d9; display: flex; }
+  .shot * { box-sizing: border-box; }
+  .mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+  .side { background: #090b0e; border-right: 1px solid #1c2128; padding: 12px 10px; width: 150px; flex: none; }
+  .logo { font-weight: 700; color: #fff; margin-bottom: 12px; }
+  .nav { padding: 4px 8px; border-radius: 6px; color: #adbac7; display: flex; justify-content: space-between; }
+  .nav.on { background: #1f6feb22; color: #58a6ff; }
+  .nav em { font-style: normal; color: #6e7681; }
+  .grp { color: #6e7681; font-size: 10px; text-transform: uppercase; letter-spacing: .08em; margin: 12px 0 4px; }
+  .main { padding: 12px 16px; flex: 1; min-width: 0; }
+  .bar1 { display: flex; gap: 8px; align-items: center; margin-bottom: 10px; }
+  .h1 { font-size: 15px; color: #fff; font-weight: 600; margin-right: 6px; }
+  .chip { background: #161b22; border: 1px solid #30363d; border-radius: 99px; padding: 2px 8px; color: #adbac7; white-space: nowrap; }
+  .chip.on { border-color: #1f6feb; color: #58a6ff; }
+  .b { border: 1px solid #30363d; border-radius: 6px; padding: 3px 9px; color: #adbac7; white-space: nowrap; }
+  .b.pri { background: #238636; border-color: #238636; color: #fff; }
+  .gantt { display: grid; grid-template-columns: 130px 1fr; border: 1px solid #21262d; border-radius: 8px; overflow: hidden; }
+  .gantt .hd { background: #11151b; color: #6e7681; font-size: 10px; padding: 4px 8px; border-bottom: 1px solid #21262d; }
+  .gantt .days { display: grid; grid-template-columns: repeat(3, 1fr); }
+  .gantt .days span { border-left: 1px solid #21262d; padding-left: 4px; }
+  .gantt .nd { padding: 6px 8px; border-bottom: 1px solid #161b22; }
+  .gantt .nd small { display: block; color: #6e7681; font-size: 10px; }
+  .lane { position: relative; border-bottom: 1px solid #161b22; background: repeating-linear-gradient(90deg, transparent 0, transparent calc(33.333% - 1px), #21262d calc(33.333% - 1px), #21262d 33.333%); }
+  .blk { position: absolute; top: 6px; bottom: 6px; border-radius: 4px; padding: 2px 5px; font-size: 10px; overflow: hidden; white-space: nowrap; }
+  .mine { background: #1f6feb; color: #fff; }
+  .other { background: #30363d; color: #adbac7; }
+  .free { border: 1px dashed #3fb95088; color: #3fb950; background: #3fb95011; }
+  .now { position: absolute; top: 0; bottom: 0; width: 2px; background: #f78166; }
+  .grid2 { display: grid; grid-template-columns: 1fr 300px; gap: 12px; margin-top: 12px; }
+  .panel { background: #11151b; border: 1px solid #21262d; border-radius: 8px; padding: 9px 11px; }
+  .panel h4 { margin: 0 0 7px; font-size: 11px; color: #adbac7; font-weight: 600; display: flex; justify-content: space-between; }
+  .panel h4 em { font-style: normal; color: #6e7681; font-weight: 400; }
+  table { width: 100%; border-collapse: collapse; }
+  td { padding: 4px 5px; border-bottom: 1px solid #161b22; white-space: nowrap; }
+  .f { display: grid; grid-template-columns: 60px 1fr; gap: 6px 8px; align-items: center; }
+  .f input, .f .sel { background: #0d1117; border: 1px solid #30363d; border-radius: 4px; color: #c9d1d9; padding: 3px 6px; font-size: 11px; }
+  .banner { background: #1f6feb1f; border: 1px solid #1f6feb55; color: #c9d1d9; border-radius: 6px; padding: 6px 10px; display: flex; gap: 10px; align-items: center; margin-bottom: 8px; }
+  .banner.warn { background: #d299221f; border-color: #d2992266; }
+  .t { font-size: 10px; border-radius: 4px; padding: 0 4px; border: 1px solid #30363d; color: #8b949e; }
+</style>
+
+<h2>预约：整机独占、先到先得、手动启动</h2>
+<p class="subtitle">侧栏新增"预约"入口，普通用户和管理员都有。页面主体是一张时间轴：每行一台可预约节点，横轴是时间。点空闲时段就能直接预约。</p>
+
+<div class="label">预约页（普通用户视角）</div>
+<div class="shot">
+  <div class="side">
+    <div class="logo">▣ devpod</div>
+    <div class="nav">我的 DevPod</div>
+    <div class="nav on">预约 <em>1</em></div>
+    <div class="nav">我的会话</div>
+    <div class="grp">设置</div>
+    <div class="nav">SSH 密钥</div>
+  </div>
+  <div class="main">
+    <div class="bar1"><span class="h1">可预约节点 4</span><span class="chip on">未来 3 天</span><span class="chip">7 天</span><span class="chip">14 天</span><span style="margin-left:auto;color:#6e7681" class="mono">本周已用 6h / 24h</span><span class="b pri">+ 预约</span></div>
+    <div class="gantt mono">
+      <div class="hd">节点</div><div class="hd days"><span>今天 11/09</span><span>11/10</span><span>11/11</span></div>
+      <div class="nd">g206<small>4×A100 · 64C · 512G</small></div>
+      <div class="lane"><div class="blk other" style="left:8%;width:14%">h3250100338</div><div class="now" style="left:20%"></div><div class="blk free" style="left:23%;width:20%">空闲 · 点击预约</div><div class="blk mine" style="left:45%;width:12%">我 · 09:00–17:00</div></div>
+      <div class="nd">g207<small>4×A100 · 64C · 512G</small></div>
+      <div class="lane"><div class="now" style="left:20%"></div><div class="blk other" style="left:30%;width:33%">jjsnam · 2 天</div></div>
+      <div class="nd">g208<small>4×A100 · 64C · 512G</small></div>
+      <div class="lane"><div class="now" style="left:20%"></div><div class="blk free" style="left:21%;width:76%">空闲 · 现在可用（非预约用户也在用：2 个 DevPod）</div></div>
+      <div class="nd">g209<small>8×4090 · 96C · 768G</small></div>
+      <div class="lane"><div class="now" style="left:20%"></div><div class="blk other" style="left:12%;width:15%">star</div><div class="blk other" style="left:70%;width:20%">h3260106621</div></div>
+    </div>
+    <div class="grid2">
+      <div class="panel"><h4>我的预约 <em>到期自动休眠所有用到该节点的 DevPod</em></h4>
+        <table class="mono">
+          <tr><td><span class="t" style="color:#58a6ff">即将开始</span></td><td>g206</td><td>11/10 09:00–17:00</td><td>8h</td><td style="color:#58a6ff">修改</td><td style="color:#f85149">取消</td></tr>
+          <tr><td><span class="t">已结束</span></td><td>g208</td><td>11/08 13:00–19:00</td><td>6h</td><td></td><td></td></tr>
+        </table>
+      </div>
+      <div class="panel"><h4>新建预约</h4>
+        <div class="f mono">
+          <span>节点</span><span class="sel">g206 · 4×A100</span>
+          <span>开始</span><input value="11/09 14:30">
+          <span>结束</span><input value="11/09 20:30">
+          <span></span><span style="color:#6e7681;font-size:10px">30 分钟一档 · 单次 ≤ 24h · 最早提前 14 天 · 本次 6h，本周剩余 18h</span>
+          <span></span><span style="color:#d29922;font-size:10px">该节点上现有 2 个他人的 DevPod，会在 14:30 被休眠（对方会提前 30 分钟收到通知）</span>
+          <span></span><span class="b pri" style="text-align:center">预约</span>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="label">在其他页面上的体现</div>
+<div class="shot" style="flex-direction:column;padding:12px 16px">
+  <div class="banner mono"><b>预约中</b> DevPod 03 运行在 g206 · 预约剩余 <b>2h13m</b>（17:00 到期后自动休眠）<span class="b" style="margin-left:auto">延长 1h</span><span class="b">提前释放</span></div>
+  <div class="banner warn mono"><b>注意</b> 你的 DevPod exp 所在节点 g208 将于 <b>14:30</b> 被 h3250100338 预约，届时自动休眠（数据保留）。<span class="b" style="margin-left:auto">现在迁到其他节点</span></div>
+  <div style="color:#adbac7;margin-top:4px" class="mono">
+    · <b>启动 / 新建 DevPod 时选节点</b>：可预约节点显示为"你的预约中 · 剩余 2h"或"空闲可用，但 14:30 起被他人预约"；<br>
+    · <b>节点页（管理员）</b>：行内有"可预约"开关，显示当前 / 下一个预约；抽屉里是这台节点的预约日历，可以取消任意预约；<br>
+    · <b>用户与配额</b>：多一列"每周预约时长"配额；<br>
+    · <b>总览 · 需要处理</b>：即将开始的预约清场名单、过期未释放的情况。
+  </div>
+</div>

@@ -1,0 +1,118 @@
+<style>
+  .shot { border-radius: 10px; overflow: hidden; border: 1px solid var(--border); margin: 0.5rem 0 1.5rem; font-size: 12px; line-height: 1.35; background: #0d1014; color: #c9d1d9; display: flex; }
+  .shot * { box-sizing: border-box; }
+  .mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+  .side { background: #090b0e; border-right: 1px solid #1c2128; padding: 12px 10px; width: 150px; flex: none; }
+  .logo { font-weight: 700; color: #fff; margin-bottom: 12px; }
+  .nav { padding: 4px 8px; border-radius: 6px; color: #adbac7; }
+  .nav.on { background: #1f6feb22; color: #58a6ff; }
+  .grp { color: #6e7681; font-size: 10px; text-transform: uppercase; letter-spacing: .08em; margin: 12px 0 4px; }
+  .main { padding: 12px 16px; flex: 1; min-width: 0; }
+  .crumb { color: #6e7681; font-size: 11px; margin-bottom: 4px; }
+  .head { display: flex; align-items: center; gap: 10px; }
+  .head b { font-size: 16px; color: #fff; }
+  .pill { border-radius: 99px; padding: 1px 8px; font-size: 11px; }
+  .acts { margin-left: auto; display: flex; gap: 6px; }
+  .acts span { border: 1px solid #30363d; border-radius: 6px; padding: 3px 9px; color: #adbac7; }
+  .acts .pri { background: #238636; border-color: #238636; color: #fff; }
+  .meta { color: #6e7681; margin: 6px 0 10px; display: flex; gap: 14px; flex-wrap: wrap; }
+  .meta b { color: #adbac7; font-weight: 500; }
+  .cards { display: grid; grid-template-columns: repeat(6, 1fr); gap: 8px; margin-bottom: 10px; }
+  .card { background: #161b22; border: 1px solid #21262d; border-radius: 8px; padding: 6px 9px; }
+  .card span { color: #6e7681; font-size: 10px; display: flex; justify-content: space-between; }
+  .card b { color: #fff; font-size: 14px; display: block; margin: 2px 0; }
+  .tabs { border-bottom: 1px solid #21262d; margin-bottom: 10px; }
+  .tabs span { display: inline-block; padding: 5px 0; margin-right: 18px; color: #6e7681; }
+  .tabs span.on { color: #fff; border-bottom: 2px solid #f78166; }
+  .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+  .panel { background: #11151b; border: 1px solid #21262d; border-radius: 8px; padding: 9px 11px; margin-bottom: 10px; }
+  .panel h4 { margin: 0 0 7px; font-size: 11px; color: #adbac7; font-weight: 600; display: flex; justify-content: space-between; }
+  .panel h4 em { font-style: normal; color: #6e7681; font-weight: 400; }
+  pre.cmd { margin: 0; background: #0d1117; border: 1px solid #21262d; border-radius: 6px; padding: 6px 8px; color: #c9d1d9; display: flex; justify-content: space-between; }
+  pre.cmd i { font-style: normal; color: #58a6ff; }
+  table { width: 100%; border-collapse: collapse; }
+  th { text-align: left; color: #6e7681; font-weight: 500; font-size: 10px; padding: 3px 5px; border-bottom: 1px solid #21262d; }
+  td { padding: 3px 5px; border-bottom: 1px solid #161b22; white-space: nowrap; }
+  .ex { color: #3fb950; font-size: 10px; border: 1px solid #23863666; border-radius: 4px; padding: 0 4px; }
+  .inf { color: #d29922; font-size: 10px; border: 1px solid #d2992266; border-radius: 4px; padding: 0 4px; }
+  .range span { border: 1px solid #30363d; border-radius: 6px; padding: 2px 8px; margin-left: 4px; color: #adbac7; font-size: 11px; }
+  .range span.on { background: #1f6feb33; border-color: #1f6feb; color: #58a6ff; }
+  .chart { height: 92px; position: relative; border-left: 1px solid #30363d; border-bottom: 1px solid #30363d; }
+  .chart svg { position: absolute; inset: 0; width: 100%; height: 100%; }
+  .chart .lim { position: absolute; left: 0; right: 0; border-top: 1px dashed #f8514988; }
+  .legend { color: #6e7681; font-size: 10px; margin-top: 4px; }
+  .legend i { display: inline-block; width: 8px; height: 3px; margin: 0 3px 2px 8px; vertical-align: middle; }
+</style>
+
+<h2>DevPod 详情页</h2>
+<p class="subtitle">普通用户和管理员共用这一页，管理员额外能看到 Owner 和"休眠他人"等操作。顶部 6 张卡片每秒刷新，下面分标签页。这里画了两个标签页：概览、监控。</p>
+
+<div class="label">概览标签页（默认）</div>
+<div class="shot">
+  <div class="side">
+    <div class="logo">▣ devpod</div>
+    <div class="nav on">我的 DevPod</div>
+    <div class="nav">我的会话</div>
+    <div class="grp">设置</div>
+    <div class="nav">SSH 密钥</div>
+  </div>
+  <div class="main">
+    <div class="crumb">我的 DevPod /</div>
+    <div class="head mono"><b>03</b><span class="pill" style="background:#23863633;color:#3fb950">● Running 3h12m</span>
+      <div class="acts"><span>复制 SSH</span><span>编辑</span><span>休眠</span><span style="color:#f85149">删除</span></div></div>
+    <div class="meta mono"><span>节点 <b>g206</b></span><span>镜像 <b>harbor…/cuda:12.4-dev</b></span><span>IP <b>172.26.5.88</b></span><span>home <b>PVC 50Gi</b></span><span>协作者 <b>star</b></span><span>Kore <b>8C · NUMA0</b></span></div>
+    <div class="cards mono">
+      <div class="card"><span>CPU<em>8 核</em></span><b>7.4</b><svg width="100%" height="16" viewBox="0 0 60 16" preserveAspectRatio="none"><polyline fill="none" stroke="#58a6ff" stroke-width="1.5" points="0,14 6,13 12,11 18,12 24,7 30,4 36,5 42,3 48,4 54,2 60,3"/></svg></div>
+      <div class="card"><span>内存<em>32G</em></span><b>26.1G</b><svg width="100%" height="16" viewBox="0 0 60 16" preserveAspectRatio="none"><polyline fill="none" stroke="#58a6ff" stroke-width="1.5" points="0,8 10,7 20,6 30,5 40,5 50,4 60,4"/></svg></div>
+      <div class="card"><span>GPU ×2<em>A100</em></span><b>97% · 74G</b><svg width="100%" height="16" viewBox="0 0 60 16" preserveAspectRatio="none"><polyline fill="none" stroke="#3fb950" stroke-width="1.5" points="0,3 10,2 20,3 30,2 40,2 50,3 60,2"/></svg></div>
+      <div class="card"><span>网络 ↓/↑</span><b>12M / 0.4M</b><svg width="100%" height="16" viewBox="0 0 60 16" preserveAspectRatio="none"><polyline fill="none" stroke="#a371f7" stroke-width="1.5" points="0,12 10,10 20,13 30,8 40,11 50,9 60,10"/></svg></div>
+      <div class="card"><span>RDMA<em>mlx5_0 VF</em></span><b>3.1 GB/s</b><svg width="100%" height="16" viewBox="0 0 60 16" preserveAspectRatio="none"><polyline fill="none" stroke="#db61a2" stroke-width="1.5" points="0,5 10,4 20,5 30,3 40,4 50,3 60,4"/></svg></div>
+      <div class="card"><span>磁盘 IO 读/写</span><b>210M / 35M</b><svg width="100%" height="16" viewBox="0 0 60 16" preserveAspectRatio="none"><polyline fill="none" stroke="#d29922" stroke-width="1.5" points="0,10 10,6 20,12 30,7 40,9 50,5 60,8"/></svg></div>
+    </div>
+    <div class="tabs"><span class="on">概览</span><span>监控</span><span>进程 <em style="font-style:normal;color:#6e7681">37</em></span><span>会话 <em style="font-style:normal;color:#6e7681">2</em></span><span>容器</span><span>事件</span></div>
+    <div class="grid2">
+      <div>
+        <div class="panel"><h4>连接 <em>点击复制</em></h4>
+          <pre class="cmd mono">ssh h3250100338+03@devpod.clusters.zjusct.io<i>⧉</i></pre>
+          <div style="height:6px"></div>
+          <pre class="cmd mono">Host devpod-03 … (~/.ssh/config)<i>⧉</i></pre>
+        </div>
+        <div class="panel"><h4>在线会话 <em>2</em></h4>
+          <table class="mono">
+            <tr><td>h3250100338</td><td>10.78.3.4 · openng</td><td>pty · tmux</td><td>2h40m</td><td style="color:#58a6ff">回放</td></tr>
+            <tr><td>star</td><td>10.12.0.7</td><td>sftp</td><td>4m</td><td style="color:#58a6ff">回放</td></tr>
+          </table>
+        </div>
+      </div>
+      <div class="panel"><h4>占用最高的进程 <em>每秒刷新 · 全部 37 个见"进程"</em></h4>
+        <table class="mono">
+          <tr><th>PID</th><th>命令</th><th>会话</th><th>CPU</th><th>RSS</th><th>GPU 显存</th></tr>
+          <tr><td>4121</td><td>python train.py --bs 256</td><td>h3250100338 <span class="ex">exact</span></td><td>6.8</td><td>18.2G</td><td>2×37G</td></tr>
+          <tr><td>4180</td><td>python -m torch…worker</td><td>h3250100338 <span class="inf">tmux</span></td><td>0.4</td><td>3.1G</td><td>—</td></tr>
+          <tr><td>5530</td><td>nvtop</td><td>h3250100338 <span class="ex">exact</span></td><td>0.1</td><td>40M</td><td>—</td></tr>
+          <tr><td>6011</td><td>sftp-server</td><td>star <span class="ex">exact</span></td><td>0.1</td><td>6M</td><td>—</td></tr>
+        </table>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="label">监控标签页</div>
+<div class="shot">
+  <div class="side">
+    <div class="logo">▣ devpod</div>
+    <div class="nav on">我的 DevPod</div>
+  </div>
+  <div class="main">
+    <div class="tabs" style="display:flex;justify-content:space-between"><div><span>概览</span><span class="on">监控</span><span>进程</span><span>会话</span><span>容器</span><span>事件</span></div>
+      <div class="range"><span class="on">实时 1s</span><span>15m</span><span>1h</span><span>24h</span><span>7d</span></div></div>
+    <div class="grid2" style="grid-template-columns:1fr 1fr 1fr">
+      <div class="panel"><h4>CPU <em>使用 · 限额 · 被限流</em></h4><div class="chart"><div class="lim" style="top:8%"></div><svg viewBox="0 0 100 40" preserveAspectRatio="none"><polyline fill="none" stroke="#58a6ff" stroke-width="1" points="0,36 8,34 16,30 24,31 32,18 40,10 48,12 56,7 64,9 72,6 80,7 88,5 100,6"/><polyline fill="none" stroke="#f85149" stroke-width="1" points="0,40 56,40 60,37 64,40 88,40 92,38 100,40"/></svg></div><div class="legend"><i style="background:#58a6ff"></i>使用<i style="background:#f85149"></i>throttled</div></div>
+      <div class="panel"><h4>内存 <em>anon · file · 限额</em></h4><div class="chart"><div class="lim" style="top:5%"></div><svg viewBox="0 0 100 40" preserveAspectRatio="none"><polygon fill="#58a6ff55" points="0,40 0,22 30,18 60,12 100,10 100,40"/><polygon fill="#a371f755" points="0,22 30,18 60,12 100,10 100,7 60,9 30,15 0,19"/></svg></div><div class="legend"><i style="background:#58a6ff"></i>anon<i style="background:#a371f7"></i>file cache</div></div>
+      <div class="panel"><h4>GPU <em>按卡 · 利用率 / 显存 / 功耗 / 温度</em></h4><div class="chart"><svg viewBox="0 0 100 40" preserveAspectRatio="none"><polyline fill="none" stroke="#3fb950" stroke-width="1" points="0,4 20,3 40,5 60,3 80,4 100,3"/><polyline fill="none" stroke="#56d364" stroke-width="1" points="0,6 20,5 40,7 60,5 80,6 100,5"/></svg></div><div class="legend"><i style="background:#3fb950"></i>GPU0<i style="background:#56d364"></i>GPU1</div></div>
+      <div class="panel"><h4>网络 <em>内核协议栈 · TCP / 其他</em></h4><div class="chart"><svg viewBox="0 0 100 40" preserveAspectRatio="none"><polyline fill="none" stroke="#a371f7" stroke-width="1" points="0,30 10,26 20,32 30,20 40,28 50,22 60,25 70,18 80,24 90,21 100,23"/><polyline fill="none" stroke="#a371f777" stroke-width="1" points="0,38 20,37 40,38 60,36 80,38 100,37"/></svg></div><div class="legend"><i style="background:#a371f7"></i>↓ 接收<i style="background:#a371f777"></i>↑ 发送</div></div>
+      <div class="panel"><h4>RDMA <em>mlx5_0 · VF · 精确</em></h4><div class="chart"><svg viewBox="0 0 100 40" preserveAspectRatio="none"><polyline fill="none" stroke="#db61a2" stroke-width="1" points="0,12 10,10 20,12 30,8 40,10 50,8 60,9 70,7 80,9 90,8 100,9"/></svg></div><div class="legend"><i style="background:#db61a2"></i>收+发 · 可切换 CNP / 重传</div></div>
+      <div class="panel"><h4>磁盘 IO <em>读 / 写</em></h4><div class="chart"><svg viewBox="0 0 100 40" preserveAspectRatio="none"><polyline fill="none" stroke="#d29922" stroke-width="1" points="0,30 10,18 20,34 30,22 40,28 50,16 60,30 70,24 80,32 90,20 100,26"/></svg></div><div class="legend"><i style="background:#d29922"></i>读<i style="background:#d2992277"></i>写</div></div>
+    </div>
+  </div>
+</div>

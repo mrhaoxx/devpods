@@ -1,0 +1,159 @@
+<style>
+  .shot { border-radius: 10px; overflow: hidden; border: 1px solid var(--border); margin: 0.5rem 0 1.75rem; font-size: 12px; line-height: 1.35; }
+  .shot * { box-sizing: border-box; }
+  .mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+  .spark { vertical-align: middle; }
+  /* A: console */
+  .a { display: grid; grid-template-columns: 168px 1fr; background: #0d1014; color: #c9d1d9; min-height: 360px; }
+  .a .side { background: #090b0e; border-right: 1px solid #1c2128; padding: 12px 10px; }
+  .a .logo { font-weight: 700; color: #fff; margin-bottom: 14px; letter-spacing: .02em; }
+  .a .grp { color: #6e7681; font-size: 10px; text-transform: uppercase; letter-spacing: .08em; margin: 12px 0 4px; }
+  .a .nav { padding: 4px 8px; border-radius: 6px; color: #adbac7; }
+  .a .nav.on { background: #1f6feb22; color: #58a6ff; }
+  .a .main { padding: 10px 14px; min-width: 0; }
+  .a .top { display: flex; gap: 10px; align-items: center; margin-bottom: 10px; }
+  .a .search { flex: 1; background: #161b22; border: 1px solid #30363d; border-radius: 6px; padding: 5px 9px; color: #6e7681; }
+  .a .chip { background: #161b22; border: 1px solid #30363d; border-radius: 99px; padding: 2px 8px; color: #adbac7; white-space: nowrap; }
+  .a .kpis { display: grid; grid-template-columns: repeat(5, 1fr); gap: 8px; margin-bottom: 10px; }
+  .a .kpi { background: #161b22; border: 1px solid #21262d; border-radius: 8px; padding: 7px 9px; }
+  .a .kpi b { display: block; font-size: 15px; color: #fff; }
+  .a .kpi span { color: #6e7681; font-size: 10px; }
+  .a table { width: 100%; border-collapse: collapse; }
+  .a th { text-align: left; color: #6e7681; font-weight: 500; font-size: 10px; text-transform: uppercase; letter-spacing: .05em; padding: 4px 6px; border-bottom: 1px solid #21262d; }
+  .a td { padding: 4px 6px; border-bottom: 1px solid #161b22; white-space: nowrap; }
+  .dot { display: inline-block; width: 7px; height: 7px; border-radius: 2px; margin-right: 6px; }
+  .bar { display: inline-block; width: 46px; height: 5px; background: #21262d; border-radius: 3px; vertical-align: middle; margin-right: 5px; }
+  .bar i { display: block; height: 100%; border-radius: 3px; background: #3fb950; }
+  .gpu { display: inline-block; width: 9px; height: 9px; margin-right: 2px; border-radius: 2px; vertical-align: middle; }
+  /* B: terminal */
+  .b { background: #0b0f0b; color: #9fe0a0; padding: 10px 12px; min-height: 340px; }
+  .b .hdr { color: #5fa860; display: flex; justify-content: space-between; border-bottom: 1px solid #1d2e1d; padding-bottom: 6px; margin-bottom: 6px; }
+  .b .keys span { color: #e5c07b; margin-right: 10px; }
+  .b pre { margin: 0; font-size: 11.5px; line-height: 1.5; white-space: pre; overflow: hidden; }
+  .b .sel { background: #1d3a1d; color: #d7ffd8; }
+  .b .dim { color: #4f7a50; }
+  .b .warn { color: #e5c07b; } .b .bad { color: #ff7b72; }
+  .b .pane { border-top: 1px solid #1d2e1d; margin-top: 6px; padding-top: 6px; }
+  /* C: master-detail */
+  .c { display: grid; grid-template-columns: 44px 300px 1fr; background: #fbfbfc; color: #1f2328; min-height: 380px; }
+  .c .rail { background: #f0f1f3; border-right: 1px solid #e3e5e8; display: flex; flex-direction: column; align-items: center; gap: 10px; padding-top: 12px; }
+  .c .rail i { width: 22px; height: 22px; border-radius: 6px; background: #d9dce1; display: block; }
+  .c .rail i.on { background: #2f6feb; }
+  .c .list { border-right: 1px solid #e3e5e8; padding: 8px; }
+  .c .list input { width: 100%; border: 1px solid #d0d4d9; border-radius: 6px; padding: 5px 8px; margin-bottom: 6px; background: #fff; font-size: 11px; }
+  .c .row { display: grid; grid-template-columns: 1fr auto; gap: 2px 8px; padding: 6px 8px; border-radius: 6px; }
+  .c .row.on { background: #e8f0fe; }
+  .c .row small { color: #6a737d; }
+  .c .det { padding: 10px 14px; min-width: 0; }
+  .c .cards4 { display: grid; grid-template-columns: repeat(5, 1fr); gap: 8px; margin: 8px 0 10px; }
+  .c .mc { background: #fff; border: 1px solid #e3e5e8; border-radius: 8px; padding: 6px 8px; }
+  .c .mc b { font-size: 13px; display: block; }
+  .c .mc span { color: #6a737d; font-size: 10px; }
+  .c .tabs span { margin-right: 14px; color: #6a737d; padding-bottom: 4px; }
+  .c .tabs span.on { color: #1f2328; border-bottom: 2px solid #2f6feb; }
+  .c table { width: 100%; border-collapse: collapse; margin-top: 6px; }
+  .c th { text-align: left; color: #6a737d; font-weight: 500; font-size: 10px; padding: 3px 5px; border-bottom: 1px solid #e3e5e8; }
+  .c td { padding: 3px 5px; border-bottom: 1px solid #f0f1f3; white-space: nowrap; }
+</style>
+
+<h2>先定整体方向：哪一种更接近你要的？</h2>
+<p class="subtitle">三种方向用的是同一份数据：管理员查看全部 DevPod，带二期的实时指标。先看框架、导航方式和信息密度，配色和细节之后再定。</p>
+
+<h3>A · 控制台式：左侧导航 + 全宽高密度表格</h3>
+<p class="subtitle">类似 Grafana、Vercel 的后台。常驻侧栏分"工作区 / 集群 / 审计"三组；顶部是全局搜索（⌘K）和状态过滤；表格每行一个 DevPod，各列直接是实时指标。点一行进入详情页。</p>
+<div class="shot">
+  <div class="a">
+    <div class="side">
+      <div class="logo">▣ devpod</div>
+      <div class="grp">工作区</div>
+      <div class="nav">我的 DevPod</div>
+      <div class="nav">SSH 密钥</div>
+      <div class="grp">集群</div>
+      <div class="nav">总览</div>
+      <div class="nav on">全部 DevPod</div>
+      <div class="nav">节点</div>
+      <div class="nav">用户与配额</div>
+      <div class="grp">审计</div>
+      <div class="nav">会话</div>
+      <div class="nav">命令 / 文件</div>
+      <div class="nav">告警 <span style="color:#f85149">3</span></div>
+    </div>
+    <div class="main">
+      <div class="top">
+        <div class="search">⌘K 搜索用户、DevPod、会话、命令…</div>
+        <span class="chip">● Running 12</span><span class="chip">Pending 1</span><span class="chip">Stopped 382</span><span class="chip">GPU only</span>
+      </div>
+      <div class="kpis">
+        <div class="kpi"><b>312 / 1024</b><span>CPU cores 使用 / 可分配</span></div>
+        <div class="kpi"><b>1.1 / 4.0 TiB</b><span>内存</span></div>
+        <div class="kpi"><b>14 / 32</b><span>GPU 占用</span></div>
+        <div class="kpi"><b>23</b><span>在线会话 · 9 用户</span></div>
+        <div class="kpi"><b>4</b><span>空转 &gt; 24h</span></div>
+      </div>
+      <table class="mono">
+        <tr><th>DevPod</th><th>节点</th><th>CPU 60s</th><th>内存</th><th>GPU</th><th>网络 ↓/↑</th><th>RDMA</th><th>会话</th><th>运行</th><th></th></tr>
+        <tr><td><span class="dot" style="background:#3fb950"></span>h3250100338/03</td><td>g206</td><td><svg class="spark" width="60" height="14"><polyline fill="none" stroke="#58a6ff" stroke-width="1.5" points="0,12 6,11 12,9 18,10 24,6 30,4 36,5 42,3 48,4 54,2 60,3"/></svg> 7.4/8</td><td><span class="bar"><i style="width:82%"></i></span>26/32G</td><td><span class="gpu" style="background:#3fb950"></span><span class="gpu" style="background:#3fb950"></span> 97%</td><td>12M/0.4M</td><td>3.1 GB/s</td><td>2 · star</td><td>3h12m</td><td>⋯</td></tr>
+        <tr><td><span class="dot" style="background:#3fb950"></span>jjsnam/dev</td><td>m603</td><td><svg class="spark" width="60" height="14"><polyline fill="none" stroke="#58a6ff" stroke-width="1.5" points="0,13 6,13 12,12 18,13 24,12 30,13 36,12 42,13 48,12 54,13 60,12"/></svg> 0.1/4</td><td><span class="bar"><i style="width:20%"></i></span>1.6/8G</td><td>—</td><td>2K/1K</td><td>—</td><td>1</td><td>2d4h</td><td>⋯</td></tr>
+        <tr><td><span class="dot" style="background:#3fb950"></span>h3260106621/main</td><td>g207</td><td><svg class="spark" width="60" height="14"><polyline fill="none" stroke="#58a6ff" stroke-width="1.5" points="0,10 6,8 12,9 18,7 24,8 30,6 36,7 42,6 48,7 54,6 60,6"/></svg> 3.9/8</td><td><span class="bar"><i style="width:55%;background:#d29922"></i></span>17/32G</td><td><span class="gpu" style="background:#3fb950"></span><span class="gpu" style="background:#21262d"></span> 41%</td><td>0.8M/0.2M</td><td>—</td><td>0 <span style="color:#d29922">空转 26h</span></td><td>26h</td><td>⋯</td></tr>
+        <tr><td><span class="dot" style="background:#d29922"></span>h3260105863/exp</td><td>—</td><td colspan="7" style="color:#d29922">Pending · 拉取镜像 harbor…/cuda:12.4（37%）</td><td>⋯</td></tr>
+        <tr><td><span class="dot" style="background:#484f58"></span>test/a</td><td>—</td><td colspan="7" style="color:#6e7681">Stopped · 休眠 6 天 · home PVC 20Gi 保留</td><td>⋯</td></tr>
+      </table>
+    </div>
+  </div>
+</div>
+
+<h3>B · 终端式：类 k9s，键盘驱动、极致密度</h3>
+<p class="subtitle">等宽字体、没有多余装饰；上方是列表，下方窗格显示选中 DevPod 的进程。用快捷键操作（/ 过滤，s 休眠，l 日志，a 审计）。密度最高，但新用户上手门槛也最高。</p>
+<div class="shot">
+  <div class="b mono">
+    <div class="hdr"><span>devpod · zjusct · all devpods [395] · running 12</span><span class="keys"><span>&lt;/&gt;filter</span><span>&lt;s&gt;sleep</span><span>&lt;l&gt;logs</span><span>&lt;a&gt;audit</span><span>&lt;enter&gt;open</span></span></div>
+<pre><span class="dim">  OWNER/NAME          NODE  CPU  60s        MEM        GPU      NET↓/↑      RDMA     SESS  AGE</span>
+<span class="sel">› h3250100338/03     g206  7.4  ▂▃▅▆▇▇█▇█  26.1/32G   ██ 97%   12M/0.4M    3.1GB/s  2     3h12m</span>
+  jjsnam/dev          m603  0.1  ▁▁▁▁▁▁▁▁▁   1.6/8G     -        2K/1K       -        1     2d4h
+  h3260106621/main    g207  3.9  ▃▄▄▅▄▅▅▅▅  <span class="warn">17.0/32G</span>   █░ 41%   0.8M/0.2M   -        <span class="warn">0 idle 26h</span>
+  h3260105863/exp     -     <span class="warn">Pending  pulling cuda:12.4 37%</span>
+  test/a              -     <span class="dim">Stopped  6d  pvc 20Gi</span></pre>
+    <div class="pane"><pre><span class="dim">  PROCESSES h3250100338/03                    SESSION            CPU   RSS     GPU MEM  RDMA</span>
+  python train.py --bs 256              star@10.78.3.4 tmux    6.8   18.2G   2×37G    3.0GB/s
+  nvtop                                 star (exact)           0.1   40M     -        -
+  sshd: star [priv]                     star (exact)           0.0   8M      -        -</pre></div>
+  </div>
+</div>
+
+<h3>C · 三栏主从式：列表和详情同屏</h3>
+<p class="subtitle">类似 Linear 或邮件客户端。窄图标栏 + 紧凑列表 + 右侧详情；点列表里任意一项，右侧立即显示它的实时指标、进程和会话，不用跳页。适合"边扫列表边排障"，但列表一栏能放的列比 A 少。</p>
+<div class="shot">
+  <div class="c">
+    <div class="rail"><i class="on"></i><i></i><i></i><i></i><i></i></div>
+    <div class="list">
+      <input placeholder="过滤：user:star phase:running gpu>0">
+      <div class="row on"><b class="mono">h3250100338/03</b><small>7.4 CPU</small><small>g206 · 2 GPU · 2 会话</small><small style="color:#1a7f37">Running</small></div>
+      <div class="row"><b class="mono">jjsnam/dev</b><small>0.1 CPU</small><small>m603 · 1 会话</small><small style="color:#1a7f37">Running</small></div>
+      <div class="row"><b class="mono">h3260106621/main</b><small>3.9 CPU</small><small>g207 · 空转 26h</small><small style="color:#9a6700">Idle</small></div>
+      <div class="row"><b class="mono">h3260105863/exp</b><small>—</small><small>拉取镜像 37%</small><small style="color:#9a6700">Pending</small></div>
+      <div class="row"><b class="mono">test/a</b><small>—</small><small>休眠 6 天</small><small style="color:#6a737d">Stopped</small></div>
+    </div>
+    <div class="det">
+      <div style="display:flex;justify-content:space-between;align-items:center"><b class="mono" style="font-size:14px">h3250100338/03</b><span style="color:#6a737d">g206 · cuda:12.4 · 3h12m · owner h3250100338</span></div>
+      <div class="cards4">
+        <div class="mc"><span>CPU</span><b>7.4 / 8</b><svg width="100%" height="18" viewBox="0 0 60 18" preserveAspectRatio="none"><polyline fill="none" stroke="#2f6feb" stroke-width="1.5" points="0,16 6,15 12,12 18,13 24,8 30,5 36,6 42,4 48,5 54,3 60,4"/></svg></div>
+        <div class="mc"><span>内存</span><b>26 / 32 G</b><svg width="100%" height="18" viewBox="0 0 60 18" preserveAspectRatio="none"><polyline fill="none" stroke="#2f6feb" stroke-width="1.5" points="0,9 10,8 20,7 30,6 40,6 50,5 60,5"/></svg></div>
+        <div class="mc"><span>GPU ×2</span><b>97%</b><svg width="100%" height="18" viewBox="0 0 60 18" preserveAspectRatio="none"><polyline fill="none" stroke="#1a7f37" stroke-width="1.5" points="0,3 10,2 20,3 30,2 40,2 50,3 60,2"/></svg></div>
+        <div class="mc"><span>网络 ↓/↑</span><b>12M / 0.4M</b><svg width="100%" height="18" viewBox="0 0 60 18" preserveAspectRatio="none"><polyline fill="none" stroke="#8250df" stroke-width="1.5" points="0,14 10,12 20,15 30,10 40,13 50,11 60,12"/></svg></div>
+        <div class="mc"><span>RDMA</span><b>3.1 GB/s</b><svg width="100%" height="18" viewBox="0 0 60 18" preserveAspectRatio="none"><polyline fill="none" stroke="#bf3989" stroke-width="1.5" points="0,6 10,5 20,6 30,4 40,5 50,4 60,5"/></svg></div>
+      </div>
+      <div class="tabs"><span class="on">进程</span><span>会话</span><span>监控</span><span>容器</span><span>事件</span></div>
+      <table class="mono">
+        <tr><th>PID</th><th>命令</th><th>会话</th><th>CPU</th><th>RSS</th><th>GPU</th></tr>
+        <tr><td>4121</td><td>python train.py --bs 256</td><td>star · tmux</td><td>6.8</td><td>18.2G</td><td>2×37G</td></tr>
+        <tr><td>5530</td><td>nvtop</td><td>star</td><td>0.1</td><td>40M</td><td>—</td></tr>
+      </table>
+    </div>
+  </div>
+</div>
+
+<div class="options">
+  <div class="option" data-choice="a" onclick="toggleSelect(this)"><div class="letter">A</div><div class="content"><h3>控制台式</h3><p>常驻侧栏、全宽高密度表格、KPI 条</p></div></div>
+  <div class="option" data-choice="b" onclick="toggleSelect(this)"><div class="letter">B</div><div class="content"><h3>终端式</h3><p>等宽、键盘驱动、上下分屏</p></div></div>
+  <div class="option" data-choice="c" onclick="toggleSelect(this)"><div class="letter">C</div><div class="content"><h3>三栏主从式</h3><p>列表和详情同屏，不用跳页</p></div></div>
+</div>

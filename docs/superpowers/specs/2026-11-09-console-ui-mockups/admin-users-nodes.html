@@ -1,0 +1,105 @@
+<style>
+  .shot { border-radius: 10px; overflow: hidden; border: 1px solid var(--border); margin: 0.5rem 0 1.5rem; font-size: 12px; line-height: 1.35; background: #0d1014; color: #c9d1d9; display: flex; position: relative; }
+  .shot * { box-sizing: border-box; }
+  .mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+  .side { background: #090b0e; border-right: 1px solid #1c2128; padding: 12px 10px; width: 150px; flex: none; }
+  .logo { font-weight: 700; color: #fff; margin-bottom: 12px; }
+  .nav { padding: 4px 8px; border-radius: 6px; color: #adbac7; }
+  .nav.on { background: #1f6feb22; color: #58a6ff; }
+  .grp { color: #6e7681; font-size: 10px; text-transform: uppercase; letter-spacing: .08em; margin: 12px 0 4px; }
+  .main { padding: 12px 16px; flex: 1; min-width: 0; }
+  .bar1 { display: flex; gap: 8px; align-items: center; margin-bottom: 8px; }
+  .h1 { font-size: 15px; color: #fff; font-weight: 600; margin-right: 6px; }
+  .in { background: #161b22; border: 1px solid #30363d; border-radius: 6px; padding: 4px 8px; color: #6e7681; flex: 1; }
+  .chip { background: #161b22; border: 1px solid #30363d; border-radius: 99px; padding: 2px 8px; color: #adbac7; white-space: nowrap; }
+  .chip.on { border-color: #1f6feb; color: #58a6ff; }
+  .b { border: 1px solid #30363d; border-radius: 6px; padding: 3px 9px; color: #adbac7; white-space: nowrap; }
+  .b.pri { background: #238636; border-color: #238636; color: #fff; }
+  .bulk { background: #1f6feb22; border: 1px solid #1f6feb55; border-radius: 6px; padding: 5px 9px; margin-bottom: 8px; display: flex; gap: 8px; align-items: center; color: #58a6ff; }
+  table { width: 100%; border-collapse: collapse; }
+  th { text-align: left; color: #6e7681; font-weight: 500; font-size: 10px; padding: 4px 5px; border-bottom: 1px solid #21262d; white-space: nowrap; }
+  td { padding: 4px 5px; border-bottom: 1px solid #161b22; white-space: nowrap; }
+  tr.sel td { background: #1f6feb14; }
+  .cb { display: inline-block; width: 10px; height: 10px; border: 1px solid #484f58; border-radius: 2px; vertical-align: middle; }
+  .cb.on { background: #1f6feb; border-color: #1f6feb; }
+  .q { display: inline-block; width: 40px; height: 5px; background: #21262d; border-radius: 3px; vertical-align: middle; margin-right: 4px; }
+  .q i { display: block; height: 100%; border-radius: 3px; background: #58a6ff; }
+  .t { font-size: 10px; border-radius: 4px; padding: 0 4px; border: 1px solid #30363d; color: #8b949e; }
+  .drawer { position: absolute; right: 0; top: 0; bottom: 0; width: 330px; background: #11151b; border-left: 1px solid #30363d; box-shadow: -8px 0 24px #0008; padding: 12px 14px; }
+  .drawer h3 { margin: 0 0 2px; color: #fff; font-size: 14px; }
+  .sec { margin-top: 10px; }
+  .sec h4 { margin: 0 0 5px; color: #6e7681; font-size: 10px; text-transform: uppercase; letter-spacing: .06em; }
+  .kv { display: grid; grid-template-columns: 70px 1fr 1fr; gap: 3px 8px; align-items: center; }
+  .kv input { background: #0d1117; border: 1px solid #30363d; border-radius: 4px; color: #c9d1d9; padding: 2px 5px; font-size: 11px; width: 100%; }
+  .gpus { display: inline-flex; gap: 2px; vertical-align: middle; }
+  .gpus i { width: 8px; height: 8px; border-radius: 2px; background: #3fb950; display: block; }
+  .gpus i.f { background: #30363d; }
+</style>
+
+<h2>管理端：用户与配额、节点</h2>
+<p class="subtitle">原则是一张表就能看全，批量操作代替逐个点开；点某一行，从右侧滑出抽屉，不离开列表。</p>
+
+<div class="label">用户与配额（已勾选 3 个用户，右侧是其中一人的抽屉）</div>
+<div class="shot">
+  <div class="side">
+    <div class="logo">▣ devpod</div>
+    <div class="grp">集群</div>
+    <div class="nav">总览</div>
+    <div class="nav">全部 DevPod</div>
+    <div class="nav">节点</div>
+    <div class="nav on">用户与配额</div>
+    <div class="grp">审计</div>
+    <div class="nav">会话 / 回放</div>
+  </div>
+  <div class="main" style="padding-right:345px">
+    <div class="bar1"><span class="h1">用户 160</span><div class="in">过滤：h3250 · 前缀、显示名、来源</div><span class="b">导入 CSV</span><span class="b pri">+ 新建</span></div>
+    <div class="bar1"><span class="chip on">有运行中 9</span><span class="chip">配额 &gt;80% 4</span><span class="chip">自定义配额 12</span><span class="chip">自定义审计策略 2</span><span class="chip">管理员 2</span><span class="chip">从未登录 31</span></div>
+    <div class="bulk">已选 3 人 · <span class="b">设置配额…</span><span class="b">审计策略…</span><span class="b">重置密码</span><span class="b">休眠其全部 DevPod</span></div>
+    <table class="mono">
+      <tr><th></th><th>用户</th><th>来源</th><th>DevPod</th><th>CPU 用/配额</th><th>内存</th><th>GPU</th><th>最近会话</th><th>策略</th></tr>
+      <tr class="sel"><td><span class="cb on"></span></td><td>h3250100338</td><td><span class="t">LDAP</span></td><td>1 / 3</td><td><span class="q"><i style="width:92%;background:#d29922"></i></span>7.4/8</td><td><span class="q"><i style="width:81%"></i></span>26/32G</td><td>2/2</td><td>在线</td><td>—</td></tr>
+      <tr class="sel"><td><span class="cb on"></span></td><td>h3260106621</td><td><span class="t">LDAP</span></td><td>1 / 3</td><td><span class="q"><i style="width:48%"></i></span>3.9/8</td><td><span class="q"><i style="width:53%"></i></span>17/32G</td><td>1/2</td><td>26h 前</td><td>—</td></tr>
+      <tr class="sel"><td><span class="cb on"></span></td><td>h3260105863</td><td><span class="t">LDAP</span></td><td>0 / 3</td><td><span class="q"><i style="width:0"></i></span>0/8</td><td><span class="q"><i style="width:0"></i></span>0/32G</td><td>0/2</td><td>从未</td><td>—</td></tr>
+      <tr><td><span class="cb"></span></td><td>jjsnam</td><td><span class="t">密码</span></td><td>2 / 5*</td><td><span class="q"><i style="width:27%"></i></span>2.2/8</td><td><span class="q"><i style="width:95%;background:#f85149"></i></span>15/16G*</td><td>0/0</td><td>在线</td><td><span class="t" style="color:#d29922">禁下载</span></td></tr>
+      <tr><td><span class="cb"></span></td><td>star <span class="t" style="color:#58a6ff">admin</span></td><td><span class="t">密码</span></td><td>1 / 3</td><td><span class="q"><i style="width:5%"></i></span>0.4/8</td><td><span class="q"><i style="width:9%"></i></span>3/32G</td><td>0/2</td><td>在线</td><td>—</td></tr>
+    </table>
+    <div style="color:#6e7681;margin-top:6px;font-size:10px">* 表示自定义配额，其余沿用全局默认（8 CPU · 32G · 2 GPU · 3 个 DevPod）</div>
+  </div>
+  <div class="drawer mono">
+    <h3>h3250100338</h3><div style="color:#6e7681">LDAP · 在线 · 最近登录 13:58 经 openng</div>
+    <div class="sec"><h4>配额（留空 = 默认）</h4>
+      <div class="kv"><span>DevPod</span><input value="" placeholder="默认 3"><span style="color:#6e7681">用 1</span>
+        <span>CPU</span><input value="16"><span style="color:#d29922">用 7.4</span>
+        <span>内存</span><input value="" placeholder="默认 32G"><span style="color:#6e7681">用 26G</span>
+        <span>GPU</span><input value="" placeholder="默认 2"><span style="color:#6e7681">用 2</span></div></div>
+    <div class="sec"><h4>DevPod</h4>
+      <table><tr><td>● 03</td><td>g206</td><td>7.4 CPU</td><td>2 GPU</td><td style="color:#58a6ff">打开</td></tr></table></div>
+    <div class="sec"><h4>最近会话</h4>
+      <table><tr><td>13:58</td><td>03 · pty</td><td>2h40m</td><td style="color:#58a6ff">回放</td></tr><tr><td>昨天</td><td>03 · sftp ↑2</td><td>3m</td><td style="color:#58a6ff">回放</td></tr></table></div>
+    <div class="sec"><h4>审计策略</h4><div style="color:#6e7681">沿用集群默认 · <span style="color:#58a6ff">覆盖…</span></div></div>
+    <div class="sec"><h4>SSH 密钥 · 账号</h4><div style="color:#6e7681">2 把公钥（LDAP）· <span style="color:#58a6ff">设为管理员</span> · <span style="color:#f85149">删除用户</span></div></div>
+  </div>
+</div>
+
+<div class="label">节点</div>
+<div class="shot">
+  <div class="side">
+    <div class="logo">▣ devpod</div>
+    <div class="grp">集群</div>
+    <div class="nav">总览</div>
+    <div class="nav">全部 DevPod</div>
+    <div class="nav on">节点</div>
+    <div class="nav">用户与配额</div>
+  </div>
+  <div class="main">
+    <div class="bar1"><span class="h1">节点 16</span><div class="in">过滤：gpu=a100 · zone · 名称</div><span class="chip on">可调度 15</span><span class="chip">有 GPU 8</span><span class="chip">NotReady 1</span></div>
+    <table class="mono">
+      <tr><th>节点</th><th>状态</th><th>CPU 已分配 / 可分配</th><th>CPU 实际（DevPod）</th><th>内存 已分配</th><th>GPU</th><th>RDMA</th><th>DevPod</th><th>标签</th></tr>
+      <tr><td>g206</td><td style="color:#3fb950">Ready</td><td><span class="q" style="width:70px"><i style="width:94%"></i></span>60/64</td><td><svg width="50" height="12"><polyline fill="none" stroke="#58a6ff" stroke-width="1.3" points="0,10 8,8 16,7 24,5 32,4 40,3 50,3"/></svg> 58.8</td><td>480/512G</td><td><span class="gpus"><i></i><i></i><i></i><i></i></span> 4/4 A100</td><td>mlx5 ×2</td><td>3</td><td><span class="t">gpu</span> <span class="t">rdma</span></td></tr>
+      <tr><td>g207</td><td style="color:#3fb950">Ready</td><td><span class="q" style="width:70px"><i style="width:62%"></i></span>40/64</td><td><svg width="50" height="12"><polyline fill="none" stroke="#58a6ff" stroke-width="1.3" points="0,9 8,8 16,9 24,7 32,8 40,7 50,7"/></svg> 21.0</td><td>310/512G</td><td><span class="gpus"><i></i><i></i><i></i><i class="f"></i></span> 3/4 A100</td><td>mlx5 ×2</td><td>4</td><td><span class="t">gpu</span></td></tr>
+      <tr><td>m603</td><td style="color:#3fb950">Ready</td><td><span class="q" style="width:70px"><i style="width:58%"></i></span>74/128</td><td><svg width="50" height="12"><polyline fill="none" stroke="#58a6ff" stroke-width="1.3" points="0,11 10,10 20,11 30,10 40,10 50,9"/></svg> 12.3</td><td>200/768G</td><td>—</td><td>—</td><td>5</td><td><span class="t">cpu</span></td></tr>
+      <tr><td>m604</td><td style="color:#f85149">NotReady 2h</td><td colspan="5" style="color:#6e7681">上次心跳 12:01 · 原有 DevPod 0</td><td>0</td><td><span class="t">cpu</span></td></tr>
+    </table>
+    <div style="color:#6e7681;margin-top:6px;font-size:10px">点击节点 → 抽屉里列出这台节点上的 DevPod（可多选休眠）、GPU 每卡占用者，以及 Kore 的 CPU 拓扑（替代现在单独的"CPU topology"页面）</div>
+  </div>
+</div>

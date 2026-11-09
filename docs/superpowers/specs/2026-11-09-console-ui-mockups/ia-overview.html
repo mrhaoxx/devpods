@@ -1,0 +1,162 @@
+<style>
+  .shot { border-radius: 10px; overflow: hidden; border: 1px solid var(--border); margin: 0.5rem 0 1.5rem; font-size: 12px; line-height: 1.35; }
+  .shot * { box-sizing: border-box; }
+  .mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+  .k { background: #0d1014; color: #c9d1d9; }
+  .side { background: #090b0e; border-right: 1px solid #1c2128; padding: 12px 10px; width: 176px; flex: none; }
+  .logo { font-weight: 700; color: #fff; margin-bottom: 12px; }
+  .grp { color: #6e7681; font-size: 10px; text-transform: uppercase; letter-spacing: .08em; margin: 12px 0 4px; }
+  .nav { padding: 4px 8px; border-radius: 6px; color: #adbac7; display: flex; justify-content: space-between; }
+  .nav.on { background: #1f6feb22; color: #58a6ff; }
+  .nav em { font-style: normal; color: #6e7681; }
+  .nav .red { color: #f85149; }
+  .btn { margin-top: 10px; background: #238636; color: #fff; border-radius: 6px; padding: 5px 8px; text-align: center; }
+  .who { margin-top: 16px; border-top: 1px solid #1c2128; padding-top: 8px; color: #6e7681; font-size: 11px; }
+  .sides { display: flex; gap: 14px; }
+  .sides .col { flex: 1; }
+  .sides .shot { display: flex; }
+  .sides .note { padding: 12px; color: #adbac7; font-size: 11.5px; }
+  .sides .note li { margin: 3px 0 3px 14px; }
+  .main { padding: 12px 16px; flex: 1; min-width: 0; }
+  .top { display: flex; gap: 10px; align-items: center; margin-bottom: 12px; }
+  .search { flex: 1; background: #161b22; border: 1px solid #30363d; border-radius: 6px; padding: 5px 9px; color: #6e7681; }
+  .h1 { font-size: 15px; color: #fff; font-weight: 600; }
+  .kpis { display: grid; grid-template-columns: repeat(6, 1fr); gap: 8px; margin-bottom: 12px; }
+  .kpi { background: #161b22; border: 1px solid #21262d; border-radius: 8px; padding: 8px 10px; }
+  .kpi b { display: block; font-size: 16px; color: #fff; }
+  .kpi span { color: #6e7681; font-size: 10px; }
+  .kpi .meter { height: 4px; background: #21262d; border-radius: 2px; margin-top: 5px; }
+  .kpi .meter i { display: block; height: 100%; border-radius: 2px; background: #58a6ff; }
+  .grid2 { display: grid; grid-template-columns: 1.25fr 1fr; gap: 12px; }
+  .panel { background: #11151b; border: 1px solid #21262d; border-radius: 8px; padding: 9px 11px; margin-bottom: 12px; }
+  .panel h4 { margin: 0 0 7px; font-size: 11px; color: #adbac7; font-weight: 600; display: flex; justify-content: space-between; }
+  .panel h4 em { font-style: normal; color: #6e7681; font-weight: 400; }
+  .nodes { display: grid; grid-template-columns: repeat(8, 1fr); gap: 4px; }
+  .node { border-radius: 4px; padding: 4px 5px; font-size: 10px; color: #0d1014; }
+  .node small { display: block; opacity: .75; }
+  table { width: 100%; border-collapse: collapse; }
+  th { text-align: left; color: #6e7681; font-weight: 500; font-size: 10px; padding: 3px 5px; border-bottom: 1px solid #21262d; }
+  td { padding: 3px 5px; border-bottom: 1px solid #161b22; white-space: nowrap; }
+  .tag { border-radius: 4px; padding: 0 5px; font-size: 10px; }
+  .act { color: #58a6ff; }
+</style>
+
+<h2>信息架构和"集群总览"</h2>
+<p class="subtitle">左右两条侧栏对比普通用户和管理员能看到的入口。底下是管理员登录后的第一页。看看入口划分对不对，总览页放的东西是不是你真正关心的。</p>
+
+<div class="sides">
+  <div class="col">
+    <div class="label">普通用户（大多数学生）</div>
+    <div class="shot k">
+      <div class="side">
+        <div class="logo">▣ devpod</div>
+        <div class="nav on">我的 DevPod <em>2</em></div>
+        <div class="nav">我的会话</div>
+        <div class="grp">设置</div>
+        <div class="nav">SSH 密钥</div>
+        <div class="nav">密码</div>
+        <div class="btn">+ 新建 DevPod</div>
+        <div class="who">h3250100338 · 配额 2/3 · 8 CPU · 1 GPU</div>
+      </div>
+      <div class="note"><ul>
+        <li>首页就是自己的 DevPod 表格，和管理员表格用同一个组件，只是少了 Owner 列</li>
+        <li>配额用量常驻在左下角</li>
+        <li>"我的会话"只有开启审计时才显示</li>
+      </ul></div>
+    </div>
+  </div>
+  <div class="col">
+    <div class="label">管理员（多出"集群""审计"两组）</div>
+    <div class="shot k">
+      <div class="side">
+        <div class="logo">▣ devpod</div>
+        <div class="nav">我的 DevPod <em>1</em></div>
+        <div class="grp">集群</div>
+        <div class="nav on">总览</div>
+        <div class="nav">全部 DevPod <em>12/395</em></div>
+        <div class="nav">节点 <em>16</em></div>
+        <div class="nav">用户与配额 <em>160</em></div>
+        <div class="grp">审计</div>
+        <div class="nav">会话 / 回放</div>
+        <div class="nav">命令 · 文件</div>
+        <div class="nav">告警 <span class="red">3</span></div>
+        <div class="nav">访问记录 · 策略</div>
+      </div>
+      <div class="note"><ul>
+        <li>每组都显示计数，告警数标红</li>
+        <li>⌘K 全局搜索可以直接跳到任意用户、DevPod、会话或命令</li>
+        <li>管理员自己的 DevPod 也放在顶部</li>
+      </ul></div>
+    </div>
+  </div>
+</div>
+
+<div class="label">管理员首页 · 集群总览（每秒刷新）</div>
+<div class="shot k" style="display:flex">
+  <div class="side">
+    <div class="logo">▣ devpod</div>
+    <div class="nav">我的 DevPod <em>1</em></div>
+    <div class="grp">集群</div>
+    <div class="nav on">总览</div>
+    <div class="nav">全部 DevPod <em>12/395</em></div>
+    <div class="nav">节点 <em>16</em></div>
+    <div class="nav">用户与配额 <em>160</em></div>
+    <div class="grp">审计</div>
+    <div class="nav">会话 / 回放</div>
+    <div class="nav">命令 · 文件</div>
+    <div class="nav">告警 <span class="red">3</span></div>
+  </div>
+  <div class="main">
+    <div class="top"><span class="h1">集群总览</span><div class="search">⌘K 搜索用户、DevPod、会话、命令…</div></div>
+    <div class="kpis mono">
+      <div class="kpi"><span>CPU 使用 / 可分配</span><b>312 / 1024</b><div class="meter"><i style="width:30%"></i></div></div>
+      <div class="kpi"><span>内存</span><b>1.1 / 4.0 TiB</b><div class="meter"><i style="width:27%"></i></div></div>
+      <div class="kpi"><span>GPU 占用 / 总数</span><b>14 / 32</b><div class="meter"><i style="width:44%;background:#3fb950"></i></div></div>
+      <div class="kpi"><span>DevPod 运行 · 启动中 · 失败</span><b>12 · 1 · <span style="color:#f85149">0</span></b></div>
+      <div class="kpi"><span>在线会话 / 用户</span><b>23 / 9</b></div>
+      <div class="kpi"><span>RDMA 合计</span><b>8.4 GB/s</b></div>
+    </div>
+    <div class="grid2">
+      <div>
+        <div class="panel"><h4>节点 <em>颜色 = CPU 使用率 · 角标 = GPU 已占/总数</em></h4>
+          <div class="nodes mono">
+            <div class="node" style="background:#2ea043">g206<small>92% · 4/4</small></div>
+            <div class="node" style="background:#56d364">g207<small>61% · 3/4</small></div>
+            <div class="node" style="background:#7ee787">g208<small>35% · 2/4</small></div>
+            <div class="node" style="background:#aff5b4">g209<small>12% · 0/4</small></div>
+            <div class="node" style="background:#7ee787">m601<small>40% · —</small></div>
+            <div class="node" style="background:#aff5b4">m602<small>8% · —</small></div>
+            <div class="node" style="background:#56d364">m603<small>58% · —</small></div>
+            <div class="node" style="background:#484f58;color:#c9d1d9">m604<small>NotReady</small></div>
+          </div>
+        </div>
+        <div class="panel"><h4>需要处理 <em>按影响排序</em></h4>
+          <table class="mono">
+            <tr><td><span class="tag" style="background:#d2992233;color:#d29922">空转</span></td><td>h3260106621/main</td><td>占 1 GPU，26h 没有会话、CPU &lt; 2%</td><td class="act">休眠</td></tr>
+            <tr><td><span class="tag" style="background:#d2992233;color:#d29922">启动慢</span></td><td>h3260105863/exp</td><td>Pending 14m · 拉取镜像</td><td class="act">事件</td></tr>
+            <tr><td><span class="tag" style="background:#f8514933;color:#f85149">告警</span></td><td>star 的会话</td><td>sftp 下载被拦截 · /etc/shadow</td><td class="act">回放</td></tr>
+            <tr><td><span class="tag" style="background:#58a6ff33;color:#58a6ff">配额</span></td><td>jjsnam</td><td>内存配额用到 95%</td><td class="act">调整</td></tr>
+          </table>
+        </div>
+      </div>
+      <div>
+        <div class="panel"><h4>用量最大的用户 <em>当前</em></h4>
+          <table class="mono">
+            <tr><th>用户</th><th>DevPod</th><th>CPU</th><th>内存</th><th>GPU</th></tr>
+            <tr><td>h3250100338</td><td>1</td><td>7.4</td><td>26G</td><td>2</td></tr>
+            <tr><td>h3260106621</td><td>1</td><td>3.9</td><td>17G</td><td>1</td></tr>
+            <tr><td>jjsnam</td><td>2</td><td>2.2</td><td>15G</td><td>0</td></tr>
+            <tr><td>star</td><td>1</td><td>0.4</td><td>3G</td><td>0</td></tr>
+          </table>
+        </div>
+        <div class="panel"><h4>最近活动 <em>审计 · 实时</em></h4>
+          <table class="mono">
+            <tr><td style="color:#6e7681">14:03</td><td>star</td><td>sftp ↑ data.tar.gz 1.2G</td></tr>
+            <tr><td style="color:#6e7681">14:01</td><td>jjsnam</td><td>exec: make test → 0</td></tr>
+            <tr><td style="color:#6e7681">13:58</td><td>h3250100338</td><td>登录 03（经 openng）</td></tr>
+          </table>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
