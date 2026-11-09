@@ -292,8 +292,19 @@ supervisor 数据保留作对照。
 - **遥测在独立子进程 `devpod-supervisor telemetry` 中运行**，由 1 号
   进程监管（崩溃后退避重启），设置 `GOMEMLIMIT`。1 号进程崩溃会重启整个
   容器，遥测 bug 不得连带用户。
-- 每 **500ms** 扫描 `/proc`，按 §5.3 归属；「socket → 进程」映射每 5 秒
-  刷新一次。
+- 每 **500ms** 发现新进程、每秒发现退出（§5.3 归属）。为把开销压到单核
+  1% 以下（§6.8，实测见 `docs/superpowers/notes/2026-11-telemetry-phase2-measurements.md`）：
+  - 每秒只读运行过的进程的 `/proc/<pid>/stat`，空闲进程每 10 秒读一次；
+    exe / cmdline / environ / status 每个进程只读一次（exec 后重读）；
+    `io` 只在 CPU 时间变化时读；速率按两次读取的实际间隔计算；
+  - 两次完整扫描之间用 `/proc/loadavg` 的最新 pid 判断有无新进程，只探测
+    新分配的 pid，不列 `/proc`；
+  - 「socket → 进程」映射每 5 秒刷新，只遍历期间运行过的进程的 fd；
+    SSH 连接的对端每个会话只解析一次；
+  - 遍历全节点 TCP 表的读取（sock_diag 每进程 TCP 字节、`/proc/net/tcp`
+    监听端口）按「不超过单核 0.1%」自适应间隔，大节点上约 18 秒一次，
+    每进程 TCP 速率为该间隔内的平均；容器级网络仍为 1 秒；
+  - 子进程 `GOMAXPROCS=2`。
 - 开关 `processTracking`（见 §10.3）：只开 Tetragon 时可关闭轮询，钩子
   照常工作。
 
@@ -484,8 +495,10 @@ node-agent 为特权 DaemonSet（`CAP_BPF`、`CAP_NET_ADMIN`、`hostPID`、读
 ### 6.8 开销预算
 
 supervisor 运行在用户 cgroup 内（Kore 绑核时落在用户独占核上）：
-目标 **平均 < 单核 2%，telemetry 子进程 RSS < 30 MB**（300 个进程、
-1 秒采样）。所有间隔可配置（§10.3）。实现计划阶段实测。
+目标 **平均 < 单核 1%，telemetry 子进程 RSS < 30 MB**（300 个进程、
+1 秒采样）。所有间隔可配置（§10.3）。**已测（2026-11-10）：单核
+0.91%、RSS 14 MB**（311 个进程、104 核节点），见
+`docs/superpowers/notes/2026-11-telemetry-phase2-measurements.md`。
 
 ---
 
@@ -906,7 +919,12 @@ Secret 卷（非 subPath）更新会传播到运行中的 Pod；supervisor telem
 
 0. （二期，新增）在 zjusct 上模拟 400 个 supervisor 每秒上报：leader 的
    CPU 和内存、每秒合并写入 ClickHouse 的耗时、界面端到端延迟（目标小于
-   1 秒），以及强制切换 leader 时的恢复时间和数据完整性。
+   1 秒），以及强制切换 leader 时的恢复时间和数据完整性。**已测
+   （2026-11-10）**：leader 0.72 核、RSS 约 270 MB；每秒约 9600 行，插入
+   p50 140 ms；界面延迟 p50 1.12 s、p99 1.80 s（未达 1 秒目标，见记录）；
+   切换后 3 秒换主、约 9 秒恢复上报、数据零丢失。chart 在开启遥测时把
+   webui 资源调为 2 核 / 1 Gi。详见
+   `docs/superpowers/notes/2026-11-telemetry-phase2-measurements.md`。
 
 1. Silo 的 bucket 初始化、生命周期规则、分片上传与 aws-sdk-go-v2 的兼容
    性；镜像 digest 与发布记录一致。**已测（2026-11-09）：兼容**，见
@@ -917,9 +935,14 @@ Secret 卷（非 subPath）更新会传播到运行中的 Pod；supervisor telem
    **已测**：修复两处热点后，TTY 开启审计与关闭时持平；scp 约 −25%
    （原文与原始流各存一份）。详见上述记录。
 4. supervisor 在 300 个进程、1 秒采样下的 CPU 与内存（§6.8）。
+   **已测（2026-11-10）**：从单核 31% 优化到 0.91%，RSS 14 MB；过程与
+   原因见 `docs/superpowers/notes/2026-11-telemetry-phase2-measurements.md`。
 5. 200 个模拟 supervisor 每秒上报时 `/ingest` 与 ClickHouse 的压力。
+   **已由第 0 项（400 个）覆盖。**
 6. `nvidia-smi -lms 1000` 的稳定性与开销；MIG / time-slicing 下的输出。
-7. RoCE 流量是否同时计入网卡计数器（§6.4）。
+   **待测**（需要 GPU 节点上的测试 Pod，用户决定延后）。
+7. RoCE 流量是否同时计入网卡计数器（§6.4）。**待测**（需要 RDMA 节点，
+   同上）。
 8. （三期）Tetragon 事件与 `ssh_conn` 的启动时间匹配精度；GPU 节点与
    fork/exec 压力下的 Tetragon 开销（可用 `tetra` 导出的每程序 CPU 用量）；
    cgroup_skb 在高 PPS UDP 与 NCCL-over-TCP 下的开销。
