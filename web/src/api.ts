@@ -36,7 +36,7 @@ export interface Me {
   nameBudget: number;
   quota: { maxDevPods?: number; compute?: Record<string, string>; storage?: string };
   usage: { devpods: number; running: number; compute: Record<string, string>; storage: string };
-  features: { pubkeySelfService: boolean; kore: boolean; passwordAuth: boolean };
+  features: { pubkeySelfService: boolean; kore: boolean; passwordAuth: boolean; audit?: boolean };
   hasPassword: boolean;
   ssh: { host: string; port: number; loginSuffix?: string };
 }
@@ -89,7 +89,8 @@ export const resetUserPassword = (name: string, password: string) =>
 export const setUserQuota = (name: string, quota: QuotaPatch) =>
   req<void>("PATCH", `/api/admin/users/${name}`, { quota });
 export const deleteUser = (name: string) => req<void>("DELETE", `/api/admin/users/${name}`);
-export const listAllDevPods = () => req<{ items: AdminDevPod[] }>("GET", "/api/admin/devpods");
+export const listAllDevPods = () =>
+  req<{ items: AdminDevPod[]; devpods: DevPod[]; pods: Record<string, PodInfo> }>("GET", "/api/admin/devpods");
 
 export type KoreZone = {
   id: number;
@@ -153,11 +154,30 @@ export type K8sEvent = {
 
 // DevPod objects are passed through as loosely-typed JSON; the UI
 // reads a handful of paths and must tolerate schema growth.
+export type ContainerSpec = { name: string; image?: string; resources?: { limits?: Record<string, string> } };
 export type DevPod = {
-  metadata: { name: string };
-  spec: { owner: string; running: boolean; shell?: string; persistence?: { size: string } };
-  status?: { phase?: string; endpoint?: string; message?: string };
+  metadata: { name: string; uid?: string; creationTimestamp?: string };
+  spec: {
+    owner: string;
+    running: boolean;
+    shell?: string;
+    collaborators?: string[];
+    persistence?: { size: string; mountPath?: string };
+    pod?: { spec?: { containers?: ContainerSpec[] } };
+  };
+  status?: {
+    phase?: string;
+    endpoint?: string;
+    message?: string;
+    hibernatedAt?: string;
+    retryCount?: number;
+    lastFailureAt?: string;
+  };
 };
+
+// PodInfo is the live Pod state attached to list/watch/detail payloads.
+export type PodInfo = { node: string; ip: string; startedAt?: string };
+export type Presence = { count: number; users: string[] };
 
 export type Template = {
   metadata: { name: string };
@@ -177,7 +197,9 @@ export type BindingInfo = {
 };
 
 export const me = () => req<Me>("GET", "/api/me");
-export const listDevPods = () => req<{ items: DevPod[] }>("GET", "/api/devpods");
+export const listDevPods = () => req<{ items: DevPod[]; pods: Record<string, PodInfo> }>("GET", "/api/devpods");
+export const auditPresence = (all = false) =>
+  req<{ items: Record<string, Presence> }>("GET", `/api/audit/presence${all ? "?scope=all" : ""}`);
 export const getDevPod = (n: string) => req<{ devpod: DevPod; binding?: BindingInfo }>("GET", `/api/devpods/${n}`);
 export const createDevPod = (body: unknown) => req<DevPod>("POST", "/api/devpods", body);
 export const patchDevPod = (n: string, running: boolean) => req<DevPod>("PATCH", `/api/devpods/${n}`, { running });
@@ -217,12 +239,12 @@ function sse(url: string, onMessage: (data: string) => void, onResync?: () => vo
 }
 
 // watchDevPods streams the caller's DevPod changes (list page).
-export function watchDevPods(onEvent: (type: string, dp: DevPod) => void, onResync: () => void): () => void {
+export function watchDevPods(onEvent: (type: string, dp: DevPod, pod?: PodInfo) => void, onResync: () => void): () => void {
   return sse(
     "/api/devpods?watch=true",
     (data) => {
-      const ev = JSON.parse(data) as { type: string; devpod: DevPod };
-      onEvent(ev.type, ev.devpod);
+      const ev = JSON.parse(data) as { type: string; devpod: DevPod; pod?: PodInfo };
+      onEvent(ev.type, ev.devpod, ev.pod);
     },
     onResync,
   );

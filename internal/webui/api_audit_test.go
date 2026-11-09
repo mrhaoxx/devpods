@@ -110,7 +110,9 @@ func (f *fakeAuditStore) actions() []string {
 
 type fakeObjects map[string][]byte
 
-func (o fakeObjects) Put(context.Context, string, io.Reader, int64) error { return errors.New("read-only") }
+func (o fakeObjects) Put(context.Context, string, io.Reader, int64) error {
+	return errors.New("read-only")
+}
 func (o fakeObjects) Get(_ context.Context, key string) (io.ReadCloser, error) {
 	b, ok := o[key]
 	if !ok {

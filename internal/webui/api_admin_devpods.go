@@ -64,5 +64,9 @@ func (s *Server) handleAdminListDevPods(w http.ResponseWriter, r *http.Request) 
 		}
 		return items[i].Name < items[j].Name
 	})
-	s.writeJSON(w, http.StatusOK, map[string]any{"items": items})
+	s.writeJSON(w, http.StatusOK, map[string]any{
+		"items":   items,
+		"devpods": list.Items,
+		"pods":    s.podInfos(r.Context(), list.Items),
+	})
 }
