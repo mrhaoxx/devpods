@@ -82,6 +82,9 @@ spec:
         - --idle-gpu-pct={{ .Values.telemetry.idle.gpuPct }}
         - --agent-silent-after={{ .Values.telemetry.agentSilentAfter }}
         env:
+        # the leader allocates per batch; trade memory for GC time
+        - {name: GOGC, value: "200"}
+        - {name: GOMEMLIMIT, value: {{ div (mul (include "devpod.mebibytes" (toString .Values.telemetry.webuiResources.limits.memory)) 90) 100 }}MiB}
         # identity in the leader Lease and the address the leader publishes
         - name: POD_NAME
           valueFrom: {fieldRef: {fieldPath: metadata.name}}
@@ -95,7 +98,11 @@ spec:
         {{- end }}
         readinessProbe:
           httpGet: {path: /healthz, port: http}
+        {{- if include "devpod.telemetry.on" $ }}
+        resources: {{- toYaml .Values.telemetry.webuiResources | nindent 10 }}
+        {{- else }}
         resources: {{- toYaml .Values.webui.resources | nindent 10 }}
+        {{- end }}
         securityContext:
           allowPrivilegeEscalation: false
           capabilities: {drop: [ALL]}

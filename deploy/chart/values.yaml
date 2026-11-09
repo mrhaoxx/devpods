@@ -154,6 +154,12 @@ telemetry:
     cpuPct: 5
     gpuPct: 5
   agentSilentAfter: 3m          # alert when a Running DevPod stops reporting
+  # The webui leader decodes and writes every DevPod's telemetry; with
+  # telemetry on these replace webui.resources (sizing: see
+  # docs/superpowers/notes/2026-11-telemetry-phase2-measurements.md).
+  webuiResources:
+    requests: {cpu: 500m, memory: 512Mi}
+    limits:   {cpu: "2", memory: 1Gi}
 
 # Session audit (docs/superpowers/specs/2026-11-09-devpod-audit-telemetry-design.md).
 # Off by default; when off the gateway behaves exactly as before.
