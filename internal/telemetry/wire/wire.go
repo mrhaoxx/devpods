@@ -8,6 +8,7 @@ package wire
 
 import (
 	"bufio"
+	"bytes"
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/hex"
@@ -397,30 +398,49 @@ func (l *limited) Read(p []byte) (int, error) {
 	return n, err
 }
 
-// Decode reads one batch; records of unknown kinds are skipped.
+// Decode reads one batch; records of unknown kinds are skipped. Each
+// NDJSON line is unmarshalled once (a json.Decoder stream scans every
+// value twice: to find its end, then to decode it).
 func Decode(r io.Reader, maxBytes int64) (Header, []Record, error) {
 	zr, err := getDecoder(r)
 	if err != nil {
 		return Header{}, nil, err
 	}
 	defer putDecoder(zr)
-	dec := json.NewDecoder(bufio.NewReader(&limited{r: zr, max: maxBytes}))
+	lr := &limited{r: zr, max: maxBytes}
+	sc := bufio.NewScanner(lr)
+	sc.Buffer(make([]byte, 0, 64<<10), int(min(maxBytes+1, 1<<30)))
+	// Over the limit, the scanner still returns the cut last line: the
+	// size error wins over the JSON one.
+	tooLarge := func(err error) bool {
+		return lr.n > lr.max || errors.Is(err, ErrTooLarge) || errors.Is(err, bufio.ErrTooLong)
+	}
+	if !sc.Scan() {
+		err := sc.Err()
+		if tooLarge(err) {
+			return Header{}, nil, ErrTooLarge
+		}
+		if err == nil {
+			err = io.ErrUnexpectedEOF
+		}
+		return Header{}, nil, fmt.Errorf("telemetry header: %w", err)
+	}
 	var h Header
-	if err := dec.Decode(&h); err != nil {
-		if errors.Is(err, ErrTooLarge) {
+	if err := json.Unmarshal(sc.Bytes(), &h); err != nil {
+		if tooLarge(err) {
 			return Header{}, nil, ErrTooLarge
 		}
 		return Header{}, nil, fmt.Errorf("telemetry header: %w", err)
 	}
 	var recs []Record
-	for {
-		var rec Record
-		err := dec.Decode(&rec)
-		if err == io.EOF {
-			return h, recs, nil
+	for sc.Scan() {
+		line := sc.Bytes()
+		if len(bytes.TrimSpace(line)) == 0 {
+			continue
 		}
-		if err != nil {
-			if errors.Is(err, ErrTooLarge) {
+		var rec Record
+		if err := json.Unmarshal(line, &rec); err != nil {
+			if tooLarge(err) {
 				return Header{}, nil, ErrTooLarge
 			}
 			return Header{}, nil, fmt.Errorf("telemetry record: %w", err)
@@ -429,6 +449,13 @@ func Decode(r io.Reader, maxBytes int64) (Header, []Record, error) {
 			recs = append(recs, rec)
 		}
 	}
+	if err := sc.Err(); err != nil {
+		if tooLarge(err) {
+			return Header{}, nil, ErrTooLarge
+		}
+		return Header{}, nil, fmt.Errorf("telemetry record: %w", err)
+	}
+	return h, recs, nil
 }
 
 // Token is a DevPod's ingest credential: hex(HMAC-SHA256(key, uid)).

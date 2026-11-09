@@ -139,3 +139,15 @@ func TestEncodeDecode_ReuseCodecs(t *testing.T) {
 		t.Fatalf("%d KiB allocated per encode+decode, want < 256 KiB", per>>10)
 	}
 }
+
+func TestDecode_SkipsUnknownKindsAndBlankLines(t *testing.T) {
+	var buf bytes.Buffer
+	h := Header{V: Version, DevPodUID: "u", Seq: 3}
+	if err := Encode(&buf, h, []Record{{K: KContainer, C: &Container{CPU: 1.5}}, {K: "future", C: &Container{}}, {K: KAlert, Alert: &Alert{Kind: "gap"}}}); err != nil {
+		t.Fatal(err)
+	}
+	gh, recs, err := Decode(bytes.NewReader(buf.Bytes()), 1<<20)
+	if err != nil || gh.Seq != 3 || len(recs) != 2 || recs[0].C.CPU != 1.5 || recs[1].Alert.Kind != "gap" {
+		t.Fatalf("%+v %+v %v", gh, recs, err)
+	}
+}

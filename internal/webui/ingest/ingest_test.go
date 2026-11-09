@@ -356,3 +356,22 @@ func TestWriter_Stats(t *testing.T) {
 		t.Fatalf("TakeStats must reset: %+v", again)
 	}
 }
+
+// Every batch is authenticated by DevPod UID: a known UID is looked up
+// once per authCacheTTL, not per batch.
+func TestIngest_AuthLookupCached(t *testing.T) {
+	h := newHandler(&fakeStore{}, leaderTrue(), 5*time.Millisecond)
+	lookups := 0
+	h.DevPods = func(uid string) (string, string, bool) { lookups++; return "alice", "dp", uid == "u1" }
+	for s := uint64(1); s <= 5; s++ {
+		acked(t, postSeq(t, h, "u1", s, s))
+	}
+	if lookups != 1 {
+		t.Fatalf("%d lookups for 5 batches", lookups)
+	}
+	for i := 0; i < 2; i++ { // unknown UIDs are not cached as valid
+		if rec := postSeq(t, h, "u9", 1, 1); rec.Code != http.StatusUnauthorized {
+			t.Fatalf("unknown uid: %d", rec.Code)
+		}
+	}
+}
