@@ -243,6 +243,12 @@ type GatewayConfigSpec struct {
 	//
 	// +optional
 	LDAP *LDAPSpec `json:"ldap,omitempty"`
+
+	// Audit configures session recording and the cluster default audit
+	// policy. Disabled when nil.
+	//
+	// +optional
+	Audit *AuditSpec `json:"audit,omitempty"`
 }
 
 // GatewayConfigStatus reports observed state.

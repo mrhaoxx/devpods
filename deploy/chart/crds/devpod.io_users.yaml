@@ -54,6 +54,81 @@ spec:
                   by an operator via kubectl — the webui treats it as read-only.
                   Effective admin = the webui's --admins allowlist OR this field.
                 type: boolean
+              auditPolicy:
+                description: |-
+                  AuditPolicy overrides fields of the cluster default audit policy
+                  (GatewayConfig.spec.audit.policy) for sessions this user starts.
+                  nil = cluster default.
+                properties:
+                  agentForwarding:
+                    description: AgentForwarding controls ssh-agent forwarding.
+                    enum:
+                    - Allow
+                    - Deny
+                    type: string
+                  download:
+                    description: |-
+                      Download denies transferring files from the DevPod to the client
+                      over SFTP, legacy scp (-f) and ZMODEM (sz).
+                    enum:
+                    - Allow
+                    - Deny
+                    type: string
+                  failMode:
+                    description: |-
+                      FailMode decides whether sessions continue (Open) or are refused
+                      (Closed) when audit storage cannot keep up.
+                    enum:
+                    - Open
+                    - Closed
+                    type: string
+                  forwarding:
+                    description: Forwarding controls TCP port forwarding.
+                    properties:
+                      local:
+                        description: |-
+                          Local controls client-requested (direct-tcpip) forwarding. Denying
+                          it makes VS Code Remote-SSH unusable.
+                        enum:
+                        - Allow
+                        - Deny
+                        type: string
+                      recordContent:
+                        description: |-
+                          RecordContent records the raw bytes of forwarded channels. By
+                          default only metadata (target, byte counts, duration) is recorded.
+                        type: boolean
+                      remote:
+                        description: Remote controls server-side (tcpip-forward) forwarding.
+                        enum:
+                        - Allow
+                        - Deny
+                        type: string
+                    type: object
+                  maxFileSize:
+                    anyOf:
+                    - type: integer
+                    - type: string
+                    description: |-
+                      MaxFileSize rejects any single recognised file transfer larger
+                      than this size.
+                    pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                    x-kubernetes-int-or-string: true
+                  upload:
+                    description: |-
+                      Upload denies transferring files from the client into the DevPod
+                      over SFTP, legacy scp (-t) and ZMODEM (rz).
+                    enum:
+                    - Allow
+                    - Deny
+                    type: string
+                  x11Forwarding:
+                    description: X11Forwarding controls X11 forwarding.
+                    enum:
+                    - Allow
+                    - Deny
+                    type: string
+                type: object
               displayName:
                 description: DisplayName is a cosmetic label for UIs.
                 type: string

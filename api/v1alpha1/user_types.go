@@ -76,6 +76,13 @@ type UserSpec struct {
 	//
 	// +optional
 	Admin bool `json:"admin,omitempty"`
+
+	// AuditPolicy overrides fields of the cluster default audit policy
+	// (GatewayConfig.spec.audit.policy) for sessions this user starts.
+	// nil = cluster default.
+	//
+	// +optional
+	AuditPolicy *AuditPolicy `json:"auditPolicy,omitempty"`
 }
 
 // UserStatus reports observed state.
