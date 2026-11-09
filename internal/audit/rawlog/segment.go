@@ -134,19 +134,25 @@ func (w *SegmentWriter) seal() error {
 	return nil
 }
 
-// encoders recycles zstd encoders across segments and sessions. Each
-// encoder is synchronous (concurrency 1): with hundreds of sessions the
-// default per-encoder goroutine fan-out cost more in scheduler wakeups
-// and per-segment allocations than it saved.
+// encoders recycles zstd encoders across segments and sessions. A
+// gateway keeps one open segment per active session, so the encoder is
+// sized for hundreds of them: synchronous (no per-encoder goroutine
+// fan-out), fastest level and a 256 KiB window (under 1 MiB of heap per
+// open segment instead of ~10 MiB with the defaults; terminal output
+// still compresses well).
 var encoders sync.Pool
+
+// EncoderWindow is the zstd window of raw segments.
+const EncoderWindow = 256 << 10
 
 func getEncoder(dst io.Writer) (*zstd.Encoder, error) {
 	if enc, ok := encoders.Get().(*zstd.Encoder); ok {
 		enc.Reset(dst)
 		return enc, nil
 	}
-	return zstd.NewWriter(dst, zstd.WithEncoderLevel(zstd.SpeedDefault),
-		zstd.WithEncoderConcurrency(1), zstd.WithLowerEncoderMem(true))
+	return zstd.NewWriter(dst, zstd.WithEncoderLevel(zstd.SpeedFastest),
+		zstd.WithWindowSize(EncoderWindow), zstd.WithEncoderConcurrency(1),
+		zstd.WithLowerEncoderMem(true))
 }
 
 // OpenSegment decompresses one segment and returns a reader positioned
