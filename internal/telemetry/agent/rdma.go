@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/mrhaoxx/devpod/internal/telemetry/agent/procfs"
 	"github.com/mrhaoxx/devpod/internal/telemetry/wire"
 )
 
@@ -94,4 +95,24 @@ func (d RDMADev) Sample(sysRoot string, prev *RDMACounters, dt time.Duration) ([
 		out = append(out, r)
 	}
 	return out, cur, nil
+}
+
+// ProcRDMA marks processes holding a /dev/infiniband/uverbs* device open
+// (spec §6.2: per-process RDMA is "in use", bytes are not split).
+func ProcRDMA(root string, procs map[procfs.PID]*procfs.Proc) map[procfs.PID]bool {
+	out := map[procfs.PID]bool{}
+	for id := range procs {
+		dir := filepath.Join(root, strconv.Itoa(id.Pid), "fd")
+		ents, err := os.ReadDir(dir)
+		if err != nil {
+			continue
+		}
+		for _, e := range ents {
+			if t, err := os.Readlink(filepath.Join(dir, e.Name())); err == nil && strings.HasPrefix(t, "/dev/infiniband/uverbs") {
+				out[id] = true
+				break
+			}
+		}
+	}
+	return out
 }

@@ -28,6 +28,7 @@ var ErrNoConfig = errors.New("telemetry config not found")
 
 // Config controls the telemetry agent.
 type Config struct {
+	DevPodUID         string // batch identity; the token is HMAC(key, uid)
 	IngestURL         string
 	MetricsInterval   time.Duration
 	ProcScanInterval  time.Duration
@@ -61,6 +62,7 @@ func DefaultConfig() Config {
 
 // file is the on-disk form; pointers distinguish "absent" from zero.
 type file struct {
+	DevPodUID           string   `json:"devpodUID,omitempty"`
 	IngestURL           string   `json:"ingestURL"`
 	MetricsIntervalMs   *int64   `json:"metricsIntervalMs,omitempty"`
 	ProcScanIntervalMs  *int64   `json:"procScanIntervalMs,omitempty"`
@@ -79,6 +81,7 @@ type file struct {
 func (c Config) MarshalJSON() ([]byte, error) {
 	ms := func(d time.Duration) *int64 { v := d.Milliseconds(); return &v }
 	return json.Marshal(file{
+		DevPodUID:           c.DevPodUID,
 		IngestURL:           c.IngestURL,
 		MetricsIntervalMs:   ms(c.MetricsInterval),
 		ProcScanIntervalMs:  ms(c.ProcScanInterval),
@@ -101,7 +104,7 @@ func (c *Config) UnmarshalJSON(b []byte) error {
 		return err
 	}
 	out := DefaultConfig()
-	out.IngestURL = f.IngestURL
+	out.IngestURL, out.DevPodUID = f.IngestURL, f.DevPodUID
 	dur := func(p *int64, d *time.Duration) {
 		if p != nil && *p > 0 {
 			*d = time.Duration(*p) * time.Millisecond
