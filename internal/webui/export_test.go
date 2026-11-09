@@ -62,3 +62,9 @@ func (s *Server) FreshSessionForTest(w http.ResponseWriter, r *http.Request) (Se
 
 func (s *Server) HandleLiveDevPodsForTest() http.HandlerFunc  { return s.handleLiveDevPods }
 func (s *Server) HandleLiveOverviewForTest() http.HandlerFunc { return s.handleLiveOverview }
+
+func (s *Server) HandleDevPodMetricsForTest() http.HandlerFunc   { return s.handleDevPodMetrics }
+func (s *Server) HandleDevPodInfoForTest() http.HandlerFunc      { return s.handleDevPodInfo }
+func (s *Server) HandleAdminNodesForTest() http.HandlerFunc      { return s.handleAdminNodes }
+func (s *Server) HandleAdminNodeForTest() http.HandlerFunc       { return s.handleAdminNode }
+func (s *Server) HandleDevPodProcessesForTest() http.HandlerFunc { return s.handleDevPodProcesses }

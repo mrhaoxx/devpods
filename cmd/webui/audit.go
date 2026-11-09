@@ -260,3 +260,33 @@ func (l *lazyCH) OpenSessionsByBackend(ctx context.Context, since time.Time) (ma
 	}
 	return c.OpenSessionsByBackend(ctx, since)
 }
+
+func (l *lazyCH) MetricsRange(ctx context.Context, uid string, from, to time.Time, step time.Duration) (*store.MetricSeries, error) {
+	c, err := l.get(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return c.MetricsRange(ctx, uid, from, to, step)
+}
+
+func (l *lazyCH) LatestInfo(ctx context.Context, uid string, since time.Time) (*store.ContainerInfoRow, *store.SnapshotRow, error) {
+	c, err := l.get(ctx)
+	if err != nil {
+		return nil, nil, err
+	}
+	return c.LatestInfo(ctx, uid, since)
+}
+
+func (l *lazyCH) LastSessionByUser(ctx context.Context, since time.Time) (map[string]time.Time, error) {
+	c, err := l.get(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return c.LastSessionByUser(ctx, since)
+}
+
+// lazyCH serves every store the webui uses.
+var (
+	_ webui.AuditStore     = (*lazyCH)(nil)
+	_ webui.TelemetryStore = (*lazyCH)(nil)
+)

@@ -41,6 +41,10 @@ rules:
 - apiGroups: ["devpod.io"]
   resources: ["users", "devpodtemplates"]
   verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+# Read-only: the admin nodes page (capacity, readiness, GPU model).
+- apiGroups: [""]
+  resources: ["nodes"]
+  verbs: ["get", "list", "watch"]
 # Read-only: the audit policy endpoints show the cluster default.
 - apiGroups: ["devpod.io"]
   resources: ["gatewayconfigs"]

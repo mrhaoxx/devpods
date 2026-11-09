@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"net/http"
 	"sort"
+	"time"
 
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -45,15 +46,29 @@ type adminUsage struct {
 }
 
 type adminUser struct {
-	Name        string                     `json:"name"`
-	DisplayName string                     `json:"displayName,omitempty"`
-	Admin       bool                       `json:"admin"`
-	HasPassword bool                       `json:"hasPassword"`
-	DevPods     int                        `json:"devpods"`
-	Running     int                        `json:"running"`
-	Usage       adminUsage                 `json:"usage"`
-	Quota       *devpodv1alpha1.UserQuota  `json:"quota,omitempty"`
+	Name        string                    `json:"name"`
+	DisplayName string                    `json:"displayName,omitempty"`
+	Admin       bool                      `json:"admin"`
+	HasPassword bool                      `json:"hasPassword"`
+	DevPods     int                       `json:"devpods"`
+	Running     int                       `json:"running"`
+	Usage       adminUsage                `json:"usage"`
+	Quota       *devpodv1alpha1.UserQuota `json:"quota,omitempty"`
+	// LiveUsage is measured usage from the live layer (absent without it).
+	LiveUsage *liveUsage `json:"liveUsage,omitempty"`
+	// LastSession is the user's latest SSH session (absent without ClickHouse).
+	LastSession *time.Time `json:"lastSession,omitempty"`
 }
+
+type liveUsage struct {
+	CPU            float64 `json:"cpu"`
+	Mem            float64 `json:"mem"`
+	GPU            int     `json:"gpu"`
+	DevPodsRunning int     `json:"devpodsRunning"`
+}
+
+// lastSessionLookback bounds the last-session query.
+const lastSessionLookback = 90 * 24 * time.Hour
 
 func (s *Server) handleListUsers(w http.ResponseWriter, r *http.Request) {
 	if _, ok := s.requireAdmin(w, r); !ok {
@@ -96,6 +111,20 @@ func (s *Server) handleListUsers(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
+	live := map[string]liveUsage{}
+	if s.Live != nil && s.Live.Snapshot != nil {
+		if snap, ok := s.Live.Snapshot(r.Context()); ok {
+			for _, u := range snap.Users {
+				live[u.User] = liveUsage{CPU: u.CPU, Mem: u.Mem, GPU: u.GPU, DevPodsRunning: u.Running}
+			}
+		}
+	}
+	var last map[string]time.Time
+	if s.Audit != nil {
+		if ts, ok := s.Audit.Store.(TelemetryStore); ok {
+			last, _ = ts.LastSessionByUser(r.Context(), time.Now().Add(-lastSessionLookback)) // optional: omitted on error
+		}
+	}
 	items := make([]adminUser, 0, len(users.Items))
 	for _, u := range users.Items {
 		au := adminUser{
@@ -104,6 +133,13 @@ func (s *Server) handleListUsers(w http.ResponseWriter, r *http.Request) {
 			Admin:       u.Spec.Admin,
 			HasPassword: u.Spec.PasswordHash != "",
 			Quota:       u.Spec.Quota,
+		}
+		if lu, ok := live[u.Name]; ok {
+			au.LiveUsage = &lu
+		}
+		if t, ok := last[u.Name]; ok {
+			t = t.UTC()
+			au.LastSession = &t
 		}
 		if a := byOwner[u.Name]; a != nil {
 			au.DevPods = a.total
