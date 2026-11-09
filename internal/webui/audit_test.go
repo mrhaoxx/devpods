@@ -88,3 +88,7 @@ func waitFor(t *testing.T, cond func() bool) {
 }
 
 func clientKey(name string) types.NamespacedName { return types.NamespacedName{Name: name} }
+
+func clientKeyNS(name string) types.NamespacedName {
+	return types.NamespacedName{Namespace: "devpods", Name: name}
+}

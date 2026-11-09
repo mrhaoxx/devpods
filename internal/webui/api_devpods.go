@@ -205,7 +205,7 @@ func (s *Server) handleListDevPods(w http.ResponseWriter, r *http.Request) {
 	if items == nil {
 		items = []devpodv1alpha1.DevPod{}
 	}
-	s.writeJSON(w, http.StatusOK, map[string]any{"items": items})
+	s.writeJSON(w, http.StatusOK, map[string]any{"items": items, "pods": s.podInfos(r.Context(), items)})
 }
 
 // BindingInfo is the Kore readback shown on the detail page: desired

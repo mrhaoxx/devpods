@@ -285,14 +285,14 @@ function MenuLink({ to, label, onNav }: { to: string; label: string; onNav: () =
   );
 }
 
-export function Shell({ children }: { children: ReactNode }) {
+export function Shell({ children, wide }: { children: ReactNode; wide?: boolean }) {
   const meQ = useQuery({ queryKey: ["me"], queryFn: fetchMe });
   const loc = useLocation();
   const onNew = loc.pathname === "/devpods/new";
   return (
     <div className="min-h-screen">
       <header className="sticky top-0 z-10 border-b border-line bg-paper/85 backdrop-blur">
-        <div className="mx-auto flex h-14 max-w-3xl items-center justify-between gap-3 px-4 sm:px-6">
+        <div className={cx("mx-auto flex h-14 items-center justify-between gap-3 px-4 sm:px-6", wide ? "max-w-7xl" : "max-w-3xl")}>
           <Link to="/" className="flex items-center gap-2">
             <span className="text-accent" aria-hidden>◈</span>
             <span className="mono text-sm font-semibold tracking-tight text-ink">devpod</span>
@@ -308,7 +308,7 @@ export function Shell({ children }: { children: ReactNode }) {
           </div>
         </div>
       </header>
-      <main className="mx-auto w-full max-w-3xl px-4 pb-16 pt-6 sm:px-6 sm:pt-10">{children}</main>
+      <main className={cx("mx-auto w-full px-4 pb-16 pt-6 sm:px-6 sm:pt-10", wide ? "max-w-7xl" : "max-w-3xl")}>{children}</main>
     </div>
   );
 }
