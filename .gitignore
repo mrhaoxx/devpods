@@ -1,6 +1,11 @@
 # Binaries / test artifacts
 /bin/
 /dist/
+# `go build ./cmd/<name>` drops its output in the repo root
+/controller
+/gateway
+/supervisor
+/webui
 *.test
 *.out
 /cover.out
