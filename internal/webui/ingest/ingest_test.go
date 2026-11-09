@@ -420,3 +420,19 @@ func TestIngest_InFlightBudget(t *testing.T) {
 		t.Fatalf("after the first is written the budget frees: %d", code)
 	}
 }
+
+func TestIngest_TellsStateTheBoot(t *testing.T) {
+	h := newHandler(&fakeStore{}, leaderTrue(), 5*time.Millisecond)
+	h.State.ResolveUser = func(uid, peer string) string { return "alice" }
+	post1 := func(boot string, recs []wire.Record) {
+		t.Helper()
+		hdr := wire.Header{V: wire.Version, DevPodUID: "u1", BootID: boot, Seq: 1}
+		acked(t, post(h, "u1", wire.Token(testKey, "u1"), body(t, hdr, recs)))
+	}
+	post1("b1", []wire.Record{containerRec(1), {K: wire.KSSHConn, SC: &wire.SSHConn{Pid: 50, Start: 1, Peer: "10.0.0.9:1"}}})
+	post1("b2", []wire.Record{containerRec(1)})
+	in := live.Inputs{DevPods: []live.DevPodRef{{UID: "u1", Name: "d", Owner: "alice", Phase: "Running"}}}
+	if got := h.State.Snapshot(in).DevPods["u1"].Sessions; len(got) != 0 {
+		t.Fatalf("session of the previous boot still live: %+v", got)
+	}
+}

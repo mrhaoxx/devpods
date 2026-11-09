@@ -195,6 +195,19 @@ func RegisterIndexes(ctx context.Context, fi client.FieldIndexer) error {
 	})
 }
 
+// UIDs lists the DevPods' UIDs; an error means "unknown", not "none".
+func (li *LiveInputs) UIDs(ctx context.Context) (map[string]bool, error) {
+	var list devpodv1alpha1.DevPodList
+	if err := li.S.Client.List(ctx, &list, client.InNamespace(li.S.NS), client.UnsafeDisableDeepCopy); err != nil {
+		return nil, err
+	}
+	out := make(map[string]bool, len(list.Items))
+	for i := range list.Items {
+		out[string(list.Items[i].UID)] = true
+	}
+	return out, nil
+}
+
 // DevPodByUID finds a DevPod in the cache by UID (an index lookup: the
 // ingest authenticates every batch with it).
 func (s *Server) DevPodByUID(ctx context.Context, uid string) (*devpodv1alpha1.DevPod, bool) {

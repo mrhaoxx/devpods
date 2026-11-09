@@ -25,6 +25,7 @@ type connKey struct {
 }
 
 type podState struct {
+	boot   string    // agent boot the data belongs to
 	at     time.Time // last container sample
 	procAt time.Time // last process data
 	c      wire.Container
@@ -60,7 +61,7 @@ func (s *State) Apply(uid string, recs []wire.Record) {
 	defer s.mu.Unlock()
 	p := s.pods[uid]
 	if p == nil {
-		p = &podState{gpus: map[string]wire.GPU{}, rdma: map[string]wire.RDMA{}, procs: map[connKey]wire.Proc{}, conns: map[connKey]string{}}
+		p = newPodState()
 		s.pods[uid] = p
 	}
 	sawGPU, sawRDMA, sawProc := false, false, false
@@ -117,6 +118,27 @@ func (s *State) Retain(keep func(uid string) bool) {
 			delete(s.pods, uid)
 		}
 	}
+}
+
+// SetBoot records which agent boot the next batches come from; a new
+// boot (container or agent restart) drops the old one's sessions and
+// processes, whose close and exit events never came.
+func (s *State) SetBoot(uid, boot string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	p := s.pods[uid]
+	if p == nil {
+		p = newPodState()
+		s.pods[uid] = p
+	}
+	if p.boot != boot {
+		p.boot = boot
+		p.conns, p.procs, p.full = map[connKey]string{}, map[connKey]wire.Proc{}, nil
+	}
+}
+
+func newPodState() *podState {
+	return &podState{gpus: map[string]wire.GPU{}, rdma: map[string]wire.RDMA{}, procs: map[connKey]wire.Proc{}, conns: map[connKey]string{}}
 }
 
 // Forget drops a DevPod (deleted).

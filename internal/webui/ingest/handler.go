@@ -149,6 +149,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if h.State != nil {
+		h.State.SetBoot(uid, hd.BootID)
 		h.State.Apply(uid, recs)
 	}
 	b := h.rows(hd, recs)
