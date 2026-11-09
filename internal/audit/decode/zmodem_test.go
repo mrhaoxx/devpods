@@ -49,6 +49,20 @@ func TestZmodem_PlainTextUntouched(t *testing.T) {
 	}
 }
 
+// Terminal output is almost never ZMODEM: chunks without ZPAD / ZDLE
+// must pass through without being copied (the gateway feeds every pty
+// byte through this decoder).
+func TestZmodem_PlainChunkZeroCopy(t *testing.T) {
+	d := NewZmodem(policy.Effective{DenyDownload: true}, &fakeSink{})
+	in := bytes.Repeat([]byte("yes\r\n"), 700)
+	if res := d.Feed(BackendToClient, in); len(res.Pass) != len(in) || &res.Pass[0] != &in[0] {
+		t.Fatal("plain chunk was copied")
+	}
+	if n := testing.AllocsPerRun(50, func() { d.Feed(BackendToClient, in) }); n != 0 {
+		t.Fatalf("%v allocs per plain chunk, want 0", n)
+	}
+}
+
 // denyRun feeds a fixture record by record under pol and returns the
 // result of the first B2C feed containing marker plus the totals.
 func denyRun(t *testing.T, name string, pol policy.Effective, marker string) (first Result, pass [2][]byte, sink *fakeSink) {

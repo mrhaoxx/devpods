@@ -18,6 +18,9 @@ import (
 // ZmodemCancel aborts a ZMODEM session: 8×CAN + 10×BS (lrzsz's canit).
 const ZmodemCancel = "\x18\x18\x18\x18\x18\x18\x18\x18\x08\x08\x08\x08\x08\x08\x08\x08\x08\x08"
 
+// zSpecial are the bytes that can start a ZMODEM frame or abort.
+const zSpecial = "*\x18"
+
 // zmodemIdle ends "drop" mode when no frame bytes were seen for this long.
 const zmodemIdle = 2 * time.Second
 
@@ -115,8 +118,26 @@ func (d *zmodemDecoder) Feed(dir Dir, p []byte) Result {
 	}
 	d.out, d.reply, d.sawFrame = nil, nil, false
 	s := &d.side[dir]
-	for _, b := range p {
-		d.step(dir, s, b)
+	for i := 0; i < len(p); {
+		// Outside a frame, bytes other than ZPAD / ZDLE only reset the
+		// star and CAN counters and pass through: skip them in bulk.
+		if s.st == zsIdle && !s.hold {
+			n := bytes.IndexAny(p[i:], zSpecial)
+			if n < 0 {
+				n = len(p) - i
+			}
+			if n > 0 {
+				s.stars, s.cans = 0, 0
+				if i == 0 && n == len(p) {
+					return Result{Pass: p} // plain terminal output: no copy
+				}
+				d.out = append(d.out, p[i:i+n]...)
+				i += n
+				continue
+			}
+		}
+		d.step(dir, s, p[i])
+		i++
 	}
 	if d.sawFrame {
 		d.lastFrame = now
