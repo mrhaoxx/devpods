@@ -16,6 +16,7 @@
 #
 #   KUBE_CONTEXT=zjusct bash hack/e2e-audit.sh          # run + clean up
 #   KUBE_CONTEXT=zjusct E2E_KEEP=1 bash hack/e2e-audit.sh  # keep objects for poking
+#   E2E_APT_MIRROR=mirrors.zju.edu.cn                      # faster apt for the sshd box
 #
 # Host tools: kubectl, go, node/npm, ssh, sftp, scp, socat, lrzsz, htpasswd, curl, openssl.
 set -euo pipefail
@@ -80,6 +81,12 @@ HASH=$(htpasswd -bnBC 10 "" "$PW" | tr -d ':\n' | sed 's/^\$2y/$2a/')
 
 # --- RBAC, GatewayConfig, users, sshd box, runner ------------------------
 log "cluster objects"
+# Fresh pods every run (pod specs are immutable; old processes linger).
+"${K[@]}" -n "$NS" delete pod audit-e2e-runner audit-e2e-box --ignore-not-found --wait=true --timeout=2m >/dev/null
+MIRROR_SED=""
+if [ -n "${E2E_APT_MIRROR:-}" ]; then
+  MIRROR_SED="sed -i 's#deb.debian.org#${E2E_APT_MIRROR}#g' /etc/apt/sources.list.d/debian.sources"
+fi
 "${K[@]}" -n "$NS" create secret generic audit-e2e-keys --dry-run=client -o yaml \
   --from-file=gw_host --from-file=gw_internal --from-file=box_host --from-file=box_host.pub \
   --from-file=gw_internal.pub --from-file=session-key | "${K[@]}" apply -f - >/dev/null
@@ -145,6 +152,7 @@ spec:
     args:
     - |
       set -e
+      ${MIRROR_SED:-true}
       apt-get update -qq && DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends openssh-server lrzsz >/dev/null
       mkdir -p /run/sshd /root/.ssh
       cp /keys/box_host /etc/ssh/ssh_host_ed25519_key && chmod 600 /etc/ssh/ssh_host_ed25519_key
@@ -172,7 +180,9 @@ spec:
   - {name: keys, secret: {secretName: audit-e2e-keys}}
   - {name: spool, emptyDir: {sizeLimit: 2Gi}}
 EOF
-"${K[@]}" -n "$NS" wait --for=condition=Ready pod/audit-e2e-box pod/audit-e2e-runner --timeout=5m >/dev/null
+# A previous run may have died with a policy still set on the user.
+"${K[@]}" patch user audit-e2e --type=json -p '[{"op":"remove","path":"/spec/auditPolicy"}]' >/dev/null 2>&1 || true
+"${K[@]}" -n "$NS" wait --for=condition=Ready pod/audit-e2e-box pod/audit-e2e-runner --timeout=15m >/dev/null
 BOX_IP=$("${K[@]}" -n "$NS" get pod audit-e2e-box -o jsonpath='{.status.podIP}')
 
 "${K[@]}" apply -f - >/dev/null <<EOF
