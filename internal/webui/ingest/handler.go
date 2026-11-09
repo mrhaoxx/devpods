@@ -24,11 +24,16 @@ import (
 
 // Limits (spec §5.10, plan Task 18).
 const (
-	MaxBody       = 4 << 20  // compressed request body
-	MaxDecoded    = 32 << 20 // decompressed NDJSON
-	RatePerSecond = 10       // per DevPod
+	MaxBody       = 4 << 20 // compressed request body
+	MaxDecoded    = 8 << 20 // decompressed NDJSON (agents send ≤ 1 MiB)
+	RatePerSecond = 10      // per DevPod
 	RateBurst     = 20
 	EventEvery    = time.Minute // one k8s Event per alert kind per DevPod
+	// DefaultMaxInFlight bounds the decompressed batches held until their
+	// merged write (catch-up after a ClickHouse outage); over it → 503.
+	DefaultMaxInFlight = 128 << 20
+	// decodeSlots bounds concurrent decompression (≤ MaxDecoded each).
+	decodeSlots = 16
 	// authCacheTTL: a known DevPod UID is looked up again after this (a
 	// deleted DevPod's agent may post this much longer).
 	authCacheTTL = 30 * time.Second
@@ -47,8 +52,12 @@ type Handler struct {
 	// Events records a k8s Event (reason TelemetryAlert) on the DevPod;
 	// nil = none. Calls are already rate-limited.
 	Events func(uid, kind, detail string)
+	// MaxInFlight overrides DefaultMaxInFlight (bytes).
+	MaxInFlight int64
 
 	mu       sync.Mutex
+	inflight int64
+	decoding chan struct{}
 	written  map[stream]uint64
 	known    map[string]time.Time // DevPod UID → valid until
 	limiters map[string]*rate.Limiter
@@ -95,17 +104,8 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, errTooLarge.Error(), http.StatusRequestEntityTooLarge)
 		return
 	}
-	cr := &countingReader{r: r.Body}
-	hd, recs, err := wire.Decode(cr, MaxDecoded)
-	if err != nil {
-		if cr.over || errors.Is(err, wire.ErrTooLarge) {
-			http.Error(w, errTooLarge.Error(), http.StatusRequestEntityTooLarge)
-			return
-		}
-		http.Error(w, "bad batch: "+err.Error(), http.StatusBadRequest)
-		return
-	}
-	uid := hd.DevPodUID
+	// Authenticate before reading the body: decompression is the cost.
+	uid := r.Header.Get("X-DevPod-UID")
 	tok := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
 	if uid == "" || subtle.ConstantTimeCompare([]byte(tok), []byte(wire.Token(h.Key, uid))) != 1 {
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
@@ -115,12 +115,32 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "unknown DevPod", http.StatusUnauthorized)
 		return
 	}
-	if hd.V != wire.Version {
-		http.Error(w, fmt.Sprintf("unsupported version %d", hd.V), http.StatusBadRequest)
-		return
-	}
 	if !h.limiter(uid).Allow() {
 		http.Error(w, "rate limited", http.StatusTooManyRequests)
+		return
+	}
+	hd, recs, size, err := h.decode(r)
+	if err != nil {
+		var tl *tooLargeError
+		if errors.As(err, &tl) {
+			http.Error(w, errTooLarge.Error(), http.StatusRequestEntityTooLarge)
+			return
+		}
+		http.Error(w, "bad batch: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+	if hd.DevPodUID != uid {
+		http.Error(w, "batch is for another DevPod", http.StatusBadRequest)
+		return
+	}
+	if !h.admit(size) {
+		w.Header().Set("Retry-After", "2")
+		http.Error(w, "ingest busy", http.StatusServiceUnavailable)
+		return
+	}
+	defer h.release(size)
+	if hd.V != wire.Version {
+		http.Error(w, fmt.Sprintf("unsupported version %d", hd.V), http.StatusBadRequest)
 		return
 	}
 	st := stream{uid, hd.BootID}
@@ -174,6 +194,54 @@ func (h *Handler) knownDevPod(uid string) bool {
 	h.known[uid] = time.Now().Add(authCacheTTL)
 	h.mu.Unlock()
 	return true
+}
+
+type tooLargeError struct{}
+
+func (*tooLargeError) Error() string { return errTooLarge.Error() }
+
+// decode decompresses the body, at most decodeSlots at a time.
+func (h *Handler) decode(r *http.Request) (wire.Header, []wire.Record, int64, error) {
+	h.mu.Lock()
+	if h.decoding == nil {
+		h.decoding = make(chan struct{}, decodeSlots)
+	}
+	slots := h.decoding
+	h.mu.Unlock()
+	select {
+	case slots <- struct{}{}:
+	case <-r.Context().Done():
+		return wire.Header{}, nil, 0, r.Context().Err()
+	}
+	defer func() { <-slots }()
+	cr := &countingReader{r: r.Body}
+	hd, recs, n, err := wire.DecodeN(cr, MaxDecoded)
+	if err != nil && (cr.over || errors.Is(err, wire.ErrTooLarge)) {
+		return hd, nil, 0, &tooLargeError{}
+	}
+	return hd, recs, n, err
+}
+
+// admit reserves size bytes of the in-flight budget; one batch is always
+// admitted when nothing else is held.
+func (h *Handler) admit(size int64) bool {
+	limit := h.MaxInFlight
+	if limit <= 0 {
+		limit = DefaultMaxInFlight
+	}
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if h.inflight > 0 && h.inflight+size > limit {
+		return false
+	}
+	h.inflight += size
+	return true
+}
+
+func (h *Handler) release(size int64) {
+	h.mu.Lock()
+	h.inflight -= size
+	h.mu.Unlock()
 }
 
 func writeAck(w http.ResponseWriter, seq uint64) {

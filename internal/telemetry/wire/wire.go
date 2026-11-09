@@ -345,7 +345,10 @@ func getDecoder(r io.Reader) (*zstd.Decoder, error) {
 		}
 		return zr, nil
 	default:
-		return zstd.NewReader(r, zstd.WithDecoderConcurrency(1), zstd.WithDecoderLowmem(true))
+		// A frame declares its own window: without a cap a 34-byte request
+		// makes the decoder allocate 512 MiB. Agents encode with 256 KiB.
+		return zstd.NewReader(r, zstd.WithDecoderConcurrency(1), zstd.WithDecoderLowmem(true),
+			zstd.WithDecoderMaxWindow(4*codecWindow), zstd.WithDecoderMaxMemory(64<<20))
 	}
 }
 
@@ -402,12 +405,25 @@ func (l *limited) Read(p []byte) (int, error) {
 // NDJSON line is unmarshalled once (a json.Decoder stream scans every
 // value twice: to find its end, then to decode it).
 func Decode(r io.Reader, maxBytes int64) (Header, []Record, error) {
+	var n int64
+	return decode(r, maxBytes, &n)
+}
+
+// DecodeN is Decode that also returns the decompressed size.
+func DecodeN(r io.Reader, maxBytes int64) (Header, []Record, int64, error) {
+	var n int64
+	h, recs, err := decode(r, maxBytes, &n)
+	return h, recs, n, err
+}
+
+func decode(r io.Reader, maxBytes int64, size *int64) (Header, []Record, error) {
 	zr, err := getDecoder(r)
 	if err != nil {
 		return Header{}, nil, err
 	}
 	defer putDecoder(zr)
 	lr := &limited{r: zr, max: maxBytes}
+	defer func() { *size = lr.n }()
 	sc := bufio.NewScanner(lr)
 	sc.Buffer(make([]byte, 0, 64<<10), int(min(maxBytes+1, 1<<30)))
 	// Over the limit, the scanner still returns the cut last line: the

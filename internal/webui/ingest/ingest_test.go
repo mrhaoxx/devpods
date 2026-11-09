@@ -90,6 +90,7 @@ func post(h http.Handler, uid, token string, b []byte) *httptest.ResponseRecorde
 	req := httptest.NewRequest(http.MethodPost, "/ingest/v1/batch", bytes.NewReader(b))
 	req.Header.Set("Authorization", "Bearer "+token)
 	req.Header.Set("Content-Encoding", "zstd")
+	req.Header.Set("X-DevPod-UID", uid)
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, req)
 	return rec
@@ -373,5 +374,48 @@ func TestIngest_AuthLookupCached(t *testing.T) {
 		if rec := postSeq(t, h, "u9", 1, 1); rec.Code != http.StatusUnauthorized {
 			t.Fatalf("unknown uid: %d", rec.Code)
 		}
+	}
+}
+
+// Nothing is decompressed before the caller is authenticated: a
+// compressed frame can declare a huge window (spec review #1).
+func TestIngest_UnauthenticatedNotDecompressed(t *testing.T) {
+	h := newHandler(&fakeStore{}, leaderTrue(), 5*time.Millisecond)
+	garbage := []byte("not a zstd frame at all")
+	if rec := post(h, "u1", "wrong-token", garbage); rec.Code != http.StatusUnauthorized {
+		t.Fatalf("bad token: %d (the body must not be read first)", rec.Code)
+	}
+	req := httptest.NewRequest(http.MethodPost, "/ingest/v1/batch", bytes.NewReader(garbage))
+	req.Header.Set("Authorization", "Bearer "+wire.Token(testKey, "u1"))
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("no X-DevPod-UID: %d", rec.Code)
+	}
+	// the body must belong to the authenticated DevPod
+	hdr := wire.Header{V: wire.Version, DevPodUID: "u2", BootID: "b", Seq: 1}
+	if rec := post(h, "u1", wire.Token(testKey, "u1"), body(t, hdr, []wire.Record{containerRec(1)})); rec.Code != http.StatusBadRequest {
+		t.Fatalf("body for another DevPod: %d", rec.Code)
+	}
+}
+
+// Decoded batches waiting for their write are bounded: over the budget
+// the leader answers 503 with Retry-After instead of growing.
+func TestIngest_InFlightBudget(t *testing.T) {
+	st := &fakeStore{block: 300 * time.Millisecond}
+	h := newHandler(st, leaderTrue(), 5*time.Millisecond)
+	h.MaxInFlight = 1 // bytes: any second batch exceeds it
+	first := make(chan int, 1)
+	go func() { first <- postSeq(t, h, "u1", 1, 1).Code }()
+	time.Sleep(100 * time.Millisecond)
+	rec := postSeq(t, h, "u2", 1, 1)
+	if rec.Code != http.StatusServiceUnavailable || rec.Header().Get("Retry-After") == "" {
+		t.Fatalf("over budget: %d retry-after=%q", rec.Code, rec.Header().Get("Retry-After"))
+	}
+	if code := <-first; code != http.StatusOK {
+		t.Fatalf("first batch: %d", code)
+	}
+	if code := postSeq(t, h, "u2", 1, 1).Code; code != http.StatusOK {
+		t.Fatalf("after the first is written the budget frees: %d", code)
 	}
 }
