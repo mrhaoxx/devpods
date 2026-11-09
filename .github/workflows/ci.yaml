@@ -53,3 +53,5 @@ jobs:
       run: helm template devpod deploy/chart > /tmp/out.yaml && wc -l /tmp/out.yaml
     - name: helm lint
       run: helm lint deploy/chart
+    - name: chart assertions (audit wiring)
+      run: bash hack/test-chart.sh
