@@ -90,6 +90,7 @@ func main() {
 	flag.StringVar(&externalURL, "external-url", "",
 		"external base URL of the UI (https → Secure cookies + Origin check); defaults to the OAuth redirect's origin")
 	af := addAuditFlags(flag.CommandLine)
+	tf := addTelemetryFlags(flag.CommandLine)
 	gcName := flag.String("gateway-config-name", "default", "GatewayConfig holding the cluster default audit policy")
 	flag.Parse()
 
@@ -224,6 +225,13 @@ func main() {
 	srv.Audit = auditDeps
 	srv.GatewayConfigName = *gcName
 
+	if tf.enabled() {
+		el, err := tf.newElector(restCfg)
+		if err != nil {
+			fatal(err)
+		}
+		go el.Run(ctx, func(lctx context.Context) { tf.publishSelf(lctx, mgr.GetClient()) }, func() {})
+	}
 	go func() {
 		if err := mgr.Start(ctx); err != nil {
 			fatal(err)
