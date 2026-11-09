@@ -288,6 +288,9 @@ func (a *agent) scan(now time.Time, full bool) {
 				a.reportedConns[c] = peer
 				a.pendingAudit = append(a.pendingAudit, wire.Record{K: wire.KSSHConn, SC: &wire.SSHConn{TS: now.UTC(),
 					FirstSeen: a.life.connSeen(c, now.UTC()), Pid: c.Pid, Start: c.Start, Peer: peer}})
+				for _, e := range a.life.resolved(c, peer, now.UTC()) {
+					a.pendingAudit = append(a.pendingAudit, wire.Record{K: wire.KProcEvent, PE: &e})
+				}
 			}
 		}
 		for c, peer := range a.reportedConns {
