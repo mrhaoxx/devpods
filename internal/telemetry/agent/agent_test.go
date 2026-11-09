@@ -352,3 +352,41 @@ func TestAgent_ReportsHooksCollector(t *testing.T) {
 		}
 	}
 }
+
+// Processes reported before their session's peer was known are re-issued
+// once it is, so their rows can be linked to the session (review #9).
+func TestAgent_StartRowsReissuedWhenPeerResolves(t *testing.T) {
+	env, proc := testEnv(t)
+	writeFakeProc(t, proc, 1, 0, 1, 0, 10)
+	writeFakeProc(t, proc, 10, 1, 2, 0, 10)
+	session(t, proc, 50, 777, "0900000A:A028") // 10.0.0.9:41000
+	writeFakeProc(t, proc, 60, 50, 60, 0, 10)  // the login shell
+	a := newAgent(config.DefaultConfig(), env)
+	resolve := false
+	a.sshConns = func(root string, sm *procfs.SocketMap, sessions []procfs.PID) map[procfs.PID]string {
+		if !resolve {
+			return map[procfs.PID]string{}
+		}
+		return procfs.SSHConns(root, sm, sessions)
+	}
+	t0 := time.Unix(1000, 0)
+	a.collect(t0)
+	resolve = true
+	for i := 1; i < 4; i++ {
+		a.collect(t0.Add(time.Duration(i) * time.Second))
+	}
+	var starts []*wire.ProcEvent
+	_, _, recs := a.buf.Pending(1 << 30)
+	for _, r := range recs {
+		if r.K == wire.KProcEvent && r.PE.Event == "process_start" && r.PE.Pid == 60 {
+			starts = append(starts, r.PE)
+		}
+	}
+	if len(starts) != 2 || starts[0].Attr.Peer != "" || starts[1].Attr.Peer != "10.0.0.9:41000" ||
+		!starts[1].FirstSeen.Equal(starts[0].FirstSeen) || !starts[1].TS.After(starts[0].TS) {
+		for _, s := range starts {
+			t.Logf("%+v attr=%+v", *s, *s.Attr)
+		}
+		t.Fatalf("want the shell's start re-issued with the peer once known")
+	}
+}

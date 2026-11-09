@@ -30,7 +30,10 @@ func (l *lifecycle) event(e *wire.ProcEvent) {
 	case "process_start":
 		e.FirstSeen = e.TS
 		s := *e
-		s.Attr = nil
+		if e.Attr != nil {
+			a := *e.Attr
+			s.Attr = &a
+		}
 		l.procs[id] = s
 	case "process_exit":
 		if s, ok := l.procs[id]; ok {
@@ -40,6 +43,28 @@ func (l *lifecycle) event(e *wire.ProcEvent) {
 	default:
 		e.FirstSeen = e.TS
 	}
+}
+
+// resolved re-issues the start rows of processes attributed to conn that
+// were reported before its peer was known: with the peer the leader can
+// link them to the session (same first_seen, later TS = higher version).
+func (l *lifecycle) resolved(conn procfs.PID, peer string, now time.Time) []wire.ProcEvent {
+	var out []wire.ProcEvent
+	for id, s := range l.procs {
+		if s.Attr == nil || s.Attr.Peer != "" || s.Attr.ConnPid != conn.Pid || s.Attr.ConnStart != conn.Start {
+			continue
+		}
+		a := *s.Attr
+		a.Peer = peer
+		s.Attr = &a
+		l.procs[id] = s
+		e := s
+		e.TS = now
+		attr := a
+		e.Attr = &attr
+		out = append(out, e)
+	}
+	return out
 }
 
 // connSeen returns the connection's first sighting, recording now if new.
