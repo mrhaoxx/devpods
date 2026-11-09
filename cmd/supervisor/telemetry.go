@@ -15,6 +15,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/mrhaoxx/devpod/internal/telemetry/agent"
 	"github.com/mrhaoxx/devpod/internal/telemetry/config"
 )
 
@@ -143,12 +144,18 @@ func (t *telemetrySup) loop() {
 // runTelemetry is the `devpod-supervisor telemetry` entry point.
 func runTelemetry() int {
 	path := envOr("SUPERVISOR_TELEMETRY_CONFIG", config.ConfigPath)
-	if _, err := config.LoadConfig(path); err != nil {
+	cfg, err := config.LoadConfig(path)
+	if err != nil {
 		fmt.Fprintf(os.Stderr, "telemetry: %v\n", err)
 		return 1
 	}
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGTERM, syscall.SIGINT)
 	defer cancel()
-	<-ctx.Done() // the agent loop arrives with plan Task 12
+	env := agent.DefaultEnv()
+	env.ConfigPath = path
+	if err := agent.Run(ctx, cfg, env); err != nil {
+		fmt.Fprintf(os.Stderr, "telemetry: %v\n", err)
+		return 1
+	}
 	return 0
 }
