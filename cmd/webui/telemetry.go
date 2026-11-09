@@ -230,6 +230,20 @@ func (tf *telemetryFlags) startTelemetry(ctx context.Context, cfg *rest.Config, 
 		jobs := &leader.Jobs{Store: ch, Running: running, LastSample: state.LastSample, SetIdle: inputs.SetIdle, Event: h.Events,
 			IdleCPUPct: tf.idleCPUPct, IdleGPUPct: tf.idleGPUPct, SilentAfter: tf.silentAfter, Since: time.Now()}
 		go jobs.Run(lctx)
+		go func() {
+			t := time.NewTicker(time.Minute)
+			defer t.Stop()
+			for {
+				select {
+				case <-lctx.Done():
+					return
+				case <-t.C:
+					st := writer.TakeStats()
+					slog.Info("telemetry writer", "flushes", st.Flushes, "rows", st.Rows, "errors", st.Errors,
+						"p50", st.P50.Round(time.Millisecond), "p99", st.P99.Round(time.Millisecond), "max", st.Max.Round(time.Millisecond))
+				}
+			}
+		}()
 	}
 	onStop := func() { slog.Info("telemetry: leadership lost") }
 	elDone := make(chan struct{})
