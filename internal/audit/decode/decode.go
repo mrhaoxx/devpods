@@ -129,3 +129,11 @@ func (c *coverage) add(off, n int64) {
 func (c *coverage) contiguous() bool {
 	return len(c.spans) == 0 || (len(c.spans) == 1 && c.spans[0][0] == 0)
 }
+
+// end is the offset one past the last captured byte.
+func (c *coverage) end() int64 {
+	if len(c.spans) == 0 {
+		return 0
+	}
+	return c.spans[len(c.spans)-1][1]
+}
