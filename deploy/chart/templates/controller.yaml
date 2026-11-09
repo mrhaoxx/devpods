@@ -33,6 +33,16 @@ spec:
         {{- with .Values.controller.homeHostPath }}
         - --home-host-path={{ . }}
         {{- end }}
+        {{- if include "devpod.telemetry.on" $ }}
+        - --ingest-url={{ include "devpod.telemetry.ingestURL" . }}
+        - --ingest-key-file=/etc/devpod/ingest/key
+        - --telemetry-metrics-interval={{ .Values.telemetry.metricsInterval }}
+        - --telemetry-proc-scan-interval={{ .Values.telemetry.procScanInterval }}
+        - --telemetry-topn={{ .Values.telemetry.topN }}
+        - --telemetry-gpu={{ .Values.telemetry.gpu }}
+        - --telemetry-rdma={{ .Values.telemetry.rdma }}
+        - --telemetry-hooks={{ .Values.telemetry.hooks }}
+        {{- end }}
         ports:
         - {name: metrics, containerPort: 8080}
         - {name: probe,   containerPort: 8081}
@@ -45,6 +55,9 @@ spec:
         - name: internal-key-pub
           mountPath: /etc/devpod/internal
           readOnly: true
+        {{- if include "devpod.telemetry.on" $ }}
+        {{- include "devpod.telemetry.keyMount" . | nindent 8 }}
+        {{- end }}
       volumes:
       - name: internal-key-pub
         secret:
@@ -52,3 +65,6 @@ spec:
           items:
           - key: ssh_host_ed25519_key.pub
             path: ssh_host_ed25519_key.pub
+      {{- if include "devpod.telemetry.on" $ }}
+      {{- include "devpod.telemetry.keyVolume" . | nindent 6 }}
+      {{- end }}

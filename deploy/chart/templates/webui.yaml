@@ -73,8 +73,26 @@ spec:
         {{- if include "devpod.audit.on" $ }}
         {{- include "devpod.audit.args" . | nindent 8 }}
         {{- end }}
+        {{- if include "devpod.telemetry.on" $ }}
+        - --ingest-listen=:8081
+        - --ingest-key-file=/etc/devpod/ingest/key
+        - --leader-election-namespace={{ .Values.namespaces.system }}
+        - --ingest-service=devpod-webui-ingest
+        - --idle-cpu-pct={{ .Values.telemetry.idle.cpuPct }}
+        - --idle-gpu-pct={{ .Values.telemetry.idle.gpuPct }}
+        - --agent-silent-after={{ .Values.telemetry.agentSilentAfter }}
+        env:
+        # identity in the leader Lease and the address the leader publishes
+        - name: POD_NAME
+          valueFrom: {fieldRef: {fieldPath: metadata.name}}
+        - name: POD_IP
+          valueFrom: {fieldRef: {fieldPath: status.podIP}}
+        {{- end }}
         ports:
         - {name: http, containerPort: 8080}
+        {{- if include "devpod.telemetry.on" $ }}
+        - {name: ingest, containerPort: 8081}
+        {{- end }}
         readinessProbe:
           httpGet: {path: /healthz, port: http}
         resources: {{- toYaml .Values.webui.resources | nindent 10 }}
@@ -91,6 +109,9 @@ spec:
         {{- if include "devpod.audit.on" $ }}
         {{- include "devpod.audit.mounts" . | nindent 8 }}
         {{- end }}
+        {{- if include "devpod.telemetry.on" $ }}
+        {{- include "devpod.telemetry.keyMount" . | nindent 8 }}
+        {{- end }}
       volumes:
       {{- if .Values.webui.gitlab.issuerURL }}
       - name: oauth
@@ -105,6 +126,9 @@ spec:
           name: devpod-webui-quota
       {{- if include "devpod.audit.on" $ }}
       {{- include "devpod.audit.volumes" (dict "root" $ "component" "webui") | nindent 6 }}
+      {{- end }}
+      {{- if include "devpod.telemetry.on" $ }}
+      {{- include "devpod.telemetry.keyVolume" . | nindent 6 }}
       {{- end }}
 ---
 apiVersion: v1
