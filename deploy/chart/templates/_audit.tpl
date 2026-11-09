@@ -81,3 +81,33 @@ devpod-audit-ch-{{ .component }}
       operator: In
       values: [devpod-gateway, devpod-webui, devpod-audit-migrate]
 {{- end -}}
+
+{{/* devpod.audit.on: "true" when audit is enabled, else "". Values from
+     before session audit (`helm upgrade --reuse-values` from v0.1.x) have
+     no audit block: that renders as disabled, and enabling audit on top of
+     them fails with a hint instead of a nil-pointer error. */}}
+{{- define "devpod.audit.on" -}}
+{{- $a := .Values.audit | default dict -}}
+{{- if $a.enabled -}}
+{{- if not (and (dig "spool" "sizeLimit" "" $a) (dig "s3" "bucket" "" $a) (dig "clickhouse" "database" "" $a)) -}}
+{{- fail "audit values are incomplete: this release's values predate session audit. Upgrade with --reset-then-reuse-values (Helm >= 3.14) instead of --reuse-values so the chart's new defaults apply." -}}
+{{- end -}}
+true
+{{- end -}}
+{{- end -}}
+
+{{/* devpod.audit.spoolMaxBytes: 85% of audit.spool.sizeLimit. The spool
+     counts bytes while kubelet counts disk blocks, and exceeding the
+     emptyDir sizeLimit evicts the pod (killing every session). */}}
+{{- define "devpod.audit.spoolMaxBytes" -}}
+{{- $q := toString .Values.audit.spool.sizeLimit -}}
+{{- $mi := 0 -}}
+{{- if hasSuffix "Gi" $q -}}
+{{- $mi = mul (trimSuffix "Gi" $q | atoi) 1024 -}}
+{{- else if hasSuffix "Mi" $q -}}
+{{- $mi = trimSuffix "Mi" $q | atoi -}}
+{{- else -}}
+{{- fail (printf "audit.spool.sizeLimit must be given in Mi or Gi, got %q" $q) -}}
+{{- end -}}
+{{- div (mul $mi 85) 100 }}Mi
+{{- end -}}

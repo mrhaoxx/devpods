@@ -38,7 +38,9 @@ has bundled "- --manage-lifecycle=true"
 has bundled "- --retention-days=180"
 has bundled "- --audit-clickhouse-url=clickhouse://devpod-audit-clickhouse.devpod-system.svc:9000"
 has bundled "- --audit-s3-endpoint=http://devpod-audit-s3.devpod-system.svc:9000"
-has bundled "- --audit-spool-max-bytes=20Gi"
+# The spool budget leaves headroom below the emptyDir limit: kubelet counts
+# disk blocks, the spool counts bytes, and exceeding sizeLimit evicts the pod.
+has bundled "- --audit-spool-max-bytes=17408Mi"
 has bundled "terminationGracePeriodSeconds: 300"
 has bundled "sizeLimit: 20Gi"
 has bundled "secretName: devpod-audit-ch-gateway"
@@ -51,6 +53,11 @@ has bundled "docker.io/pgsty/silo:RELEASE.2026-10-26T00-00-00Z"
 has bundled "clickhouse/clickhouse-server:26.8.36.3"
 has bundled "app.kubernetes.io/name: devpod-audit-migrate"
 has bundled "resources: [\"gatewayconfigs\"]"
+
+render small "${WEBUI[@]}" --set audit.enabled=true --set audit.spool.sizeLimit=2Gi \
+  --set audit.s3.bundled.enabled=true --set audit.clickhouse.bundled.enabled=true
+has small "- --audit-spool-max-bytes=1740Mi"
+has small "sizeLimit: 2Gi"
 
 # (c) external storage: no StatefulSets, the given Secrets are mounted.
 render external "${WEBUI[@]}" --set audit.enabled=true \
@@ -67,6 +74,25 @@ has external "secretName: ch-mig"
 has external "- --audit-clickhouse-url=clickhouse://ch.example.com:9000"
 has external "- --create-bucket=false"
 has external "- --manage-lifecycle=false"
+
+# (d) `helm upgrade --reuse-values` from v0.1.x: the old release's values
+# replace the chart defaults, so audit.* and gatewayConfigName are absent.
+OLD="$OUT/chart-v0.1"
+cp -R "$CHART" "$OLD"
+cp "$ROOT/hack/testdata/chart-values-v0.1.yaml" "$OLD/values.yaml"
+if helm template devpod "$OLD" "${WEBUI[@]}" >"$OUT/reuse.yaml" 2>"$OUT/reuse.err"; then
+  lacks reuse "--audit-"
+  has reuse "- --gateway-config-name=default"
+else
+  echo "FAIL [reuse]: old values do not render: $(cat "$OUT/reuse.err")"; fail=1
+fi
+# Enabling audit on top of old values must say how to fix it.
+if helm template devpod "$OLD" "${WEBUI[@]}" --set audit.enabled=true \
+  --set audit.s3.bundled.enabled=true --set audit.clickhouse.bundled.enabled=true >/dev/null 2>"$OUT/reuse-audit.err"; then
+  echo "FAIL [reuse-audit]: rendered with incomplete audit values"; fail=1
+elif ! grep -qF -- "--reset-then-reuse-values" "$OUT/reuse-audit.err"; then
+  echo "FAIL [reuse-audit]: unhelpful error: $(cat "$OUT/reuse-audit.err")"; fail=1
+fi
 
 [ "$fail" -eq 0 ] && echo "chart: OK"
 exit "$fail"

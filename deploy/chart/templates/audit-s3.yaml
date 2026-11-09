@@ -1,4 +1,4 @@
-{{- if and .Values.audit.enabled .Values.audit.s3.bundled.enabled }}
+{{- if and (include "devpod.audit.on" $) .Values.audit.s3.bundled.enabled }}
 apiVersion: v1
 kind: Secret
 metadata:

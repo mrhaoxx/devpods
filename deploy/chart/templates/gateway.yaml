@@ -20,7 +20,7 @@ spec:
         app.kubernetes.io/name: devpod-gateway
     spec:
       serviceAccountName: devpod-gateway
-      {{- if .Values.audit.enabled }}
+      {{- if include "devpod.audit.on" $ }}
       # Sessions get --shutdown-session-grace (60s), then the audit spool
       # drains for --audit-drain-timeout (220s) before exit.
       terminationGracePeriodSeconds: 300
@@ -32,11 +32,11 @@ spec:
         args:
         - --listen=:22
         - --host-key-dir=/etc/devpod/gateway
-        - --gateway-config-name={{ .Values.gatewayConfigName }}
-        {{- if .Values.audit.enabled }}
+        - --gateway-config-name={{ $.Values.gatewayConfigName | default "default" }}
+        {{- if include "devpod.audit.on" $ }}
         {{- include "devpod.audit.args" . | nindent 8 }}
         - --audit-spool-dir=/var/spool/devpod-audit
-        - --audit-spool-max-bytes={{ .Values.audit.spool.sizeLimit }}
+        - --audit-spool-max-bytes={{ include "devpod.audit.spoolMaxBytes" $ }}
         {{- end }}
         env:
         - name: POD_NAME
@@ -60,7 +60,7 @@ spec:
         - name: internal-key
           mountPath: /etc/devpod/gateway/internal
           readOnly: true
-        {{- if .Values.audit.enabled }}
+        {{- if include "devpod.audit.on" $ }}
         - {name: audit-spool, mountPath: /var/spool/devpod-audit}
         {{- include "devpod.audit.mounts" . | nindent 8 }}
         {{- end }}
@@ -83,7 +83,7 @@ spec:
       - name: internal-key
         secret:
           secretName: devpod-gateway-internal-key
-      {{- if .Values.audit.enabled }}
+      {{- if include "devpod.audit.on" $ }}
       - name: audit-spool
         emptyDir: {sizeLimit: {{ .Values.audit.spool.sizeLimit }}}
       {{- include "devpod.audit.volumes" (dict "root" $ "component" "gateway") | nindent 6 }}

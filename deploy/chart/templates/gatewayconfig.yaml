@@ -1,7 +1,7 @@
 apiVersion: devpod.io/v1alpha1
 kind: GatewayConfig
 metadata:
-  name: {{ .Values.gatewayConfigName }}
+  name: {{ $.Values.gatewayConfigName | default "default" }}
 spec:
   devPodNamespace: {{ .Values.namespaces.devpods }}
   supervisorImage: "{{ .Values.image.supervisor.repository }}:{{ .Values.image.supervisor.tag }}"
@@ -18,7 +18,7 @@ spec:
   # backtick raw-string passes the inner template through unprocessed.
   banner: |
     {{ `devpod-gateway · {{ .ClientIP }} → {{ if .User }}{{ .User }}+{{ .Pod }}{{ else }}{{ .Login }}{{ end }} · {{ .Now.Format "2006-01-02 15:04:05 MST" }}` }}
-  {{- if .Values.audit.enabled }}
+  {{- if include "devpod.audit.on" $ }}
   audit:
     enabled: true
     {{- with .Values.audit.notice }}

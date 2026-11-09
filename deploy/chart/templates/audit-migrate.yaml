@@ -1,4 +1,4 @@
-{{- if .Values.audit.enabled }}
+{{- if include "devpod.audit.on" $ }}
 # Creates the bucket / lifecycle (bundled or manageLifecycle) and applies
 # ClickHouse migrations + retention TTLs on every install and upgrade.
 apiVersion: batch/v1
