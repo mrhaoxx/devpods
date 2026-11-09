@@ -73,7 +73,8 @@ func TestSFTP_PipelinedFixture(t *testing.T) {
 }
 
 func TestSFTP_DenyDownload(t *testing.T) {
-	for _, flags := range []uint32{fxfRead, fxfRead | fxfWrite} {
+	// pflags 0 opens read-only in OpenSSH's sftp-server, so it is a download too.
+	for _, flags := range []uint32{fxfRead, fxfRead | fxfWrite, 0} {
 		sink := &fakeSink{}
 		d := NewSFTP(policy.Effective{DenyDownload: true}, sink)
 		res := d.Feed(ClientToBackend, sftpOpen(7, "/etc/passwd", flags))
@@ -91,6 +92,19 @@ func TestSFTP_DenyDownload(t *testing.T) {
 		if string(res.Notice) != MsgDownloadDenied+"\n" {
 			t.Fatalf("flags %#x: OpenSSH sftp prints only the status code, so the reason must go to stderr; notice %q", flags, res.Notice)
 		}
+	}
+}
+
+// With downloads denied every READ is refused, whatever handle it names.
+func TestSFTP_DenyDownloadRefusesReads(t *testing.T) {
+	sink := &fakeSink{}
+	d := NewSFTP(policy.Effective{DenyDownload: true}, sink)
+	res := d.Feed(ClientToBackend, sftpRead(11, "H?", 0, 4096))
+	if len(res.Pass) != 0 {
+		t.Fatal("READ was forwarded with downloads denied")
+	}
+	if id, code, msg := parseStatus(t, res.Reply); id != 11 || code != fxPermissionDenied || msg != MsgDownloadDenied {
+		t.Fatalf("status id=%d code=%d msg=%q", id, code, msg)
 	}
 }
 
@@ -136,9 +150,15 @@ func TestSFTP_MaxFileSize(t *testing.T) {
 
 	d.Feed(ClientToBackend, sftpOpen(4, "/tmp/down", fxfRead))
 	d.Feed(BackendToClient, sftpHandle(4, "H2"))
-	res = d.Feed(ClientToBackend, sftpRead(5, "H2", 1000, 100))
+	// Clients read ahead past EOF: a read that merely straddles the limit
+	// must pass, or files just under the limit could not be downloaded.
+	straddle := sftpRead(6, "H2", 1000, 100)
+	if res := d.Feed(ClientToBackend, straddle); !bytes.Equal(res.Pass, straddle) || len(res.Reply) != 0 {
+		t.Fatal("read straddling the limit must pass")
+	}
+	res = d.Feed(ClientToBackend, sftpRead(5, "H2", 1024, 100))
 	if len(res.Pass) != 0 {
-		t.Fatal("oversize read was forwarded")
+		t.Fatal("read beyond the limit was forwarded")
 	}
 	if id, code, msg := parseStatus(t, res.Reply); id != 5 || code != fxFailure || msg != MsgFileTooLarge {
 		t.Fatalf("status id=%d code=%d msg=%q", id, code, msg)

@@ -164,7 +164,10 @@ func (d *sftpDecoder) packet(dir Dir, body []byte) (pass bool, reply []byte) {
 		if r.err != nil {
 			return true, nil
 		}
-		req := sftpOpenReq{path: path, download: flags&fxfRead != 0, upload: flags&(fxfWrite|fxfAppend) != 0}
+		upload := flags&(fxfWrite|fxfAppend) != 0
+		// OpenSSH's sftp-server opens a file read-only when neither READ
+		// nor WRITE is set, so that is a download as well.
+		req := sftpOpenReq{path: path, download: flags&fxfRead != 0 || !upload, upload: upload}
 		if req.download && d.pol.DenyDownload {
 			return false, d.deny(id, fxPermissionDenied, MsgDownloadDenied, "download", "download", path)
 		}
@@ -175,12 +178,18 @@ func (d *sftpDecoder) packet(dir Dir, body []byte) (pass bool, reply []byte) {
 	case fxpRead:
 		h := r.str()
 		off := r.u64()
-		n := r.u32()
+		_ = r.u32() // length
 		if r.err != nil {
 			return true, nil
 		}
 		f := d.handles[h]
-		if d.pol.MaxFileSize > 0 && int64(off)+int64(n) > d.pol.MaxFileSize {
+		if d.pol.DenyDownload {
+			return false, d.deny(id, fxPermissionDenied, MsgDownloadDenied, "download", "download", pathOf(f))
+		}
+		// Only reads starting at or past the limit: clients read ahead
+		// past EOF, so a read that straddles the limit may still be
+		// within a file that fits.
+		if d.pol.MaxFileSize > 0 && int64(off) >= d.pol.MaxFileSize {
 			return false, d.deny(id, fxFailure, MsgFileTooLarge, "maxFileSize", "download", pathOf(f))
 		}
 		if f != nil {
