@@ -9,6 +9,7 @@ import (
 	"io"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"golang.org/x/crypto/ssh"
 
@@ -48,6 +49,10 @@ func Proxy(
 		hooks = audit.Noop()
 	}
 	var wg sync.WaitGroup
+	// chans tracks per-channel goroutines: the caller closes the session
+	// hooks right after Proxy returns, so each channel's Close (its final
+	// audit rows) must have run by then.
+	var chans sync.WaitGroup
 
 	// proxyChannel's stats parameter assumes local=client / remote=backend
 	// orientation (lch→rch is client→backend, rch→lch is backend→client).
@@ -58,7 +63,11 @@ func Proxy(
 	go func() {
 		defer wg.Done()
 		for nc := range clientChans {
-			go proxyChannel(nc, backendConn, stats, hooks, audit.ClientToBackend)
+			chans.Add(1)
+			go func() {
+				defer chans.Done()
+				proxyChannel(nc, backendConn, stats, hooks, audit.ClientToBackend)
+			}()
 		}
 	}()
 
@@ -66,7 +75,11 @@ func Proxy(
 	go func() {
 		defer wg.Done()
 		for nc := range backendChans {
-			go proxyChannel(nc, clientConn, nil, hooks, audit.BackendToClient)
+			chans.Add(1)
+			go func() {
+				defer chans.Done()
+				proxyChannel(nc, clientConn, nil, hooks, audit.BackendToClient)
+			}()
 		}
 	}()
 
@@ -121,11 +134,29 @@ func Proxy(
 	_ = clientConn.Close()
 	_ = backendConn.Close()
 	wg.Wait()
+	// Both transports are closed, so every channel's pumps fail fast; the
+	// timeout only guards against a wedged hook.
+	waitTimeout(&chans, channelDrainTimeout)
 
 	if err == io.EOF {
 		return nil
 	}
 	return err
+}
+
+// channelDrainTimeout bounds how long Proxy waits for channel goroutines
+// after both connections closed.
+const channelDrainTimeout = 10 * time.Second
+
+func waitTimeout(wg *sync.WaitGroup, d time.Duration) {
+	done := make(chan struct{})
+	go func() { wg.Wait(); close(done) }()
+	t := time.NewTimer(d)
+	defer t.Stop()
+	select {
+	case <-done:
+	case <-t.C:
+	}
 }
 
 func opposite(d audit.Dir) audit.Dir {

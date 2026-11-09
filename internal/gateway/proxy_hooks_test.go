@@ -14,6 +14,7 @@ import (
 	"net"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -160,12 +161,16 @@ type fakeHooks struct {
 	denyGlobal map[string]bool
 	filter     func(audit.Dir, []byte) audit.Result
 	done       chan struct{}
+	closeDelay time.Duration
+	opened     atomic.Int32
+	closed     atomic.Int32
 }
 
 func (h *fakeHooks) OpenChannel(audit.Dir, string, []byte) (audit.ChannelHooks, error) {
 	if h.openErr != nil {
 		return nil, h.openErr
 	}
+	h.opened.Add(1)
 	return &fakeChan{h: h}, nil
 }
 
@@ -194,7 +199,10 @@ func (c *fakeChan) Data(d audit.Dir, _ bool, p []byte) audit.Result {
 	}
 	return audit.Result{Pass: p}
 }
-func (c *fakeChan) Close() {}
+func (c *fakeChan) Close() {
+	time.Sleep(c.h.closeDelay)
+	c.h.closed.Add(1)
+}
 
 func TestProxy_RejectsChannelOpen(t *testing.T) {
 	client, log, _ := startProxy(t, &fakeHooks{openErr: &audit.DenyError{Msg: "nope"}})
@@ -317,5 +325,31 @@ func TestProxy_DeniedRequestReasonOnStderr(t *testing.T) {
 	got := make([]byte, len("denied\n"))
 	if _, err := io.ReadFull(stderr, got); err != nil || string(got) != "denied\n" {
 		t.Fatalf("stderr %q %v", got, err)
+	}
+}
+
+// The session's hooks are closed as soon as Proxy returns, so every
+// channel's Close (which emits its final rows) must have run by then —
+// also when the client vanishes without closing its channels.
+func TestProxy_WaitsForChannelsOnAbruptDisconnect(t *testing.T) {
+	h := &fakeHooks{closeDelay: 100 * time.Millisecond}
+	client, _, done := startProxy(t, h)
+	for i := 0; i < 3; i++ {
+		sess, err := client.NewSession()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := sess.Shell(); err != nil {
+			t.Fatal(err)
+		}
+	}
+	_ = client.Close() // drops the transport, no channel-close messages
+	select {
+	case <-done:
+	case <-time.After(10 * time.Second):
+		t.Fatal("proxy did not return")
+	}
+	if o, c := h.opened.Load(), h.closed.Load(); c != o {
+		t.Fatalf("Proxy returned with %d of %d channels closed", c, o)
 	}
 }
