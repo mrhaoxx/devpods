@@ -151,3 +151,24 @@ func TestDecode_SkipsUnknownKindsAndBlankLines(t *testing.T) {
 		t.Fatalf("%+v %+v %v", gh, recs, err)
 	}
 }
+
+// A 34-byte frame may declare a 512 MiB window; decoding must refuse it
+// rather than allocate it (agents encode with 256 KiB).
+func TestDecode_RefusesHugeWindow(t *testing.T) {
+	frame := []byte{0x28, 0xb5, 0x2f, 0xfd, // magic
+		0x00,       // frame header: no single segment, no checksum
+		19 << 3,    // window descriptor: 2^(10+19) = 512 MiB
+		0x21, 0, 0, // last raw block, 4 bytes
+		'{', '}', '\n', ' '}
+	var before, after runtime.MemStats
+	runtime.GC()
+	runtime.ReadMemStats(&before)
+	_, _, err := Decode(bytes.NewReader(frame), 1<<20)
+	runtime.ReadMemStats(&after)
+	if err == nil {
+		t.Fatal("a 512 MiB window was accepted")
+	}
+	if grew := after.TotalAlloc - before.TotalAlloc; grew > 32<<20 {
+		t.Fatalf("allocated %d MiB for a refused frame", grew>>20)
+	}
+}

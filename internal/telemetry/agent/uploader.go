@@ -21,7 +21,9 @@ import (
 const (
 	// uploadMaxBytes bounds one request's records (uncompressed JSON);
 	// the compressed body stays far below the ingest's 4 MiB limit.
-	uploadMaxBytes = 3584 << 10
+	// Catch-up after an outage goes in 1 MiB requests: the leader holds
+	// every decoded request until its write, for ~400 agents at once.
+	uploadMaxBytes = 1 << 20
 	uploadMaxDelay = 30 * time.Second
 	unauthDelay    = 60 * time.Second
 )
@@ -113,6 +115,8 @@ func (u *Uploader) post(ctx context.Context, h wire.Header, recs []wire.Record) 
 	req.Header.Set("Authorization", "Bearer "+strings.TrimSpace(string(tok)))
 	req.Header.Set("Content-Type", "application/x-ndjson")
 	req.Header.Set("Content-Encoding", "zstd")
+	// lets the leader authenticate before decompressing anything
+	req.Header.Set("X-DevPod-UID", h.DevPodUID)
 	resp, err := u.Client.Do(req)
 	if err != nil {
 		return wire.Ack{}, 0, err
