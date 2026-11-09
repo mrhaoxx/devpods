@@ -8,10 +8,14 @@ package store
 
 import (
 	"context"
+	"crypto/rand"
 	"errors"
 	"fmt"
 	"testing"
 	"time"
+
+	"github.com/ClickHouse/clickhouse-go/v2"
+	"github.com/oklog/ulid/v2"
 )
 
 // freshDB opens a migrated, empty database unique to this test.
@@ -152,19 +156,30 @@ func TestListSessions_HasFilesHasAlerts(t *testing.T) {
 
 func TestGetSession_DetailAndNotFound(t *testing.T) {
 	c := freshDB(t)
-	b := sampleBatch("S9")
+	sid := ulidAt(base) // session ids are ULIDs of the open time
+	b := sampleBatch(sid)
 	b.Sessions[0].OpenedAt = base
 	mustInsert(t, c, b, "seed")
-	d, err := c.GetSession(context.Background(), "S9")
+	// The channel's close is a second version of its row.
+	v2 := b.Channels[0]
+	closed := base.Add(time.Minute)
+	v2.ClosedAt, v2.BytesIn, v2.Version = &closed, 42, 2
+	mustInsert(t, c, Batch{Channels: []ChannelRow{v2}}, "close")
+	d, err := c.GetSession(context.Background(), sid)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if d.Session.SessionID != "S9" || len(d.Channels) != 1 || len(d.Commands) != 1 || len(d.Files) != 1 ||
+	if len(d.Channels) != 1 || d.Channels[0].BytesIn != 42 || d.Channels[0].ClosedAt == nil {
+		t.Fatalf("want only the latest channel version, got %+v", d.Channels)
+	}
+	if d.Session.SessionID != sid || len(d.Channels) != 1 || len(d.Commands) != 1 || len(d.Files) != 1 ||
 		len(d.Policy) != 1 || len(d.Alerts) != 1 || len(d.Segments) != 1 {
 		t.Fatalf("detail %+v", d)
 	}
-	if _, err := c.GetSession(context.Background(), "nope"); !errors.Is(err, ErrNotFound) {
-		t.Fatalf("want ErrNotFound, got %v", err)
+	for _, id := range []string{"nope", ulidAt(base.Add(time.Minute))} {
+		if _, err := c.GetSession(context.Background(), id); !errors.Is(err, ErrNotFound) {
+			t.Fatalf("%s: want ErrNotFound, got %v", id, err)
+		}
 	}
 }
 
@@ -192,25 +207,28 @@ func TestSearchCommands_Substring(t *testing.T) {
 
 func TestSearchFiles_BySHA(t *testing.T) {
 	c := freshDB(t)
+	a, bID := ulidAt(base), ulidAt(base) // file event ids are ULIDs of their ts
 	mustInsert(t, c, Batch{FileEvents: []FileEventRow{
-		{EventID: "a", TS: base, User: "alice", DevPodUID: "u1", Path: "/data/a.csv", SHA256: "aaa"},
-		{EventID: "b", TS: base, User: "alice", DevPodUID: "u1", Path: "/data/b.csv", SHA256: "bbb"},
+		{EventID: a, TS: base, User: "alice", DevPodUID: "u1", Path: "/data/a.csv", SHA256: "aaa"},
+		{EventID: bID, TS: base, User: "alice", DevPodUID: "u1", Path: "/data/b.csv", SHA256: "bbb"},
 	}}, "seed")
 	r := TimeFilter{From: base.Add(-time.Hour), To: base.Add(time.Hour)}
 	rows, _, err := c.SearchFiles(context.Background(), FileFilter{SHA256: "bbb", From: r.From, To: r.To})
-	if err != nil || len(rows) != 1 || rows[0].EventID != "b" {
+	if err != nil || len(rows) != 1 || rows[0].EventID != bID {
 		t.Fatalf("by sha: %+v %v", rows, err)
 	}
 	rows, _, _ = c.SearchFiles(context.Background(), FileFilter{Path: "a.csv", From: r.From, To: r.To})
-	if len(rows) != 1 || rows[0].EventID != "a" {
+	if len(rows) != 1 || rows[0].EventID != a {
 		t.Fatalf("by path: %+v", rows)
 	}
-	fe, err := c.GetFileEvent(context.Background(), "a")
+	fe, err := c.GetFileEvent(context.Background(), a)
 	if err != nil || fe.Path != "/data/a.csv" {
 		t.Fatalf("GetFileEvent: %+v %v", fe, err)
 	}
-	if _, err := c.GetFileEvent(context.Background(), "zz"); !errors.Is(err, ErrNotFound) {
-		t.Fatalf("want ErrNotFound, got %v", err)
+	for _, id := range []string{"zz", ulidAt(base.Add(time.Minute))} {
+		if _, err := c.GetFileEvent(context.Background(), id); !errors.Is(err, ErrNotFound) {
+			t.Fatalf("%s: want ErrNotFound, got %v", id, err)
+		}
 	}
 }
 
@@ -260,4 +278,59 @@ func TestRangeRequired(t *testing.T) {
 	if _, _, err := c.SearchCommands(context.Background(), CommandFilter{}); !errors.Is(err, ErrRangeRequired) {
 		t.Fatalf("SearchCommands: %v", err)
 	}
+}
+
+func ulidAt(t time.Time) string { return ulid.MustNew(ulid.Timestamp(t), rand.Reader).String() }
+
+// §9.3: every audit read must be bounded by time. With
+// force_index_by_date ClickHouse refuses any query that cannot prune
+// partitions by date, i.e. one that would scan all retained months.
+func TestReadQueries_UseDateIndex(t *testing.T) {
+	c := freshDB(t)
+	sid := ulidAt(base)
+	b := sampleBatch(sid)
+	b.Sessions[0].OpenedAt = base
+	for i := range b.Channels {
+		b.Channels[i].OpenedAt = base
+	}
+	at := base.Add(time.Second)
+	b.Commands[0].TS, b.PolicyEvents[0].TS, b.Alerts[0].TS = at, at, at
+	b.FileEvents[0].TS, b.FileEvents[0].EventID = at, ulidAt(at)
+	b.RawSegments[0].FirstTS, b.RawSegments[0].LastTS = at, at
+	mustInsert(t, c, b, "seed")
+	if err := c.InsertAccessLog(context.Background(), AccessLogRow{TS: at, Viewer: "root", Action: "replay", TargetSession: sid}); err != nil {
+		t.Fatal(err)
+	}
+	c.readExtra = clickhouse.Settings{"force_index_by_date": 1}
+	ctx := context.Background()
+	f := day()
+
+	check := func(name string, err error) {
+		t.Helper()
+		if err != nil {
+			t.Errorf("%s: %v", name, err)
+		}
+	}
+	_, _, err := c.ListSessions(ctx, f)
+	check("ListSessions", err)
+	f.HasFiles, f.HasAlerts = true, true
+	_, _, err = c.ListSessions(ctx, f)
+	check("ListSessions(has files, alerts)", err)
+	d, err := c.GetSession(ctx, sid)
+	check("GetSession", err)
+	if err == nil && (len(d.Channels) != 1 || len(d.Commands) != 1 || len(d.Files) != 1 || len(d.Policy) != 1 || len(d.Alerts) != 1 || len(d.Segments) != 1) {
+		t.Errorf("GetSession detail incomplete: %+v", d)
+	}
+	_, err = c.GetFileEvent(ctx, b.FileEvents[0].EventID)
+	check("GetFileEvent", err)
+	_, _, err = c.SearchCommands(ctx, CommandFilter{From: f.From, To: f.To, Q: "make"})
+	check("SearchCommands", err)
+	_, _, err = c.SearchFiles(ctx, FileFilter{From: f.From, To: f.To, SHA256: "abc"})
+	check("SearchFiles", err)
+	_, _, err = c.ListAlerts(ctx, TimeFilter{From: f.From, To: f.To})
+	check("ListAlerts", err)
+	_, _, err = c.ListAccessLog(ctx, TimeFilter{From: f.From, To: f.To})
+	check("ListAccessLog", err)
+	_, err = c.Presence(ctx, []string{"uid-1"})
+	check("Presence", err)
 }
