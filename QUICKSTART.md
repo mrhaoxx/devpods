@@ -70,7 +70,7 @@ or let `hack/e2e-up.sh` generate them.
 
 ```bash
 kubectl -n devpod-system get pods            # controller + gateway × 2 Running
-kubectl get gatewayconfig default            # cluster singleton
+kubectl get gatewayconfig default            # read by the gateway (--gateway-config-name)
 kubectl explain devpod.spec                  # CRD docs visible
 ```
 

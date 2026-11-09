@@ -10,8 +10,9 @@
 #
 # Cluster-scoped objects created (and removed at the end): User audit-e2e,
 # User audit-e2e2, GatewayConfig audit-e2e, ClusterRole/Binding
-# devpod-audit-e2e. The CRDs must already carry the audit fields; set
-# E2E_APPLY_CRDS=1 to server-side-apply config/crd/bases first (additive).
+# devpod-audit-e2e. The GatewayConfig and User CRDs must already carry the
+# audit fields; E2E_APPLY_CRDS=1 server-side-applies just those two first
+# (additive schema change).
 #
 #   KUBE_CONTEXT=zjusct bash hack/e2e-audit.sh          # run + clean up
 #   KUBE_CONTEXT=zjusct E2E_KEEP=1 bash hack/e2e-audit.sh  # keep objects for poking
@@ -44,8 +45,9 @@ trap cleanup EXIT
 
 # --- CRDs ----------------------------------------------------------------
 if [ -n "${E2E_APPLY_CRDS:-}" ]; then
-  log "applying CRDs (additive schema change)"
-  "${K[@]}" apply --server-side --force-conflicts -f "$ROOT/config/crd/bases/" >/dev/null
+  log "applying the GatewayConfig + User CRDs (additive: spec.audit, spec.auditPolicy)"
+  "${K[@]}" apply --server-side --force-conflicts \
+    -f "$ROOT/config/crd/bases/devpod.io_gatewayconfigs.yaml" -f "$ROOT/config/crd/bases/devpod.io_users.yaml" >/dev/null
 fi
 "${K[@]}" get crd gatewayconfigs.devpod.io -o yaml | grep -q 'audit:' ||
   die "CRDs lack the audit fields; rerun with E2E_APPLY_CRDS=1"
@@ -138,20 +140,20 @@ spec:
   nodeSelector: {kubernetes.io/arch: amd64}
   containers:
   - name: box
-    image: alpine:3.20
+    image: debian:trixie-slim
     command: [sh, -c]
     args:
     - |
       set -e
-      apk add --no-cache openssh-server openssh-sftp-server lrzsz >/dev/null
+      apt-get update -qq && DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends openssh-server lrzsz >/dev/null
+      mkdir -p /run/sshd /root/.ssh
       cp /keys/box_host /etc/ssh/ssh_host_ed25519_key && chmod 600 /etc/ssh/ssh_host_ed25519_key
-      mkdir -p /root/.ssh && cp /keys/gw_internal.pub /root/.ssh/authorized_keys && chmod 600 /root/.ssh/authorized_keys
-      sed -i 's/^root:!/root:*/' /etc/shadow
+      cp /keys/gw_internal.pub /root/.ssh/authorized_keys && chmod 600 /root/.ssh/authorized_keys
       head -c 1048576 /dev/urandom >/root/z.bin
       head -c 1048576 /dev/urandom >/root/get.bin
       exec /usr/sbin/sshd -D -e -p 2222 -h /etc/ssh/ssh_host_ed25519_key \
-        -o PermitRootLogin=prohibit-password -o "Subsystem sftp /usr/lib/ssh/sftp-server"
-    readinessProbe: {tcpSocket: {port: 2222}, periodSeconds: 2}
+        -o PermitRootLogin=prohibit-password -o "Subsystem sftp /usr/lib/openssh/sftp-server"
+    readinessProbe: {tcpSocket: {port: 2222}, periodSeconds: 3, failureThreshold: 100}
     volumeMounts: [{name: keys, mountPath: /keys}]
   volumes: [{name: keys, secret: {secretName: audit-e2e-keys}}]
 ---

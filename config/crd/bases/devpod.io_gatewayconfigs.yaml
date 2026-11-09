@@ -19,8 +19,10 @@ spec:
   - name: v1alpha1
     schema:
       openAPIV3Schema:
-        description: GatewayConfig is the cluster-singleton runtime configuration
-          for DevPod.
+        description: |-
+          GatewayConfig is the cluster-scoped runtime configuration for DevPod.
+          A gateway / webui pair reads the one named by --gateway-config-name
+          ("default" unless set), so several pairs can share a cluster.
         properties:
           apiVersion:
             description: |-
@@ -467,9 +469,6 @@ spec:
                 type: integer
             type: object
         type: object
-        x-kubernetes-validations:
-        - message: GatewayConfig must be named 'default'
-          rule: self.metadata.name == 'default'
     served: true
     storage: true
     subresources:
