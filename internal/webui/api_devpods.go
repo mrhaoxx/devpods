@@ -60,6 +60,10 @@ type Server struct {
 	// SecureCookies sets the Secure attribute on session cookies (https
 	// deployments true; plain-http dev/e2e false).
 	SecureCookies bool
+
+	// Audit holds the audit store backends; nil disables every audit
+	// endpoint and hides the audit UI.
+	Audit *AuditDeps
 }
 
 type apiBody struct {
