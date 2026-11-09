@@ -112,3 +112,15 @@ func TestParse_Malformed(t *testing.T) {
 		t.Error("tcpip-forward")
 	}
 }
+
+func TestParseStreamlocalExtra(t *testing.T) {
+	// direct-streamlocal@openssh.com: socket path, reserved string, reserved uint32.
+	extra := ssh.Marshal(struct {
+		Path string
+		R    string
+		RP   uint32
+	}{"/run/user/0/vscode.sock", "", 0})
+	if p, err := ParseStreamlocalExtra(extra); err != nil || p != "/run/user/0/vscode.sock" {
+		t.Fatalf("got %q, %v", p, err)
+	}
+}

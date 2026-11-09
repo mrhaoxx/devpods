@@ -258,7 +258,7 @@ func (s *Session) OpenChannel(dir Dir, chType string, extra []byte) (ChannelHook
 		return nil, s.deny("failMode", MsgAuditUnavailable)
 	}
 	switch chType {
-	case "direct-tcpip":
+	case "direct-tcpip", "direct-streamlocal@openssh.com":
 		if dir == ClientToBackend && s.pol.DenyLocalForward {
 			return nil, s.deny("forwarding.local", MsgForwardDenied)
 		}
@@ -280,12 +280,17 @@ func (s *Session) OpenChannel(dir Dir, chType string, extra []byte) (ChannelHook
 	return c, nil
 }
 
-// GlobalRequest enforces forwarding.remote.
+// GlobalRequest enforces forwarding.remote (TCP and Unix-socket).
 func (s *Session) GlobalRequest(dir Dir, typ string, payload []byte) error {
-	if typ != "tcpip-forward" && typ != "cancel-tcpip-forward" {
+	var listen bool
+	switch typ {
+	case "tcpip-forward", "streamlocal-forward@openssh.com":
+		listen = true
+	case "cancel-tcpip-forward", "cancel-streamlocal-forward@openssh.com":
+	default:
 		return nil
 	}
-	denied := typ == "tcpip-forward" && dir == ClientToBackend && s.pol.DenyRemoteForward
+	denied := listen && dir == ClientToBackend && s.pol.DenyRemoteForward
 	s.record(0, rawlog.KindRequest, rawlog.Encode(rawlog.Request{Dir: uint8(dir), Type: typ, WantReply: true, OK: !denied, Denied: denied, Payload: payload}))
 	if denied {
 		return s.deny("forwarding.remote", MsgForwardDenied)
