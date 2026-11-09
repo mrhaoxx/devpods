@@ -225,8 +225,9 @@ func main() {
 	srv.Audit = auditDeps
 	srv.GatewayConfigName = *gcName
 
+	waitTelemetry := func() {}
 	if tf.enabled() {
-		if err := tf.startTelemetry(ctx, restCfg, mgr, srv); err != nil {
+		if waitTelemetry, err = tf.startTelemetry(ctx, restCfg, mgr, srv); err != nil {
 			fatal(err)
 		}
 	}
@@ -272,6 +273,9 @@ func main() {
 	if err != nil && err != http.ErrServerClosed {
 		fatal(err)
 	}
+	// Shutdown: let the telemetry leader release its lease first, so the
+	// next replica takes over at once instead of after the lease expires.
+	waitTelemetry()
 }
 
 // originOf reduces the redirect URL to its scheme://host origin for

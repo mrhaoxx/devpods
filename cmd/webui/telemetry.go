@@ -107,28 +107,30 @@ func (tf *telemetryFlags) publishSelf(ctx context.Context, c client.Client) {
 // startTelemetry runs the live layer: the :8081 listener (ingest and
 // the leader's internal endpoints), the election, and — on the leader —
 // the session resolver, the input refresher and the snapshot ticker;
-// on followers the link to the leader.
-func (tf *telemetryFlags) startTelemetry(ctx context.Context, cfg *rest.Config, mgr manager.Manager, srv *webui.Server) error {
+// on followers the link to the leader. The returned wait blocks (up to
+// 5 s) until the elector has released the lease after ctx ends; main
+// must call it before exiting or a successor waits out the lease.
+func (tf *telemetryFlags) startTelemetry(ctx context.Context, cfg *rest.Config, mgr manager.Manager, srv *webui.Server) (wait func(), err error) {
 	key, err := tf.key()
 	if err != nil {
-		return err
+		return nil, err
 	}
 	if srv.Audit == nil {
-		return errors.New("telemetry needs the audit store (--clickhouse-*)")
+		return nil, errors.New("telemetry needs the audit store (--clickhouse-*)")
 	}
 	ch, ok := srv.Audit.Store.(*lazyCH)
 	if !ok {
-		return errors.New("telemetry: unexpected audit store type")
+		return nil, errors.New("telemetry: unexpected audit store type")
 	}
 	el, err := tf.newElector(cfg)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	// The EndpointSlice lives in one namespace the webui may access; a
 	// cached client would start a cluster-wide informer for it.
 	direct, err := client.New(cfg, client.Options{Scheme: mgr.GetScheme()})
 	if err != nil {
-		return err
+		return nil, err
 	}
 
 	state := live.NewState(nil)
@@ -230,9 +232,18 @@ func (tf *telemetryFlags) startTelemetry(ctx context.Context, cfg *rest.Config, 
 		go jobs.Run(lctx)
 	}
 	onStop := func() { slog.Info("telemetry: leadership lost") }
-	go el.Run(ctx, onStart, onStop)
+	elDone := make(chan struct{})
+	go func() {
+		el.Run(ctx, onStart, onStop) // releases the lease when ctx ends
+		close(elDone)
+	}()
 	go followWhileNotLeading(ctx, el, addr, token, hub)
-	return nil
+	return func() {
+		select {
+		case <-elDone:
+		case <-time.After(5 * time.Second):
+		}
+	}, nil
 }
 
 // followWhileNotLeading relays the leader's snapshots whenever this
