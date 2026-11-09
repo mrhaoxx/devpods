@@ -567,6 +567,8 @@ ClickHouse 客户端用 clickhouse-go v2，查询一律参数化。
   2–3 GB，180 天约 0.5 TB。
 - 指标：200 个 DevPod × 每秒 1 行容器级 ≈ 每天 1700 万行；进程级按「只报
   活跃进程」控制。
+- gateway 实测（2026-11-09）：开启审计后 TTY 吞吐不变，scp / sftp 单会话
+  约 100 MB/s（关闭时约 140 MB/s），CPU 约 +7 ms/MiB。
 - **风险**：VS Code Remote-SSH 的流量可能经 exec server（exec channel）
   而非 direct-tcpip，取决于其设置。若如此，默认策略会完整录制，容量显著
   增大。实测后若成立，将 VS Code exec server 识别为不透明通道，纳入
@@ -806,9 +808,9 @@ Secret 卷（非 subPath）更新会传播到运行中的 Pod；supervisor telem
 |---|---|
 | 单元（表驱动） | rawlog 编解码往返；asciicast 转换（golden 文件）；策略引擎（含合并规则）；会话归属规则（伪造 procfs 目录，采集器支持配置 proc 根）；cgroup v1/v2 解析；RDMA 设备发现与精度标签；权限规则 |
 | 协议解析器 | 以真实客户端产生的原始流为夹具：CI 安装 OpenSSH `sftp`、`scp`、`scp -O` 与 `lrzsz`，在 pty 中运行 `sz` / `rz` 录制原始流。覆盖随机读写、中途断开、超大文件、被拦截 |
-| 集成（`-tags integration`） | testcontainers 启动 ClickHouse 与 Silo；进程内 gateway + 真实 sshd 后端，验证「会话 → spool → 上传 → 入库」全链路；故障注入：S3 / ClickHouse 断开、spool 写满、gateway 重启 |
+| 集成（`-tags integration`） | `hack/test-integration.sh` 在 `KUBE_CONTEXT` 指定的集群中起一次性的 ClickHouse 与 Silo Pod 并 port-forward（实现时改为此方式，不用 testcontainers）；进程内 gateway + 真实 sshd 后端，验证「会话 → spool → 上传 → 入库」全链路；故障注入：S3 / ClickHouse 断开、spool 写满、gateway 重启 |
 | envtest | webui 审计 API：A 看不到 B 的会话；owner 看不到 collaborator 会话；collaborator 进程命令行脱敏；每次请求重判管理员；访问记录写入；`/ingest` 令牌校验 |
-| e2e（kind） | 扩展 `hack/e2e-*.sh`：部署自带 Silo + ClickHouse；执行含命令、sftp、`scp -O`、rz/sz（expect 脚本）的会话，断言 ClickHouse 行与 S3 对象；策略拦截；1 秒指标实时出现在 API |
+| e2e | `hack/e2e-audit.sh`：在共享集群的隔离命名空间中运行（不起第二个 controller，读自己的 GatewayConfig，见 `--gateway-config-name`）；chart 接线由 `hack/test-chart.sh` 覆盖。原计划为 kind 上部署自带 Silo + ClickHouse；执行含命令、sftp、`scp -O`、rz/sz（expect 脚本）的会话，断言 ClickHouse 行与 S3 对象；策略拦截；1 秒指标实时出现在 API |
 | 前端（Vitest） | 表格单位 / 标签格式化、脱敏展示、窄屏按优先级隐藏列 |
 
 ---
@@ -843,9 +845,13 @@ Secret 卷（非 subPath）更新会传播到运行中的 Pod；supervisor telem
 ## 14. 实现计划阶段需实测的事项
 
 1. Silo 的 bucket 初始化、生命周期规则、分片上传与 aws-sdk-go-v2 的兼容
-   性；镜像 digest 与发布记录一致。
+   性；镜像 digest 与发布记录一致。**已测（2026-11-09）：兼容**，见
+   `docs/superpowers/notes/2026-11-audit-phase1-measurements.md`。
 2. VS Code Remote-SSH 流量走 exec channel 还是 direct-tcpip（§8.6）。
+   **待测**（需要用户本人参与；方法见上述记录）。
 3. 开启 / 关闭审计时 gateway 吞吐（scp 大文件、`yes` 刷满 TTY）。
+   **已测**：修复两处热点后，TTY 开启审计与关闭时持平；scp 约 −25%
+   （原文与原始流各存一份）。详见上述记录。
 4. supervisor 在 300 个进程、1 秒采样下的 CPU 与内存（§6.8）。
 5. 200 个模拟 supervisor 每秒上报时 `/ingest` 与 ClickHouse 的压力。
 6. `nvidia-smi -lms 1000` 的稳定性与开销；MIG / time-slicing 下的输出。
