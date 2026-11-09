@@ -92,7 +92,10 @@ type Record struct {
 type Attr struct {
 	ConnPid   int    `json:"conn_pid,omitempty"`
 	ConnStart uint64 `json:"conn_start,omitempty"`
-	How       string `json:"how"` // tree | ssh_connection | sid_tty | inferred | unattributed
+	// Peer is the sshd-session's TCP peer, i.e. the gateway's
+	// backend_local_addr; the webui resolves the gateway session by it.
+	Peer string `json:"peer,omitempty"`
+	How  string `json:"how"` // tree | ssh_connection | sid_tty | inferred | unattributed
 }
 
 // Container is one container-level sample (spec §6.1, §6.3).
