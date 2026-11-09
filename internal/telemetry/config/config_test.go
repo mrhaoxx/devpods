@@ -27,7 +27,7 @@ func TestLoadConfig_DefaultsAndOverrides(t *testing.T) {
 		t.Fatalf("overrides lost: %+v", c)
 	}
 	if c.MetricsInterval != time.Second || c.ProcScanInterval != 500*time.Millisecond || c.SocketMapInterval != 5*time.Second ||
-		c.BufferBytes != 33554432 || !c.RDMA || !c.ProcessTracking || !c.Hooks {
+		c.BufferBytes != 8388608 || !c.RDMA || !c.ProcessTracking || !c.Hooks {
 		t.Fatalf("defaults wrong: %+v", c)
 	}
 }

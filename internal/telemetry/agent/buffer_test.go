@@ -11,12 +11,14 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/mrhaoxx/devpod/internal/telemetry/config"
 	"github.com/mrhaoxx/devpod/internal/telemetry/wire"
 )
 
@@ -181,5 +183,39 @@ func waitLen(t *testing.T, b *Buffer) {
 	}
 	if b.Len() > 0 {
 		t.Fatal("not uploaded")
+	}
+}
+
+// During an ingest outage the buffer fills; full, it must still fit the
+// agent's GOMEMLIMIT (24 MiB) with room for everything else (review #2).
+func TestBuffer_DefaultFitsMemoryLimit(t *testing.T) {
+	if raceEnabled {
+		t.Skip("heap sizes are meaningless under the race detector")
+	}
+	second := func(seq uint64) []wire.Record {
+		now := time.Unix(int64(seq), 0).UTC()
+		recs := []wire.Record{{K: wire.KContainer, C: &wire.Container{TS: now, CPU: 1.5, MemWorkingSet: 1 << 30, NetKind: "pod", Pids: 120}}}
+		for g := 0; g < 2; g++ {
+			recs = append(recs, wire.Record{K: wire.KGPU, G: &wire.GPU{TS: now, Index: g, UUID: "GPU-0000-aaaa-bbbb", Name: "NVIDIA A100-SXM4-80GB", Util: 50}})
+		}
+		for j := 0; j < 20; j++ {
+			recs = append(recs, wire.Record{K: wire.KProc, P: &wire.Proc{TS: now, Pid: 1000 + j, Start: 100, CPU: 0.5, RSS: 1 << 28,
+				Attr: &wire.Attr{ConnPid: 50, ConnStart: 100, Peer: "10.1.2.3:41000", How: "tree"}}})
+		}
+		return recs
+	}
+	runtime.GC()
+	var before, after runtime.MemStats
+	runtime.ReadMemStats(&before)
+	b := NewBuffer(config.DefaultConfig().BufferBytes)
+	for seq := uint64(1); seq < 200000 && b.Size() < config.DefaultConfig().BufferBytes*95/100; seq++ {
+		b.Add(seq, second(seq))
+	}
+	runtime.GC()
+	runtime.ReadMemStats(&after)
+	held := int64(after.HeapAlloc) - int64(before.HeapAlloc)
+	runtime.KeepAlive(b)
+	if held > 14<<20 {
+		t.Fatalf("a full default buffer holds %d MiB of heap; the agent's limit is 24 MiB", held>>20)
 	}
 }

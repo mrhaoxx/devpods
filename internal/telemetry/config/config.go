@@ -56,7 +56,9 @@ func DefaultConfig() Config {
 		RDMA:              true,
 		ProcessTracking:   true,
 		Hooks:             true,
-		BufferBytes:       32 << 20,
+		// ~10 minutes of full-rate data; full it holds ~1.6× this in heap,
+		// within the agent's 24 MiB GOMEMLIMIT.
+		BufferBytes: 8 << 20,
 	}
 }
 

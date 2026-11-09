@@ -830,7 +830,7 @@ Secret 缺失时创建，需改为对这两个键做 reconcile）：
   "rdma": true,
   "processTracking": true,
   "hooks": true,
-  "bufferBytes": 33554432
+  "bufferBytes": 8388608
 }
 ```
 
