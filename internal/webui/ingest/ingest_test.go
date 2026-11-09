@@ -336,3 +336,23 @@ func TestResolver_PendingThenResolved(t *testing.T) {
 		t.Fatalf("no peer → no session, got %q", sid)
 	}
 }
+
+func TestWriter_Stats(t *testing.T) {
+	st := &fakeStore{block: 30 * time.Millisecond}
+	w := NewWriter(st)
+	w.Interval = 5 * time.Millisecond
+	for i := 0; i < 3; i++ {
+		done := make(chan error, 1)
+		w.Submit("k", store.TelemetryBatch{Containers: make([]store.ContainerMetricRow, 2)}, func(err error) { done <- err })
+		if err := <-done; err != nil {
+			t.Fatal(err)
+		}
+	}
+	s := w.TakeStats()
+	if s.Flushes != 3 || s.Rows != 6 || s.Errors != 0 || s.P50 < 30*time.Millisecond || s.Max < s.P99 || s.P99 < s.P50 {
+		t.Fatalf("stats %+v", s)
+	}
+	if again := w.TakeStats(); again.Flushes != 0 {
+		t.Fatalf("TakeStats must reset: %+v", again)
+	}
+}

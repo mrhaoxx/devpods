@@ -42,6 +42,38 @@ type Writer struct {
 	dones     []func(error)
 	scheduled bool
 	flushing  bool
+
+	// flush statistics since the last TakeStats
+	durs   []time.Duration
+	rows   int
+	errors int
+}
+
+// WriterStats summarises the inserts since the previous TakeStats.
+type WriterStats struct {
+	Flushes, Rows, Errors int
+	P50, P99, Max         time.Duration
+}
+
+// TakeStats returns and resets the flush statistics.
+func (w *Writer) TakeStats() WriterStats {
+	w.mu.Lock()
+	durs, rows, errs := w.durs, w.rows, w.errors
+	w.durs, w.rows, w.errors = nil, 0, 0
+	w.mu.Unlock()
+	s := WriterStats{Flushes: len(durs), Rows: rows, Errors: errs}
+	if len(durs) == 0 {
+		return s
+	}
+	sort.Slice(durs, func(i, j int) bool { return durs[i] < durs[j] })
+	at := func(q float64) time.Duration { return durs[min(len(durs)-1, int(q*float64(len(durs))))] }
+	s.P50, s.P99, s.Max = at(0.5), at(0.99), durs[len(durs)-1]
+	return s
+}
+
+func rowCount(b store.TelemetryBatch) int {
+	return len(b.Containers) + len(b.GPUs) + len(b.RDMAs) + len(b.Procs) + len(b.ProcRows) + len(b.SSHConns) +
+		len(b.Commands) + len(b.Infos) + len(b.Snapshots) + len(b.Alerts)
 }
 
 // NewWriter creates a writer for st.
@@ -79,7 +111,17 @@ func (w *Writer) flush() {
 	w.scheduled, w.flushing = false, true
 	w.mu.Unlock()
 
+	start := time.Now()
 	err := w.write(b, keys)
+	if !b.Empty() {
+		w.mu.Lock()
+		w.durs = append(w.durs, time.Since(start))
+		w.rows += rowCount(b)
+		if err != nil {
+			w.errors++
+		}
+		w.mu.Unlock()
+	}
 	for _, d := range dones {
 		d(err)
 	}
