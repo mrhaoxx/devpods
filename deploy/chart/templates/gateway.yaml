@@ -20,6 +20,9 @@ spec:
         app.kubernetes.io/name: devpod-gateway
     spec:
       serviceAccountName: devpod-gateway
+      {{- with $.Values.imagePullSecrets }}
+      imagePullSecrets: {{- toYaml . | nindent 8 }}
+      {{- end }}
       {{- if include "devpod.audit.on" $ }}
       # Sessions get --shutdown-session-grace (60s), then the audit spool
       # drains for --audit-drain-timeout (220s) before exit.
