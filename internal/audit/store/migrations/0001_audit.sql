@@ -140,4 +140,5 @@ CREATE TABLE IF NOT EXISTS {db}.access_log (
 ) ENGINE = MergeTree
 PARTITION BY toYYYYMM(ts)
 ORDER BY ts
-SETTINGS non_replicated_deduplication_window = 10000
+-- No deduplication window: every access is recorded, even identical ones
+-- (rows are written one at a time by the webui and never retried).
