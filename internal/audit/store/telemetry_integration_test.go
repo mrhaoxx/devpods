@@ -179,3 +179,46 @@ func TestHookMissing(t *testing.T) {
 		t.Fatalf("hook_missing %+v", got)
 	}
 }
+
+func TestBackfillQueries(t *testing.T) {
+	c := freshDB(t)
+	ctx := context.Background()
+	now := time.Now().UTC().Truncate(time.Millisecond)
+	shellAt := now.Add(-10 * time.Minute)
+	s := sess("S1", "alice", "u1", now.Add(-20*time.Minute), 1, false)
+	s.BackendLocalAddr = "10.0.0.9:41000"
+	mustInsert(t, c, Batch{Sessions: []SessionRow{s}}, "s")
+	exit := int32(0)
+	b := TelemetryBatch{
+		SSHConns: []SSHConnRow{{DevPodUID: "u1", BootID: "b", Pid: 50, StartTime: 100, PeerAddr: "10.0.0.9:41000", FirstSeen: shellAt, SessionID: "pending", Version: 1}},
+		ProcRows: []ProcessRow{
+			{DevPodUID: "u1", BootID: "b", Pid: 60, StartTime: 110, Exe: "/bin/bash", FirstSeen: shellAt, SessionID: "pending", Peer: "10.0.0.9:41000", Attribution: "tree", Version: 1},
+			{DevPodUID: "u1", BootID: "b", Pid: 61, StartTime: 120, Exe: "/bin/ls", FirstSeen: shellAt, SessionID: "S0", Peer: "10.0.0.8:1", Attribution: "tree", Version: 1},
+		},
+		Commands: []CommandRow{{EventID: "e1", TS: shellAt.Add(time.Minute), SessionID: "pending", DevPodUID: "u1", Source: "shell_hook", PID: 60, Cmdline: "make", ExitCode: &exit, Attribution: "pending", Version: 1}},
+		Infos:    []ContainerInfoRow{{TS: shellAt, DevPodUID: "u1", BootID: "b", Info: "{}", Version: 1}},
+	}
+	if err := c.InsertTelemetry(ctx, b, "t"); err != nil {
+		t.Fatal(err)
+	}
+	conns, err := c.PendingAttributions(ctx, now.Add(-time.Hour))
+	if err != nil || len(conns) != 1 || conns[0].Pid != 50 {
+		t.Fatalf("pending conns %+v %v", conns, err)
+	}
+	procs, err := c.PendingProcesses(ctx, now.Add(-time.Hour))
+	if err != nil || len(procs) != 1 || procs[0].Pid != 60 {
+		t.Fatalf("pending processes %+v %v", procs, err)
+	}
+	cmds, err := c.PendingCommands(ctx, now.Add(-time.Hour), now.Add(-7*24*time.Hour))
+	if err != nil || len(cmds) != 1 || cmds[0].EventID != "e1" || cmds[0].Peer != "10.0.0.9:41000" || cmds[0].ProcAttribution != "tree" {
+		t.Fatalf("pending commands %+v %v", cmds, err)
+	}
+	sessions, err := c.BackendSessions(ctx, now.Add(-24*time.Hour))
+	if err != nil || len(sessions) != 1 || sessions[0].Addr != "10.0.0.9:41000" || sessions[0].SessionID != "S1" || sessions[0].UID != "u1" {
+		t.Fatalf("backend sessions %+v %v", sessions, err)
+	}
+	seen, err := c.InfoSeen(ctx, now.Add(-time.Hour))
+	if err != nil || !seen["u1"].Equal(shellAt) {
+		t.Fatalf("info seen %v %v", seen, err)
+	}
+}

@@ -41,16 +41,10 @@ func peer(a *wire.Attr) string {
 // commandAttribution maps the agent's rule to the commands table's
 // exact / inferred / pending / unattributed.
 func commandAttribution(a *wire.Attr, sessionID string) string {
-	switch h := how(a); {
-	case sessionID == Pending:
+	if sessionID == Pending {
 		return Pending
-	case h == "tree" || h == "ssh_connection" || h == "sid_tty":
-		return "exact"
-	case h == "inferred":
-		return "inferred"
-	default:
-		return "unattributed"
 	}
+	return store.CommandAttribution(how(a))
 }
 
 // rows converts one batch to table rows. Alert rows (supervisor alerts,

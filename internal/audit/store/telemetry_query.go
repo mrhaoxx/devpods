@@ -302,3 +302,97 @@ func (c *CH) LastSessionByUser(ctx context.Context, since time.Time) (map[string
 	}
 	return out, rows.Err()
 }
+
+// PendingProcesses lists process rows whose session was unknown at
+// ingest (spec §5.4 backfill).
+func (c *CH) PendingProcesses(ctx context.Context, since time.Time) ([]ProcessRow, error) {
+	var out []ProcessRow
+	err := c.conn.Select(c.readCtx(ctx), &out, fmt.Sprintf("SELECT * FROM %s.processes FINAL WHERE first_seen >= ? AND session_id = 'pending'", c.db), since)
+	if err != nil {
+		return nil, fmt.Errorf("pending processes: %w", err)
+	}
+	return out, nil
+}
+
+// PendingCommand is a shell-hook command whose session was unknown at
+// ingest, with the peer of the shell process that ran it.
+type PendingCommand struct {
+	CommandRow
+	Peer            string    `ch:"peer"`
+	ProcAttribution string    `ch:"proc_attribution"`
+	ProcFirstSeen   time.Time `ch:"proc_first_seen"`
+}
+
+// PendingCommands joins pending commands to their shell's process row
+// (same DevPod and pid, alive at the command's time) to recover the
+// peer; procSince bounds how old that shell may be.
+func (c *CH) PendingCommands(ctx context.Context, since, procSince time.Time) ([]PendingCommand, error) {
+	q := fmt.Sprintf(`SELECT c.event_id AS event_id, c.ts AS ts, c.session_id AS session_id, c.devpod_uid AS devpod_uid, c.user AS user,
+			c.source AS source, c.channel_id AS channel_id, c.pid AS pid, c.cwd AS cwd, c.cmdline AS cmdline, c.exit_code AS exit_code,
+			c.duration_ms AS duration_ms, c.attribution AS attribution, c.version AS version,
+			p.peer AS peer, p.attribution AS proc_attribution, p.first_seen AS proc_first_seen
+		FROM (SELECT * FROM %[1]s.commands FINAL WHERE ts >= ? AND session_id = 'pending') AS c
+		INNER JOIN (SELECT devpod_uid, pid, peer, attribution, first_seen, exit_seen FROM %[1]s.processes FINAL
+		            WHERE first_seen >= ? AND peer != '') AS p
+		ON c.devpod_uid = p.devpod_uid AND c.pid = toInt32(p.pid)
+		WHERE p.first_seen <= c.ts AND (p.exit_seen IS NULL OR p.exit_seen >= c.ts)`, c.db)
+	var rows []PendingCommand
+	if err := c.conn.Select(c.readCtx(ctx), &rows, q, since, procSince); err != nil {
+		return nil, fmt.Errorf("pending commands: %w", err)
+	}
+	// A reused pid can match an older shell too: keep the newest.
+	best := map[string]int{}
+	var out []PendingCommand
+	for _, r := range rows {
+		if i, ok := best[r.EventID]; ok {
+			if r.ProcFirstSeen.After(out[i].ProcFirstSeen) {
+				out[i] = r
+			}
+			continue
+		}
+		best[r.EventID] = len(out)
+		out = append(out, r)
+	}
+	return out, nil
+}
+
+// BackendSession is a gateway session with its backend address.
+type BackendSession struct {
+	UID       string     `ch:"devpod_uid"`
+	Addr      string     `ch:"backend_local_addr"`
+	SessionID string     `ch:"session_id"`
+	User      string     `ch:"user"`
+	OpenedAt  time.Time  `ch:"opened_at"`
+	ClosedAt  *time.Time `ch:"closed_at"`
+}
+
+// BackendSessions lists sessions opened since since that have a backend
+// address (all of them, unlike OpenSessionsByBackend's newest-per-addr).
+func (c *CH) BackendSessions(ctx context.Context, since time.Time) ([]BackendSession, error) {
+	var out []BackendSession
+	q := fmt.Sprintf(`SELECT devpod_uid, backend_local_addr, session_id, user, opened_at, closed_at FROM %s.sessions FINAL
+		WHERE opened_at >= ? AND backend_local_addr != ''`, c.db)
+	if err := c.conn.Select(c.readCtx(ctx), &out, q, since); err != nil {
+		return nil, fmt.Errorf("backend sessions: %w", err)
+	}
+	return out, nil
+}
+
+// InfoSeen returns each DevPod's latest container_info time since since.
+func (c *CH) InfoSeen(ctx context.Context, since time.Time) (map[string]time.Time, error) {
+	rows, err := c.conn.Query(c.readCtx(ctx), fmt.Sprintf("SELECT devpod_uid, max(ts) FROM %s.container_info WHERE ts >= ? GROUP BY devpod_uid", c.db), since)
+	if err != nil {
+		return nil, fmt.Errorf("info seen: %w", err)
+	}
+	defer rows.Close()
+	out := map[string]time.Time{}
+	for rows.Next() {
+		var uid string
+		var t time.Time
+		if err := rows.Scan(&uid, &t); err != nil {
+			return nil, err
+		}
+		out[uid] = t
+	}
+	return out, rows.Err()
+}

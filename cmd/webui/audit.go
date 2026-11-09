@@ -15,6 +15,7 @@ import (
 
 	"github.com/mrhaoxx/devpod/internal/audit/store"
 	"github.com/mrhaoxx/devpod/internal/webui"
+	"github.com/mrhaoxx/devpod/internal/webui/leader"
 )
 
 type auditFlags struct {
@@ -285,8 +286,65 @@ func (l *lazyCH) LastSessionByUser(ctx context.Context, since time.Time) (map[st
 	return c.LastSessionByUser(ctx, since)
 }
 
+func (l *lazyCH) IdleCandidates(ctx context.Context, now time.Time, cpuPct, gpuPct float64) ([]string, error) {
+	c, err := l.get(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return c.IdleCandidates(ctx, now, cpuPct, gpuPct)
+}
+
+func (l *lazyCH) PendingAttributions(ctx context.Context, since time.Time) ([]store.SSHConnRow, error) {
+	c, err := l.get(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return c.PendingAttributions(ctx, since)
+}
+
+func (l *lazyCH) PendingProcesses(ctx context.Context, since time.Time) ([]store.ProcessRow, error) {
+	c, err := l.get(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return c.PendingProcesses(ctx, since)
+}
+
+func (l *lazyCH) PendingCommands(ctx context.Context, since, procSince time.Time) ([]store.PendingCommand, error) {
+	c, err := l.get(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return c.PendingCommands(ctx, since, procSince)
+}
+
+func (l *lazyCH) BackendSessions(ctx context.Context, since time.Time) ([]store.BackendSession, error) {
+	c, err := l.get(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return c.BackendSessions(ctx, since)
+}
+
+func (l *lazyCH) HookMissing(ctx context.Context, from, to time.Time) ([]store.SessionRow, error) {
+	c, err := l.get(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return c.HookMissing(ctx, from, to)
+}
+
+func (l *lazyCH) InfoSeen(ctx context.Context, since time.Time) (map[string]time.Time, error) {
+	c, err := l.get(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return c.InfoSeen(ctx, since)
+}
+
 // lazyCH serves every store the webui uses.
 var (
 	_ webui.AuditStore     = (*lazyCH)(nil)
 	_ webui.TelemetryStore = (*lazyCH)(nil)
+	_ leader.JobStore      = (*lazyCH)(nil)
 )

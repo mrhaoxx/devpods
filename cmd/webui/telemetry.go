@@ -35,6 +35,9 @@ type telemetryFlags struct {
 	ingestKeyFile   string
 	leaderNamespace string
 	ingestService   string
+	idleCPUPct      float64
+	idleGPUPct      float64
+	silentAfter     time.Duration
 }
 
 func addTelemetryFlags(fs *flag.FlagSet) *telemetryFlags {
@@ -43,6 +46,9 @@ func addTelemetryFlags(fs *flag.FlagSet) *telemetryFlags {
 	fs.StringVar(&tf.ingestKeyFile, "ingest-key-file", "", "shared telemetry ingest HMAC key; empty = telemetry off")
 	fs.StringVar(&tf.leaderNamespace, "leader-election-namespace", "devpod-system", "namespace of the webui leader Lease and the ingest EndpointSlice")
 	fs.StringVar(&tf.ingestService, "ingest-service", "devpod-webui-ingest", "selectorless Service the leader publishes itself behind")
+	fs.Float64Var(&tf.idleCPUPct, "idle-cpu-pct", 5, "a DevPod is idle below this average CPU % (of its limit) over 24 h")
+	fs.Float64Var(&tf.idleGPUPct, "idle-gpu-pct", 5, "… and below this average GPU utilisation %")
+	fs.DurationVar(&tf.silentAfter, "agent-silent-after", 3*time.Minute, "alert agent_silent when a Running DevPod's telemetry stops this long")
 	return tf
 }
 
@@ -148,6 +154,7 @@ func (tf *telemetryFlags) startTelemetry(ctx context.Context, cfg *rest.Config, 
 			}
 		},
 	}
+
 	token := wire.Token(key, "internal-live")
 	addr := func() (string, error) {
 		actx, cancel := context.WithTimeout(ctx, 5*time.Second)
@@ -155,6 +162,15 @@ func (tf *telemetryFlags) startTelemetry(ctx context.Context, cfg *rest.Config, 
 		return leader.LeaderAddr(actx, direct, tf.leaderNamespace, tf.ingestService)
 	}
 	inputs := &webui.LiveInputs{S: srv}
+	running := func(ctx context.Context) []leader.RunningDevPod {
+		var out []leader.RunningDevPod
+		for _, d := range inputs.Build(ctx).DevPods {
+			if d.Phase == "Running" {
+				out = append(out, leader.RunningDevPod{UID: d.UID, Name: d.Name, PodStart: d.PhaseSince})
+			}
+		}
+		return out
+	}
 	srv.Live = &webui.LiveDeps{Hub: hub, Source: live.SwitchSource{
 		IsLeader: el.IsLeader,
 		Local:    live.LocalSource{State: state},
@@ -209,6 +225,9 @@ func (tf *telemetryFlags) startTelemetry(ctx context.Context, cfg *rest.Config, 
 			}
 		}()
 		go live.Tick(lctx, hub, time.Second, func() live.Snapshot { return state.Snapshot(inputs.Build(lctx)) })
+		jobs := &leader.Jobs{Store: ch, Running: running, LastSample: state.LastSample, SetIdle: inputs.SetIdle, Event: h.Events,
+			IdleCPUPct: tf.idleCPUPct, IdleGPUPct: tf.idleGPUPct, SilentAfter: tf.silentAfter, Since: time.Now()}
+		go jobs.Run(lctx)
 	}
 	onStop := func() { slog.Info("telemetry: leadership lost") }
 	go el.Run(ctx, onStart, onStop)
