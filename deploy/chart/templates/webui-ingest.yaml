@@ -33,5 +33,8 @@ spec:
     - podSelector:
         matchLabels:
           app.kubernetes.io/name: devpod-webui
+    {{- range (dig "ingestFromCIDRs" (list) (.Values.telemetry | default dict)) }}
+    - ipBlock: {cidr: {{ . }}}
+    {{- end }}
     ports: [{port: 8081}]
 {{- end }}

@@ -25,7 +25,8 @@ func (sockDiag) Bytes() (map[uint64]TCPBytes, error) {
 			return nil, err
 		}
 		for _, r := range resp {
-			if r.InetDiagMsg == nil || r.TCPInfo == nil {
+			if r.InetDiagMsg == nil || r.TCPInfo == nil ||
+				!CountedTCP(r.InetDiagMsg.ID.Source, r.InetDiagMsg.ID.Destination) {
 				continue
 			}
 			out[uint64(r.InetDiagMsg.INode)] = TCPBytes{Acked: r.TCPInfo.Bytes_acked, Received: r.TCPInfo.Bytes_received}
