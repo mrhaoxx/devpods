@@ -494,3 +494,34 @@ func TestEnsureZshProfileHook(t *testing.T) {
 		}
 	}
 }
+
+func TestInstallProfileScripts_IncludesHooks(t *testing.T) {
+	files := map[string][]byte{}
+	mkdir := func(string, os.FileMode) error { return nil }
+	readF := func(p string) ([]byte, error) {
+		if b, ok := files[p]; ok {
+			return b, nil
+		}
+		return nil, os.ErrNotExist
+	}
+	writeF := func(p string, b []byte, _ os.FileMode) error { files[p] = b; return nil }
+	if err := installProfileScripts(mkdir, readF, writeF); err != nil {
+		t.Fatal(err)
+	}
+	sh := string(files["/etc/profile.d/devpod.sh"])
+	if !strings.Contains(sh, "/etc/profile.d/devpod-hook.bash") || !strings.Contains(sh, "/etc/profile.d/devpod-hook.zsh") {
+		t.Fatalf("devpod.sh must source the per-shell hooks:\n%s", sh)
+	}
+	if strings.Contains(sh, "[[") || strings.Contains(sh, "+=(") {
+		t.Fatalf("devpod.sh is parsed by dash too; no bash/zsh syntax:\n%s", sh)
+	}
+	if b := string(files["/etc/profile.d/devpod-hook.bash"]); !strings.Contains(b, "trap") || !strings.Contains(b, "PROMPT_COMMAND") {
+		t.Fatalf("bash hook: %s", b)
+	}
+	if z := string(files["/etc/profile.d/devpod-hook.zsh"]); !strings.Contains(z, "preexec_functions") {
+		t.Fatalf("zsh hook: %s", z)
+	}
+	if f := string(files["/etc/fish/conf.d/devpod.fish"]); !strings.Contains(f, "fish_postexec") {
+		t.Fatalf("fish hook: %s", f)
+	}
+}
