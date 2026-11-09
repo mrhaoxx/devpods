@@ -279,3 +279,43 @@ func TestProxy_DoneClosesConnection(t *testing.T) {
 		t.Fatal("Proxy did not return after Done")
 	}
 }
+
+func TestProxy_NoticeGoesToClientStderr(t *testing.T) {
+	h := &fakeHooks{filter: func(d audit.Dir, p []byte) audit.Result {
+		if d == audit.ClientToBackend {
+			return audit.Result{Pass: p, Notice: []byte("heads up\n")}
+		}
+		return audit.Result{Pass: p}
+	}}
+	client, _, _ := startProxy(t, h)
+	sess, err := client.NewSession()
+	if err != nil {
+		t.Fatal(err)
+	}
+	stdin, _ := sess.StdinPipe()
+	stderr, _ := sess.StderrPipe()
+	if err := sess.Shell(); err != nil {
+		t.Fatal(err)
+	}
+	_, _ = stdin.Write([]byte("x"))
+	got := make([]byte, len("heads up\n"))
+	if _, err := io.ReadFull(stderr, got); err != nil || string(got) != "heads up\n" {
+		t.Fatalf("stderr %q %v", got, err)
+	}
+}
+
+func TestProxy_DeniedRequestReasonOnStderr(t *testing.T) {
+	client, _, _ := startProxy(t, &fakeHooks{denyReq: map[string]bool{"exec": true}})
+	sess, err := client.NewSession()
+	if err != nil {
+		t.Fatal(err)
+	}
+	stderr, _ := sess.StderrPipe()
+	if err := sess.Start("scp -f /etc/shadow"); err == nil {
+		t.Fatal("denied exec must fail")
+	}
+	got := make([]byte, len("denied\n"))
+	if _, err := io.ReadFull(stderr, got); err != nil || string(got) != "denied\n" {
+		t.Fatalf("stderr %q %v", got, err)
+	}
+}

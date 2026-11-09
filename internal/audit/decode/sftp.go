@@ -72,6 +72,7 @@ type sftpDecoder struct {
 	mu       sync.Mutex
 	buf      [2][]byte
 	disabled bool
+	notice   []byte // pending client notice for the current Feed
 	opens    map[uint32]sftpOpenReq
 	handles  map[string]*sftpFile
 	reads    map[uint32]pendingRead
@@ -95,7 +96,7 @@ func (d *sftpDecoder) carry(dir Dir) int {
 	return len(d.buf[dir])
 }
 
-func (d *sftpDecoder) Feed(dir Dir, p []byte) Result {
+func (d *sftpDecoder) Feed(dir Dir, p []byte) (res Result) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	if d.disabled {
@@ -106,7 +107,7 @@ func (d *sftpDecoder) Feed(dir Dir, p []byte) Result {
 	d.buf[dir] = append(d.buf[dir], p...)
 	buf := d.buf[dir]
 	consumed := 0
-	var res Result
+	defer func() { res.Notice = append(res.Notice, d.notice...); d.notice = nil }()
 	for len(buf)-consumed >= 4 {
 		rest := buf[consumed:]
 		n := binary.BigEndian.Uint32(rest)
@@ -283,6 +284,7 @@ func (d *sftpDecoder) op(op, path, path2 string, r *reader) {
 
 func (d *sftpDecoder) deny(id, code uint32, msg, rule, op, path string) []byte {
 	d.sink.Emit(Event{Kind: EventPolicy, Protocol: "sftp", Op: op, Path: path, Rule: rule, Action: "deny", Detail: msg})
+	d.notice = append(d.notice, msg+"\n"...)
 	return sftpStatus(id, code, msg)
 }
 
