@@ -15,18 +15,25 @@ import (
 
 	devpodv1alpha1 "github.com/mrhaoxx/devpod/api/v1alpha1"
 	"github.com/mrhaoxx/devpod/internal/render"
+	"github.com/mrhaoxx/devpod/internal/webui/live"
 )
 
 // streamMsg is one Server-Sent Event on the per-DevPod stream. Kind
 // selects the payload: "devpod" carries the DevPod object plus its
 // Kore binding readback (drives live phase/status), "event" carries a
-// related k8s Event (drives the live event log).
+// related k8s Event (drives the live event log); with telemetry,
+// "metrics" carries the latest full sample, "processes" the process
+// list (?procs=all for every process, else the top 10 by CPU) and
+// "liveStatus" whether the live layer is reachable.
 type streamMsg struct {
-	Kind   string                 `json:"kind"` // "devpod" | "event"
-	Type   string                 `json:"type"` // ADDED | MODIFIED | DELETED
-	DevPod *devpodv1alpha1.DevPod `json:"devpod,omitempty"`
-	Detail *DevPodDetail          `json:"detail,omitempty"`
-	Event  *corev1.Event          `json:"event,omitempty"`
+	Kind      string                 `json:"kind"`           // devpod | event | metrics | processes | liveStatus
+	Type      string                 `json:"type,omitempty"` // ADDED | MODIFIED | DELETED
+	DevPod    *devpodv1alpha1.DevPod `json:"devpod,omitempty"`
+	Detail    *DevPodDetail          `json:"detail,omitempty"`
+	Event     *corev1.Event          `json:"event,omitempty"`
+	Metrics   *live.DevPodSample     `json:"metrics,omitempty"`
+	Processes *[]live.ProcLive       `json:"processes,omitempty"`
+	Connected *bool                  `json:"connected,omitempty"`
 }
 
 // handleDevPodStream is the single SSE connection a detail page needs:
@@ -153,6 +160,7 @@ func (s *Server) handleDevPodStream(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-cache")
 	w.WriteHeader(http.StatusOK)
 	flusher.Flush()
+	go s.pushLive(r.Context(), sess, string(dp.UID), r.URL.Query().Get("procs") == "all", send)
 
 	for {
 		select {

@@ -77,7 +77,7 @@ func TestRollup_Attention(t *testing.T) {
 		DevPods: []DevPodRef{
 			{UID: "idle", Name: "i", Owner: "bob", Phase: "Running", GPURequest: 1},
 			{UID: "pend", Name: "p", Owner: "carol", Phase: "Pending", PhaseSince: now.Add(-11 * time.Minute)},
-			{UID: "big", Name: "q", Owner: "dave", Phase: "Running", CPURequest: 7.6},
+			{UID: "big", Name: "q", Owner: "dave", Phase: "Running", CPURequest: 2, CPULimit: 7.6},
 		},
 		Quotas: map[string]Quota{"dave": {CPU: 8}},
 		Idle:   map[string]bool{"idle": true},
@@ -130,5 +130,22 @@ func TestState_ProcessesMergeFullAndLive(t *testing.T) {
 	}
 	if top := s.Processes("u", false); len(top) != 2 {
 		t.Fatalf("top %+v", top)
+	}
+}
+
+func TestState_StaleProcessesAndRetain(t *testing.T) {
+	now := time.Unix(1000, 0)
+	s := NewState(clock(&now))
+	s.Apply("u", []wire.Record{container(1, 1), {K: wire.KFullProcs, Full: &wire.FullProcs{Procs: []wire.SnapProc{{Pid: 5, Start: 1}}}}})
+	if len(s.Processes("u", true)) != 1 {
+		t.Fatal("fresh processes missing")
+	}
+	now = now.Add(11 * time.Second)
+	if got := s.Processes("u", true); len(got) != 0 {
+		t.Fatalf("a silent agent's processes must not be shown: %+v", got)
+	}
+	s.Retain(func(uid string) bool { return uid != "u" })
+	if _, ok := s.Sample("u"); ok || len(s.pods) != 0 {
+		t.Fatal("Retain kept a deleted DevPod")
 	}
 }

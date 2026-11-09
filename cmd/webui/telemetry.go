@@ -7,17 +7,26 @@ package main
 import (
 	"bytes"
 	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"log/slog"
+	"net/http"
 	"os"
+	"time"
 
+	corev1 "k8s.io/api/core/v1"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/manager"
 
 	"github.com/mrhaoxx/devpod/internal/render"
+	"github.com/mrhaoxx/devpod/internal/telemetry/wire"
+	"github.com/mrhaoxx/devpod/internal/webui"
+	"github.com/mrhaoxx/devpod/internal/webui/ingest"
 	"github.com/mrhaoxx/devpod/internal/webui/leader"
+	"github.com/mrhaoxx/devpod/internal/webui/live"
 )
 
 // telemetryFlags configure the phase-2 live data layer (spec §5.10).
@@ -65,16 +74,172 @@ func (tf *telemetryFlags) newElector(cfg *rest.Config) (*leader.Elector, error) 
 	return &leader.Elector{Client: cs, Namespace: tf.leaderNamespace, Name: "devpod-webui-leader", Identity: id}, nil
 }
 
-// publishSelf points the ingest Service at this pod when it leads.
+// publishSelf points the ingest Service at this pod while it leads,
+// re-asserting every 30 s in case the slice was edited or deleted.
 func (tf *telemetryFlags) publishSelf(ctx context.Context, c client.Client) {
 	name, ip := os.Getenv("POD_NAME"), os.Getenv("POD_IP")
 	if name == "" || ip == "" {
 		slog.Error("telemetry leader: POD_NAME / POD_IP unset; ingest endpoint not published")
 		return
 	}
-	if err := leader.PublishIngestEndpoint(ctx, c, tf.leaderNamespace, tf.ingestService, name, ip, render.IngestPort); err != nil {
-		slog.Error("telemetry leader: publish ingest endpoint", "err", err)
-		return
+	t := time.NewTicker(30 * time.Second)
+	defer t.Stop()
+	for {
+		if err := leader.PublishIngestEndpoint(ctx, c, tf.leaderNamespace, tf.ingestService, name, ip, render.IngestPort); err != nil {
+			if ctx.Err() == nil {
+				slog.Error("telemetry leader: publish ingest endpoint", "err", err)
+			}
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+		}
 	}
-	slog.Info("telemetry leader: ingest endpoint published", "pod", name, "ip", ip)
+}
+
+// startTelemetry runs the live layer: the :8081 listener (ingest and
+// the leader's internal endpoints), the election, and — on the leader —
+// the session resolver, the input refresher and the snapshot ticker;
+// on followers the link to the leader.
+func (tf *telemetryFlags) startTelemetry(ctx context.Context, cfg *rest.Config, mgr manager.Manager, srv *webui.Server) error {
+	key, err := tf.key()
+	if err != nil {
+		return err
+	}
+	if srv.Audit == nil {
+		return errors.New("telemetry needs the audit store (--clickhouse-*)")
+	}
+	ch, ok := srv.Audit.Store.(*lazyCH)
+	if !ok {
+		return errors.New("telemetry: unexpected audit store type")
+	}
+	el, err := tf.newElector(cfg)
+	if err != nil {
+		return err
+	}
+	// The EndpointSlice lives in one namespace the webui may access; a
+	// cached client would start a cluster-wide informer for it.
+	direct, err := client.New(cfg, client.Options{Scheme: mgr.GetScheme()})
+	if err != nil {
+		return err
+	}
+
+	state := live.NewState(nil)
+	hub := live.NewHub()
+	hub.SetConnected(false)
+	resolver := &ingest.Resolver{Source: ch}
+	state.ResolveUser = resolver.User
+	writer := ingest.NewWriter(ch)
+	writer.IsLeader = el.IsLeader
+	recorder := mgr.GetEventRecorderFor("devpod-webui")
+	h := &ingest.Handler{
+		Key: key, IsLeader: el.IsLeader, Writer: writer, State: state, Resolver: resolver,
+		DevPods: func(uid string) (string, string, bool) {
+			dp, ok := srv.DevPodByUID(context.Background(), uid)
+			if !ok {
+				return "", "", false
+			}
+			return dp.Spec.Owner, dp.Name, true
+		},
+		Events: func(uid, kind, detail string) {
+			if dp, ok := srv.DevPodByUID(context.Background(), uid); ok {
+				recorder.Eventf(dp, corev1.EventTypeWarning, "TelemetryAlert", "%s: %s", kind, detail)
+			}
+		},
+	}
+	token := wire.Token(key, "internal-live")
+	addr := func() (string, error) {
+		actx, cancel := context.WithTimeout(ctx, 5*time.Second)
+		defer cancel()
+		return leader.LeaderAddr(actx, direct, tf.leaderNamespace, tf.ingestService)
+	}
+	inputs := &webui.LiveInputs{S: srv}
+	srv.Live = &webui.LiveDeps{Hub: hub, Source: live.SwitchSource{
+		IsLeader: el.IsLeader,
+		Local:    live.LocalSource{State: state},
+		Remote:   &live.RemoteSource{Addr: addr, Token: token},
+	}}
+
+	mux := http.NewServeMux()
+	mux.Handle("POST /ingest/v1/batch", h)
+	mux.Handle("GET "+live.LivePath, live.LiveHandler(hub, token, el.IsLeader))
+	mux.Handle("GET "+live.DevPodPath, live.DevPodHandler(state, token, el.IsLeader))
+	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write([]byte("ok")) })
+	ingestSrv := &http.Server{Addr: tf.ingestListen, Handler: mux, ReadHeaderTimeout: 5 * time.Second}
+	go func() {
+		<-ctx.Done()
+		sctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_ = ingestSrv.Shutdown(sctx)
+	}()
+	go func() {
+		slog.Info("telemetry ingest listening", "addr", tf.ingestListen)
+		if err := ingestSrv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			fatal(err)
+		}
+	}()
+
+	onStart := func(lctx context.Context) {
+		slog.Info("telemetry: this replica leads")
+		go tf.publishSelf(lctx, direct)
+		go resolver.Run(lctx)
+		go func() {
+			t := time.NewTicker(15 * time.Second)
+			defer t.Stop()
+			for {
+				if err := inputs.Refresh(lctx); err != nil && lctx.Err() == nil {
+					slog.Warn("telemetry: refresh presence/alerts", "err", err)
+				}
+				keep := map[string]bool{}
+				for _, d := range inputs.Build(lctx).DevPods {
+					keep[d.UID] = true
+				}
+				state.Retain(func(uid string) bool { return keep[uid] })
+				select {
+				case <-lctx.Done():
+					return
+				case <-t.C:
+				}
+			}
+		}()
+		go live.Tick(lctx, hub, time.Second, func() live.Snapshot { return state.Snapshot(inputs.Build(lctx)) })
+	}
+	onStop := func() { slog.Info("telemetry: leadership lost") }
+	go el.Run(ctx, onStart, onStop)
+	go followWhileNotLeading(ctx, el, addr, token, hub)
+	return nil
+}
+
+// followWhileNotLeading relays the leader's snapshots whenever this
+// replica is a follower.
+func followWhileNotLeading(ctx context.Context, el *leader.Elector, addr func() (string, error), token string, hub *live.Hub) {
+	for ctx.Err() == nil {
+		if el.IsLeader() {
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(500 * time.Millisecond):
+			}
+			continue
+		}
+		fctx, cancel := context.WithCancel(ctx)
+		go func() {
+			t := time.NewTicker(500 * time.Millisecond)
+			defer t.Stop()
+			for {
+				select {
+				case <-fctx.Done():
+					return
+				case <-t.C:
+					if el.IsLeader() {
+						cancel()
+						return
+					}
+				}
+			}
+		}()
+		live.Follow(fctx, addr, token, hub)
+		cancel()
+	}
 }

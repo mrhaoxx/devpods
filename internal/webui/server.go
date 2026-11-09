@@ -74,6 +74,8 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("GET /api/devpods/{name}/stream", s.handleDevPodStream)
 	mux.HandleFunc("GET /api/devpods/{name}/topology", s.handleDevPodTopology)
 	s.registerAuditRoutes(mux)
+	mux.HandleFunc("GET /api/live/devpods", s.handleLiveDevPods)
+	mux.HandleFunc("GET /api/admin/live/overview", s.handleLiveOverview)
 	mux.HandleFunc("/api/", func(w http.ResponseWriter, r *http.Request) {
 		s.writeErr(w, http.StatusNotFound, "NOT_FOUND", "no such endpoint", nil)
 	})

@@ -67,6 +67,9 @@ type Server struct {
 	// GatewayConfigName is the GatewayConfig whose audit policy is the
 	// cluster default ("" = "default").
 	GatewayConfigName string
+
+	// Live is the phase-2 live telemetry layer; nil hides it.
+	Live *LiveDeps
 }
 
 type apiBody struct {
