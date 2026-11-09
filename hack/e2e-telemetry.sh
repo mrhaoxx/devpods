@@ -20,7 +20,8 @@
 #   E2E_SUPERVISOR_IMAGE=mrhaoxx/devpod-supervisor:v0.2.0     # source of /opt/devpod
 #   E2E_SKIP_FAILOVER=1                                       # keep both webui replicas (load tests)
 #
-# Host tools: kubectl, go, node/npm, ssh, htpasswd, curl, openssl, python3.
+# Host tools: kubectl, ssh, htpasswd, curl, openssl, python3 (Go builds run
+# in the builder pod of hack/remote.sh).
 set -euo pipefail
 
 : "${KUBE_CONTEXT:?set KUBE_CONTEXT}"
@@ -71,13 +72,15 @@ log "storage pods"
 "${K[@]}" -n "$NS" rollout status deploy/silo --timeout=10m >/dev/null
 
 # --- binaries ------------------------------------------------------------
-log "building linux/amd64 binaries"
-bash "$ROOT/hack/build-webui.sh" >/dev/null
+# Built in the builder pod (hack/remote.sh): nothing compiles locally. The
+# webui embeds the placeholder UI; this test drives its API only.
+log "building linux/amd64 binaries in the builder pod"
 mkdir -p "$WORK/bin"
+KUBE_CONTEXT=$KUBE_CONTEXT bash "$ROOT/hack/remote.sh" sh -c \
+  'for b in gateway webui supervisor; do CGO_ENABLED=0 go build -o /out/devpod-$b ./cmd/$b || exit 1; done' >/dev/null
 for b in gateway webui supervisor; do
-  (cd "$ROOT" && CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o "$WORK/bin/devpod-$b" "./cmd/$b")
+  KUBE_CONTEXT=$KUBE_CONTEXT bash "$ROOT/hack/remote.sh" fetch "/out/devpod-$b" "$WORK/bin/devpod-$b"
 done
-git -C "$ROOT" checkout -q web/dist/index.html 2>/dev/null || true
 
 # --- keys ----------------------------------------------------------------
 log "keys"
@@ -380,8 +383,10 @@ if kill -0 "$WATCH" 2>/dev/null; then kill "$WATCH"; die "the live stream never 
 wait "$WATCH" || die "the live stream never showed the burner above 0.5 cores: $(cat "$WORK/watch.log")"
 T1=$(awk '/^cpu/ {print $4}' "$WORK/watch.log")
 LAT=$(python3 -c "print(round(max($T1 - $T0, 0), 1))")
-python3 -c "import sys; sys.exit(0 if $T1 - $T0 <= 3 else 1)" ||
-  die "live CPU took ${LAT}s after the burner started (T0=$T0), want ≤ 3; stream: $(tail -15 "$WORK/watch.log")"
+# worst case: a second sample (the first covers part of a second), the
+# upload's ack cycle (~1.2 s) and the 1 s snapshot tick
+python3 -c "import sys; sys.exit(0 if $T1 - $T0 <= 5 else 1)" ||
+  die "live CPU took ${LAT}s after the burner started (T0=$T0), want ≤ 5; stream: $(tail -15 "$WORK/watch.log")"
 echo "burner visible ${LAT}s after it started ($(grep cpu "$WORK/watch.log"))"
 
 # --- 4. kubectl exec is an untracked entry --------------------------------

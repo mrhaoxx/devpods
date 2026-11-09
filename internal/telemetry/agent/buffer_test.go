@@ -219,3 +219,42 @@ func TestBuffer_DefaultFitsMemoryLimit(t *testing.T) {
 		t.Fatalf("a full default buffer holds %d MiB of heap; the agent's limit is 24 MiB", held>>20)
 	}
 }
+
+// After a leader failover agents must find the new leader quickly: the
+// retry backoff is capped at 8 s (+20 % jitter).
+func TestUploader_BackoffCapped(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "not the leader", http.StatusServiceUnavailable)
+	}))
+	defer srv.Close()
+	tok := filepath.Join(t.TempDir(), "tok")
+	_ = os.WriteFile(tok, []byte("t"), 0o600)
+	b := NewBuffer(1 << 20)
+	b.Add(1, []wire.Record{{K: wire.KContainer, C: &wire.Container{}}})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	var mu sync.Mutex
+	var waits []time.Duration
+	u := &Uploader{URL: func() string { return srv.URL }, TokenPath: tok, Sleep: func(ctx context.Context, d time.Duration) bool {
+		mu.Lock()
+		waits = append(waits, d)
+		n := len(waits)
+		mu.Unlock()
+		if n >= 12 {
+			cancel()
+			return false
+		}
+		return true
+	}}
+	u.Run(ctx, func() wire.Header { return wire.Header{V: wire.Version, DevPodUID: "u"} }, b)
+	mu.Lock()
+	defer mu.Unlock()
+	if len(waits) < 12 {
+		t.Fatalf("%d retries", len(waits))
+	}
+	for _, d := range waits {
+		if d > 8*time.Second*12/10 {
+			t.Fatalf("backoff %v exceeds the 8 s cap: %v", d, waits)
+		}
+	}
+}
