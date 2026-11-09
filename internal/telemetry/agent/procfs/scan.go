@@ -34,6 +34,7 @@ type Proc struct {
 	Cmdline       string
 	UID           int
 	SID, TTY      int
+	PGID          int // process group
 	State         string
 	Threads       int
 	SSHConnection string // from environ, "" when absent or unreadable
@@ -358,6 +359,7 @@ func (s *Scanner) read(pid int, nextStatic map[PID]static, nextDyn map[PID]dyn) 
 	p := &Proc{
 		ID:      PID{Pid: pid, Start: num(19)},
 		PPid:    inum(1),
+		PGID:    inum(2),
 		SID:     inum(3),
 		TTY:     inum(4),
 		State:   string(f[0]),

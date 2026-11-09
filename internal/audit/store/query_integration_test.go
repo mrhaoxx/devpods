@@ -359,4 +359,8 @@ func TestReadQueries_UseDateIndex(t *testing.T) {
 	check("BackendSessions", err)
 	_, err = c.InfoSeen(ctx, time.Now().Add(-time.Hour))
 	check("InfoSeen", err)
+	_, err = c.HooksSince(ctx, time.Now().Add(-time.Hour))
+	check("HooksSince", err)
+	_, err = c.UnattributedCounts(ctx, time.Now().Add(-time.Minute), time.Now())
+	check("UnattributedCounts", err)
 }

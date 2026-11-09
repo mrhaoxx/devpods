@@ -100,6 +100,7 @@ func main() {
 		os.Exit(1)
 	}
 	children := []*child{{name: "sshd", cmd: sshdCmd}}
+	workloadPid := 0
 
 	if userArgs := os.Args[1:]; len(userArgs) > 0 {
 		uc := exec.Command(userArgs[0], userArgs[1:]...)
@@ -113,6 +114,7 @@ func main() {
 			os.Exit(1)
 		}
 		children = append(children, &child{name: "user", cmd: uc})
+		workloadPid = uc.Process.Pid
 	}
 
 	// exitOnUserCmd controls whether the supervisor exits when the
@@ -127,7 +129,7 @@ func main() {
 	// (spec §5.5); it is restarted on crash and never decides our exit.
 	var tel *telemetrySup
 	if _, err := os.Stat(envOr("SUPERVISOR_TELEMETRY_CONFIG", config.ConfigPath)); err == nil {
-		tel = newTelemetrySup(sshdCmd.Process.Pid)
+		tel = newTelemetrySup(sshdCmd.Process.Pid, workloadPid)
 		go tel.loop()
 	}
 

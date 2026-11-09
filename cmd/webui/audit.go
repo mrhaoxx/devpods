@@ -342,6 +342,22 @@ func (l *lazyCH) InfoSeen(ctx context.Context, since time.Time) (map[string]time
 	return c.InfoSeen(ctx, since)
 }
 
+func (l *lazyCH) HooksSince(ctx context.Context, since time.Time) (map[string]time.Time, error) {
+	c, err := l.get(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return c.HooksSince(ctx, since)
+}
+
+func (l *lazyCH) UnattributedCounts(ctx context.Context, from, to time.Time) (map[string]uint64, error) {
+	c, err := l.get(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return c.UnattributedCounts(ctx, from, to)
+}
+
 // lazyCH serves every store the webui uses.
 var (
 	_ webui.AuditStore     = (*lazyCH)(nil)

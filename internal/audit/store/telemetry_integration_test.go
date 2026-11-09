@@ -194,9 +194,14 @@ func TestBackfillQueries(t *testing.T) {
 		ProcRows: []ProcessRow{
 			{DevPodUID: "u1", BootID: "b", Pid: 60, StartTime: 110, Exe: "/bin/bash", FirstSeen: shellAt, SessionID: "pending", Peer: "10.0.0.9:41000", Attribution: "tree", Version: 1},
 			{DevPodUID: "u1", BootID: "b", Pid: 61, StartTime: 120, Exe: "/bin/ls", FirstSeen: shellAt, SessionID: "S0", Peer: "10.0.0.8:1", Attribution: "tree", Version: 1},
+			{DevPodUID: "u2", BootID: "b", Pid: 70, StartTime: 130, Exe: "/bin/x", FirstSeen: shellAt, Attribution: "unattributed", Version: 1},
+			{DevPodUID: "u2", BootID: "b", Pid: 71, StartTime: 131, Exe: "/bin/y", FirstSeen: shellAt, Attribution: "unattributed", Version: 1},
+			{DevPodUID: "u2", BootID: "b", Pid: 72, StartTime: 132, Exe: "/bin/z", FirstSeen: shellAt, Attribution: "workload", Version: 1},
 		},
 		Commands: []CommandRow{{EventID: "e1", TS: shellAt.Add(time.Minute), SessionID: "pending", DevPodUID: "u1", Source: "shell_hook", PID: 60, Cmdline: "make", ExitCode: &exit, Attribution: "pending", Version: 1}},
-		Infos:    []ContainerInfoRow{{TS: shellAt, DevPodUID: "u1", BootID: "b", Info: "{}", Version: 1}},
+		Infos: []ContainerInfoRow{{TS: shellAt, DevPodUID: "u1", BootID: "b", Info: "{}", Version: 1},
+			{TS: shellAt, DevPodUID: "u2", BootID: "b", Info: `{"collectors":{"hooks":"ok","cgroup":"ok"}}`, Version: 1},
+			{TS: shellAt, DevPodUID: "u3", BootID: "b", Info: `{"collectors":{"hooks":"disabled: config"}}`, Version: 1}},
 	}
 	if err := c.InsertTelemetry(ctx, b, "t"); err != nil {
 		t.Fatal(err)
@@ -220,6 +225,14 @@ func TestBackfillQueries(t *testing.T) {
 	seen, err := c.InfoSeen(ctx, now.Add(-time.Hour))
 	if err != nil || !seen["u1"].Equal(shellAt) {
 		t.Fatalf("info seen %v %v", seen, err)
+	}
+	hooks, err := c.HooksSince(ctx, now.Add(-time.Hour))
+	if err != nil || len(hooks) != 1 || !hooks["u2"].Equal(shellAt) {
+		t.Fatalf("hooks since %v %v (only u2 runs hooks)", hooks, err)
+	}
+	un, err := c.UnattributedCounts(ctx, shellAt.Add(-time.Second), shellAt.Add(time.Second))
+	if err != nil || len(un) != 1 || un["u2"] != 2 {
+		t.Fatalf("unattributed %v %v", un, err)
 	}
 }
 

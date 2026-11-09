@@ -6,6 +6,7 @@ package leader
 
 import (
 	"context"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -21,6 +22,8 @@ type fakeJobStore struct {
 	sessions []store.BackendSession
 	hook     []store.SessionRow
 	info     map[string]time.Time
+	hooks    map[string]time.Time
+	unattr   map[string]uint64
 	idle     []string
 	block    bool
 	inserts  []store.TelemetryBatch
@@ -54,6 +57,12 @@ func (f *fakeJobStore) HookMissing(ctx context.Context, _, _ time.Time) ([]store
 }
 func (f *fakeJobStore) InfoSeen(ctx context.Context, _ time.Time) (map[string]time.Time, error) {
 	return f.info, f.wait(ctx)
+}
+func (f *fakeJobStore) HooksSince(ctx context.Context, _ time.Time) (map[string]time.Time, error) {
+	return f.hooks, f.wait(ctx)
+}
+func (f *fakeJobStore) UnattributedCounts(ctx context.Context, _, _ time.Time) (map[string]uint64, error) {
+	return f.unattr, f.wait(ctx)
 }
 func (f *fakeJobStore) InsertTelemetry(_ context.Context, b store.TelemetryBatch, _ string) error {
 	f.mu.Lock()
@@ -187,5 +196,51 @@ func TestJobs_StopWhenLeadershipLost(t *testing.T) {
 	j.SetIdle = func(m map[string]bool) { idle = m }
 	if err := j.RunOnce(context.Background(), time.Now()); err != nil || !idle["u1"] {
 		t.Fatalf("idle job: %v %v", idle, err)
+	}
+}
+
+// hook_missing only for DevPods whose agent ran hooks when the session
+// opened: old Pods and --telemetry-hooks=false have none (review #6).
+func TestJobs_HookMissingOnlyWhereHooksRun(t *testing.T) {
+	now := time.Now().UTC().Truncate(time.Minute)
+	opened := now.Add(-5 * time.Minute)
+	closed := now.Add(-90 * time.Second)
+	st := &fakeJobStore{
+		hook: []store.SessionRow{
+			{SessionID: "S1", DevPodUID: "u1", User: "alice", OpenedAt: opened, ClosedAt: &closed},
+			{SessionID: "S2", DevPodUID: "u2", User: "bob", OpenedAt: opened, ClosedAt: &closed},
+			{SessionID: "S3", DevPodUID: "u3", User: "carol", OpenedAt: opened, ClosedAt: &closed},
+		},
+		hooks: map[string]time.Time{"u1": opened.Add(-time.Hour), "u3": opened.Add(time.Minute)}, // u3's agent came later
+	}
+	if err := newJobs(st).RunOnce(context.Background(), now); err != nil {
+		t.Fatal(err)
+	}
+	var got []string
+	for _, a := range st.all().Alerts {
+		if a.Kind == "hook_missing" {
+			got = append(got, a.SessionID)
+		}
+	}
+	if len(got) != 1 || got[0] != "S1" {
+		t.Fatalf("hook_missing for %v, want only S1", got)
+	}
+}
+
+// unattributed is one alert per DevPod per minute with the count (spec
+// §5.8 cross-check), not one per batch (review #7).
+func TestJobs_UnattributedPerMinute(t *testing.T) {
+	st := &fakeJobStore{unattr: map[string]uint64{"u1": 3}}
+	if err := newJobs(st).RunOnce(context.Background(), time.Now().UTC()); err != nil {
+		t.Fatal(err)
+	}
+	var n int
+	for _, a := range st.all().Alerts {
+		if a.Kind == "unattributed" && a.DevPodUID == "u1" && strings.Contains(a.Detail, "3") {
+			n++
+		}
+	}
+	if n != 1 {
+		t.Fatalf("%d unattributed alerts: %+v", n, st.all().Alerts)
 	}
 }

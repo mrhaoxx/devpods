@@ -441,3 +441,38 @@ func TestCountedTCP(t *testing.T) {
 		}
 	}
 }
+
+// The DevPod's own command (started by the supervisor in its own process
+// group) and its tree are "workload": never a session's, never alerted
+// as unattributed (review #7).
+func TestAttributor_WorkloadTree(t *testing.T) {
+	root := base(t)
+	writeProc(t, root, fp{pid: 30, ppid: 1, sid: 1, start: 7, exe: "/usr/bin/jupyter", cmd: "jupyter lab"})
+	writeProc(t, root, fp{pid: 31, ppid: 30, sid: 1, pgrp: 30, start: 160, exe: "/usr/bin/python3", cmd: "python3 kernel"})
+	writeProc(t, root, fp{pid: 32, ppid: 1, sid: 1, pgrp: 30, start: 170, exe: "/usr/bin/worker", cmd: "worker"}) // orphaned, same group
+	a := NewAttributor(10, sessExe)
+	a.WorkloadPid = 30
+	attr, _ := update(t, root, a, conns) // one live SSH connection
+	for _, id := range []PID{{30, 7}, {31, 160}, {32, 170}} {
+		if attr[id].How != "workload" {
+			t.Errorf("%v: %+v, want workload", id, attr[id])
+		}
+	}
+}
+
+// kubectl exec enters with PPid 0: it and its children are "untracked",
+// never inferred to the one open SSH session (review #8).
+func TestAttributor_UntrackedNotInferred(t *testing.T) {
+	root := base(t)
+	writeProc(t, root, fp{pid: 40, ppid: 0, sid: 40, start: 200, exe: "/bin/bash", cmd: "bash"})
+	writeProc(t, root, fp{pid: 41, ppid: 40, sid: 40, start: 210, exe: "/usr/bin/vim", cmd: "vim /etc/hosts"})
+	attr, kinds := update(t, root, NewAttributor(10, sessExe), conns)
+	for _, id := range []PID{{40, 200}, {41, 210}} {
+		if attr[id].How != "untracked" {
+			t.Errorf("%v: %+v, want untracked", id, attr[id])
+		}
+	}
+	if count(kinds, "untracked_entry") != 1 {
+		t.Fatalf("events %v", kinds)
+	}
+}

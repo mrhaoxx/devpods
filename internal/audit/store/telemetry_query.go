@@ -405,3 +405,47 @@ func (c *CH) InfoSeen(ctx context.Context, since time.Time) (map[string]time.Tim
 	}
 	return out, rows.Err()
 }
+
+// HooksSince returns, per DevPod, the first container_info since since
+// from an agent that runs shell hooks (hook_missing is judged only there).
+func (c *CH) HooksSince(ctx context.Context, since time.Time) (map[string]time.Time, error) {
+	q := fmt.Sprintf(`SELECT devpod_uid, min(ts) FROM %s.container_info
+		WHERE ts >= ? AND JSONExtractString(info, 'collectors', 'hooks') = 'ok' GROUP BY devpod_uid`, c.db)
+	rows, err := c.conn.Query(c.readCtx(ctx), q, since)
+	if err != nil {
+		return nil, fmt.Errorf("hooks since: %w", err)
+	}
+	defer rows.Close()
+	out := map[string]time.Time{}
+	for rows.Next() {
+		var uid string
+		var t time.Time
+		if err := rows.Scan(&uid, &t); err != nil {
+			return nil, err
+		}
+		out[uid] = t
+	}
+	return out, rows.Err()
+}
+
+// UnattributedCounts counts, per DevPod, processes first seen in
+// [from, to) that no rule attributed (the minute's unattributed alert).
+func (c *CH) UnattributedCounts(ctx context.Context, from, to time.Time) (map[string]uint64, error) {
+	q := fmt.Sprintf(`SELECT devpod_uid, count() FROM %s.processes FINAL
+		WHERE first_seen >= ? AND first_seen < ? AND attribution = 'unattributed' AND pid != 1 GROUP BY devpod_uid`, c.db)
+	rows, err := c.conn.Query(c.readCtx(ctx), q, from, to)
+	if err != nil {
+		return nil, fmt.Errorf("unattributed counts: %w", err)
+	}
+	defer rows.Close()
+	out := map[string]uint64{}
+	for rows.Next() {
+		var uid string
+		var n uint64
+		if err := rows.Scan(&uid, &n); err != nil {
+			return nil, err
+		}
+		out[uid] = n
+	}
+	return out, rows.Err()
+}

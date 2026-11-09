@@ -293,12 +293,13 @@ func TestIngest_RowsAlertsAndEvents(t *testing.T) {
 		}
 		kinds[a.Kind] = true
 	}
-	if len(b.Alerts) != 3 || !kinds["untracked_entry"] || !kinds["unattributed"] || !kinds["gap"] {
-		t.Fatalf("alerts %+v (system processes must not raise unattributed)", b.Alerts)
+	// unattributed is counted per minute by the leader job, not per batch
+	if len(b.Alerts) != 2 || !kinds["untracked_entry"] || !kinds["gap"] || kinds["unattributed"] {
+		t.Fatalf("alerts %+v", b.Alerts)
 	}
 	mu.Lock()
 	defer mu.Unlock()
-	if len(events) != 3 {
+	if len(events) != 2 {
 		t.Fatalf("one Event per kind per DevPod per minute: %v", events)
 	}
 }

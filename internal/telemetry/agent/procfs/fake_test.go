@@ -24,6 +24,7 @@ type fp struct {
 	threads             int
 	state               string
 	tgid                int // 0 = pid (a process); else a thread of tgid
+	pgrp                int // 0 = pid
 }
 
 func writeProc(t *testing.T, root string, p fp) {
@@ -43,11 +44,15 @@ func writeProc(t *testing.T, root string, p fp) {
 	if tgid == 0 {
 		tgid = p.pid
 	}
+	pgrp := p.pgrp
+	if pgrp == 0 {
+		pgrp = p.pid
+	}
 	// pid (comm) state ppid pgrp session tty_nr tpgid flags minflt cminflt
 	// majflt cmajflt utime stime cutime cstime priority nice num_threads
 	// itrealvalue starttime …
 	stat := fmt.Sprintf("%d (%s) %s %d %d %d %d -1 0 0 0 0 0 %d 0 0 0 20 0 %d 0 %d 0 %d\n",
-		p.pid, comm, p.state, p.ppid, p.pid, p.sid, p.tty, p.cpuTicks, p.threads, p.start, p.rssPages)
+		p.pid, comm, p.state, p.ppid, pgrp, p.sid, p.tty, p.cpuTicks, p.threads, p.start, p.rssPages)
 	files := map[string]string{
 		"stat":    stat,
 		"cmdline": strings.ReplaceAll(p.cmd, " ", "\x00") + "\x00",

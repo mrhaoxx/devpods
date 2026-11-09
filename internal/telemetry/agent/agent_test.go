@@ -339,3 +339,16 @@ func TestAgent_LightScanBetweenFullScans(t *testing.T) {
 		}
 	}
 }
+
+// The leader alerts hook_missing only where hooks run: the agent says so.
+func TestAgent_ReportsHooksCollector(t *testing.T) {
+	for _, on := range []bool{true, false} {
+		env, _ := testEnv(t)
+		cfg := config.DefaultConfig()
+		cfg.Hooks = on
+		got := newAgent(cfg, env).collectorStatus()["hooks"]
+		if want := map[bool]string{true: "ok", false: "disabled: config"}[on]; got != want {
+			t.Fatalf("hooks=%v: collector status %q, want %q", on, got, want)
+		}
+	}
+}
