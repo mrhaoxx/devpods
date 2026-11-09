@@ -5,10 +5,15 @@
 package main
 
 import (
+	"context"
 	"net"
 	"strings"
 	"testing"
 	"text/template"
+
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
+	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
 	devpodv1alpha1 "github.com/mrhaoxx/devpod/api/v1alpha1"
 )
@@ -87,5 +92,20 @@ func TestParseSize(t *testing.T) {
 		if _, err := parseSize(bad); err == nil {
 			t.Errorf("parseSize(%q) should fail", bad)
 		}
+	}
+}
+
+func TestAuditDeps_GatewayConfigName(t *testing.T) {
+	scheme := runtime.NewScheme()
+	_ = devpodv1alpha1.AddToScheme(scheme)
+	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(
+		&devpodv1alpha1.GatewayConfig{ObjectMeta: metav1.ObjectMeta{Name: "default"}},
+		&devpodv1alpha1.GatewayConfig{ObjectMeta: metav1.ObjectMeta{Name: "audit-e2e"}, Spec: devpodv1alpha1.GatewayConfigSpec{Audit: &devpodv1alpha1.AuditSpec{Enabled: true}}},
+	).Build()
+	if gc := (&auditDeps{cache: c, gcName: "audit-e2e"}).gatewayConfig(context.Background()); !auditEnabled(gc) {
+		t.Fatalf("named GatewayConfig not used: %+v", gc)
+	}
+	if gc := (&auditDeps{cache: c, gcName: "default"}).gatewayConfig(context.Background()); auditEnabled(gc) {
+		t.Fatal("default GatewayConfig has audit off")
 	}
 }

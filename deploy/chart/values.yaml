@@ -18,6 +18,10 @@ image:
     tag: dev
     pullPolicy: IfNotPresent
 
+# Name of the cluster-scoped GatewayConfig this release creates and reads.
+# Change it to run a second gateway/webui pair next to an existing one.
+gatewayConfigName: default
+
 namespaces:
   system: devpod-system
   devpods: devpods

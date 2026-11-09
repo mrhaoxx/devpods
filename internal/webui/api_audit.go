@@ -444,7 +444,11 @@ func (s *Server) handleAuditPresence(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) defaultAuditPolicy(r *http.Request) devpodv1alpha1.AuditPolicy {
 	var gc devpodv1alpha1.GatewayConfig
-	if err := s.Client.Get(r.Context(), types.NamespacedName{Name: "default"}, &gc); err != nil || gc.Spec.Audit == nil {
+	name := s.GatewayConfigName
+	if name == "" {
+		name = "default"
+	}
+	if err := s.Client.Get(r.Context(), types.NamespacedName{Name: name}, &gc); err != nil || gc.Spec.Audit == nil {
 		return devpodv1alpha1.AuditPolicy{}
 	}
 	return gc.Spec.Audit.Policy

@@ -61,6 +61,7 @@ func main() {
 		httpBaseDomain      string
 		httpSubdomainSuffix string
 		sessionGrace        time.Duration
+		gcName              string
 		af                  auditFlags
 	)
 	flag.StringVar(&listenAddr, "listen", ":22", "TCP address to listen on")
@@ -78,6 +79,7 @@ func main() {
 		"base domain for HTTP proxy routing, e.g. ktaas.approaching-ai.com")
 	flag.StringVar(&httpSubdomainSuffix, "http-subdomain-suffix", "",
 		"fixed suffix stripped from subdomain before parsing, e.g. -dev for {name}-{port}-dev.{base}")
+	flag.StringVar(&gcName, "gateway-config-name", "default", "name of the cluster-scoped GatewayConfig this gateway reads")
 	flag.DurationVar(&sessionGrace, "shutdown-session-grace", 60*time.Second,
 		"on SIGTERM, how long open sessions may continue before they are closed")
 	flag.StringVar(&af.s3Endpoint, "audit-s3-endpoint", "", "audit S3 endpoint URL (empty = AWS)")
@@ -138,7 +140,7 @@ func main() {
 		os.Exit(1)
 	}
 
-	gw, err := loadGatewayConfig(ctx, c)
+	gw, err := loadGatewayConfig(ctx, c, gcName)
 	if err != nil {
 		slog.Error("load_gatewayconfig", "err", err)
 		os.Exit(1)
@@ -201,7 +203,7 @@ func main() {
 		go auditRec.Run(ctx)
 		slog.Info("audit_recorder_ready", "spool", af.spoolDir)
 	}
-	ad := &auditDeps{cache: c, ns: devpodNamespace, rec: auditRec, tmpl: bannerTmpl, sessionGrace: sessionGrace}
+	ad := &auditDeps{cache: c, gcName: gcName, ns: devpodNamespace, rec: auditRec, tmpl: bannerTmpl, sessionGrace: sessionGrace}
 
 	runErr := run(ctx, listenAddr, gw.Spec.Listen, hostSigner, authn, dialer, proxyKeys, ad, recorder)
 
@@ -325,10 +327,10 @@ func newCachedClient(ctx context.Context, cfg *rest.Config) (client.Reader, erro
 // loadGatewayConfig reads the cluster-singleton GatewayConfig/default.
 // One-shot: trustedProxyKeys are frozen at startup. To roll the keys,
 // the operator restarts the gateway Deployment.
-func loadGatewayConfig(ctx context.Context, r client.Reader) (*devpodv1alpha1.GatewayConfig, error) {
+func loadGatewayConfig(ctx context.Context, r client.Reader, name string) (*devpodv1alpha1.GatewayConfig, error) {
 	var gc devpodv1alpha1.GatewayConfig
-	if err := r.Get(ctx, types.NamespacedName{Name: "default"}, &gc); err != nil {
-		return nil, fmt.Errorf("get gatewayconfig/default: %w", err)
+	if err := r.Get(ctx, types.NamespacedName{Name: name}, &gc); err != nil {
+		return nil, fmt.Errorf("get gatewayconfig/%s: %w", name, err)
 	}
 	return &gc, nil
 }

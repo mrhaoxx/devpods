@@ -32,6 +32,7 @@ spec:
         args:
         - --listen=:22
         - --host-key-dir=/etc/devpod/gateway
+        - --gateway-config-name={{ .Values.gatewayConfigName }}
         {{- if .Values.audit.enabled }}
         {{- include "devpod.audit.args" . | nindent 8 }}
         - --audit-spool-dir=/var/spool/devpod-audit
