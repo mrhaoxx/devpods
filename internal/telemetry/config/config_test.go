@@ -9,6 +9,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"reflect"
 	"testing"
 	"time"
 )
@@ -40,6 +41,7 @@ func TestLoadConfig_Missing(t *testing.T) {
 func TestConfig_MarshalRoundTrip(t *testing.T) {
 	c := DefaultConfig()
 	c.IngestURL, c.TopN, c.HostNetwork, c.MetricsInterval = "http://y", 9, true, 2*time.Second
+	c.PVCMounts = []string{"/root"}
 	b, err := json.Marshal(c)
 	if err != nil {
 		t.Fatal(err)
@@ -52,7 +54,7 @@ func TestConfig_MarshalRoundTrip(t *testing.T) {
 		}
 	}
 	var back Config
-	if err := json.Unmarshal(b, &back); err != nil || back != c {
+	if err := json.Unmarshal(b, &back); err != nil || !reflect.DeepEqual(back, c) {
 		t.Fatalf("round trip: %+v %v", back, err)
 	}
 }

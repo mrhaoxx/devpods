@@ -39,6 +39,9 @@ type Config struct {
 	Hooks             bool
 	HostNetwork       bool
 	BufferBytes       int64
+	// PVCMounts are the DevPod's persistent-volume mount points (§6.5
+	// storage usage); hostPath homes and the root filesystem are excluded.
+	PVCMounts []string
 }
 
 // DefaultConfig is spec §10.3's defaults.
@@ -58,17 +61,18 @@ func DefaultConfig() Config {
 
 // file is the on-disk form; pointers distinguish "absent" from zero.
 type file struct {
-	IngestURL           string `json:"ingestURL"`
-	MetricsIntervalMs   *int64 `json:"metricsIntervalMs,omitempty"`
-	ProcScanIntervalMs  *int64 `json:"procScanIntervalMs,omitempty"`
-	SocketMapIntervalMs *int64 `json:"socketMapIntervalMs,omitempty"`
-	TopN                *int   `json:"topN,omitempty"`
-	GPU                 *bool  `json:"gpu,omitempty"`
-	RDMA                *bool  `json:"rdma,omitempty"`
-	ProcessTracking     *bool  `json:"processTracking,omitempty"`
-	Hooks               *bool  `json:"hooks,omitempty"`
-	HostNetwork         *bool  `json:"hostNetwork,omitempty"`
-	BufferBytes         *int64 `json:"bufferBytes,omitempty"`
+	IngestURL           string   `json:"ingestURL"`
+	MetricsIntervalMs   *int64   `json:"metricsIntervalMs,omitempty"`
+	ProcScanIntervalMs  *int64   `json:"procScanIntervalMs,omitempty"`
+	SocketMapIntervalMs *int64   `json:"socketMapIntervalMs,omitempty"`
+	TopN                *int     `json:"topN,omitempty"`
+	GPU                 *bool    `json:"gpu,omitempty"`
+	RDMA                *bool    `json:"rdma,omitempty"`
+	ProcessTracking     *bool    `json:"processTracking,omitempty"`
+	Hooks               *bool    `json:"hooks,omitempty"`
+	HostNetwork         *bool    `json:"hostNetwork,omitempty"`
+	BufferBytes         *int64   `json:"bufferBytes,omitempty"`
+	PVCMounts           []string `json:"pvcMounts,omitempty"`
 }
 
 // MarshalJSON writes every field explicitly.
@@ -86,6 +90,7 @@ func (c Config) MarshalJSON() ([]byte, error) {
 		Hooks:               &c.Hooks,
 		HostNetwork:         &c.HostNetwork,
 		BufferBytes:         &c.BufferBytes,
+		PVCMounts:           c.PVCMounts,
 	})
 }
 
@@ -119,6 +124,7 @@ func (c *Config) UnmarshalJSON(b []byte) error {
 	if f.BufferBytes != nil && *f.BufferBytes > 0 {
 		out.BufferBytes = *f.BufferBytes
 	}
+	out.PVCMounts = f.PVCMounts
 	*c = out
 	return nil
 }
