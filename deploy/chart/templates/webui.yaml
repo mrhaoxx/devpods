@@ -41,6 +41,7 @@ spec:
         - --session-key-file=/etc/devpod/webui/session/session-key
         - --default-quota-file=/etc/devpod/webui/default-quota.yaml
         - --devpod-namespace={{ .Values.namespaces.devpods }}
+        - --gateway-config-name={{ .Values.gatewayConfigName }}
         - --kore={{ .Values.webui.kore }}
         - --admins={{ join "," .Values.webui.admins }}
         {{- if .Values.webui.baseURL }}

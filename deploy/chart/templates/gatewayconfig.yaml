@@ -1,7 +1,7 @@
 apiVersion: devpod.io/v1alpha1
 kind: GatewayConfig
 metadata:
-  name: default
+  name: {{ .Values.gatewayConfigName }}
 spec:
   devPodNamespace: {{ .Values.namespaces.devpods }}
   supervisorImage: "{{ .Values.image.supervisor.repository }}:{{ .Values.image.supervisor.tag }}"

@@ -90,6 +90,7 @@ func main() {
 	flag.StringVar(&externalURL, "external-url", "",
 		"external base URL of the UI (https → Secure cookies + Origin check); defaults to the OAuth redirect's origin")
 	af := addAuditFlags(flag.CommandLine)
+	gcName := flag.String("gateway-config-name", "default", "GatewayConfig holding the cluster default audit policy")
 	flag.Parse()
 
 	logger := slog.New(slog.NewJSONHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelInfo}))
@@ -221,6 +222,7 @@ func main() {
 		fatal(err)
 	}
 	srv.Audit = auditDeps
+	srv.GatewayConfigName = *gcName
 
 	go func() {
 		if err := mgr.Start(ctx); err != nil {

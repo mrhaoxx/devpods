@@ -64,6 +64,9 @@ type Server struct {
 	// Audit holds the audit store backends; nil disables every audit
 	// endpoint and hides the audit UI.
 	Audit *AuditDeps
+	// GatewayConfigName is the GatewayConfig whose audit policy is the
+	// cluster default ("" = "default").
+	GatewayConfigName string
 }
 
 type apiBody struct {

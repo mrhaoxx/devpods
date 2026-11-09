@@ -175,6 +175,7 @@ func buildRecorder(ctx context.Context, f auditFlags) (*audit.Recorder, error) {
 // dynamic banner.
 type auditDeps struct {
 	cache        client.Reader
+	gcName       string // GatewayConfig to read (default "default")
 	ns           string
 	rec          *audit.Recorder // nil = audit storage not configured
 	tmpl         *template.Template
@@ -185,7 +186,7 @@ type auditDeps struct {
 // banner, audit switch and policy changes apply to new sessions.
 func (a *auditDeps) gatewayConfig(ctx context.Context) *devpodv1alpha1.GatewayConfig {
 	var gc devpodv1alpha1.GatewayConfig
-	if err := a.cache.Get(ctx, types.NamespacedName{Name: "default"}, &gc); err != nil {
+	if err := a.cache.Get(ctx, types.NamespacedName{Name: a.gcName}, &gc); err != nil {
 		return nil
 	}
 	return &gc
