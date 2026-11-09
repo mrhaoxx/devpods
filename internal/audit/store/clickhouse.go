@@ -45,6 +45,9 @@ var identRE = regexp.MustCompile(`^[a-z_][a-z0-9_]*$`)
 type CH struct {
 	conn driver.Conn
 	db   string
+	// readExtra is merged into every read query's settings (tests set
+	// force_index_by_date to prove each query is time-bounded).
+	readExtra clickhouse.Settings
 }
 
 // OpenCH connects and pings.
