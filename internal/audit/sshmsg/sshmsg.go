@@ -94,6 +94,19 @@ type TCPIP struct {
 }
 
 // ParseTCPIPExtra parses direct-tcpip / forwarded-tcpip extra data.
+// ParseStreamlocalExtra returns the socket path of a direct- or
+// forwarded-streamlocal@openssh.com channel (its first field).
+func ParseStreamlocalExtra(extra []byte) (string, error) {
+	var m struct {
+		Path string
+		Rest []byte `ssh:"rest"`
+	}
+	if err := ssh.Unmarshal(extra, &m); err != nil {
+		return "", err
+	}
+	return m.Path, nil
+}
+
 func ParseTCPIPExtra(extra []byte) (TCPIP, error) {
 	var m TCPIP
 	if err := ssh.Unmarshal(extra, &m); err != nil {

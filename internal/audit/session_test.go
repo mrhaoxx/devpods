@@ -279,6 +279,33 @@ func TestSession_DenyLocalForward(t *testing.T) {
 	}
 }
 
+// Unix-socket forwarding (ssh -L port:/path.sock, -R /path.sock:…;
+// VS Code's remoteServerListenOnSocket) falls under the same rules.
+func TestSession_DenyStreamlocalForwarding(t *testing.T) {
+	g := newRig(t, 64<<20)
+	s := g.start(policy.Effective{DenyLocalForward: true, DenyRemoteForward: true})
+	extra := ssh.Marshal(struct {
+		Path string
+		R    string
+		RP   uint32
+	}{"/run/user/0/vscode.sock", "", 0})
+	if _, err := s.OpenChannel(ClientToBackend, "direct-streamlocal@openssh.com", extra); !isDeny(err, MsgForwardDenied) {
+		t.Fatalf("direct-streamlocal: got %v", err)
+	}
+	if err := s.GlobalRequest(ClientToBackend, "streamlocal-forward@openssh.com", ssh.Marshal(struct{ P string }{"/tmp/x.sock"})); !isDeny(err, MsgForwardDenied) {
+		t.Fatalf("streamlocal-forward: got %v", err)
+	}
+	s.Close("x", 0, 0)
+	all := g.drain()
+	var rules []string
+	for _, p := range all.PolicyEvents {
+		rules = append(rules, p.Rule)
+	}
+	if fmt.Sprint(rules) != "[forwarding.local forwarding.remote]" {
+		t.Fatalf("policy rules %v", rules)
+	}
+}
+
 func TestSession_DenyRemoteForward(t *testing.T) {
 	g := newRig(t, 64<<20)
 	s := g.start(policy.Effective{DenyRemoteForward: true})
@@ -349,10 +376,17 @@ func rawRecords(t *testing.T, g *rig, all store.Batch) []rawlog.Record {
 }
 
 func TestSession_ForwardContentRecordingToggle(t *testing.T) {
-	for _, record := range []bool{false, true} {
+	for _, tc := range []struct {
+		typ    string
+		record bool
+	}{
+		{"direct-tcpip", false}, {"direct-tcpip", true},
+		{"direct-streamlocal@openssh.com", false}, {"forwarded-streamlocal@openssh.com", false},
+	} {
+		typ, record := tc.typ, tc.record
 		g := newRig(t, 64<<20)
 		s := g.start(policy.Effective{RecordForwardContent: record})
-		ch, err := s.OpenChannel(ClientToBackend, "direct-tcpip", nil)
+		ch, err := s.OpenChannel(ClientToBackend, typ, nil)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -368,7 +402,7 @@ func TestSession_ForwardContentRecordingToggle(t *testing.T) {
 			}
 		}
 		if (data > 0) != record {
-			t.Errorf("record=%v: %d data records", record, data)
+			t.Errorf("%s record=%v: %d data records", typ, record, data)
 		}
 		if all.Channels[len(all.Channels)-1].BytesIn == 0 {
 			t.Errorf("byte counts must be kept even without content")

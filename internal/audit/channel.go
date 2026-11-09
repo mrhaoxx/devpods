@@ -51,16 +51,31 @@ type channel struct {
 var _ ChannelHooks = (*channel)(nil)
 
 func newChannel(s *Session, id uint32, dir Dir, typ string, extra []byte) *channel {
-	forward := typ == "direct-tcpip" || typ == "forwarded-tcpip"
+	forward := isForward(typ)
 	c := &channel{s: s, id: id, opened: s.r.cfg.Now()}
 	c.recordData = !forward || s.pol.RecordForwardContent
 	c.row = store.ChannelRow{SessionID: s.meta.ID, ChannelID: id, Type: typ, OpenedAt: c.opened, RawRecorded: c.recordData, Version: 1}
-	if forward {
+	switch {
+	case typ == "direct-tcpip" || typ == "forwarded-tcpip":
 		if t, err := sshmsg.ParseTCPIPExtra(extra); err == nil {
 			c.row.Target = net.JoinHostPort(t.Host, strconv.Itoa(int(t.Port)))
 		}
+	case forward:
+		if path, err := sshmsg.ParseStreamlocalExtra(extra); err == nil {
+			c.row.Target = path
+		}
 	}
 	return c
+}
+
+// isForward reports port / Unix-socket forwarding channels, whose content
+// is recorded only with forwarding.recordContent.
+func isForward(typ string) bool {
+	switch typ {
+	case "direct-tcpip", "forwarded-tcpip", "direct-streamlocal@openssh.com", "forwarded-streamlocal@openssh.com":
+		return true
+	}
+	return false
 }
 
 func (c *channel) Request(dir Dir, typ string, want bool, payload []byte) error {
