@@ -312,6 +312,10 @@ supervisor 数据保留作对照。
 
 - 每秒推送一批（NDJSON + zstd）到 webui `POST /ingest/v1/batch`。该接口
   监听**独立端口 8081**，Service 仅集群内可达，不经 Ingress。
+- **只有 leader 接收上报**（§5.10）：supervisor 的上报地址是 Service
+  `devpod-webui-ingest`。这个 Service 不带选择器，EndpointSlice 由 leader
+  写入自己的 Pod IP。非 leader 副本收到上报时返回 503，supervisor 的环形
+  缓冲负责重发。
 - **令牌**：每个 DevPod 一个，值为 `HMAC-SHA256(ingest-key, DevPod UID)`。
   controller 写入 host-key Secret 的 `ingest-token` 键（挂载于
   `/etc/devpod/ingest-token`）；webui 用同一 key 重算校验，无需查表。
@@ -348,6 +352,46 @@ k8s Event。leader 用 Lease 选举，失去租约立即停止定时任务。
 
 所有容器侧数据标记 `source` 为 `supervisor` 或 `tetragon`。supervisor
 数据为参考级；gateway 原始流与 Tetragon 事件为可信级。
+
+### 5.10 实时数据层（webui leader）
+
+新 UI（`2026-11-09-devpod-console-ui-design.md`）要求界面每秒刷新，且
+延迟小于 1 秒：全部 DevPod 的指标列、总览的 KPI 和节点热力条、按节点和
+按用户的汇总。设计：
+
+- **选主**：webui 各副本用 Lease 选出一个 leader，同时负责 §5.8 的定时
+  任务。失去租约时立即停止定时任务、停止接收上报，并且不再写
+  EndpointSlice。
+- **上报只进 leader**：leader 当选后，把 `devpod-webui-ingest`（不带选择器
+  的 Service）的 EndpointSlice 写成自己的 Pod IP 和 8081 端口。非 leader
+  收到上报时返回 503。webui 需要新增 RBAC：`devpod-system` 命名空间里
+  `endpointslices` 的 get/list/watch/create/update。
+- **leader 统一写库**：每秒对每张表合并成一次插入，带
+  `insert_deduplication_token`，不依赖 ClickHouse 的异步插入。supervisor
+  的 seq 在写库成功后才确认。
+- **内存中的全量最新状态**，只在 leader 上：
+  - 每个 DevPod 的最新容器级样本，超过 5 秒没更新视为"无数据"；
+  - 最新的活跃进程，以及每 5 秒一次的**全量进程快照**。全量快照由
+    supervisor 每 5 秒发一次，只放在内存里，**不入库**；ClickHouse 仍然
+    只写 §6.2 的活跃进程和前 N 名。
+  - 由上面两项算出的汇总：
+    - 按节点：结合 Node 对象和 Pod 所在节点；GPU 每卡的占用者按 supervisor
+      上报的 GPU UUID 对应。webui 需要新增 `nodes` 的 get/list/watch
+      权限（ClusterRole）。
+    - 按用户（owner），以及 KPI 合计。
+    - 只在至少有一个订阅者时才计算。
+- **其他副本从 leader 拉**：非 leader 副本和 leader 之间维持一条内部长
+  连接（8081 端口上的 `GET /internal/live`，认证用 ingest key 派生的令牌）。
+  leader 每秒推一份完整快照，副本再分发给自己的浏览器 SSE 连接。leader
+  自己直接从内存分发。
+- **空转判断**："24 小时内没有会话，并且 CPU 平均低于 5%、GPU 利用率平均
+  低于 5%"（UI spec §5.3）。由 leader 每分钟查一次 `*_1m` 表，结果放在
+  内存快照里一起下发。
+- **切换**：Lease 到期后，最多约 15 秒内产生新 leader，期间：
+  - 上报由 supervisor 缓冲重发；
+  - 浏览器 SSE 保持连接，界面顶部显示"实时数据重连中"；
+  - 新 leader 的内存从空开始，收到第一批上报后即恢复。
+  历史数据以 ClickHouse 为准，不受影响。
 
 ---
 
@@ -586,6 +630,8 @@ ClickHouse 客户端用 clickhouse-go v2，查询一律参数化。
 - **审计相关接口每次请求重新判定管理员身份**（`--admins` 列表 +
   `User.spec.admin`，读缓存），不信任 session cookie 中的 admin 标志位。
 - `/ingest`（8081）、Lease 选主、交叉校验与回填任务（§5.7、§5.8）。
+- 实时数据层（§5.10）：leader 的内存状态、副本之间的 `/internal/live`，
+  以及 UI spec §6.1 的实时流。
 - SSE：现有 `/api/devpods/{name}/stream` 增加 `metrics` 事件，每秒推送；
   同一副本内观看同一 DevPod 的连接共享 1 秒缓存。
 
@@ -625,12 +671,23 @@ ClickHouse 客户端用 clickhouse-go v2，查询一律参数化。
 | `GET` / `PUT /api/admin/users/{name}/audit-policy` | 管理员编辑用户策略；`GET /api/admin/audit/policy-default` 只读集群默认 |
 | `GET /api/devpods/{name}/metrics?range=&step=` | 时序；超出 1 秒粒度保留期自动切到 `_1m` 表 |
 | `GET /api/devpods/{name}/processes`、`GET /api/devpods/{name}/info` | 进程前 N 与容器信息 |
-| `GET /api/admin/metrics/overview` | 所有 DevPod 当前用量，可排序、可按用户汇总 |
+| ~~`GET /api/admin/metrics/overview`~~ | 改由下面的实时流和节点 / 用户接口提供 |
+| `GET /api/live/devpods?scope=mine\|all` | SSE，每秒一批，运行中 DevPod 的最新样本（字段见 UI spec §6.1） |
+| `GET /api/admin/live/overview` | SSE，每秒：KPI、各节点汇总、用量最大的用户、需要处理 |
+| `GET /api/devpods/{name}/stream` 的 `metrics`、`processes` 事件 | 每秒；`?procs=all` 时推全量进程快照（§5.10） |
+| `GET /api/admin/nodes`、`/nodes/{n}` | 节点：可分配和已分配资源、DevPod 实际用量汇总、GPU 每卡占用者 |
+| `GET /api/admin/users` 的用量字段 | 每个用户的当前 CPU、内存、GPU 用量 |
+
+接口的完整清单和字段以 UI spec §6 为准（预约和通知相关的接口属于预约
+子项目）。
 
 查询保护：必须带时间范围、最大返回行数、`max_execution_time`、每用户
 并发上限。
 
 ### 9.4 页面
+
+> **已被取代**：页面布局以 `2026-11-09-devpod-console-ui-design.md` 为准。
+> 下面是一期写下的原始设想，仅作参考。
 
 **DevPod 列表页（重构为高密度表格，二期补齐指标列）**
 
@@ -828,6 +885,9 @@ Secret 卷（非 subPath）更新会传播到运行中的 Pod；supervisor telem
 
 ### 二期：supervisor 遥测
 
+- 实时数据层（§5.10）：上报只进 leader；leader 统一写库；其他副本从
+  leader 拉；切换期间不丢历史，界面最多约 15 秒显示"重连中"。
+
 - 新建的 DevPod 在 webui 列表与详情页显示 1 秒刷新的 CPU / 内存 / IO /
   网络 / RDMA / GPU；进程标签页显示带会话归属的进程；shell 钩子命令出现
   在会话时间线。
@@ -843,6 +903,10 @@ Secret 卷（非 subPath）更新会传播到运行中的 Pod；supervisor telem
 ---
 
 ## 14. 实现计划阶段需实测的事项
+
+0. （二期，新增）在 zjusct 上模拟 400 个 supervisor 每秒上报：leader 的
+   CPU 和内存、每秒合并写入 ClickHouse 的耗时、界面端到端延迟（目标小于
+   1 秒），以及强制切换 leader 时的恢复时间和数据完整性。
 
 1. Silo 的 bucket 初始化、生命周期规则、分片上传与 aws-sdk-go-v2 的兼容
    性；镜像 digest 与发布记录一致。**已测（2026-11-09）：兼容**，见
