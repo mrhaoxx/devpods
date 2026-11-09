@@ -86,3 +86,96 @@ func TestMigrate_TelemetryTTLs(t *testing.T) {
 		t.Fatalf("container-side events follow the audit retention: %s", q)
 	}
 }
+
+// minuteRows writes `minutes` 1-minute container rollups ending at end.
+func minuteRows(t *testing.T, c *CH, uid string, end time.Time, minutes int, cpu, limit float32) {
+	t.Helper()
+	q := fmt.Sprintf(`INSERT INTO %s.metrics_container_1m (ts, devpod_uid, cpu_avg, cpu_max, cpu_p95, cpu_limit)
+		SELECT toStartOfMinute(toDateTime(?) - toIntervalMinute(number)), ?, avgState(toFloat32(?)), maxState(toFloat32(?)),
+		       quantileState(0.95)(toFloat32(?)), maxState(toFloat32(?))
+		FROM numbers(?) GROUP BY number`, c.db)
+	if err := c.conn.Exec(context.Background(), q, end, uid, cpu, cpu, cpu, limit, minutes); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestMetricsRange_PicksTable(t *testing.T) {
+	c := freshDB(t)
+	ctx := context.Background()
+	now := time.Now().UTC().Truncate(time.Second)
+	var b TelemetryBatch
+	for i := 0; i < 60; i++ {
+		b.Containers = append(b.Containers, ContainerMetricRow{TS: now.Add(-10*time.Minute + time.Duration(i)*time.Second), DevPodUID: "u1", BootID: "b", CPU: 2, CPULimit: 4})
+	}
+	b.GPUs = []GPUMetricRow{{TS: now.Add(-10 * time.Minute), DevPodUID: "u1", GPUUUID: "GPU-a", Util: 90}}
+	if err := c.InsertTelemetry(ctx, b, "r"); err != nil {
+		t.Fatal(err)
+	}
+	minuteRows(t, c, "u1", now.Add(-2*time.Hour), 1, 7, 4) // only in the 1m table
+	s, err := c.MetricsRange(ctx, "u1", now.Add(-30*time.Minute), now, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !hasValue(s.Series["cpu"], 2) || hasValue(s.Series["cpu"], 7) || !hasValue(s.Series["gpu.GPU-a.util"], 90) {
+		t.Fatalf("30 min range must read the 1s tables: %+v", s.Series)
+	}
+	s, err = c.MetricsRange(ctx, "u1", now.Add(-3*time.Hour), now, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !hasValue(s.Series["cpu"], 7) || s.Step < 60 {
+		t.Fatalf("3 h range must read the 1m tables (step %d): %+v", s.Step, s.Series["cpu"])
+	}
+}
+
+func hasValue(xs []*float64, v float64) bool {
+	for _, x := range xs {
+		if x != nil && *x == v {
+			return true
+		}
+	}
+	return false
+}
+
+func TestIdleCandidates(t *testing.T) {
+	c := freshDB(t)
+	ctx := context.Background()
+	now := time.Now().UTC()
+	minuteRows(t, c, "A", now, 1440, 0.04, 4) // 1 % of 4 cores, all day
+	minuteRows(t, c, "B", now, 1440, 1.6, 4)  // 40 %
+	minuteRows(t, c, "C", now, 1440, 0.04, 4) // idle CPU but used over SSH 2 h ago
+	minuteRows(t, c, "D", now, 120, 0.04, 4)  // idle, but only up for 2 h
+	sess := sess("S-C", "carol", "C", now.Add(-2*time.Hour), 1, true)
+	mustInsert(t, c, Batch{Sessions: []SessionRow{sess}}, "s")
+	got, err := c.IdleCandidates(ctx, now, 5, 5)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fmt.Sprint(got) != "[A]" {
+		t.Fatalf("idle %v", got)
+	}
+}
+
+func TestHookMissing(t *testing.T) {
+	c := freshDB(t)
+	ctx := context.Background()
+	now := time.Now().UTC().Truncate(time.Millisecond)
+	mk := func(id string, dur time.Duration) {
+		s := sess(id, "alice", "u1", now.Add(-dur), 2, false)
+		closed := now
+		s.ClosedAt = &closed
+		ch := ChannelRow{SessionID: id, ChannelID: 1, Type: "session", Pty: true, OpenedAt: now.Add(-dur), BytesIn: 2048, Version: 2}
+		mustInsert(t, c, Batch{Sessions: []SessionRow{s}, Channels: []ChannelRow{ch}}, id)
+	}
+	mk("S-long", 90*time.Second)
+	mk("S-hooked", 90*time.Second)
+	mk("S-short", 30*time.Second)
+	mustInsert(t, c, Batch{Commands: []CommandRow{{EventID: "h1", TS: now.Add(-time.Minute), SessionID: "S-hooked", DevPodUID: "u1", Source: "shell_hook", Cmdline: "ls", Version: 1}}}, "cmd")
+	got, err := c.HookMissing(ctx, now.Add(-time.Hour), now.Add(time.Minute))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 || got[0].SessionID != "S-long" {
+		t.Fatalf("hook_missing %+v", got)
+	}
+}

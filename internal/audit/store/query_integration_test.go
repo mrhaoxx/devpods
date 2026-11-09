@@ -333,4 +333,22 @@ func TestReadQueries_UseDateIndex(t *testing.T) {
 	check("ListAccessLog", err)
 	_, err = c.Presence(ctx, []string{"uid-1"})
 	check("Presence", err)
+	_, err = c.MetricsRange(ctx, "uid-1", time.Now().Add(-30*time.Minute), time.Now(), 0)
+	check("MetricsRange 1s", err)
+	_, err = c.MetricsRange(ctx, "uid-1", time.Now().Add(-3*time.Hour), time.Now(), 0)
+	check("MetricsRange 1m", err)
+	_, _, err = c.LatestInfo(ctx, "uid-1", time.Now().Add(-time.Hour))
+	if !errors.Is(err, ErrNotFound) {
+		check("LatestInfo", err)
+	}
+	_, err = c.IdleCandidates(ctx, time.Now(), 5, 5)
+	check("IdleCandidates", err)
+	_, err = c.PendingAttributions(ctx, time.Now().Add(-time.Hour))
+	check("PendingAttributions", err)
+	_, err = c.OpenSessionsByBackend(ctx, time.Now().Add(-time.Hour))
+	check("OpenSessionsByBackend", err)
+	_, err = c.HookMissing(ctx, time.Now().Add(-time.Hour), time.Now())
+	check("HookMissing", err)
+	_, err = c.LastSessionByUser(ctx, time.Now().Add(-24*time.Hour))
+	check("LastSessionByUser", err)
 }
