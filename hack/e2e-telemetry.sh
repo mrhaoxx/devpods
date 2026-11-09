@@ -18,6 +18,7 @@
 #   KUBE_CONTEXT=zjusct E2E_KEEP=1 bash hack/e2e-telemetry.sh # keep objects
 #   E2E_APT_MIRROR=mirrors.zju.edu.cn                         # faster apt in the box
 #   E2E_SUPERVISOR_IMAGE=mrhaoxx/devpod-supervisor:v0.2.0     # source of /opt/devpod
+#   E2E_SKIP_FAILOVER=1                                       # keep both webui replicas (load tests)
 #
 # Host tools: kubectl, go, node/npm, ssh, htpasswd, curl, openssl, python3.
 set -euo pipefail
@@ -387,6 +388,7 @@ for _ in $(seq 1 150); do attributed && break; sleep 1; done
 attributed || die "sleep 600 has no session: $(q "SELECT session_id, attribution, peer FROM $DB.processes FINAL WHERE devpod_uid = '$UID_' AND startsWith(cmdline, 'sleep 600') FORMAT TSV")"
 
 # --- 6. leader failover ----------------------------------------------------
+if [ -n "${E2E_SKIP_FAILOVER:-}" ]; then echo; echo "e2e-telemetry: OK (failover skipped)"; exit 0; fi
 log "leader failover"
 OLD=$(holder)
 case "$OLD" in telemetry-e2e-webui-0) NEW=telemetry-e2e-webui-1 ;; telemetry-e2e-webui-1) NEW=telemetry-e2e-webui-0 ;; *) die "unexpected leader '$OLD'" ;; esac
