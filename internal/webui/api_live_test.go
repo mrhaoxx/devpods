@@ -254,3 +254,20 @@ func TestLiveInputs_Build(t *testing.T) {
 		t.Fatalf("quota %+v", q)
 	}
 }
+
+// Ingest authenticates every batch by DevPod UID: an index lookup, not a
+// list of every DevPod (400 DevPods × 400 batches/s).
+func TestDevPodByUID(t *testing.T) {
+	setupSuite(t)
+	s, sm := newServer(t)
+	createFor(t, s, forge(sm, "gl-alice", false), "gl-alice-dev1")
+	t.Cleanup(func() { cleanupDevPods(t) })
+	dp := waitDevPod(t, "gl-alice-dev1")
+	got, ok := s.DevPodByUID(context.Background(), string(dp.UID))
+	if !ok || got.Name != "gl-alice-dev1" || got.Spec.Owner != "gl-alice" {
+		t.Fatalf("%v %+v", ok, got)
+	}
+	if _, ok := s.DevPodByUID(context.Background(), "no-such-uid"); ok {
+		t.Fatal("unknown uid found")
+	}
+}

@@ -6,6 +6,7 @@ package webui_test
 
 import (
 	"context"
+	"github.com/mrhaoxx/devpod/internal/webui"
 	"path/filepath"
 	"testing"
 	"time"
@@ -56,6 +57,9 @@ func setupSuite(t *testing.T) {
 	})
 	if err != nil {
 		t.Fatalf("manager: %v", err)
+	}
+	if err := webui.RegisterIndexes(context.Background(), k8sManager.GetFieldIndexer()); err != nil {
+		t.Fatalf("indexes: %v", err)
 	}
 	mgrCtx, mgrCancel := context.WithCancel(context.Background())
 	go func() { _ = k8sManager.Start(mgrCtx) }()

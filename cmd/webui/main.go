@@ -176,6 +176,9 @@ func main() {
 	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	if err := webui.RegisterIndexes(ctx, mgr.GetFieldIndexer()); err != nil {
+		fatal(err)
+	}
 	defer stop()
 
 	sshHost, sshPort := sshAdvertise, 22
