@@ -102,3 +102,13 @@ func Tick(ctx context.Context, h *Hub, every time.Duration, build func() Snapsho
 		}
 	}
 }
+
+// Last returns the latest snapshot if it is fresh.
+func (h *Hub) Last() (Snapshot, bool) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if h.last == nil || time.Since(h.last.TS) >= freshFor {
+		return Snapshot{}, false
+	}
+	return *h.last, true
+}

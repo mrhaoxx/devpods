@@ -26,6 +26,10 @@ type LiveDeps struct {
 	// Source yields one DevPod's full sample and processes (the leader's
 	// state, or the leader over HTTP); nil = no per-DevPod live data.
 	Source live.Source
+	// Snapshot returns current rollups for the REST views (nodes,
+	// users): built fresh on the leader, the relayed one on followers;
+	// false when unavailable.
+	Snapshot func(ctx context.Context) (live.Snapshot, bool)
 }
 
 // liveItem is one row of the DevPod list stream.

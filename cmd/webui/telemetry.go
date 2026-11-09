@@ -159,6 +159,11 @@ func (tf *telemetryFlags) startTelemetry(ctx context.Context, cfg *rest.Config, 
 		IsLeader: el.IsLeader,
 		Local:    live.LocalSource{State: state},
 		Remote:   &live.RemoteSource{Addr: addr, Token: token},
+	}, Snapshot: func(ctx context.Context) (live.Snapshot, bool) {
+		if el.IsLeader() {
+			return state.Snapshot(inputs.Build(ctx)), true
+		}
+		return hub.Last()
 	}}
 
 	mux := http.NewServeMux()
