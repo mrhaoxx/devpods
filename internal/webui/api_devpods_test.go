@@ -75,8 +75,10 @@ func cleanupDevPods(t *testing.T) {
 		_ = k8sClient.Delete(ctx, &list.Items[i])
 	}
 	// Wait until the cache reflects the deletions — the next subtest's
-	// quota aggregation reads through the same cache.
-	deadline := time.Now().Add(10 * time.Second)
+	// quota aggregation reads through the same cache. Generous: under the
+	// full -race suite several envtest apiservers run at once and informer
+	// delivery can lag well past 10 s.
+	deadline := time.Now().Add(60 * time.Second)
 	for time.Now().Before(deadline) {
 		var left devpodv1alpha1.DevPodList
 		if err := k8sClient.List(ctx, &left); err == nil && len(left.Items) == 0 {
