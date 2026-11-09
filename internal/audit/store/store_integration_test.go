@@ -61,10 +61,10 @@ var auditTables = []string{"sessions", "channels", "commands", "file_events", "p
 func TestMigrate_Idempotent(t *testing.T) {
 	ctx := context.Background()
 	c := openTestCH(t, "audit_migrate")
-	if err := Migrate(ctx, c, 180); err != nil {
+	if err := Migrate(ctx, c, DefaultRetention(180)); err != nil {
 		t.Fatal(err)
 	}
-	if err := Migrate(ctx, c, 30); err != nil {
+	if err := Migrate(ctx, c, DefaultRetention(30)); err != nil {
 		t.Fatalf("second run: %v", err)
 	}
 	for _, tbl := range auditTables {
@@ -77,9 +77,10 @@ func TestMigrate_Idempotent(t *testing.T) {
 			t.Errorf("%s: TTL not updated to 30 days: %s", tbl, q)
 		}
 	}
+	files, _ := migrationFS.ReadDir("migrations")
 	var n uint64
-	if err := c.conn.QueryRow(ctx, "SELECT count() FROM audit_migrate.schema_migrations").Scan(&n); err != nil || n != 1 {
-		t.Fatalf("schema_migrations rows = %d (%v); a migration ran twice", n, err)
+	if err := c.conn.QueryRow(ctx, "SELECT count() FROM audit_migrate.schema_migrations").Scan(&n); err != nil || n != uint64(len(files)) {
+		t.Fatalf("schema_migrations rows = %d for %d migrations (%v); a migration ran twice", n, len(files), err)
 	}
 }
 
@@ -100,7 +101,7 @@ func sampleBatch(sid string) Batch {
 func TestInsert_DedupToken(t *testing.T) {
 	ctx := context.Background()
 	c := openTestCH(t, "audit_dedup")
-	if err := Migrate(ctx, c, 180); err != nil {
+	if err := Migrate(ctx, c, DefaultRetention(180)); err != nil {
 		t.Fatal(err)
 	}
 	b := sampleBatch("S1")

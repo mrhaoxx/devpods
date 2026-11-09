@@ -18,24 +18,59 @@ import (
 //go:embed migrations/*.sql
 var migrationFS embed.FS
 
-// ttlColumns maps every audit table to the time column its TTL keys on.
-var ttlColumns = map[string]string{
-	"sessions":      "opened_at",
-	"channels":      "opened_at",
-	"commands":      "ts",
-	"file_events":   "ts",
-	"policy_events": "ts",
-	"raw_segments":  "first_ts",
-	"alerts":        "ts",
-	"access_log":    "ts",
+// Retention is the per-class data retention (spec §8.5).
+type Retention struct {
+	AuditDays      int // audit tables and container-side event tables
+	Metrics1sDays  int // 1-second container / GPU / RDMA metrics
+	Metrics1mDays  int // 1-minute rollups
+	Process1sHours int // 1-second process metrics
+	SnapshotDays   int // container_snapshots
+}
+
+// DefaultRetention is spec §8.5's defaults with the given audit days.
+func DefaultRetention(auditDays int) Retention {
+	return Retention{AuditDays: auditDays, Metrics1sDays: 7, Metrics1mDays: 90, Process1sHours: 48, SnapshotDays: 7}
+}
+
+type ttlRule struct {
+	col  string
+	unit string // DAY | HOUR
+	n    func(Retention) int
+}
+
+func auditDays(r Retention) int { return r.AuditDays }
+
+// ttlRules maps every table to its TTL column and retention class.
+var ttlRules = map[string]ttlRule{
+	"sessions":             {"opened_at", "DAY", auditDays},
+	"channels":             {"opened_at", "DAY", auditDays},
+	"commands":             {"ts", "DAY", auditDays},
+	"file_events":          {"ts", "DAY", auditDays},
+	"policy_events":        {"ts", "DAY", auditDays},
+	"raw_segments":         {"first_ts", "DAY", auditDays},
+	"alerts":               {"ts", "DAY", auditDays},
+	"access_log":           {"ts", "DAY", auditDays},
+	"ssh_conns":            {"first_seen", "DAY", auditDays},
+	"processes":            {"first_seen", "DAY", auditDays},
+	"container_info":       {"ts", "DAY", auditDays},
+	"container_snapshots":  {"ts", "DAY", func(r Retention) int { return r.SnapshotDays }},
+	"metrics_container_1s": {"ts", "DAY", func(r Retention) int { return r.Metrics1sDays }},
+	"metrics_gpu_1s":       {"ts", "DAY", func(r Retention) int { return r.Metrics1sDays }},
+	"metrics_rdma_1s":      {"ts", "DAY", func(r Retention) int { return r.Metrics1sDays }},
+	"metrics_process_1s":   {"ts", "HOUR", func(r Retention) int { return r.Process1sHours }},
+	"metrics_container_1m": {"ts", "DAY", func(r Retention) int { return r.Metrics1mDays }},
+	"metrics_gpu_1m":       {"ts", "DAY", func(r Retention) int { return r.Metrics1mDays }},
+	"metrics_rdma_1m":      {"ts", "DAY", func(r Retention) int { return r.Metrics1mDays }},
 }
 
 // Migrate creates the database, applies pending migrations in order
-// (recorded in schema_migrations) and (re)applies the retention TTL to
-// every audit table. Safe to run on every helm upgrade.
-func Migrate(ctx context.Context, c *CH, retentionDays int) error {
-	if retentionDays <= 0 {
-		return fmt.Errorf("retention days must be positive, got %d", retentionDays)
+// (recorded in schema_migrations) and (re)applies the retention TTLs.
+// Safe to run on every helm upgrade.
+func Migrate(ctx context.Context, c *CH, r Retention) error {
+	for table, rule := range ttlRules {
+		if rule.n(r) <= 0 {
+			return fmt.Errorf("retention for %s must be positive, got %d", table, rule.n(r))
+		}
 	}
 	if err := c.conn.Exec(ctx, fmt.Sprintf("CREATE DATABASE IF NOT EXISTS %s", c.db)); err != nil {
 		return fmt.Errorf("create database: %w", err)
@@ -89,8 +124,8 @@ func Migrate(ctx context.Context, c *CH, retentionDays int) error {
 
 	// Do not rewrite existing parts on a TTL change; merges apply it.
 	ttlCtx := clickhouse.Context(ctx, clickhouse.WithSettings(clickhouse.Settings{"materialize_ttl_after_modify": 0}))
-	for table, col := range ttlColumns {
-		q := fmt.Sprintf("ALTER TABLE %s.%s MODIFY TTL toDateTime(%s) + INTERVAL %d DAY", c.db, table, col, retentionDays)
+	for table, rule := range ttlRules {
+		q := fmt.Sprintf("ALTER TABLE %s.%s MODIFY TTL toDateTime(%s) + INTERVAL %d %s", c.db, table, rule.col, rule.n(r), rule.unit)
 		if err := c.conn.Exec(ttlCtx, q); err != nil {
 			return fmt.Errorf("ttl %s: %w", table, err)
 		}

@@ -24,7 +24,7 @@ func freshDB(t *testing.T) *CH {
 	ctx := context.Background()
 	db := fmt.Sprintf("q_%d", time.Now().UnixNano())
 	c := openTestCH(t, db)
-	if err := Migrate(ctx, c, 30); err != nil {
+	if err := Migrate(ctx, c, DefaultRetention(30)); err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = c.conn.Exec(context.Background(), "DROP DATABASE IF EXISTS "+db) })

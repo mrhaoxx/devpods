@@ -176,6 +176,10 @@ func runMigrate(args []string) error {
 	fs := flag.NewFlagSet("migrate", flag.ExitOnError)
 	af := addAuditFlags(fs)
 	retention := fs.Int("retention-days", 180, "retention for audit data (ClickHouse TTL and S3 lifecycle)")
+	m1s := fs.Int("metrics-retention-1s-days", 7, "retention of 1-second container/GPU/RDMA metrics")
+	m1m := fs.Int("metrics-retention-1m-days", 90, "retention of 1-minute metric rollups")
+	p1s := fs.Int("process-retention-hours", 48, "retention of 1-second process metrics")
+	snapDays := fs.Int("snapshot-retention-days", 7, "retention of container snapshots")
 	manageLifecycle := fs.Bool("manage-lifecycle", false, "set S3 lifecycle expiration rules on the bucket")
 	createBucket := fs.Bool("create-bucket", false, "create the S3 bucket when missing")
 	wait := fs.Duration("wait", 5*time.Minute, "how long to retry connecting to ClickHouse")
@@ -222,7 +226,8 @@ func runMigrate(args []string) error {
 		time.Sleep(5 * time.Second)
 	}
 	defer ch.Close()
-	if err := store.Migrate(ctx, ch, *retention); err != nil {
+	if err := store.Migrate(ctx, ch, store.Retention{AuditDays: *retention, Metrics1sDays: *m1s, Metrics1mDays: *m1m,
+		Process1sHours: *p1s, SnapshotDays: *snapDays}); err != nil {
 		return err
 	}
 	slog.Info("audit storage migrated", "database", chCfg.Database, "retentionDays", *retention)
