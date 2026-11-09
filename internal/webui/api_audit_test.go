@@ -35,6 +35,7 @@ type fakeAuditStore struct {
 	files     map[string]*store.FileEventRow
 	presence  map[string][]string
 	access    []store.AccessLogRow
+	accessErr error
 	alertsHit bool
 }
 
@@ -84,6 +85,9 @@ func (f *fakeAuditStore) ListAccessLog(context.Context, store.TimeFilter) ([]sto
 func (f *fakeAuditStore) InsertAccessLog(_ context.Context, r store.AccessLogRow) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if f.accessErr != nil {
+		return f.accessErr
+	}
 	f.access = append(f.access, r)
 	return nil
 }
@@ -276,6 +280,24 @@ func TestAuditAPI(t *testing.T) {
 		}
 		if a := st.actions(); len(a) != 1 || a[0] != "download_file" {
 			t.Fatalf("access log %v", a)
+		}
+	})
+
+	// §9.1: access_log must not miss a content access, so content is
+	// only served once its access record is written.
+	t.Run("NoContentWithoutAccessLog", func(t *testing.T) {
+		s, sm, st, _ := auditRig(t)
+		st.accessErr = errors.New("clickhouse down")
+		for _, c := range []struct{ path, user string }{
+			{"/api/audit/sessions/S1/channels/1/cast", "gl-bob"},
+			{"/api/audit/sessions/S1/channels/1/raw?stream=out", "gl-root"},
+			{"/api/audit/files/F1/content", "gl-bob"},
+			{"/api/audit/sessions/S1", "gl-root"}, // admin viewing another user's session
+		} {
+			rec := route(t, s, "GET", c.path, forge(sm, c.user, false), "")
+			if rec.Code != http.StatusServiceUnavailable || strings.Contains(rec.Body.String(), "hello") || strings.Contains(rec.Body.String(), "TOP SECRET") {
+				t.Errorf("%s: %d %q", c.path, rec.Code, rec.Body)
+			}
 		}
 	})
 

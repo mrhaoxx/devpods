@@ -119,13 +119,25 @@ func (s *Server) auditStoreErr(w http.ResponseWriter, err error) {
 	}
 }
 
-func (s *Server) logAccess(r *http.Request, viewer, action, sessionID, target string) {
+func (s *Server) insertAccess(r *http.Request, viewer, action, sessionID, target string) error {
 	err := s.Audit.Store.InsertAccessLog(r.Context(), store.AccessLogRow{
 		TS: time.Now().UTC(), Viewer: viewer, Action: action, TargetSession: sessionID, TargetFile: target, ClientIP: r.RemoteAddr,
 	})
 	if err != nil {
 		slog.Error("audit access log", "err", err, "viewer", viewer, "action", action)
 	}
+	return err
+}
+
+// logAccess records a content access before the content is served
+// (§9.1: access_log must not miss one). On failure it answers 503 and
+// returns false; the caller then serves nothing.
+func (s *Server) logAccess(w http.ResponseWriter, r *http.Request, viewer, action, sessionID, target string) bool {
+	if err := s.insertAccess(r, viewer, action, sessionID, target); err != nil {
+		s.writeErr(w, http.StatusServiceUnavailable, "AUDIT_UNAVAILABLE", "the access could not be recorded; try again later", nil)
+		return false
+	}
+	return true
 }
 
 type page[T any] struct {
@@ -188,8 +200,8 @@ func (s *Server) handleAuditSession(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	if d.Session.User != sess.User {
-		s.logAccess(r, sess.User, "view_session", d.Session.SessionID, "")
+	if d.Session.User != sess.User && !s.logAccess(w, r, sess.User, "view_session", d.Session.SessionID, "") {
+		return
 	}
 	s.writeJSON(w, http.StatusOK, d)
 }
@@ -222,7 +234,9 @@ func (s *Server) handleAuditCast(w http.ResponseWriter, r *http.Request) {
 		s.writeErr(w, http.StatusBadRequest, "BAD_REQUEST", "invalid channel", nil)
 		return
 	}
-	s.logAccess(r, sess.User, "replay", d.Session.SessionID, fmt.Sprintf("channel/%d", ch))
+	if !s.logAccess(w, r, sess.User, "replay", d.Session.SessionID, fmt.Sprintf("channel/%d", ch)) {
+		return
+	}
 	w.Header().Set("Content-Type", "application/x-asciicast")
 	if err := rawlog.WriteCast(w, s.segmentIterator(r, d), ch); err != nil {
 		slog.Error("audit cast", "session", d.Session.SessionID, "err", err)
@@ -248,7 +262,9 @@ func (s *Server) handleAuditRaw(w http.ResponseWriter, r *http.Request) {
 		s.writeErr(w, http.StatusBadRequest, "BAD_REQUEST", "stream must be in, out or err", nil)
 		return
 	}
-	s.logAccess(r, sess.User, "download_raw", d.Session.SessionID, fmt.Sprintf("channel/%d/%s", ch, r.URL.Query().Get("stream")))
+	if !s.logAccess(w, r, sess.User, "download_raw", d.Session.SessionID, fmt.Sprintf("channel/%d/%s", ch, r.URL.Query().Get("stream"))) {
+		return
+	}
 	w.Header().Set("Content-Type", "application/octet-stream")
 	w.Header().Set("Content-Disposition", fmt.Sprintf(`attachment; filename="%s-ch%d-%s.bin"`, d.Session.SessionID, ch, r.URL.Query().Get("stream")))
 	it := s.segmentIterator(r, d)
@@ -288,7 +304,9 @@ func (s *Server) handleAuditFileContent(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	defer body.Close()
-	s.logAccess(r, sess.User, "download_file", fe.SessionID, fe.EventID)
+	if !s.logAccess(w, r, sess.User, "download_file", fe.SessionID, fe.EventID) {
+		return
+	}
 	name := strings.NewReplacer(`"`, "", `\`, "", "\r", "", "\n", "").Replace(path.Base(fe.Path))
 	w.Header().Set("Content-Type", "application/octet-stream")
 	w.Header().Set("Content-Disposition", fmt.Sprintf(`attachment; filename="%s"`, name))
@@ -502,6 +520,6 @@ func (s *Server) handlePutAuditPolicy(w http.ResponseWriter, r *http.Request) {
 		s.writeErr(w, http.StatusBadRequest, "BAD_REQUEST", "update rejected", err.Error())
 		return
 	}
-	s.logAccess(r, sess.User, "edit_policy", "", "user/"+name)
+	_ = s.insertAccess(r, sess.User, "edit_policy", "", "user/"+name) // the edit already happened
 	s.writeJSON(w, http.StatusOK, u.Spec.AuditPolicy)
 }
