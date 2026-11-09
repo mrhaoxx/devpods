@@ -1,4 +1,4 @@
-{{- if and .Values.audit.enabled .Values.audit.clickhouse.bundled.enabled }}
+{{- if and (include "devpod.audit.on" $) .Values.audit.clickhouse.bundled.enabled }}
 {{- $db := .Values.audit.clickhouse.database }}
 {{- range $component := list "gateway" "webui" "migrate" }}
 apiVersion: v1

@@ -233,10 +233,13 @@ The gateway records every SSH session — raw streams (TTY replay), exec
 commands, and the content of SFTP / scp / ZMODEM transfers — to S3 +
 ClickHouse; the web UI shows sessions, replays, command / file search.
 
-Quick start with bundled single-replica storage (Silo for S3, ClickHouse):
+Quick start with bundled single-replica storage (Silo for S3, ClickHouse).
+Use `--reset-then-reuse-values` (Helm ≥ 3.14), not `--reuse-values`: the
+latter keeps the old release's values and drops the chart's new `audit.*`
+defaults.
 
 ```bash
-helm upgrade --install devpod ./deploy/chart --reuse-values \
+helm upgrade --install devpod ./deploy/chart --reset-then-reuse-values \
     --set audit.enabled=true \
     --set audit.s3.bundled.enabled=true \
     --set audit.clickhouse.bundled.enabled=true
@@ -255,7 +258,7 @@ for c in gateway webui migrate; do
   kubectl -n devpod-system create secret generic audit-ch-$c \
       --from-literal=username=devpod_$c --from-literal=password=...
 done
-helm upgrade --install devpod ./deploy/chart --reuse-values \
+helm upgrade --install devpod ./deploy/chart --reset-then-reuse-values \
     --set audit.enabled=true \
     --set audit.s3.endpoint=https://s3.example.com \
     --set audit.s3.credentialsSecret=audit-s3 \
