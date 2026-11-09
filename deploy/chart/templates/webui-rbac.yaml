@@ -20,6 +20,12 @@ rules:
 - apiGroups: [""]
   resources: ["pods", "events"]
   verbs: ["get", "list", "watch"]
+{{- if include "devpod.telemetry.on" $ }}
+# TelemetryAlert Events on DevPods.
+- apiGroups: [""]
+  resources: ["events"]
+  verbs: ["create", "patch"]
+{{- end }}
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
@@ -63,4 +69,32 @@ metadata:
 roleRef: {apiGroup: rbac.authorization.k8s.io, kind: ClusterRole, name: devpod-webui}
 subjects:
 - {kind: ServiceAccount, name: devpod-webui, namespace: {{ .Values.namespaces.system }}}
+{{- if include "devpod.telemetry.on" $ }}
+---
+# Telemetry leader election, and the ingest EndpointSlice the leader
+# points at itself.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: devpod-webui-leader
+  namespace: {{ .Values.namespaces.system }}
+  labels: {{ include "devpod.labels" . | nindent 4 }}
+rules:
+- apiGroups: ["coordination.k8s.io"]
+  resources: ["leases"]
+  verbs: ["get", "list", "watch", "create", "update", "patch"]
+- apiGroups: ["discovery.k8s.io"]
+  resources: ["endpointslices"]
+  verbs: ["get", "list", "watch", "create", "update"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: devpod-webui-leader
+  namespace: {{ .Values.namespaces.system }}
+  labels: {{ include "devpod.labels" . | nindent 4 }}
+roleRef: {apiGroup: rbac.authorization.k8s.io, kind: Role, name: devpod-webui-leader}
+subjects:
+- {kind: ServiceAccount, name: devpod-webui, namespace: {{ .Values.namespaces.system }}}
+{{- end }}
 {{- end }}

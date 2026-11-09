@@ -33,6 +33,11 @@ spec:
         - migrate
         {{- include "devpod.audit.args" . | nindent 8 }}
         - --retention-days={{ .Values.audit.retentionDays }}
+        {{- $r := dig "retention" (dict) (.Values.telemetry | default dict) }}
+        - --metrics-retention-1s-days={{ dig "metrics1sDays" 7 $r }}
+        - --metrics-retention-1m-days={{ dig "metrics1mDays" 90 $r }}
+        - --process-retention-hours={{ dig "process1sHours" 48 $r }}
+        - --snapshot-retention-days={{ dig "snapshotDays" 7 $r }}
         - --manage-lifecycle={{ or .Values.audit.s3.bundled.enabled .Values.audit.s3.manageLifecycle }}
         - --create-bucket={{ .Values.audit.s3.bundled.enabled }}
         securityContext:

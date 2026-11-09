@@ -133,6 +133,28 @@ webui:
     compute: {cpu: "8", memory: "16Gi"}
     storage: "50Gi"
 
+# Live telemetry (phase 2 of the audit spec): every DevPod's supervisor
+# samples cgroup / process / GPU / RDMA metrics and posts them to the
+# webui leader. Requires audit.enabled (ClickHouse) and webui.enabled.
+# New settings reach a DevPod when its Pod is next created.
+telemetry:
+  enabled: false
+  metricsInterval: 1s           # container / GPU / RDMA sample period
+  procScanInterval: 500ms       # /proc scan period (process start/exit, attribution)
+  topN: 20                      # processes reported per metric besides the active ones
+  gpu: true                     # nvidia-smi
+  rdma: true                    # sysfs RDMA counters
+  hooks: true                   # shell command hooks (bash / zsh / fish)
+  retention:
+    metrics1sDays: 7            # 1-second container / GPU / RDMA metrics
+    metrics1mDays: 90           # 1-minute rollups
+    process1sHours: 48          # 1-second process metrics
+    snapshotDays: 7             # container snapshots
+  idle:                         # "idle for 24 h" in the overview
+    cpuPct: 5
+    gpuPct: 5
+  agentSilentAfter: 3m          # alert when a Running DevPod stops reporting
+
 # Session audit (docs/superpowers/specs/2026-11-09-devpod-audit-telemetry-design.md).
 # Off by default; when off the gateway behaves exactly as before.
 audit:

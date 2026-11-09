@@ -1,0 +1,37 @@
+{{- if include "devpod.telemetry.on" $ }}
+# Selectorless: the elected webui leader writes this Service's
+# EndpointSlice (devpod-webui-ingest-leader) with its own Pod IP, so
+# supervisors always reach the one replica that accepts telemetry.
+apiVersion: v1
+kind: Service
+metadata:
+  name: devpod-webui-ingest
+  namespace: {{ .Values.namespaces.system }}
+  labels: {{ include "devpod.labels" . | nindent 4 }}
+spec:
+  ports:
+  - {name: ingest, port: 8081, targetPort: 8081, protocol: TCP}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: devpod-webui-ingest
+  namespace: {{ .Values.namespaces.system }}
+  labels: {{ include "devpod.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: devpod-webui
+  policyTypes: [Ingress]
+  ingress:
+  # supervisors in DevPods post telemetry; follower replicas pull the
+  # leader's live state.
+  - from:
+    - namespaceSelector:
+        matchLabels:
+          kubernetes.io/metadata.name: {{ .Values.namespaces.devpods }}
+    - podSelector:
+        matchLabels:
+          app.kubernetes.io/name: devpod-webui
+    ports: [{port: 8081}]
+{{- end }}

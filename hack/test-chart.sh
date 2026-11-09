@@ -15,6 +15,11 @@ render() { # name, helm --set args...
   helm lint "$CHART" "$@" >/dev/null || { echo "FAIL [$name]: helm lint"; fail=1; }
 }
 has() { grep -qF -- "$2" "$OUT/$1.yaml" || { echo "FAIL [$1]: missing: $2"; fail=1; }; }
+# doc RENDER KIND NAME: print that one object of a render.
+doc() { KIND=$2 NAME=$3 perl -0777 -ne 'for (split /^---$/m) { print if /^kind: \Q$ENV{KIND}\E$/m && /^  name: \Q$ENV{NAME}\E$/m }' "$OUT/$1.yaml"; }
+docHas() { # RENDER KIND NAME TEXT
+  grep -qF -- "$4" <<<"$(doc "$1" "$2" "$3")" || { echo "FAIL [$1]: $2/$3 lacks: $4"; fail=1; }
+}
 lacks() { if grep -qF -- "$2" "$OUT/$1.yaml"; then echo "FAIL [$1]: unexpected: $2"; fail=1; fi; }
 
 WEBUI=(--set webui.enabled=true --set webui.passwordAuth=true --set webui.sessionKeySecret.name=sk)
@@ -112,6 +117,46 @@ has route "- --external-url=https://devpod.example.org"
 lacks defaults "kind: HTTPRoute"
 if helm template devpod "$CHART" "${WEBUI[@]}" "${ROUTE[@]}" >/dev/null 2>"$OUT/route-nourl.err"; then
   echo "FAIL [route]: rendered without webui.baseURL"; fail=1
+fi
+
+# (g) telemetry: the leader publishes itself behind a selectorless Service;
+# the shared ingest key reaches the controller (tokens) and the webui.
+AUDIT=(--set audit.enabled=true --set audit.s3.bundled.enabled=true --set audit.clickhouse.bundled.enabled=true)
+render telemetry "${WEBUI[@]}" "${AUDIT[@]}" --set telemetry.enabled=true
+has telemetry "name: devpod-webui-ingest"
+svc=$(doc telemetry Service devpod-webui-ingest)
+[ -n "$svc" ] || { echo "FAIL [telemetry]: no devpod-webui-ingest Service"; fail=1; }
+if grep -q "selector:" <<<"$svc"; then echo "FAIL [telemetry]: the ingest Service must be selectorless"; fail=1; fi
+grep -qF "name: ingest" <<<"$svc" || { echo "FAIL [telemetry]: ingest Service port must be named ingest (matches the EndpointSlice)"; fail=1; }
+has telemetry "containerPort: 8081"
+has telemetry "- --ingest-key-file=/etc/devpod/ingest/key"
+has telemetry "- --leader-election-namespace=devpod-system"
+has telemetry "- --ingest-service=devpod-webui-ingest"
+has telemetry "- --idle-cpu-pct=5"
+has telemetry "- --agent-silent-after=3m"
+has telemetry "fieldPath: status.podIP"
+docHas telemetry Role devpod-webui-leader "namespace: devpod-system"
+docHas telemetry Role devpod-webui-leader 'resources: ["endpointslices"]'
+docHas telemetry Role devpod-webui-leader 'resources: ["leases"]'
+docHas telemetry RoleBinding devpod-webui-leader "name: devpod-webui"
+docHas telemetry NetworkPolicy devpod-webui-ingest "port: 8081"
+docHas telemetry NetworkPolicy devpod-webui-ingest "kubernetes.io/metadata.name: devpods"
+docHas telemetry NetworkPolicy devpod-webui-ingest "app.kubernetes.io/name: devpod-webui"
+docHas telemetry Role devpod-webui 'verbs: ["create", "patch"]'
+has telemetry "- --ingest-url=http://devpod-webui-ingest.devpod-system.svc:8081/ingest/v1/batch"
+has telemetry "- --telemetry-metrics-interval=1s"
+has telemetry "- --metrics-retention-1s-days=7"
+has telemetry "- --process-retention-hours=48"
+has telemetry "name: devpod-ingest-key"
+lacks defaults "devpod-webui-ingest"
+lacks defaults "--ingest-"
+lacks defaults "devpod-ingest-key"
+lacks bundled "devpod-webui-ingest"
+lacks bundled "--ingest-"
+if helm template devpod "$CHART" "${WEBUI[@]}" --set telemetry.enabled=true >/dev/null 2>"$OUT/tele-noaudit.err"; then
+  echo "FAIL [telemetry]: rendered without audit"; fail=1
+elif ! grep -qF "audit.enabled" "$OUT/tele-noaudit.err"; then
+  echo "FAIL [telemetry]: unhelpful error: $(cat "$OUT/tele-noaudit.err")"; fail=1
 fi
 
 # (d) `helm upgrade --reuse-values` from v0.1.x: the old release's values

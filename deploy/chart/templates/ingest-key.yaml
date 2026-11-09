@@ -1,0 +1,20 @@
+{{- if include "devpod.telemetry.on" $ }}
+{{- /* Shared HMAC key for per-DevPod ingest tokens; kept across upgrades
+       (a new key would invalidate every running DevPod's token). */}}
+{{- $existing := lookup "v1" "Secret" .Values.namespaces.system "devpod-ingest-key" }}
+apiVersion: v1
+kind: Secret
+metadata:
+  name: devpod-ingest-key
+  namespace: {{ .Values.namespaces.system }}
+  labels: {{ include "devpod.labels" . | nindent 4 }}
+  annotations:
+    "helm.sh/resource-policy": keep
+type: Opaque
+data:
+  {{- if and $existing (index ($existing.data | default dict) "key") }}
+  key: {{ index $existing.data "key" }}
+  {{- else }}
+  key: {{ randAlphaNum 64 | b64enc }}
+  {{- end }}
+{{- end }}
