@@ -66,6 +66,9 @@ spec:
         {{- if .Values.webui.sshLoginSuffix }}
         - --ssh-login-suffix={{ .Values.webui.sshLoginSuffix }}
         {{- end }}
+        {{- if .Values.audit.enabled }}
+        {{- include "devpod.audit.args" . | nindent 8 }}
+        {{- end }}
         ports:
         - {name: http, containerPort: 8080}
         readinessProbe:
@@ -81,6 +84,9 @@ spec:
         {{- end }}
         - {name: session, mountPath: /etc/devpod/webui/session, readOnly: true}
         - {name: quota, mountPath: /etc/devpod/webui/default-quota.yaml, subPath: default-quota.yaml, readOnly: true}
+        {{- if .Values.audit.enabled }}
+        {{- include "devpod.audit.mounts" . | nindent 8 }}
+        {{- end }}
       volumes:
       {{- if .Values.webui.gitlab.issuerURL }}
       - name: oauth
@@ -93,6 +99,9 @@ spec:
       - name: quota
         configMap:
           name: devpod-webui-quota
+      {{- if .Values.audit.enabled }}
+      {{- include "devpod.audit.volumes" (dict "root" $ "component" "webui") | nindent 6 }}
+      {{- end }}
 ---
 apiVersion: v1
 kind: Service

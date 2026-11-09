@@ -20,6 +20,11 @@ spec:
         app.kubernetes.io/name: devpod-gateway
     spec:
       serviceAccountName: devpod-gateway
+      {{- if .Values.audit.enabled }}
+      # Sessions get --shutdown-session-grace (60s), then the audit spool
+      # drains for --audit-drain-timeout (220s) before exit.
+      terminationGracePeriodSeconds: 300
+      {{- end }}
       containers:
       - name: gateway
         image: "{{ .Values.image.gateway.repository }}:{{ .Values.image.gateway.tag }}"
@@ -27,6 +32,14 @@ spec:
         args:
         - --listen=:22
         - --host-key-dir=/etc/devpod/gateway
+        {{- if .Values.audit.enabled }}
+        {{- include "devpod.audit.args" . | nindent 8 }}
+        - --audit-spool-dir=/var/spool/devpod-audit
+        - --audit-spool-max-bytes={{ .Values.audit.spool.sizeLimit }}
+        {{- end }}
+        env:
+        - name: POD_NAME
+          valueFrom: {fieldRef: {fieldPath: metadata.name}}
         ports:
         - {name: ssh,     containerPort: 22}
         - {name: metrics, containerPort: 8080}
@@ -46,6 +59,10 @@ spec:
         - name: internal-key
           mountPath: /etc/devpod/gateway/internal
           readOnly: true
+        {{- if .Values.audit.enabled }}
+        - {name: audit-spool, mountPath: /var/spool/devpod-audit}
+        {{- include "devpod.audit.mounts" . | nindent 8 }}
+        {{- end }}
         {{- if .Values.gateway.ldap.enabled }}
         - name: ldap-secrets
           mountPath: /etc/devpod/gateway/ldap
@@ -65,6 +82,11 @@ spec:
       - name: internal-key
         secret:
           secretName: devpod-gateway-internal-key
+      {{- if .Values.audit.enabled }}
+      - name: audit-spool
+        emptyDir: {sizeLimit: {{ .Values.audit.spool.sizeLimit }}}
+      {{- include "devpod.audit.volumes" (dict "root" $ "component" "gateway") | nindent 6 }}
+      {{- end }}
       {{- if .Values.gateway.ldap.enabled }}
       - name: ldap-secrets
         projected:

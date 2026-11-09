@@ -117,7 +117,7 @@
 |---|---|
 | `audit.enabled=false`（默认） | gateway 行为与现在完全一致 |
 | `audit.s3.bundled.enabled=false`（默认） | 使用外部 S3：`endpoint`、`bucket`、`region`、凭据 Secret |
-| `audit.s3.bundled.enabled=true` | 部署单副本 **Silo**（`docker.io/pgsty/silo`，MinIO 社区 fork）StatefulSet + PVC，启动时用 `mcli` 建 bucket 并配置生命周期规则。镜像可通过 values 替换（例如 MinIO AIStor Free） |
+| `audit.s3.bundled.enabled=true` | 部署单副本 **Silo**（`docker.io/pgsty/silo`，MinIO 社区 fork）StatefulSet + PVC；bucket 与生命周期规则由 migrate Job（`devpod-webui migrate`，aws-sdk）创建。镜像可通过 values 替换（例如 MinIO AIStor Free） |
 | `audit.clickhouse.bundled.enabled=false`（默认） | 使用外部 ClickHouse |
 | `audit.clickhouse.bundled.enabled=true` | 用官方 `clickhouse/clickhouse-server` 镜像部署单副本 StatefulSet + PVC |
 
@@ -733,8 +733,9 @@ type ForwardingPolicy struct {
 | webui | 同上的 S3 / ClickHouse 读参数，`--ingest-listen`（默认 `:8081`）、`--ingest-key-file`、`--leader-election-namespace` |
 | controller | `--ingest-url`（空 = 不启用遥测）、`--ingest-key-file`、遥测默认值（写入 `telemetry.json`） |
 
-chart：gateway 增加 spool emptyDir（`sizeLimit`）、`preStop` 与
-`terminationGracePeriodSeconds: 300`；gateway RBAC 无新增；webui RBAC
+chart：gateway 增加 spool emptyDir（`sizeLimit`）与
+`terminationGracePeriodSeconds: 300`（不需要 preStop：gateway 收到 SIGTERM
+后自行等待会话、再排空 spool）；gateway RBAC 无新增；webui RBAC
 增加 `coordination.k8s.io/leases`（选主）与 `authentication.k8s.io/
 tokenreviews`（三期）；`values.yaml` 增加 `audit.*`。
 

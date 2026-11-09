@@ -41,6 +41,10 @@ rules:
 - apiGroups: ["devpod.io"]
   resources: ["users", "devpodtemplates"]
   verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+# Read-only: the audit policy endpoints show the cluster default.
+- apiGroups: ["devpod.io"]
+  resources: ["gatewayconfigs"]
+  verbs: ["get", "list", "watch"]
 {{- if ne .Values.webui.kore "off" }}
 - apiGroups: ["kore.zjusct.io"]
   resources: ["korenodetopologies"]

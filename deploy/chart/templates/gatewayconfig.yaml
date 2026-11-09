@@ -18,6 +18,16 @@ spec:
   # backtick raw-string passes the inner template through unprocessed.
   banner: |
     {{ `devpod-gateway · {{ .ClientIP }} → {{ if .User }}{{ .User }}+{{ .Pod }}{{ else }}{{ .Login }}{{ end }} · {{ .Now.Format "2006-01-02 15:04:05 MST" }}` }}
+  {{- if .Values.audit.enabled }}
+  audit:
+    enabled: true
+    {{- with .Values.audit.notice }}
+    notice: {{ . | quote }}
+    {{- end }}
+    {{- with .Values.audit.policy }}
+    policy: {{- toYaml . | nindent 6 }}
+    {{- end }}
+  {{- end }}
   {{- if .Values.gateway.ldap.enabled }}
   ldap:
     url: {{ .Values.gateway.ldap.url | quote }}

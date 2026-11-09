@@ -1,0 +1,150 @@
+{{- if and .Values.audit.enabled .Values.audit.clickhouse.bundled.enabled }}
+{{- $db := .Values.audit.clickhouse.database }}
+{{- range $component := list "gateway" "webui" "migrate" }}
+apiVersion: v1
+kind: Secret
+metadata:
+  name: devpod-audit-ch-{{ $component }}
+  namespace: {{ $.Values.namespaces.system }}
+  labels: {{ include "devpod.labels" $ | nindent 4 }}
+type: Opaque
+stringData:
+  username: devpod_{{ $component }}
+  password: {{ include "devpod.audit.password" (dict "root" $ "secret" (printf "devpod-audit-ch-%s" $component) "key" "password") | quote }}
+---
+{{- end }}
+apiVersion: v1
+kind: Secret
+metadata:
+  name: devpod-audit-ch-default
+  namespace: {{ .Values.namespaces.system }}
+  labels: {{ include "devpod.labels" . | nindent 4 }}
+type: Opaque
+stringData:
+  password: {{ include "devpod.audit.password" (dict "root" $ "secret" "devpod-audit-ch-default" "key" "password") | quote }}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: devpod-audit-clickhouse
+  namespace: {{ .Values.namespaces.system }}
+  labels: {{ include "devpod.labels" . | nindent 4 }}
+data:
+  # Least-privilege accounts; passwords come from the Secrets above.
+  devpod.xml: |
+    <clickhouse>
+      <users>
+        <devpod_gateway>
+          <password from_env="DEVPOD_CH_GATEWAY_PASSWORD"/>
+          <networks><ip>::/0</ip></networks>
+          <profile>default</profile>
+          <quota>default</quota>
+          <grants><query>GRANT INSERT ON {{ $db }}.*</query></grants>
+        </devpod_gateway>
+        <devpod_webui>
+          <password from_env="DEVPOD_CH_WEBUI_PASSWORD"/>
+          <networks><ip>::/0</ip></networks>
+          <profile>default</profile>
+          <quota>default</quota>
+          <grants><query>GRANT SELECT, INSERT ON {{ $db }}.*</query></grants>
+        </devpod_webui>
+        <devpod_migrate>
+          <password from_env="DEVPOD_CH_MIGRATE_PASSWORD"/>
+          <networks><ip>::/0</ip></networks>
+          <profile>default</profile>
+          <quota>default</quota>
+          <grants>
+            <query>GRANT CREATE DATABASE ON {{ $db }}.*</query>
+            <query>GRANT ALL ON {{ $db }}.*</query>
+          </grants>
+        </devpod_migrate>
+      </users>
+    </clickhouse>
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: devpod-audit-clickhouse
+  namespace: {{ .Values.namespaces.system }}
+  labels: {{ include "devpod.labels" . | nindent 4 }}
+spec:
+  serviceName: devpod-audit-clickhouse
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: devpod-audit-clickhouse
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: devpod-audit-clickhouse
+      annotations:
+        checksum/users: {{ $db | sha256sum }}
+    spec:
+      securityContext:
+        fsGroup: 101
+      containers:
+      - name: clickhouse
+        image: "{{ .Values.audit.clickhouse.bundled.image.repository }}:{{ .Values.audit.clickhouse.bundled.image.tag }}"
+        env:
+        - name: CLICKHOUSE_PASSWORD
+          valueFrom: {secretKeyRef: {name: devpod-audit-ch-default, key: password}}
+        {{- range $component := list "gateway" "webui" "migrate" }}
+        - name: DEVPOD_CH_{{ upper $component }}_PASSWORD
+          valueFrom: {secretKeyRef: {name: devpod-audit-ch-{{ $component }}, key: password}}
+        {{- end }}
+        ports:
+        - {name: native, containerPort: 9000}
+        - {name: http, containerPort: 8123}
+        readinessProbe:
+          httpGet: {path: /ping, port: http}
+          periodSeconds: 5
+        resources:
+          requests: {cpu: 250m, memory: 1Gi}
+          limits: {cpu: "4", memory: 8Gi}
+        volumeMounts:
+        - {name: data, mountPath: /var/lib/clickhouse}
+        - {name: users, mountPath: /etc/clickhouse-server/users.d/devpod.xml, subPath: devpod.xml, readOnly: true}
+      volumes:
+      - name: users
+        configMap:
+          name: devpod-audit-clickhouse
+  volumeClaimTemplates:
+  - metadata:
+      name: data
+    spec:
+      accessModes: [ReadWriteOnce]
+      {{- with .Values.audit.clickhouse.bundled.storageClass }}
+      storageClassName: {{ . }}
+      {{- end }}
+      resources:
+        requests:
+          storage: {{ .Values.audit.clickhouse.bundled.storage }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: devpod-audit-clickhouse
+  namespace: {{ .Values.namespaces.system }}
+  labels: {{ include "devpod.labels" . | nindent 4 }}
+spec:
+  selector:
+    app.kubernetes.io/name: devpod-audit-clickhouse
+  ports:
+  - {name: native, port: 9000, targetPort: native}
+  - {name: http, port: 8123, targetPort: http}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: devpod-audit-clickhouse
+  namespace: {{ .Values.namespaces.system }}
+  labels: {{ include "devpod.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: devpod-audit-clickhouse
+  policyTypes: [Ingress]
+  ingress:
+  - from: {{- include "devpod.audit.clients" . | nindent 4 }}
+    ports: [{port: 9000}, {port: 8123}]
+{{- end }}

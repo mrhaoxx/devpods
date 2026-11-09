@@ -106,3 +106,35 @@ webui:
     maxDevPods: 3
     compute: {cpu: "8", memory: "16Gi"}
     storage: "50Gi"
+
+# Session audit (docs/superpowers/specs/2026-11-09-devpod-audit-telemetry-design.md).
+# Off by default; when off the gateway behaves exactly as before.
+audit:
+  enabled: false
+  notice: ""                    # login-banner notice; "" = default text
+  retentionDays: 180            # ClickHouse TTL and S3 lifecycle (bundled / manageLifecycle)
+  policy: {}                    # cluster default AuditPolicy → GatewayConfig.spec.audit.policy
+  spool:
+    sizeLimit: 20Gi             # gateway emptyDir and --audit-spool-max-bytes
+  s3:
+    endpoint: ""                # external mode, e.g. https://s3.example.com
+    region: us-east-1
+    bucket: devpod-audit
+    pathStyle: true
+    credentialsSecret: ""       # external mode: Secret with keys access-key, secret-key
+    manageLifecycle: false      # external mode: let the migrate Job set expiration rules
+    bundled:
+      enabled: false            # single-replica Silo (MinIO fork) StatefulSet, no HA
+      image: {repository: docker.io/pgsty/silo, tag: "RELEASE.2026-10-26T00-00-00Z"}
+      storage: 100Gi
+      storageClass: ""
+  clickhouse:
+    url: ""                     # external mode, e.g. clickhouse://clickhouse.example.com:9000
+    database: devpod_audit
+    # external mode: Secrets with keys username, password, one per component
+    credentialsSecrets: {gateway: "", webui: "", migrate: ""}
+    bundled:
+      enabled: false            # single-replica ClickHouse StatefulSet, no HA
+      image: {repository: clickhouse/clickhouse-server, tag: "26.8.36.3"}
+      storage: 50Gi
+      storageClass: ""

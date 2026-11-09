@@ -1,0 +1,87 @@
+{{- if and .Values.audit.enabled .Values.audit.s3.bundled.enabled }}
+apiVersion: v1
+kind: Secret
+metadata:
+  name: devpod-audit-s3
+  namespace: {{ .Values.namespaces.system }}
+  labels: {{ include "devpod.labels" . | nindent 4 }}
+type: Opaque
+stringData:
+  access-key: devpod-audit
+  secret-key: {{ include "devpod.audit.password" (dict "root" $ "secret" "devpod-audit-s3" "key" "secret-key") | quote }}
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: devpod-audit-s3
+  namespace: {{ .Values.namespaces.system }}
+  labels: {{ include "devpod.labels" . | nindent 4 }}
+spec:
+  serviceName: devpod-audit-s3
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: devpod-audit-s3
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: devpod-audit-s3
+    spec:
+      containers:
+      - name: silo
+        image: "{{ .Values.audit.s3.bundled.image.repository }}:{{ .Values.audit.s3.bundled.image.tag }}"
+        args: [server, /data]
+        env:
+        - name: MINIO_ROOT_USER
+          valueFrom: {secretKeyRef: {name: devpod-audit-s3, key: access-key}}
+        - name: MINIO_ROOT_PASSWORD
+          valueFrom: {secretKeyRef: {name: devpod-audit-s3, key: secret-key}}
+        ports:
+        - {name: s3, containerPort: 9000}
+        readinessProbe:
+          httpGet: {path: /minio/health/live, port: s3}
+          periodSeconds: 5
+        resources:
+          requests: {cpu: 100m, memory: 256Mi}
+          limits: {cpu: "2", memory: 2Gi}
+        volumeMounts:
+        - {name: data, mountPath: /data}
+  volumeClaimTemplates:
+  - metadata:
+      name: data
+    spec:
+      accessModes: [ReadWriteOnce]
+      {{- with .Values.audit.s3.bundled.storageClass }}
+      storageClassName: {{ . }}
+      {{- end }}
+      resources:
+        requests:
+          storage: {{ .Values.audit.s3.bundled.storage }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: devpod-audit-s3
+  namespace: {{ .Values.namespaces.system }}
+  labels: {{ include "devpod.labels" . | nindent 4 }}
+spec:
+  selector:
+    app.kubernetes.io/name: devpod-audit-s3
+  ports:
+  - {name: s3, port: 9000, targetPort: s3}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: devpod-audit-s3
+  namespace: {{ .Values.namespaces.system }}
+  labels: {{ include "devpod.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: devpod-audit-s3
+  policyTypes: [Ingress]
+  ingress:
+  - from: {{- include "devpod.audit.clients" . | nindent 4 }}
+    ports: [{port: 9000}]
+{{- end }}
