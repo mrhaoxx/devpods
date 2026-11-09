@@ -33,6 +33,12 @@ export function mergeTimeline(d: SessionDetail): TimelineItem[] {
   return out.sort((a, b) => new Date(a.ts).getTime() - new Date(b.ts).getTime());
 }
 
+// castPlayerOptions configures asciinema-player for audit replays. No
+// idleTimeLimit: it compresses idle gaps and seek() then runs on the
+// compressed clock, so a timeline jump (castOffset, wall-clock seconds)
+// would land late after any pause.
+export const castPlayerOptions = { fit: "width", terminalFontSize: "13px" } as const;
+
 // castOffset is where in a channel's recording an event happened.
 export function castOffset(channelOpenedAt: string, ts: string): number {
   return Math.max(0, (new Date(ts).getTime() - new Date(channelOpenedAt).getTime()) / 1000);
