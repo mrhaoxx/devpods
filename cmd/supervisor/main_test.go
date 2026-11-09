@@ -205,3 +205,59 @@ func TestSupervisor_ForwardsShellOverridesToSshd(t *testing.T) {
 		t.Errorf("stdout unexpectedly contains ForceCommand= — chosen shell lands via /etc/passwd, not ForceCommand:\n%s", s)
 	}
 }
+
+// writeTelemetryFake makes a telemetry stand-in that appends a timestamp
+// to count and exits 1, plus a config file that enables telemetry.
+func writeTelemetryFake(t *testing.T) (cfg, count, script string) {
+	t.Helper()
+	dir := t.TempDir()
+	cfg = filepath.Join(dir, "telemetry.json")
+	if err := os.WriteFile(cfg, []byte(`{}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	count = filepath.Join(dir, "count")
+	script = filepath.Join(dir, "telemetry.sh")
+	body := "#!/bin/sh\ndate +%s.%N >> " + count + "\nexit 1\n"
+	if err := os.WriteFile(script, []byte(body), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	return cfg, count, script
+}
+
+// A crashing telemetry child is restarted with growing delays and never
+// makes PID 1 exit: the container's fate stays with sshd / the user cmd.
+func TestSupervisor_TelemetryCrashDoesNotExit(t *testing.T) {
+	sup := buildSupervisor(t)
+	cfg, count, script := writeTelemetryFake(t)
+	cmd := exec.Command(sup)
+	cmd.Env = append(cmd.Environ(),
+		"SUPERVISOR_SSHD_PATH=/bin/sh", "SUPERVISOR_SSHD_ARGS=-c;exec sleep 3;--",
+		"SUPERVISOR_TELEMETRY_CONFIG="+cfg, "SUPERVISOR_TELEMETRY_CMD="+script,
+		"SUPERVISOR_TELEMETRY_BACKOFF=200ms",
+	)
+	start := time.Now()
+	_ = cmd.Run()
+	if dt := time.Since(start); dt < 2500*time.Millisecond {
+		t.Fatalf("supervisor exited after %v; a telemetry crash must not end it", dt)
+	}
+	b, _ := os.ReadFile(count)
+	runs := strings.Count(string(b), "\n")
+	// 200ms, 400ms, 800ms, 1.6s backoff within ~3s → 3..5 runs, not dozens.
+	if runs < 3 || runs > 6 {
+		t.Fatalf("telemetry ran %d times in 3s; want restarts with exponential backoff", runs)
+	}
+}
+
+func TestSupervisor_NoConfigNoTelemetry(t *testing.T) {
+	sup := buildSupervisor(t)
+	_, count, script := writeTelemetryFake(t)
+	cmd := exec.Command(sup)
+	cmd.Env = append(cmd.Environ(),
+		"SUPERVISOR_SSHD_PATH=/bin/sh", "SUPERVISOR_SSHD_ARGS=-c;exec sleep 1;--",
+		"SUPERVISOR_TELEMETRY_CONFIG="+filepath.Join(t.TempDir(), "absent.json"), "SUPERVISOR_TELEMETRY_CMD="+script,
+	)
+	_ = cmd.Run()
+	if _, err := os.Stat(count); !os.IsNotExist(err) {
+		t.Fatalf("telemetry started without a config (count file: %v)", err)
+	}
+}

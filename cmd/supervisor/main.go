@@ -23,6 +23,8 @@ import (
 	"strings"
 	"sync/atomic"
 	"syscall"
+
+	"github.com/mrhaoxx/devpod/internal/telemetry/config"
 )
 
 const (
@@ -44,6 +46,9 @@ type child struct {
 func main() {
 	if len(os.Args) >= 2 && os.Args[1] == "bootstrap" {
 		os.Exit(runBootstrap())
+	}
+	if len(os.Args) >= 2 && os.Args[1] == "telemetry" {
+		os.Exit(runTelemetry())
 	}
 
 	// Register signal handling before forking so a SIGTERM racing
@@ -118,6 +123,14 @@ func main() {
 	// wins, useful for service-style workloads.
 	exitOnUserCmd := os.Getenv("SUPERVISOR_EXIT_ON_USER_CMD") == "true"
 
+	// Telemetry runs only when the controller handed out a config
+	// (spec §5.5); it is restarted on crash and never decides our exit.
+	var tel *telemetrySup
+	if _, err := os.Stat(envOr("SUPERVISOR_TELEMETRY_CONFIG", config.ConfigPath)); err == nil {
+		tel = newTelemetrySup(sshdCmd.Process.Pid)
+		go tel.loop()
+	}
+
 	// shuttingDown is set the first time we forward a terminal signal.
 	// Under shutdown we wait for all tracked children so we can prefer
 	// the user command's exit code.
@@ -126,6 +139,7 @@ func main() {
 	go func() {
 		for sig := range sigCh {
 			shuttingDown.Store(true)
+			tel.stop()
 			s := sig.(syscall.Signal)
 			for _, c := range children {
 				if c.cmd.Process != nil {
@@ -135,7 +149,9 @@ func main() {
 		}
 	}()
 
-	os.Exit(waitForChildren(children, &shuttingDown, exitOnUserCmd))
+	code := waitForChildren(children, &shuttingDown, exitOnUserCmd, tel.exited)
+	tel.stop()
+	os.Exit(code)
 }
 
 // waitForChildren reaps tracked + orphan children until the supervisor
@@ -148,7 +164,7 @@ func main() {
 //     ssh in and investigate.
 //   - During shutdown (we forwarded a terminal signal), wait for all
 //     tracked children and prefer the user command's exit code.
-func waitForChildren(children []*child, shuttingDown *atomic.Bool, exitOnUserCmd bool) int {
+func waitForChildren(children []*child, shuttingDown *atomic.Bool, exitOnUserCmd bool, untracked func(pid, code int)) int {
 	var firstTrackedExit *int
 	for {
 		var ws syscall.WaitStatus
@@ -173,7 +189,8 @@ func waitForChildren(children []*child, shuttingDown *atomic.Bool, exitOnUserCmd
 			}
 		}
 		if hit == nil {
-			continue // untracked orphan
+			untracked(pid, waitStatusToExit(ws)) // telemetry child or an orphan
+			continue
 		}
 		code := waitStatusToExit(ws)
 		hit.exit = &code
