@@ -660,12 +660,24 @@ func (s *Server) freshSession(w http.ResponseWriter, r *http.Request) (Session, 
 ### Task 18: Frontend — table-style DevPod list
 
 **Files:**
-- Create: `web/src/format.ts`, `web/src/format.test.ts`, `web/src/columns.ts`, `web/src/columns.test.ts`, `web/src/components/DevPodTable.tsx`
-- Modify: `web/src/api.ts` (presence), `web/src/pages/PodList.tsx`, `web/src/pages/AdminDevPods.tsx`
+- Create: `internal/webui/podinfo.go`, `internal/webui/podinfo_test.go`, `web/src/format.ts`, `web/src/format.test.ts`, `web/src/columns.ts`, `web/src/columns.test.ts`, `web/src/components/DevPodTable.tsx`
+- Modify: `internal/webui/api_devpods.go` (list response), `internal/webui/watch.go` (+ `watch_test.go`), `internal/webui/api_admin_devpods.go`, `web/src/api.ts` (pod info, presence), `web/src/pages/PodList.tsx`, `web/src/pages/AdminDevPods.tsx`
 
 **Interfaces:**
 - Consumes: Task 17 `GET /api/audit/presence`.
-- Produces:
+- Produces (Go, read from the webui's existing Pod informer cache — no extra API calls):
+```go
+type PodInfo struct {
+	Node      string       `json:"node"`
+	IP        string       `json:"ip"`
+	StartedAt *metav1.Time `json:"startedAt,omitempty"` // target container's state.running.startedAt (resets on container restart); nil unless running
+}
+func targetContainerName(dp *devpodv1alpha1.DevPod) string     // spec.persistence.targetContainer, else spec.pod.spec.containers[0].name (same rule as render)
+func podInfoFor(dp *devpodv1alpha1.DevPod, pod *corev1.Pod) *PodInfo // nil pod ⇒ nil
+func (s *Server) podInfo(ctx context.Context, dp *devpodv1alpha1.DevPod) *PodInfo // cached Pod named render.PodName(dp)
+```
+  - `GET /api/devpods` and `GET /api/admin/devpods` responses gain `pods: {"<devpod>": PodInfo}`; the list watch message (`watchEvent`) gains `pod?: PodInfo`; the watch handler also subscribes to the Pod informer and, on a Pod add/update/delete, pushes a `MODIFIED` message for the owning DevPod (label `devpod.io/devpod`) so container restarts update the Up column live.
+- Produces (TS):
 ```ts
 export function fmtBytes(n: number): string          // 1536 → "1.5K", 58.1e9 → "58.1G" (1024-based, 1 decimal, units K M G T)
 export function fmtDuration(ms: number): string       // 7920000 → "2h12m", 194400000 → "2d6h", 42000 → "42s"
@@ -676,12 +688,12 @@ export const HIDE_ORDER: ColumnKey[] = ["image", "rdma", "net", "up"]
 export function visibleColumns(width: number, available: ColumnKey[]): ColumnKey[] // ≥1100 all; <1100 −image; <980 −rdma; <860 −net; <760 −up
 export function DevPodTable(props: { items: DevPod[]; me: Me; presence?: Record<string, {count: number; users: string[]}>; showOwner?: boolean; onToggle: (name: string, running: boolean) => void }): JSX.Element
 ```
-- Phase-1 columns (spec §9.4, metrics arrive in phase 2): Name (suffix; Owner column when `showOwner`), Phase, CPU = summed container cpu limits, Memory = summed memory limits, GPU = summed `nvidia.com/gpu` limits, Sess = presence count + users, **Age** (phase 2 renames to Up), Image = first container image's last path segment, SSH copy icon, Hibernate/Wake. Row ≈ 30 px, mono 12 px, tokens from `index.css`. Non-running rows merge the metric cells into one status cell: Pending ⇒ `status.message` or `starting…`; Stopped ⇒ `hibernated <fmtAge(hibernatedAt)> ago` + `· home PVC <size> kept` when persistence; Failed ⇒ `status.message · retry #<n> in <failureRetryIn>s`. Toolbar: name/image filter, Phase chips with counts, totals vs quota from `me.usage`/`me.quota`. Presence polled every 10 s when `features.audit`; without audit the `sess` column is not in `available`. `net` and `rdma` are not in `available` until phase 2.
+- Phase-1 columns (spec §9.4, metrics arrive in phase 2): Name (suffix; Owner column when `showOwner`), Phase, CPU = summed container cpu limits, Memory = summed memory limits, GPU = summed `nvidia.com/gpu` limits, Sess = presence count + users, Up = `fmtDuration(now − pod.startedAt)` refreshed every second (Running rows only), Image = first container image's last path segment, SSH copy icon, Hibernate/Wake. Row ≈ 30 px, mono 12 px, tokens from `index.css`. Non-running rows merge the metric cells into one status cell: Pending ⇒ `status.message` or `starting…`; Stopped ⇒ `hibernated <fmtAge(hibernatedAt)> ago` + `· home PVC <size> kept` when persistence; Failed ⇒ `status.message · retry #<n> in <failureRetryIn>s`. Toolbar: name/image filter, Phase chips with counts, totals vs quota from `me.usage`/`me.quota`. Presence polled every 10 s when `features.audit`; without audit the `sess` column is not in `available`. `net` and `rdma` are not in `available` until phase 2.
 
-- [ ] **Step 1: Write the failing Vitest tests** — `format.test.ts` (the examples above; `failureRetryIn(3, t-30s, t) === 10`); `columns.test.ts` (`visibleColumns(1200, all)` has image; `1000` drops image only; `800` drops image, rdma, net; `700` also up; keys absent from `available` never appear).
-- [ ] **Step 2: Run** `cd web && npm test` — Expected: FAIL.
-- [ ] **Step 3: Implement** helpers, `DevPodTable`; switch `PodList` and `AdminDevPods` (with `showOwner`, `scope=all` presence) to it.
-- [ ] **Step 4: Run** `cd web && npm test && npm run build` — Expected: PASS, build OK.
+- [ ] **Step 1: Write the failing tests** — Go: `TestPodInfoFor_TargetContainerStartedAt` (two containers, persistence targets the second ⇒ its `startedAt`; target waiting/terminated ⇒ `StartedAt` nil; nil Pod ⇒ nil), envtest `TestListDevPods_IncludesPods`, `TestWatchDevPods_PodUpdatePushesOwningDevPod` (update the Pod's container status ⇒ a `MODIFIED` message for its DevPod with the new `pod.startedAt`). Vitest: `format.test.ts` (the examples above; `failureRetryIn(3, t-30s, t) === 10`); `columns.test.ts` (`visibleColumns(1200, all)` has image; `1000` drops image only; `800` drops image, rdma, net; `700` also up; keys absent from `available` never appear).
+- [ ] **Step 2: Run** `bash hack/test.sh ./internal/webui/ -run 'PodInfo|IncludesPods|PodUpdate'` and `cd web && npm test` — Expected: FAIL.
+- [ ] **Step 3: Implement** `PodInfo` plumbing, helpers, `DevPodTable`; switch `PodList` and `AdminDevPods` (with `showOwner`, `scope=all` presence) to it.
+- [ ] **Step 4: Run** both test commands and `npm run build` — Expected: PASS, build OK.
 - [ ] **Step 5: Commit** `git commit -m "webui: table-style DevPod list"`
 
 ---
@@ -693,10 +705,11 @@ export function DevPodTable(props: { items: DevPod[]; me: Me; presence?: Record<
 - Create: `web/src/tabs.ts`, `web/src/tabs.test.ts`
 
 **Interfaces:**
-- Produces: `GET /api/devpods/{name}` and the SSE `devpod` message gain `pod?: {node: string; ip: string; startTime?: string}` read from the cached Pod; `export function tabFromHash(hash: string, tabs: string[]): string` (unknown / empty ⇒ first tab).
-- Layout (spec §9.4, phase 1 subset): header (name, phase, SSH copy, Hibernate, Delete); meta row (owner, node, pod IP, image, up from `pod.startTime`, shell, home volume, Kore binding summary, collaborators); tabs via URL hash — `Overview` (existing Access card, SSH config, Kore node layout), `Sessions` (only when `features.audit`: rows of `/api/audit/sessions?devpod=<name>` with user, from, start, duration, commands, files, blocked/alert tags, ▶ replay link to `/audit/sessions/<id>`), `Events` (existing live list). KPI cards and Monitoring/Processes/Container tabs are phase 2.
+- Consumes: Task 18 `PodInfo` / `s.podInfo`.
+- Produces: `GET /api/devpods/{name}` and the SSE `devpod` message of `/api/devpods/{name}/stream` gain `pod?: PodInfo` (the stream also pushes on Pod updates, as in Task 18); `export function tabFromHash(hash: string, tabs: string[]): string` (unknown / empty ⇒ first tab).
+- Layout (spec §9.4, phase 1 subset): header (name, phase, SSH copy, Hibernate, Delete); meta row (owner, node, pod IP, image, up from `pod.startedAt`, shell, home volume, Kore binding summary, collaborators); tabs via URL hash — `Overview` (existing Access card, SSH config, Kore node layout), `Sessions` (only when `features.audit`: rows of `/api/audit/sessions?devpod=<name>` with user, from, start, duration, commands, files, blocked/alert tags, ▶ replay link to `/audit/sessions/<id>`), `Events` (existing live list). KPI cards and Monitoring/Processes/Container tabs are phase 2.
 
-- [ ] **Step 1: Write the failing tests** — Go envtest `TestGetDevPod_IncludesPodInfo` (Pod with `spec.nodeName`, `status.podIP`, `status.startTime` ⇒ JSON `pod` fields); Vitest `tabs.test.ts` (`tabFromHash("#sessions", ["overview","sessions","events"]) === "sessions"`, `"#bogus"` ⇒ `"overview"`).
+- [ ] **Step 1: Write the failing tests** — Go envtest `TestGetDevPod_IncludesPodInfo` (Pod with `spec.nodeName`, `status.podIP`, running target container ⇒ JSON `pod` fields incl. `startedAt`); Vitest `tabs.test.ts` (`tabFromHash("#sessions", ["overview","sessions","events"]) === "sessions"`, `"#bogus"` ⇒ `"overview"`).
 - [ ] **Step 2: Run** `bash hack/test.sh ./internal/webui/ -run PodInfo` and `cd web && npm test` — Expected: FAIL.
 - [ ] **Step 3: Implement.**
 - [ ] **Step 4: Run** both plus `npm run build` — Expected: PASS.
