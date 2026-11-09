@@ -6,11 +6,13 @@ import {
   resetUserPassword,
   deleteUser,
   setUserQuota,
+  me,
   ApiFailure,
   AdminUser,
   UserQuota,
 } from "../api";
 import { BackLink, Button, Card, Field, Input, Notice, Shell, cx } from "../ui";
+import { AuditPolicyEditor } from "../components/AuditPolicyEditor";
 
 function QuotaEditor({
   user,
@@ -86,6 +88,8 @@ export default function AdminUsers() {
   const [password, setPassword] = useState("");
   const [err, setErr] = useState<string | null>(null);
   const [editing, setEditing] = useState<string | null>(null);
+  const [policyFor, setPolicyFor] = useState<string | null>(null);
+  const meQ = useQuery({ queryKey: ["me"], queryFn: me });
 
   const refresh = () => qc.invalidateQueries({ queryKey: ["admin-users"] });
 
@@ -177,6 +181,9 @@ export default function AdminUsers() {
               </div>
               <div className="flex shrink-0 gap-2 text-xs">
                 <button onClick={() => setEditing(editing === u.name ? null : u.name)} className="text-accent hover:underline">quota</button>
+                {meQ.data?.features.audit && (
+                  <button onClick={() => setPolicyFor(policyFor === u.name ? null : u.name)} className="text-accent hover:underline">audit policy</button>
+                )}
                 <button onClick={() => reset(u)} className="text-accent hover:underline">reset</button>
                 <button onClick={() => remove(u)} className="text-fail hover:underline">delete</button>
               </div>
@@ -184,6 +191,7 @@ export default function AdminUsers() {
             {editing === u.name && (
               <QuotaEditor user={u} defaults={defaults} onDone={() => { setEditing(null); refresh(); }} />
             )}
+            {policyFor === u.name && <AuditPolicyEditor user={u.name} onDone={() => setPolicyFor(null)} />}
           </li>
         ))}
       </ul>
