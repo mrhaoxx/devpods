@@ -16,7 +16,7 @@ import (
 type Attribution struct {
 	Conn PID    // the sshd-session; zero when only Peer is known
 	Peer string // gateway backend_local_addr
-	How  string // tree | ssh_connection | sid_tty | inferred | unattributed
+	How  string // tree | ssh_connection | sid_tty | inferred | unattributed | system
 }
 
 // Wire converts to the wire form.
@@ -24,12 +24,17 @@ func (a Attribution) Wire() *wire.Attr {
 	return &wire.Attr{ConnPid: a.Conn.Pid, ConnStart: a.Conn.Start, Peer: a.Peer, How: a.How}
 }
 
-func (a Attribution) attributed() bool { return a.How != "" && a.How != "unattributed" }
+func (a Attribution) attributed() bool {
+	return a.How != "" && a.How != "unattributed" && a.How != "system"
+}
 
 // Attributor keeps sticky attributions across scans.
 type Attributor struct {
 	SSHDPid    int
 	SessionExe string
+	// SelfPid is the telemetry agent; it and its children (nvidia-smi …)
+	// are infrastructure like PID 1 and the sshd.
+	SelfPid int
 
 	known     map[PID]Attribution
 	peers     map[PID]string // sshd-session → peer, remembered after it exits
@@ -107,10 +112,14 @@ func (a *Attributor) resolve(at Attribution) Attribution {
 }
 
 func (a *Attributor) decide(p *Proc, procs map[PID]*Proc, conns map[PID]string) Attribution {
-	// PID 1 (the supervisor) and the sshd are infrastructure, never a
-	// session's; their re-parented orphans must not inherit from them.
-	if p.ID.Pid == 1 || p.ID.Pid == a.SSHDPid {
-		return Attribution{How: "unattributed"}
+	// PID 1 (the supervisor), the sshd and the telemetry agent's own
+	// subtree are infrastructure ("system"), never a session's; orphans
+	// re-parented to PID 1 or the sshd must not inherit from them.
+	if p.ID.Pid == 1 || p.ID.Pid == a.SSHDPid || (a.SelfPid > 1 && (p.ID.Pid == a.SelfPid || p.PPid == a.SelfPid)) {
+		return Attribution{How: "system"}
+	}
+	if p.PPid != 1 && p.PPid != a.SSHDPid && a.known[p.Parent].How == "system" {
+		return Attribution{How: "system"}
 	}
 	// 1. process tree: the session itself, or inherit from the parent.
 	if a.legit(p) {

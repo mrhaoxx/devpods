@@ -103,7 +103,7 @@ func newAgent(cfg config.Config, env Env) *agent {
 	a := &agent{
 		cfg: cfg, env: env, bootID: ulid.Make().String(), buf: NewBuffer(cfg.BufferBytes),
 		scanner:       &procfs.Scanner{Root: env.ProcRoot},
-		attr:          procfs.NewAttributor(env.SSHDPid(), SessionExe),
+		attr:          newAttributor(env.SSHDPid()),
 		procs:         map[procfs.PID]*procfs.Proc{},
 		attrib:        map[procfs.PID]procfs.Attribution{},
 		cpuRates:      map[procfs.PID]float64{},
@@ -519,4 +519,10 @@ func Run(ctx context.Context, cfg config.Config, env Env) error {
 			}
 		}
 	}
+}
+
+func newAttributor(sshdPid int) *procfs.Attributor {
+	a := procfs.NewAttributor(sshdPid, SessionExe)
+	a.SelfPid = os.Getpid()
+	return a
 }
