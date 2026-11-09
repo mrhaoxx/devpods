@@ -42,7 +42,9 @@ func (f *fakeObjects) Put(_ context.Context, key string, body io.Reader, size in
 	return nil
 }
 
-func (f *fakeObjects) Get(context.Context, string) (io.ReadCloser, error) { return nil, errors.New("unused") }
+func (f *fakeObjects) Get(context.Context, string) (io.ReadCloser, error) {
+	return nil, errors.New("unused")
+}
 
 type fakeEvents struct {
 	mu     sync.Mutex

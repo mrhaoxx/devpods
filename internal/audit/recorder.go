@@ -1,0 +1,182 @@
+// Copyright 2026 The DevPod Authors.
+//
+// SPDX-License-Identifier: Apache-2.0
+
+package audit
+
+import (
+	"context"
+	"crypto/rand"
+	"errors"
+	"strings"
+	"sync"
+	"time"
+
+	"github.com/oklog/ulid/v2"
+
+	"github.com/mrhaoxx/devpod/internal/audit/policy"
+	"github.com/mrhaoxx/devpod/internal/audit/spool"
+	"github.com/mrhaoxx/devpod/internal/audit/store"
+)
+
+// Config parameterises a Recorder.
+type Config struct {
+	SpoolDir      string
+	SpoolMaxBytes int64
+	Objects       store.ObjectStore
+	Events        store.EventStore
+	GatewayPod    string
+
+	SegmentMaxBytes int64         // default 8 MiB
+	SegmentMaxAge   time.Duration // default 60s
+	FlushInterval   time.Duration // default 5s
+	Now             func() time.Time
+}
+
+// SessionMeta identifies a session.
+type SessionMeta struct {
+	ID, User, DevPod, DevPodUID, Owner, ClientIP, PubkeyFP, AuthKind, ProxyAlias string
+	OpenedAt                                                                    time.Time
+}
+
+// NewSessionID returns a ULID for a session opened at t.
+func NewSessionID(t time.Time) string {
+	return ulid.MustNew(ulid.Timestamp(t), rand.Reader).String()
+}
+
+// Recorder owns the spool and uploader and hands out Sessions.
+type Recorder struct {
+	cfg   Config
+	spool *spool.Spool
+	up    *spool.Uploader
+
+	mu       sync.Mutex
+	sessions map[*Session]struct{}
+}
+
+// NewRecorder opens the spool (recovering what a previous process left).
+func NewRecorder(cfg Config) (*Recorder, error) {
+	if cfg.Objects == nil || cfg.Events == nil {
+		return nil, errors.New("audit: Objects and Events stores are required")
+	}
+	if cfg.SegmentMaxBytes <= 0 {
+		cfg.SegmentMaxBytes = 8 << 20
+	}
+	if cfg.SegmentMaxAge <= 0 {
+		cfg.SegmentMaxAge = 60 * time.Second
+	}
+	if cfg.FlushInterval <= 0 {
+		cfg.FlushInterval = 5 * time.Second
+	}
+	if cfg.Now == nil {
+		cfg.Now = time.Now
+	}
+	sp, err := spool.Open(cfg.SpoolDir, cfg.SpoolMaxBytes)
+	if err != nil {
+		return nil, err
+	}
+	r := &Recorder{cfg: cfg, spool: sp, sessions: map[*Session]struct{}{}}
+	r.up = &spool.Uploader{Spool: sp, Objects: cfg.Objects, Events: cfg.Events, OnLag: UploadLag.Set}
+	return r, nil
+}
+
+// Run uploads in the background and, once a second, rotates aged
+// segments, flushes row batches and tears down fail-closed sessions when
+// the spool is full. Returns when ctx is done.
+func (r *Recorder) Run(ctx context.Context) {
+	go r.up.Run(ctx)
+	t := time.NewTicker(time.Second)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case now := <-t.C:
+			r.tick(now)
+		}
+	}
+}
+
+func (r *Recorder) snapshot() []*Session {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	out := make([]*Session, 0, len(r.sessions))
+	for s := range r.sessions {
+		out = append(out, s)
+	}
+	return out
+}
+
+func (r *Recorder) tick(now time.Time) {
+	SpoolBytes.Set(float64(r.spool.Usage()))
+	full := r.spool.Level() == spool.LevelFull
+	for _, s := range r.snapshot() {
+		s.tick(now)
+		if full && s.pol.FailClosed {
+			s.kill()
+		}
+	}
+}
+
+// Start begins recording a session under policy pol.
+func (r *Recorder) Start(meta SessionMeta, pol policy.Effective) *Session {
+	s := newSession(r, meta, pol)
+	r.mu.Lock()
+	r.sessions[s] = struct{}{}
+	r.mu.Unlock()
+	return s
+}
+
+func (r *Recorder) remove(s *Session) {
+	r.mu.Lock()
+	delete(r.sessions, s)
+	r.mu.Unlock()
+}
+
+// Drain seals and flushes every session, then uploads until the spool is
+// empty or ctx ends. On a deadline it records best-effort gap alerts for
+// sessions whose data could not be uploaded.
+func (r *Recorder) Drain(ctx context.Context) error {
+	for _, s := range r.snapshot() {
+		s.sealAndFlush()
+	}
+	for {
+		if err := r.up.Flush(ctx); err == nil {
+			items, err := r.spool.Ready()
+			if err == nil && len(items) == 0 {
+				return nil
+			}
+		}
+		select {
+		case <-ctx.Done():
+			r.alertUnuploaded()
+			return ctx.Err()
+		case <-time.After(200 * time.Millisecond):
+		}
+	}
+}
+
+func (r *Recorder) alertUnuploaded() {
+	items, err := r.spool.Ready()
+	if err != nil {
+		return
+	}
+	seen := map[string]bool{}
+	var b store.Batch
+	now := r.cfg.Now()
+	for _, it := range items {
+		// raw/<y>/<m>/<d>/<session>/... and files/<y>/<m>/<d>/<session>/...
+		parts := strings.Split(it.ObjectKey, "/")
+		if len(parts) < 5 || seen[parts[4]] {
+			continue
+		}
+		seen[parts[4]] = true
+		b.Alerts = append(b.Alerts, store.AlertRow{TS: now, SessionID: parts[4], Kind: "gap", Source: "gateway", Detail: "gateway stopped before audit data was uploaded"})
+	}
+	if len(b.Alerts) == 0 {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	_ = r.cfg.Events.Insert(ctx, b, ulid.Make().String())
+}
