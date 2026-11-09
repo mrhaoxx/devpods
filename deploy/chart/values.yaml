@@ -26,8 +26,15 @@ namespaces:
   system: devpod-system
   devpods: devpods
 
+# Pull secrets (must exist in namespaces.system) for the controller,
+# gateway, webui and audit-migrate pods, e.g. [{name: harbor-pull}].
+imagePullSecrets: []
+
 controller:
   replicas: 1
+  # Host directory under which per-user home dirs live (hostPath homes,
+  # mounted at /home/<user>); empty = no hostPath homes.
+  homeHostPath: ""
   resources:
     requests: {cpu: 100m, memory: 128Mi}
     limits:   {cpu: 500m, memory: 512Mi}
@@ -43,6 +50,9 @@ gateway:
   service:
     type: ClusterIP
     port: 22
+  # SSH front proxies allowed to log in on behalf of users, as
+  # [{alias: openng, pubkey: "ssh-ed25519 AAAA… openng"}].
+  trustedProxyKeys: []
   ldap:
     enabled: false
     url: ""

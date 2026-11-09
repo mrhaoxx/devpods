@@ -15,6 +15,9 @@ spec:
         app.kubernetes.io/name: devpod-controller
     spec:
       serviceAccountName: devpod-controller
+      {{- with $.Values.imagePullSecrets }}
+      imagePullSecrets: {{- toYaml . | nindent 8 }}
+      {{- end }}
       containers:
       - name: controller
         image: "{{ .Values.image.controller.repository }}:{{ .Values.image.controller.tag }}"
@@ -27,6 +30,9 @@ spec:
         - --zap-devel=false
         - --snapshot-image={{ .Values.image.snapshot.repository }}:{{ .Values.image.snapshot.tag }}
         - --internal-pubkey-file=/etc/devpod/internal/ssh_host_ed25519_key.pub
+        {{- with .Values.controller.homeHostPath }}
+        - --home-host-path={{ . }}
+        {{- end }}
         ports:
         - {name: metrics, containerPort: 8080}
         - {name: probe,   containerPort: 8081}

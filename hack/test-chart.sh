@@ -79,6 +79,20 @@ has external "- --audit-clickhouse-url=clickhouse://ch.example.com:9000"
 has external "- --create-bucket=false"
 has external "- --manage-lifecycle=false"
 
+# (e) site settings a production install needs (were hand-edited on zjusct).
+render site "${WEBUI[@]}" --set audit.enabled=true \
+  --set audit.s3.bundled.enabled=true --set audit.clickhouse.bundled.enabled=true \
+  --set 'imagePullSecrets[0].name=harbor-pull' --set controller.homeHostPath=/tank/home \
+  --set-json 'gateway.trustedProxyKeys=[{"alias":"openng","pubkey":"ssh-ed25519 AAAAtest openng"}]'
+has site "- --home-host-path=/tank/home"
+has site "trustedProxyKeys:"
+has site "alias: openng"
+has site "pubkey: ssh-ed25519 AAAAtest openng"
+n=$(grep -c "name: harbor-pull" "$OUT/site.yaml" || true)
+[ "$n" -ge 4 ] || { echo "FAIL [site]: imagePullSecrets on $n pod specs, want controller, gateway, webui, migrate"; fail=1; }
+lacks defaults "imagePullSecrets"
+lacks defaults "home-host-path"
+
 # (d) `helm upgrade --reuse-values` from v0.1.x: the old release's values
 # replace the chart defaults, so audit.* and gatewayConfigName are absent.
 OLD="$OUT/chart-v0.1"

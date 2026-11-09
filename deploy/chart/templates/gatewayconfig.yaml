@@ -13,6 +13,9 @@ spec:
     namespace: {{ .Values.namespaces.system }}
   listen:
     port: 22
+  {{- with .Values.gateway.trustedProxyKeys }}
+  trustedProxyKeys: {{- toYaml . | nindent 4 }}
+  {{- end }}
   # banner: a Go text/template rendered server-side per connection;
   # see api/v1alpha1/gatewayconfig_types.go for the field set. Helm's
   # backtick raw-string passes the inner template through unprocessed.
