@@ -1,0 +1,79 @@
+# Throwaway storage for `hack/test-integration.sh`: one ClickHouse and one
+# Silo (S3) pod with emptyDir data, in their own namespace. Never point
+# this at a namespace that holds real data. Image tags match
+# deploy/chart/values.yaml.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: devpod-audit-it
+  labels:
+    app.kubernetes.io/part-of: devpod-audit-integration-tests
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: clickhouse
+  namespace: devpod-audit-it
+spec:
+  replicas: 1
+  selector:
+    matchLabels: {app: clickhouse}
+  template:
+    metadata:
+      labels: {app: clickhouse}
+    spec:
+      nodeSelector: {kubernetes.io/arch: amd64}
+      containers:
+      - name: clickhouse
+        image: clickhouse/clickhouse-server:26.8.36.3
+        env:
+        - {name: CLICKHOUSE_USER, value: it}
+        - {name: CLICKHOUSE_PASSWORD, value: it-password}
+        - {name: CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT, value: "1"}
+        ports:
+        - {name: native, containerPort: 9000}
+        - {name: http, containerPort: 8123}
+        readinessProbe:
+          httpGet: {path: /ping, port: http}
+          periodSeconds: 3
+        resources:
+          requests: {cpu: 200m, memory: 512Mi}
+          limits: {cpu: "2", memory: 2Gi}
+        volumeMounts:
+        - {name: data, mountPath: /var/lib/clickhouse}
+      volumes:
+      - {name: data, emptyDir: {sizeLimit: 2Gi}}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: silo
+  namespace: devpod-audit-it
+spec:
+  replicas: 1
+  selector:
+    matchLabels: {app: silo}
+  template:
+    metadata:
+      labels: {app: silo}
+    spec:
+      nodeSelector: {kubernetes.io/arch: amd64}
+      containers:
+      - name: silo
+        image: docker.io/pgsty/silo:RELEASE.2026-10-26T00-00-00Z
+        args: [server, /data]
+        env:
+        - {name: MINIO_ROOT_USER, value: devpod}
+        - {name: MINIO_ROOT_PASSWORD, value: devpod-secret}
+        ports:
+        - {name: s3, containerPort: 9000}
+        readinessProbe:
+          httpGet: {path: /minio/health/live, port: s3}
+          periodSeconds: 3
+        resources:
+          requests: {cpu: 100m, memory: 256Mi}
+          limits: {cpu: "1", memory: 1Gi}
+        volumeMounts:
+        - {name: data, mountPath: /data}
+      volumes:
+      - {name: data, emptyDir: {sizeLimit: 4Gi}}
