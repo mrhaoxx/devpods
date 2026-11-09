@@ -8,6 +8,7 @@ import (
 	"bytes"
 	"errors"
 	"reflect"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -105,5 +106,36 @@ func TestToken_StableAndKeyed(t *testing.T) {
 	}
 	if len(a) != 64 {
 		t.Fatalf("hex sha256, got %d chars", len(a))
+	}
+}
+
+// One upload per second must not allocate a fresh zstd encoder (MiBs of
+// history) each time: under the agent's 24 MiB GOMEMLIMIT that drives
+// the GC (spec §14 item 4).
+func TestEncodeDecode_ReuseCodecs(t *testing.T) {
+	h := Header{V: Version, DevPodUID: "u", BootID: "b", Seq: 1}
+	var recs []Record
+	for i := 0; i < 20; i++ {
+		recs = append(recs, Record{K: KProc, P: &Proc{Pid: i, Start: 1, CPU: 0.5, RSS: 1 << 20}})
+	}
+	var buf bytes.Buffer
+	cycle := func() {
+		buf.Reset()
+		if err := Encode(&buf, h, recs); err != nil {
+			t.Fatal(err)
+		}
+		if _, got, err := Decode(bytes.NewReader(buf.Bytes()), 1<<20); err != nil || len(got) != 20 {
+			t.Fatalf("%d %v", len(got), err)
+		}
+	}
+	cycle()
+	var before, after runtime.MemStats
+	runtime.ReadMemStats(&before)
+	for i := 0; i < 50; i++ {
+		cycle()
+	}
+	runtime.ReadMemStats(&after)
+	if per := (after.TotalAlloc - before.TotalAlloc) / 50; per > 256<<10 {
+		t.Fatalf("%d KiB allocated per encode+decode, want < 256 KiB", per>>10)
 	}
 }

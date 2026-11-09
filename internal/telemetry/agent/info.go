@@ -59,6 +59,24 @@ type SnapshotInput struct {
 	CPU       map[procfs.PID]float64 // cores, last interval
 	Sockets   *procfs.SocketMap
 	PVCMounts []string
+	// TCPSocks are /proc/net/tcp and tcp6 by name; nil reads them now
+	// (the agent caches them: the read walks the node's TCP table).
+	TCPSocks map[string][]procfs.TCPSock
+}
+
+// ReadTCPSocks reads /proc/net/tcp and tcp6 under procRoot.
+func ReadTCPSocks(procRoot string) map[string][]procfs.TCPSock {
+	out := map[string][]procfs.TCPSock{}
+	for _, name := range []string{"tcp", "tcp6"} {
+		f, err := os.Open(filepath.Join(procRoot, "net", name))
+		if err != nil {
+			continue
+		}
+		socks, _ := procfs.ParseProcNetTCP(f)
+		_ = f.Close()
+		out[name] = socks
+	}
+	return out
 }
 
 // SnapProcs renders processes as snapshot lines (also used for the
@@ -98,14 +116,12 @@ func CollectSnapshot(in SnapshotInput) wire.Snapshot {
 	}
 	s.TopCPU = top(func(a, b procfs.PID) bool { return in.CPU[a] > in.CPU[b] })
 	s.TopRSS = top(func(a, b procfs.PID) bool { return in.Procs[a].RSS > in.Procs[b].RSS })
+	tcp := in.TCPSocks
+	if tcp == nil {
+		tcp = ReadTCPSocks(in.ProcRoot)
+	}
 	for _, name := range []string{"tcp", "tcp6"} {
-		f, err := os.Open(filepath.Join(in.ProcRoot, "net", name))
-		if err != nil {
-			continue
-		}
-		socks, _ := procfs.ParseProcNetTCP(f)
-		_ = f.Close()
-		for _, sk := range socks {
+		for _, sk := range tcp[name] {
 			if sk.State != procfs.StateListen {
 				continue
 			}

@@ -101,18 +101,12 @@ func (d RDMADev) Sample(sysRoot string, prev *RDMACounters, dt time.Duration) ([
 // (spec §6.2: per-process RDMA is "in use", bytes are not split).
 func ProcRDMA(root string, procs map[procfs.PID]*procfs.Proc) map[procfs.PID]bool {
 	out := map[procfs.PID]bool{}
-	for id := range procs {
-		dir := filepath.Join(root, strconv.Itoa(id.Pid), "fd")
-		ents, err := os.ReadDir(dir)
-		if err != nil {
-			continue
+	procfs.WalkFDs(root, procs, func(id procfs.PID, t string) {
+		if isUverbs(t) {
+			out[id] = true
 		}
-		for _, e := range ents {
-			if t, err := os.Readlink(filepath.Join(dir, e.Name())); err == nil && strings.HasPrefix(t, "/dev/infiniband/uverbs") {
-				out[id] = true
-				break
-			}
-		}
-	}
+	})
 	return out
 }
+
+func isUverbs(t string) bool { return strings.HasPrefix(t, "/dev/infiniband/uverbs") }

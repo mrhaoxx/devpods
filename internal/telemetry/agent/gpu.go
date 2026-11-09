@@ -10,7 +10,6 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
-	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
@@ -142,28 +141,36 @@ func parseNvidiaCSV(line string) (wire.GPU, error) {
 // ProcGPUs maps processes to the /dev/nvidia<N> minors they hold open
 // (control nodes nvidiactl / nvidia-uvm are ignored).
 func ProcGPUs(root string, procs map[procfs.PID]*procfs.Proc) map[procfs.PID][]int {
+	g := gpuHolders{}
+	procfs.WalkFDs(root, procs, g.add)
+	return g.result()
+}
+
+// gpuHolders collects the /dev/nvidiaN minors each process holds open.
+type gpuHolders map[procfs.PID]map[int]bool
+
+func (g gpuHolders) add(id procfs.PID, t string) {
+	if minor, ok := gpuMinor(t); ok {
+		if g[id] == nil {
+			g[id] = map[int]bool{}
+		}
+		g[id][minor] = true
+	}
+}
+
+// gpuMinor parses an fd target "/dev/nvidiaN".
+func gpuMinor(t string) (int, bool) {
+	v, ok := strings.CutPrefix(t, "/dev/nvidia")
+	if !ok {
+		return 0, false
+	}
+	minor, err := strconv.Atoi(v)
+	return minor, err == nil
+}
+
+func (g gpuHolders) result() map[procfs.PID][]int {
 	out := map[procfs.PID][]int{}
-	for id := range procs {
-		dir := filepath.Join(root, strconv.Itoa(id.Pid), "fd")
-		ents, err := os.ReadDir(dir)
-		if err != nil {
-			continue
-		}
-		set := map[int]bool{}
-		for _, e := range ents {
-			target, err := os.Readlink(filepath.Join(dir, e.Name()))
-			if err != nil {
-				continue
-			}
-			if v, ok := strings.CutPrefix(target, "/dev/nvidia"); ok {
-				if minor, err := strconv.Atoi(v); err == nil {
-					set[minor] = true
-				}
-			}
-		}
-		if len(set) == 0 {
-			continue
-		}
+	for id, set := range g {
 		for m := range set {
 			out[id] = append(out[id], m)
 		}

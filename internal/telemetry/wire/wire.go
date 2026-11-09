@@ -304,12 +304,69 @@ type Ack struct {
 	AckedSeq uint64 `json:"acked_seq"`
 }
 
+// Reused codecs: a fresh zstd encoder allocates its history window per
+// call, which at one batch per second (and on the leader, one decode per
+// DevPod per second) dominates the GC. A free list rather than a
+// sync.Pool, which every GC cycle empties. Batches are small, so a
+// 256 KiB window loses nothing.
+const codecWindow = 256 << 10
+
+var (
+	encoders = make(chan *zstd.Encoder, 8)
+	decoders = make(chan *zstd.Decoder, 32)
+)
+
+func getEncoder(w io.Writer) (*zstd.Encoder, error) {
+	select {
+	case zw := <-encoders:
+		zw.Reset(w)
+		return zw, nil
+	default:
+		return zstd.NewWriter(w, zstd.WithEncoderLevel(zstd.SpeedFastest), zstd.WithEncoderConcurrency(1),
+			zstd.WithWindowSize(codecWindow), zstd.WithLowerEncoderMem(true))
+	}
+}
+
+func putEncoder(zw *zstd.Encoder) {
+	zw.Reset(nil)
+	select {
+	case encoders <- zw:
+	default:
+	}
+}
+
+func getDecoder(r io.Reader) (*zstd.Decoder, error) {
+	select {
+	case zr := <-decoders:
+		if err := zr.Reset(r); err != nil {
+			zr.Close()
+			return nil, err
+		}
+		return zr, nil
+	default:
+		return zstd.NewReader(r, zstd.WithDecoderConcurrency(1), zstd.WithDecoderLowmem(true))
+	}
+}
+
+func putDecoder(zr *zstd.Decoder) {
+	if err := zr.Reset(nil); err != nil {
+		zr.Close()
+		return
+	}
+	select {
+	case decoders <- zr:
+	default:
+		zr.Close()
+	}
+}
+
 // Encode writes h and recs as zstd-compressed NDJSON.
 func Encode(w io.Writer, h Header, recs []Record) error {
-	zw, err := zstd.NewWriter(w, zstd.WithEncoderLevel(zstd.SpeedFastest), zstd.WithEncoderConcurrency(1))
+	zw, err := getEncoder(w)
 	if err != nil {
 		return err
 	}
+	defer putEncoder(zw)
 	enc := json.NewEncoder(zw)
 	if err := enc.Encode(h); err != nil {
 		_ = zw.Close()
@@ -342,11 +399,11 @@ func (l *limited) Read(p []byte) (int, error) {
 
 // Decode reads one batch; records of unknown kinds are skipped.
 func Decode(r io.Reader, maxBytes int64) (Header, []Record, error) {
-	zr, err := zstd.NewReader(r, zstd.WithDecoderConcurrency(1), zstd.WithDecoderLowmem(true))
+	zr, err := getDecoder(r)
 	if err != nil {
 		return Header{}, nil, err
 	}
-	defer zr.Close()
+	defer putDecoder(zr)
 	dec := json.NewDecoder(bufio.NewReader(&limited{r: zr, max: maxBytes}))
 	var h Header
 	if err := dec.Decode(&h); err != nil {
