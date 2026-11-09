@@ -264,6 +264,11 @@ function IdentityMenu({ me }: { me?: Me }) {
             {me?.admin && <MenuLink to="/admin/devpods" label="All DevPods" onNav={() => setOpen(false)} />}
             {me?.admin && me?.features?.kore && <MenuLink to="/admin/topology" label="CPU topology" onNav={() => setOpen(false)} />}
             {me?.admin && <MenuLink to="/admin/users" label="Users" onNav={() => setOpen(false)} />}
+            {me?.features?.audit && <MenuLink to="/audit/sessions" label={me.admin ? "Audit · sessions" : "My sessions"} onNav={() => setOpen(false)} />}
+            {me?.features?.audit && <MenuLink to="/audit/commands" label="Audit · commands" onNav={() => setOpen(false)} />}
+            {me?.features?.audit && <MenuLink to="/audit/files" label="Audit · files" onNav={() => setOpen(false)} />}
+            {me?.admin && me?.features?.audit && <MenuLink to="/audit/alerts" label="Audit · alerts" onNav={() => setOpen(false)} />}
+            {me?.admin && me?.features?.audit && <MenuLink to="/audit/access-log" label="Audit · access log" onNav={() => setOpen(false)} />}
             <button
               onClick={() => logout().finally(() => (window.location.href = "/login"))}
               className="block w-full px-4 py-2 text-left text-ink hover:bg-sunk"
@@ -298,6 +303,11 @@ export function Shell({ children, wide }: { children: ReactNode; wide?: boolean 
             <span className="mono text-sm font-semibold tracking-tight text-ink">devpod</span>
           </Link>
           <div className="flex items-center gap-2">
+            {meQ.data?.features?.audit && (
+              <Link to="/audit/sessions" className="mono rounded-lg px-2 py-1.5 text-sm text-muted hover:text-ink">
+                Audit
+              </Link>
+            )}
             {!onNew && (
               <Link to="/devpods/new" className="inline-flex items-center gap-1 rounded-lg bg-accent px-3 py-1.5 text-sm font-medium text-white transition-colors hover:bg-accent-hi">
                 <span className="hidden sm:inline">New</span>
