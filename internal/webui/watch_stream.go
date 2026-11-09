@@ -10,9 +10,11 @@ import (
 	"net/http"
 
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/types"
 	toolscache "k8s.io/client-go/tools/cache"
 
 	devpodv1alpha1 "github.com/mrhaoxx/devpod/api/v1alpha1"
+	"github.com/mrhaoxx/devpod/internal/render"
 )
 
 // streamMsg is one Server-Sent Event on the per-DevPod stream. Kind
@@ -78,7 +80,27 @@ func (s *Server) handleDevPodStream(w http.ResponseWriter, r *http.Request) {
 		if !ok || got.Namespace != s.NS || got.Name != name {
 			return
 		}
-		send(streamMsg{Kind: "devpod", Type: typ, DevPod: got, Detail: &DevPodDetail{DevPod: *got, Binding: s.bindingInfo(r, got)}})
+		d := &DevPodDetail{DevPod: *got, Binding: s.bindingInfo(r, got)}
+		if typ != "DELETED" {
+			d.Pod = s.podInfo(r.Context(), got)
+		}
+		send(streamMsg{Kind: "devpod", Type: typ, DevPod: got, Detail: d})
+	}
+	// Pod changes (container restart, IP, node) re-push the DevPod.
+	pushPod := func(obj any, deleted bool) {
+		pod, ok := unwrap(obj).(*corev1.Pod)
+		if !ok || pod.Namespace != s.NS || pod.Labels[render.LabelDevPod] != name {
+			return
+		}
+		var cur devpodv1alpha1.DevPod
+		if err := s.Client.Get(r.Context(), types.NamespacedName{Namespace: s.NS, Name: name}, &cur); err != nil {
+			return
+		}
+		d := &DevPodDetail{DevPod: cur, Binding: s.bindingInfo(r, &cur)}
+		if !deleted {
+			d.Pod = PodInfoFor(&cur, pod)
+		}
+		send(streamMsg{Kind: "devpod", Type: "MODIFIED", DevPod: &cur, Detail: d})
 	}
 	pushEvent := func(typ string, obj any) {
 		obj = unwrap(obj)
@@ -110,6 +132,22 @@ func (s *Server) handleDevPodStream(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer func() { _ = evInformer.RemoveEventHandler(evReg) }()
+
+	podInformer, err := s.Cache.GetInformer(r.Context(), &corev1.Pod{})
+	if err != nil {
+		s.writeErr(w, http.StatusInternalServerError, "INTERNAL", err.Error(), nil)
+		return
+	}
+	podReg, err := podInformer.AddEventHandler(toolscache.ResourceEventHandlerFuncs{
+		AddFunc:    func(o any) { pushPod(o, false) },
+		UpdateFunc: func(_, o any) { pushPod(o, false) },
+		DeleteFunc: func(o any) { pushPod(o, true) },
+	})
+	if err != nil {
+		s.writeErr(w, http.StatusInternalServerError, "INTERNAL", err.Error(), nil)
+		return
+	}
+	defer func() { _ = podInformer.RemoveEventHandler(podReg) }()
 
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
