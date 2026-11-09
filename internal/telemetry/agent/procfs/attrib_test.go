@@ -182,3 +182,24 @@ func count(xs []string, s string) int {
 	}
 	return n
 }
+
+func TestAttributor_InfrastructureIsSystem(t *testing.T) {
+	root := base(t)
+	// the telemetry agent (pid 20, child of PID 1) and an nvidia-smi it spawned
+	writeProc(t, root, fp{pid: 20, ppid: 1, sid: 1, start: 6, exe: "/opt/devpod/devpod-supervisor", cmd: "devpod-supervisor telemetry"})
+	writeProc(t, root, fp{pid: 80, ppid: 20, sid: 1, start: 140, exe: "/usr/bin/nvidia-smi", cmd: "nvidia-smi -q"})
+	// a user daemon re-parented to PID 1 before the first scan
+	writeProc(t, root, fp{pid: 81, ppid: 1, sid: 81, start: 150, exe: "/usr/bin/sleep", cmd: "sleep 1000"})
+	a := NewAttributor(10, sessExe)
+	a.SelfPid = 20
+	attr, _ := update(t, root, a, conns)
+	for _, id := range []PID{{1, 1}, {10, 5}, {20, 6}, {80, 140}} {
+		if attr[id].How != "system" {
+			t.Errorf("%v: infrastructure must be system, got %+v", id, attr[id])
+		}
+	}
+	// one live connection: the re-parented daemon is inferred, not system
+	if attr[PID{81, 150}].How != "inferred" {
+		t.Fatalf("orphan of PID 1 must not inherit system: %+v", attr[PID{81, 150}])
+	}
+}
