@@ -40,7 +40,10 @@ type testEnv struct {
 	Ns     *corev1.Namespace
 }
 
-func setupSuite(t *testing.T) {
+func setupSuite(t *testing.T) { setupSuiteWith(t, nil) }
+
+// setupSuiteWith lets a test adjust the DevPodReconciler (e.g. telemetry).
+func setupSuiteWith(t *testing.T, opt func(*controllers.DevPodReconciler)) {
 	t.Helper()
 
 	scheme = runtime.NewScheme()
@@ -68,13 +71,17 @@ func setupSuite(t *testing.T) {
 	if err != nil {
 		t.Fatalf("manager: %v", err)
 	}
-	if err := (&controllers.DevPodReconciler{
+	dpr := &controllers.DevPodReconciler{
 		Client:             mgr.GetClient(),
 		Scheme:             mgr.GetScheme(),
 		GwConfig:           defaultGwConfig(),
 		GatewayNamespace:   "devpod-system",
 		GatewayInternalPub: []byte("ssh-ed25519 AAAA test gateway-internal\n"),
-	}).SetupWithManager(mgr); err != nil {
+	}
+	if opt != nil {
+		opt(dpr)
+	}
+	if err := dpr.SetupWithManager(mgr); err != nil {
 		t.Fatalf("setup DevPodReconciler: %v", err)
 	}
 	if err := (&controllers.UserReconciler{
@@ -106,7 +113,7 @@ func defaultGwConfig() *devpodv1alpha1.GatewayConfig {
 	return &devpodv1alpha1.GatewayConfig{
 		Spec: devpodv1alpha1.GatewayConfigSpec{
 			DevPodNamespace: "devpods",
-			SupervisorImage:    "ghcr.io/example/devpod-sshd:test",
+			SupervisorImage: "ghcr.io/example/devpod-sshd:test",
 			HostKeyRef:      devpodv1alpha1.SecretRef{Name: "gw-host", Namespace: "devpod-system"},
 			InternalKeyRef:  devpodv1alpha1.SecretRef{Name: "gw-internal", Namespace: "devpod-system"},
 			// The netpol tests assert the isolation path; keep it on in

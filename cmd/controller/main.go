@@ -6,7 +6,9 @@
 package main
 
 import (
+	"bytes"
 	"flag"
+	"fmt"
 	"net/http"
 	"os"
 
@@ -21,6 +23,8 @@ import (
 
 	devpodv1alpha1 "github.com/mrhaoxx/devpod/api/v1alpha1"
 	"github.com/mrhaoxx/devpod/internal/controllers"
+	"github.com/mrhaoxx/devpod/internal/render"
+	"github.com/mrhaoxx/devpod/internal/telemetry/config"
 )
 
 var setupLog = ctrl.Log.WithName("setup")
@@ -51,6 +55,9 @@ func main() {
 		homeDirHostPath      string
 		homeDirMountPrefix   string
 		snapshotImage        string
+		ingestURL            string
+		ingestKeyFile        string
+		tel                  = config.DefaultConfig()
 	)
 
 	flag.StringVar(&metricsAddr, "metrics-bind-address", ":8080", "metrics endpoint bind address")
@@ -71,6 +78,15 @@ func main() {
 
 	opts := zap.Options{Development: true, Level: zapcore.InfoLevel}
 	opts.BindFlags(flag.CommandLine)
+	flag.StringVar(&ingestURL, "ingest-url", "",
+		"telemetry ingest URL handed to supervisors (default http://devpod-webui-ingest.<gateway-namespace>.svc:8081/ingest/v1/batch)")
+	flag.StringVar(&ingestKeyFile, "ingest-key-file", "", "file with the shared telemetry ingest HMAC key; empty = telemetry off")
+	flag.DurationVar(&tel.MetricsInterval, "telemetry-metrics-interval", tel.MetricsInterval, "supervisor metrics sampling interval")
+	flag.DurationVar(&tel.ProcScanInterval, "telemetry-proc-scan-interval", tel.ProcScanInterval, "supervisor /proc scan interval")
+	flag.IntVar(&tel.TopN, "telemetry-topn", tel.TopN, "processes reported per metric besides the active ones")
+	flag.BoolVar(&tel.GPU, "telemetry-gpu", tel.GPU, "collect GPU metrics (nvidia-smi)")
+	flag.BoolVar(&tel.RDMA, "telemetry-rdma", tel.RDMA, "collect RDMA counters")
+	flag.BoolVar(&tel.Hooks, "telemetry-hooks", tel.Hooks, "record shell commands via profile hooks")
 	flag.Parse()
 
 	ctrl.SetLogger(zap.New(zap.UseFlagOptions(&opts)))
@@ -130,6 +146,7 @@ func main() {
 		GwConfig:           gw,
 		GatewayNamespace:   gatewayNamespace,
 		GatewayInternalPub: internalPub,
+		Telemetry:          telemetrySettings(ingestKeyFile, ingestURL, gatewayNamespace, tel),
 	}).SetupWithManager(mgr); err != nil {
 		die(err, "set up DevPodReconciler")
 	}
@@ -157,4 +174,19 @@ func main() {
 	if err := mgr.Start(ctrl.SetupSignalHandler()); err != nil {
 		die(err, "run manager")
 	}
+}
+
+// telemetrySettings loads the ingest key; no key file = telemetry off.
+func telemetrySettings(keyFile, url, gatewayNS string, defaults config.Config) *render.TelemetrySettings {
+	if keyFile == "" {
+		return nil
+	}
+	key, err := os.ReadFile(keyFile)
+	if err != nil || len(bytes.TrimSpace(key)) < 32 {
+		die(fmt.Errorf("ingest key %s: must hold >= 32 bytes (%v)", keyFile, err), "telemetry")
+	}
+	if url == "" {
+		url = fmt.Sprintf("http://devpod-webui-ingest.%s.svc:%d/ingest/v1/batch", gatewayNS, render.IngestPort)
+	}
+	return &render.TelemetrySettings{IngestURL: url, Key: bytes.TrimSpace(key), Defaults: defaults}
 }
