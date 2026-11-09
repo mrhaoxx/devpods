@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"sync"
 	"time"
 
 	"github.com/klauspost/compress/zstd"
@@ -58,13 +59,14 @@ func (w *SegmentWriter) open() error {
 	if err != nil {
 		return err
 	}
-	enc, err := zstd.NewWriter(dst, zstd.WithEncoderLevel(zstd.SpeedDefault))
+	enc, err := getEncoder(dst)
 	if err != nil {
 		_ = dst.Close()
 		return err
 	}
 	if _, err := enc.Write([]byte(Magic)); err != nil {
 		_ = enc.Close()
+		encoders.Put(enc)
 		_ = dst.Close()
 		return err
 	}
@@ -120,6 +122,7 @@ func (w *SegmentWriter) Close() error {
 func (w *SegmentWriter) seal() error {
 	encErr := w.enc.Close()
 	dstErr := w.dst.Close()
+	encoders.Put(w.enc)
 	seq, first, last, raw := w.seq, w.first, w.last, w.rawBytes
 	w.enc, w.dst = nil, nil
 	if err := errors.Join(encErr, dstErr); err != nil {
@@ -129,6 +132,21 @@ func (w *SegmentWriter) seal() error {
 		return w.cfg.OnSeal(seq, first, last, raw)
 	}
 	return nil
+}
+
+// encoders recycles zstd encoders across segments and sessions. Each
+// encoder is synchronous (concurrency 1): with hundreds of sessions the
+// default per-encoder goroutine fan-out cost more in scheduler wakeups
+// and per-segment allocations than it saved.
+var encoders sync.Pool
+
+func getEncoder(dst io.Writer) (*zstd.Encoder, error) {
+	if enc, ok := encoders.Get().(*zstd.Encoder); ok {
+		enc.Reset(dst)
+		return enc, nil
+	}
+	return zstd.NewWriter(dst, zstd.WithEncoderLevel(zstd.SpeedDefault),
+		zstd.WithEncoderConcurrency(1), zstd.WithLowerEncoderMem(true))
 }
 
 // OpenSegment decompresses one segment and returns a reader positioned
