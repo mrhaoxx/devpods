@@ -324,7 +324,7 @@ func newCachedClient(ctx context.Context, cfg *rest.Config) (client.Reader, erro
 	return cch, nil
 }
 
-// loadGatewayConfig reads the cluster-singleton GatewayConfig/default.
+// loadGatewayConfig reads the GatewayConfig selected by --gateway-config-name.
 // One-shot: trustedProxyKeys are frozen at startup. To roll the keys,
 // the operator restarts the gateway Deployment.
 func loadGatewayConfig(ctx context.Context, r client.Reader, name string) (*devpodv1alpha1.GatewayConfig, error) {

@@ -262,12 +262,13 @@ type GatewayConfigStatus struct {
 	Conditions []metav1.Condition `json:"conditions,omitempty"`
 }
 
-// GatewayConfig is the cluster-singleton runtime configuration for DevPod.
+// GatewayConfig is the cluster-scoped runtime configuration for DevPod.
+// A gateway / webui pair reads the one named by --gateway-config-name
+// ("default" unless set), so several pairs can share a cluster.
 //
 // +kubebuilder:object:root=true
 // +kubebuilder:resource:scope=Cluster,shortName=dgc
 // +kubebuilder:subresource:status
-// +kubebuilder:validation:XValidation:rule="self.metadata.name == 'default'",message="GatewayConfig must be named 'default'"
 type GatewayConfig struct {
 	metav1.TypeMeta   `json:",inline"`
 	metav1.ObjectMeta `json:"metadata,omitempty"`
