@@ -27,3 +27,9 @@ See `docs/superpowers/specs/2026-05-12-devpod-design.md` for the design.
 
     # Web UI end-to-end (kind required, after e2e-up.sh)
     bash hack/e2e-webui.sh
+
+    # Audit: chart wiring, integration (needs a cluster for throwaway
+    # ClickHouse + S3 pods), and an isolated end-to-end run
+    bash hack/test-chart.sh
+    KUBE_CONTEXT=<ctx> bash hack/test-integration.sh
+    KUBE_CONTEXT=<ctx> bash hack/e2e-audit.sh

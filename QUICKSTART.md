@@ -227,6 +227,68 @@ kubeconfig bypasses it.
 
 ---
 
+## 6c. (Optional) Enable session audit
+
+The gateway records every SSH session — raw streams (TTY replay), exec
+commands, and the content of SFTP / scp / ZMODEM transfers — to S3 +
+ClickHouse; the web UI shows sessions, replays, command / file search.
+
+Quick start with bundled single-replica storage (Silo for S3, ClickHouse):
+
+```bash
+helm upgrade --install devpod ./deploy/chart --reuse-values \
+    --set audit.enabled=true \
+    --set audit.s3.bundled.enabled=true \
+    --set audit.clickhouse.bundled.enabled=true
+```
+
+A `devpod-audit-migrate` hook Job creates the bucket, lifecycle rules and
+tables on every install/upgrade. Retention is `audit.retentionDays`
+(default 180).
+
+Production: point at existing storage instead (no HA in bundled mode):
+
+```bash
+kubectl -n devpod-system create secret generic audit-s3 \
+    --from-literal=access-key=... --from-literal=secret-key=...
+for c in gateway webui migrate; do
+  kubectl -n devpod-system create secret generic audit-ch-$c \
+      --from-literal=username=devpod_$c --from-literal=password=...
+done
+helm upgrade --install devpod ./deploy/chart --reuse-values \
+    --set audit.enabled=true \
+    --set audit.s3.endpoint=https://s3.example.com \
+    --set audit.s3.credentialsSecret=audit-s3 \
+    --set audit.s3.manageLifecycle=true \
+    --set audit.clickhouse.url=clickhouse://clickhouse.example.com:9000 \
+    --set audit.clickhouse.credentialsSecrets.gateway=audit-ch-gateway \
+    --set audit.clickhouse.credentialsSecrets.webui=audit-ch-webui \
+    --set audit.clickhouse.credentialsSecrets.migrate=audit-ch-migrate
+```
+
+ClickHouse grants: gateway `INSERT`, webui `SELECT, INSERT`, migrate `ALL`
+on the audit database.
+
+Optional hard policies (all default to Allow) — cluster default in
+`audit.policy`, per-user override on `User.spec.auditPolicy` (admins can
+edit it in the UI):
+
+```yaml
+audit:
+  policy:
+    download: Deny          # sftp get / scp -f / sz
+    maxFileSize: 1Gi
+    forwarding: {local: Allow, remote: Deny, recordContent: false}
+    failMode: Open          # Closed: refuse sessions when the spool is full
+```
+
+Denying downloads while local forwarding stays allowed leaves VS Code's
+file download open; the UI warns about that combination. Policies only
+cover recognised protocols — `cat`/`tar`/`rsync` over exec and copy-paste
+are recorded, not blocked.
+
+---
+
 ## 7. Hibernate / persist / collaborate
 
 ```yaml
