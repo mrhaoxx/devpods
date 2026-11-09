@@ -89,6 +89,7 @@ func main() {
 	flag.IntVar(&passwordMinLength, "password-min-length", 8, "minimum password length for create/reset/change")
 	flag.StringVar(&externalURL, "external-url", "",
 		"external base URL of the UI (https → Secure cookies + Origin check); defaults to the OAuth redirect's origin")
+	af := addAuditFlags(flag.CommandLine)
 	flag.Parse()
 
 	logger := slog.New(slog.NewJSONHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelInfo}))
@@ -215,6 +216,11 @@ func main() {
 		Admins:            adminSet,
 		SecureCookies:     strings.HasPrefix(origin, "https://"),
 	}
+	auditDeps, err := af.deps(ctx)
+	if err != nil {
+		fatal(err)
+	}
+	srv.Audit = auditDeps
 
 	go func() {
 		if err := mgr.Start(ctx); err != nil {

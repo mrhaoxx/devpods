@@ -53,3 +53,7 @@ func KoreTransformForTest(items []map[string]any, devpodNS string) []nodeTopolog
 }
 
 func (s *Server) HandleDevPodTopologyForTest() http.HandlerFunc { return s.handleDevPodTopology }
+
+func (s *Server) FreshSessionForTest(w http.ResponseWriter, r *http.Request) (Session, bool) {
+	return s.freshSession(w, r)
+}

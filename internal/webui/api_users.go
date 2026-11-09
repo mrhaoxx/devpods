@@ -76,6 +76,7 @@ func (s *Server) handleMe(w http.ResponseWriter, r *http.Request) {
 			"pubkeySelfService": s.PubkeySelfService,
 			"kore":              s.KoreEnabled,
 			"passwordAuth":      s.PasswordAuth,
+			"audit":             s.Audit != nil,
 		},
 		"hasPassword": hasPassword,
 		"ssh":         map[string]any{"host": s.SSHHost, "port": s.SSHPort, "loginSuffix": s.SSHLoginSuffix},
