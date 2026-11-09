@@ -132,6 +132,7 @@ type Container struct {
 // GPU is one card's sample; -1 marks a field nvidia-smi reports as N/A.
 type GPU struct {
 	TS        time.Time `json:"ts"`
+	Index     int       `json:"index"`
 	UUID      string    `json:"uuid"`
 	Name      string    `json:"name"`
 	Util      float64   `json:"util"`
