@@ -476,7 +476,7 @@ func handle(parent context.Context, id uint64, conn net.Conn, hostSigner ssh.Sig
 
 	recorder.SessionConnected(parent, devpodName, ap.User, clientIP, ap.Kind)
 	slog.Info("proxy_start", "id", id)
-	if err := gateway.Proxy(srvConn, srvChans, srvReqs, cliConn, cliChans, cliReqs, stats); err != nil {
+	if err := gateway.Proxy(srvConn, srvChans, srvReqs, cliConn, cliChans, cliReqs, stats, nil); err != nil {
 		slog.Info("proxy_end", "id", id, "err", err)
 		// "disconnected by user" (SSH_DISCONNECT_BY_APPLICATION, reason 11)
 		// is the normal way an OpenSSH client closes; not a proxy error.

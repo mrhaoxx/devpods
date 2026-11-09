@@ -118,7 +118,7 @@ func TestProxy_EchoEndToEnd(t *testing.T) {
 					return
 				}
 				stats := &gateway.ProxyStats{}
-				_ = gateway.Proxy(srv, srvChans, srvReqs, cli, cliChans, cliReqs, stats)
+				_ = gateway.Proxy(srv, srvChans, srvReqs, cli, cliChans, cliReqs, stats, nil)
 				select {
 				case statsCh <- stats:
 				default:
