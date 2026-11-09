@@ -6,8 +6,8 @@
 // webui leader (audit-telemetry spec §14 item 0). Each fake uses the
 // agent's own Buffer and Uploader, so buffering, resends and backoff are
 // the real ones. With -webui it also watches /api/live/devpods and reports
-// the sample → browser latency: fake 0 carries its sample time (unix ms)
-// in netRx.
+// the sample → browser latency: the first `timed` fakes (random start
+// phases) carry their sample time (unix ms) in netRx.
 //
 //	telemetry-load -n 400 -url http://…:8081/ingest/v1/batch -key-file key \
 //	  -uids-file uids -duration 10m -webui http://10.0.0.5:8080 -user u -password-file pw
@@ -96,7 +96,7 @@ func records(i int, seq uint64, now time.Time) []wire.Record {
 	c := &wire.Container{TS: now, CPU: 2 + 4*r(), CPULimit: 8, MemWorkingSet: 6 << 30, MemAnon: 5 << 30, MemFile: 1 << 30,
 		MemLimit: 32 << 30, IOReadBps: 1e6 * r(), IOWriteBps: 1e6 * r(), NetRx: 1e6 * r(), NetTx: 1e6 * r(),
 		NetTCPRx: 9e5 * r(), NetTCPTx: 9e5 * r(), NetKind: "pod", Pids: 120}
-	if i == 0 {
+	if i < timed {
 		c.NetRx = float64(now.UnixMilli())
 	}
 	recs := []wire.Record{{K: wire.KContainer, C: c}}
@@ -126,7 +126,11 @@ func records(i int, seq uint64, now time.Time) []wire.Record {
 	return recs
 }
 
-func watch(ctx context.Context, base, user, pwFile, name string, lat *[]time.Duration, mu *sync.Mutex) error {
+// timed fakes carry timestamps (several, so no single sampling phase
+// against the leader's 1 s snapshot tick decides the result).
+const timed = 20
+
+func watch(ctx context.Context, base, user, pwFile string, names map[string]bool, lat *[]time.Duration, mu *sync.Mutex) error {
 	pw, err := os.ReadFile(pwFile)
 	if err != nil {
 		return err
@@ -151,7 +155,7 @@ func watch(ctx context.Context, base, user, pwFile, name string, lat *[]time.Dur
 		}
 		sc := bufio.NewScanner(resp.Body)
 		sc.Buffer(make([]byte, 1<<20), 64<<20)
-		var last float64
+		last := map[string]float64{}
 		for sc.Scan() {
 			line := sc.Text()
 			if !strings.HasPrefix(line, "data: ") {
@@ -168,9 +172,9 @@ func watch(ctx context.Context, base, user, pwFile, name string, lat *[]time.Dur
 			}
 			now := float64(time.Now().UnixMilli())
 			for _, it := range ev.Items {
-				if it.Name == name && it.NetRx != nil && *it.NetRx != last {
-					last = *it.NetRx
-					if d := now - last; d >= 0 && d < 60000 {
+				if names[it.Name] && it.NetRx != nil && *it.NetRx != last[it.Name] {
+					last[it.Name] = *it.NetRx
+					if d := now - *it.NetRx; d >= 0 && d < 60000 {
 						mu.Lock()
 						*lat = append(*lat, time.Duration(d)*time.Millisecond)
 						mu.Unlock()
@@ -258,7 +262,11 @@ func main() {
 	var latMu sync.Mutex
 	if *webui != "" {
 		go func() {
-			if err := watch(ctx, *webui, *user, *pwFile, fakes[0].name, &lat, &latMu); err != nil {
+			names := map[string]bool{}
+			for i := 0; i < timed && i < len(fakes); i++ {
+				names[fakes[i].name] = true
+			}
+			if err := watch(ctx, *webui, *user, *pwFile, names, &lat, &latMu); err != nil {
 				fmt.Fprintln(os.Stderr, "watch:", err)
 			}
 		}()
