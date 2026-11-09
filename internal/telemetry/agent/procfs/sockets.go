@@ -89,6 +89,17 @@ type SocketMap struct {
 	byPID   map[PID][]uint64
 }
 
+// NewSocketMap builds a map from inode owners (tests, callers that
+// already know the mapping).
+func NewSocketMap(byInode map[uint64]PID) *SocketMap {
+	m := &SocketMap{byInode: map[uint64]PID{}, byPID: map[PID][]uint64{}}
+	for ino, id := range byInode {
+		m.byInode[ino] = id
+		m.byPID[id] = append(m.byPID[id], ino)
+	}
+	return m
+}
+
 // Owner returns the process holding inode (zero PID when unknown).
 func (m *SocketMap) Owner(inode uint64) PID { return m.byInode[inode] }
 
