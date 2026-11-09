@@ -41,6 +41,10 @@ has bundled "- --audit-s3-endpoint=http://devpod-audit-s3.devpod-system.svc:9000
 # The spool budget leaves headroom below the emptyDir limit: kubelet counts
 # disk blocks, the spool counts bytes, and exceeding sizeLimit evicts the pod.
 has bundled "- --audit-spool-max-bytes=17408Mi"
+# ~2 MiB per audited session (measured): 1Gi covers ~300 sessions on one
+# replica, and GOMEMLIMIT (90%) makes the GC work before the OOM killer.
+has bundled "memory: 1Gi"
+has bundled "- {name: GOMEMLIMIT, value: 921MiB}"
 has bundled "terminationGracePeriodSeconds: 300"
 has bundled "sizeLimit: 20Gi"
 has bundled "secretName: devpod-audit-ch-gateway"

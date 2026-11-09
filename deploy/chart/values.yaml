@@ -34,9 +34,12 @@ controller:
 
 gateway:
   replicas: 2
+  # An audited session costs ~2 MiB of gateway memory (measured; ~0.5 MiB
+  # without audit). 1Gi holds ~300 audited sessions on one replica, e.g.
+  # while the other restarts. GOMEMLIMIT is set to 90% of the limit.
   resources:
     requests: {cpu: 100m, memory: 128Mi}
-    limits:   {cpu: 500m, memory: 512Mi}
+    limits:   {cpu: 500m, memory: 1Gi}
   service:
     type: ClusterIP
     port: 22

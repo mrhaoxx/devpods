@@ -105,3 +105,23 @@ GOMAXPROCS 起后台 goroutine 并分配缓冲。
   而 e2e runner 用了 20Gi 的 spool 默认上限，emptyDir 只有 2Gi。
   `817afd9` 把 e2e 的 spool 上限设为 1536Mi。chart 里两者都取
   `audit.spool.sizeLimit`，不受影响。
+
+## 4. gateway 内存：并发会话（最终审查后补测）
+
+审查者发现每个打开的 segment 持有一个 zstd 编码器：默认级别和窗口下，
+写入约 1 MiB 后占 9.6 MiB 堆，150 个会话就会超过 512Mi 的限额。
+`985b8c4` 改为 SpeedFastest 加 256 KiB 窗口后，单 segment 降到 0.75 MiB
+（`TestSegment_OpenWriterHeapBounded`）。
+
+zjusct 实测：150 个并发 pty 会话，每个输出约 1.4 MB 的 base64 文本后
+空闲；每 0.1 s 启动一个；取 gateway 的 VmRSS。
+
+| | 空闲 | 150 个会话 | 每会话 |
+|---|---|---|---|
+| 关闭审计 | 68 MB | 145 MB | ≈ 0.5 MB |
+| 开启审计 | 69–71 MB | 301–338 MB | ≈ 1.6–1.8 MB |
+
+- 按修复前每 segment 9.6 MiB 估算，150 个会话会到 1.4 GB 以上。
+- 两副本中一个重启时，另一个要承接全部会话（约 300 个，约 640 MB）。
+  `b7bc600` 之后的 chart 把 gateway 内存上限默认值提到 1Gi，并把
+  `GOMEMLIMIT` 设为上限的 90%。
