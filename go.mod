@@ -6,6 +6,7 @@ require (
 	github.com/coreos/go-oidc/v3 v3.11.0
 	github.com/go-ldap/ldap/v3 v3.4.8
 	github.com/jimlambrt/gldap v0.1.10
+	github.com/klauspost/compress v1.20.3
 	github.com/pires/go-proxyproto v0.12.0
 	github.com/prometheus/client_golang v1.23.2
 	github.com/prometheus/common v0.66.1
@@ -18,6 +19,7 @@ require (
 	k8s.io/client-go v0.32.0
 	k8s.io/utils v0.0.0-20260507154919-ff6756f316d2
 	sigs.k8s.io/controller-runtime v0.20.0
+	sigs.k8s.io/yaml v1.4.0
 )
 
 require (
@@ -78,5 +80,4 @@ require (
 	k8s.io/kube-openapi v0.0.0-20241105132330-32ad38e42d3f // indirect
 	sigs.k8s.io/json v0.0.0-20241010143419-9aa6b5e7a4b3 // indirect
 	sigs.k8s.io/structured-merge-diff/v4 v4.4.2 // indirect
-	sigs.k8s.io/yaml v1.4.0 // indirect
 )
