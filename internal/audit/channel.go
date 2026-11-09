@@ -167,6 +167,9 @@ func (c *channel) Data(dir Dir, stderr bool, p []byte) (res Result) {
 		return Result{Pass: p}
 	}
 	res = c.feed(dec, dir, p)
+	if len(res.Notice) > 0 {
+		c.s.record(c.id, rawlog.KindInjectToClient, res.Notice)
+	}
 	if len(res.Reply) > 0 {
 		kind := rawlog.KindInjectToBackend
 		if dir == ClientToBackend {

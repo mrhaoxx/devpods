@@ -23,6 +23,10 @@ type Result struct {
 	Pass []byte
 	// Reply is written back to the side that sent the chunk.
 	Reply []byte
+	// Notice is human-readable text for the client's terminal, written
+	// to the channel's stderr (OpenSSH sftp/scp print it verbatim but
+	// show only status codes for protocol-level errors).
+	Notice []byte
 	// CloseChannel asks the proxy to close the channel.
 	CloseChannel bool
 }

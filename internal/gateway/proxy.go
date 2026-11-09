@@ -189,6 +189,12 @@ func proxyChannel(local ssh.NewChannel, remote ssh.Conn, stats *ProxyStats, hook
 	lw := &lockedWriter{w: lch}
 	rw := &lockedWriter{w: rch}
 	lerr := &lockedWriter{w: lch.Stderr()}
+	// clientErr is the client's stderr on this channel: audit notices
+	// and rejection reasons go there (OpenSSH prints it verbatim).
+	clientErr := lerr
+	if l2r == audit.BackendToClient {
+		clientErr = &lockedWriter{w: rch.Stderr()}
+	}
 	closeBoth := func() {
 		_ = lch.Close()
 		_ = rch.Close()
@@ -236,6 +242,9 @@ func proxyChannel(local ssh.NewChannel, remote ssh.Conn, stats *ProxyStats, hook
 	forwardReqs := func(in <-chan *ssh.Request, to ssh.Channel, dir audit.Dir, onStart func()) {
 		for r := range in {
 			if err := ch.Request(dir, r.Type, r.WantReply, r.Payload); err != nil {
+				if dir == audit.ClientToBackend {
+					_ = clientErr.write([]byte(err.Error() + "\n"))
+				}
 				if r.WantReply {
 					_ = r.Reply(false, nil)
 				}
@@ -282,6 +291,7 @@ func proxyChannel(local ssh.NewChannel, remote ssh.Conn, stats *ProxyStats, hook
 					return
 				}
 				_ = back.write(res.Reply)
+				_ = clientErr.write(res.Notice)
 				if res.CloseChannel {
 					closeBoth()
 					return

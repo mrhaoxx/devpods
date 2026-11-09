@@ -77,3 +77,21 @@ spec:
         - {name: data, mountPath: /data}
       volumes:
       - {name: data, emptyDir: {sizeLimit: 4Gi}}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: clickhouse
+  namespace: devpod-audit-it
+spec:
+  selector: {app: clickhouse}
+  ports: [{name: native, port: 9000}, {name: http, port: 8123}]
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: silo
+  namespace: devpod-audit-it
+spec:
+  selector: {app: silo}
+  ports: [{name: s3, port: 9000}]

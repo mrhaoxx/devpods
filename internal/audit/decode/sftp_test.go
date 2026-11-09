@@ -88,6 +88,9 @@ func TestSFTP_DenyDownload(t *testing.T) {
 		if len(pol) != 1 || pol[0].Rule != "download" || pol[0].Action != "deny" || pol[0].Path != "/etc/passwd" {
 			t.Fatalf("flags %#x: policy events %+v", flags, pol)
 		}
+		if string(res.Notice) != MsgDownloadDenied+"\n" {
+			t.Fatalf("flags %#x: OpenSSH sftp prints only the status code, so the reason must go to stderr; notice %q", flags, res.Notice)
+		}
 	}
 }
 
@@ -126,6 +129,9 @@ func TestSFTP_MaxFileSize(t *testing.T) {
 	}
 	if id, code, msg := parseStatus(t, res.Reply); id != 3 || code != fxFailure || msg != MsgFileTooLarge {
 		t.Fatalf("status id=%d code=%d msg=%q", id, code, msg)
+	}
+	if string(res.Notice) != MsgFileTooLarge+"\n" {
+		t.Fatalf("notice %q", res.Notice)
 	}
 
 	d.Feed(ClientToBackend, sftpOpen(4, "/tmp/down", fxfRead))
