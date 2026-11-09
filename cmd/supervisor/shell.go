@@ -9,6 +9,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/mrhaoxx/devpod/internal/telemetry/agent"
 )
 
 // allowedShells are the shells provided by the supervisor bundle.
@@ -399,8 +401,10 @@ func installProfileScripts(
 		dir, file, body string
 	}
 	entries := []entry{
-		{"/etc/profile.d", "devpod.sh", profileShContent},
-		{"/etc/fish/conf.d", "devpod.fish", profileFishContent},
+		{"/etc/profile.d", "devpod.sh", profileShContent + agent.ProfileHookLoader},
+		{"/etc/profile.d", "devpod-hook.bash", agent.BashHook},
+		{"/etc/profile.d", "devpod-hook.zsh", agent.ZshHook},
+		{"/etc/fish/conf.d", "devpod.fish", profileFishContent + agent.FishHook},
 	}
 	var firstErr error
 	for _, e := range entries {
