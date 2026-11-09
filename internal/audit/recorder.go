@@ -36,7 +36,7 @@ type Config struct {
 // SessionMeta identifies a session.
 type SessionMeta struct {
 	ID, User, DevPod, DevPodUID, Owner, ClientIP, PubkeyFP, AuthKind, ProxyAlias string
-	OpenedAt                                                                    time.Time
+	OpenedAt                                                                     time.Time
 }
 
 // NewSessionID returns a ULID for a session opened at t.

@@ -11,6 +11,8 @@ import (
 	"sync/atomic"
 
 	"golang.org/x/crypto/ssh"
+
+	"github.com/mrhaoxx/devpod/internal/audit"
 )
 
 // ProxyStats accumulates byte counts for one proxied SSH connection.
@@ -22,24 +24,12 @@ type ProxyStats struct {
 	BytesBackendToClient atomic.Int64
 }
 
-// countingReader is an io.Reader that increments a *atomic.Int64 by the
-// number of bytes Read'd.
-type countingReader struct {
-	r io.Reader
-	n *atomic.Int64
-}
-
-func (c *countingReader) Read(p []byte) (int, error) {
-	n, err := c.r.Read(p)
-	if n > 0 {
-		c.n.Add(int64(n))
-	}
-	return n, err
-}
-
 // Proxy bridges a client SSH connection (server-side from our POV) and
 // a backend SSH connection (client-side from our POV). Runs until either
-// side closes; returns the close reason.
+// side closes, or hooks.Done() fires; returns the close reason.
+//
+// hooks (nil = audit.Noop()) sees every channel open, request and data
+// chunk before it is forwarded and may reject or rewrite it.
 //
 // Ported from OpenNG/ngssh/proxy.go's HandleSSH: four goroutines fan
 // channel-open events and global requests in both directions; per-channel
@@ -52,7 +42,11 @@ func Proxy(
 	backendChans <-chan ssh.NewChannel,
 	backendReqs <-chan *ssh.Request,
 	stats *ProxyStats,
+	hooks audit.SessionHooks,
 ) error {
+	if hooks == nil {
+		hooks = audit.Noop()
+	}
 	var wg sync.WaitGroup
 
 	// proxyChannel's stats parameter assumes local=client / remote=backend
@@ -64,7 +58,7 @@ func Proxy(
 	go func() {
 		defer wg.Done()
 		for nc := range clientChans {
-			go proxyChannel(nc, backendConn, stats)
+			go proxyChannel(nc, backendConn, stats, hooks, audit.ClientToBackend)
 		}
 	}()
 
@@ -72,7 +66,7 @@ func Proxy(
 	go func() {
 		defer wg.Done()
 		for nc := range backendChans {
-			go proxyChannel(nc, clientConn, nil)
+			go proxyChannel(nc, clientConn, nil, hooks, audit.BackendToClient)
 		}
 	}()
 
@@ -80,6 +74,10 @@ func Proxy(
 	go func() {
 		defer wg.Done()
 		for req := range clientReqs {
+			if err := hooks.GlobalRequest(audit.ClientToBackend, req.Type, req.Payload); err != nil {
+				_ = req.Reply(false, nil)
+				continue
+			}
 			ok, payload, _ := backendConn.SendRequest(req.Type, req.WantReply, req.Payload)
 			_ = req.Reply(ok, payload)
 		}
@@ -95,8 +93,22 @@ func Proxy(
 				}
 				continue
 			}
+			if err := hooks.GlobalRequest(audit.BackendToClient, req.Type, req.Payload); err != nil {
+				_ = req.Reply(false, nil)
+				continue
+			}
 			ok, payload, _ := clientConn.SendRequest(req.Type, req.WantReply, req.Payload)
 			_ = req.Reply(ok, payload)
+		}
+	}()
+
+	stop := make(chan struct{})
+	go func() {
+		select {
+		case <-hooks.Done(): // e.g. fail-closed audit storage is full
+			_ = clientConn.Close()
+			_ = backendConn.Close()
+		case <-stop:
 		}
 	}()
 
@@ -105,6 +117,7 @@ func Proxy(
 	go func() { closeErr <- backendConn.Wait() }()
 
 	err := <-closeErr
+	close(stop)
 	_ = clientConn.Close()
 	_ = backendConn.Close()
 	wg.Wait()
@@ -115,14 +128,48 @@ func Proxy(
 	return err
 }
 
+func opposite(d audit.Dir) audit.Dir {
+	if d == audit.ClientToBackend {
+		return audit.BackendToClient
+	}
+	return audit.ClientToBackend
+}
+
+// lockedWriter serialises writes to one channel side so that a unit
+// injected by one pump (an audit Reply) never interleaves with a unit
+// forwarded by the other.
+type lockedWriter struct {
+	mu sync.Mutex
+	w  io.Writer
+}
+
+func (l *lockedWriter) write(p []byte) error {
+	if len(p) == 0 {
+		return nil
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	_, err := l.w.Write(p)
+	return err
+}
+
 // proxyChannel opens the corresponding channel on remote, accepts the
 // local channel, and pumps stdin/stdout/stderr + channel requests in
-// both directions until both sides close.
+// both directions until both sides close. l2r is the direction of data
+// flowing from the local (opening) side to remote.
 //
 // stats (optional) counts bytes assuming local=client / remote=backend:
 // lch→rch writes bump BytesClientToBackend; rch→lch writes bump
 // BytesBackendToClient. Pass nil to skip counting.
-func proxyChannel(local ssh.NewChannel, remote ssh.Conn, stats *ProxyStats) {
+func proxyChannel(local ssh.NewChannel, remote ssh.Conn, stats *ProxyStats, hooks audit.SessionHooks, l2r audit.Dir) {
+	r2l := opposite(l2r)
+	ch, err := hooks.OpenChannel(l2r, local.ChannelType(), local.ExtraData())
+	if err != nil {
+		_ = local.Reject(ssh.Prohibited, err.Error())
+		return
+	}
+	defer ch.Close()
+
 	rch, rreqs, err := remote.OpenChannel(local.ChannelType(), local.ExtraData())
 	if err != nil {
 		if oce, ok := err.(*ssh.OpenChannelError); ok {
@@ -139,12 +186,20 @@ func proxyChannel(local ssh.NewChannel, remote ssh.Conn, stats *ProxyStats) {
 		return
 	}
 
+	lw := &lockedWriter{w: lch}
+	rw := &lockedWriter{w: rch}
+	lerr := &lockedWriter{w: lch.Stderr()}
+	closeBoth := func() {
+		_ = lch.Close()
+		_ = rch.Close()
+	}
+
 	// OpenNG-style close orchestration. Two signal channels gate the
 	// closes so exit-status (and any other late channel-requests) gets
 	// flushed before we tear the channel down.
 	//
-	//   stdup   = backend → client copy finished
-	//   stddown = client → backend copy finished
+	//   stdup   = remote → local copy finished
+	//   stddown = local → remote copy finished
 	//
 	// Each request-forwarder, after its incoming reqs channel drains
 	// (peer sent channel-close), waits for the corresponding data pump
@@ -159,7 +214,7 @@ func proxyChannel(local ssh.NewChannel, remote ssh.Conn, stats *ProxyStats) {
 	// before the "shell"/"exec"/"subsystem" request has been processed:
 	// the spawned process's stdin pipe is created after the request, so
 	// nothing closes it when an early EOF was already received and
-	// dropped. Hold the client→backend CloseWrite until the start-program
+	// dropped. Hold the local→remote CloseWrite until the start-program
 	// request has been forwarded (its SendRequest with WantReply=true
 	// blocks until backend has the shell running and replies "success").
 	//
@@ -178,15 +233,28 @@ func proxyChannel(local ssh.NewChannel, remote ssh.Conn, stats *ProxyStats) {
 		markStartProgSent()
 	}
 
-	go func() {
-		for r := range lreqs {
-			ok, _ := rch.SendRequest(r.Type, r.WantReply, r.Payload)
+	forwardReqs := func(in <-chan *ssh.Request, to ssh.Channel, dir audit.Dir, onStart func()) {
+		for r := range in {
+			if err := ch.Request(dir, r.Type, r.WantReply, r.Payload); err != nil {
+				if r.WantReply {
+					_ = r.Reply(false, nil)
+				}
+				continue
+			}
+			ok, _ := to.SendRequest(r.Type, r.WantReply, r.Payload)
+			ch.RequestResult(dir, r.Type, ok)
 			_ = r.Reply(ok, nil)
 			switch r.Type {
 			case "shell", "exec", "subsystem":
-				markStartProgSent()
+				if onStart != nil {
+					onStart()
+				}
 			}
 		}
+	}
+
+	go func() {
+		forwardReqs(lreqs, rch, l2r, markStartProgSent)
 		// If the client closed without ever asking us to start a program,
 		// unblock the data pump so we don't leak.
 		markStartProgSent()
@@ -194,36 +262,56 @@ func proxyChannel(local ssh.NewChannel, remote ssh.Conn, stats *ProxyStats) {
 		_ = rch.Close()
 	}()
 	go func() {
-		for r := range rreqs {
-			ok, _ := lch.SendRequest(r.Type, r.WantReply, r.Payload)
-			_ = r.Reply(ok, nil)
-		}
+		forwardReqs(rreqs, lch, r2l, nil)
 		<-stdup
 		_ = lch.Close()
 	}()
 
-	// Stderr is unidirectional: backend → client.
-	go func() { _, _ = io.Copy(lch.Stderr(), rch.Stderr()) }()
+	// pump reads src, lets the hooks filter each chunk, forwards Pass to
+	// dst and writes Reply back to the sender.
+	pump := func(src io.Reader, dst, back *lockedWriter, dir audit.Dir, stderr bool, count *atomic.Int64) {
+		buf := make([]byte, 32<<10)
+		for {
+			n, err := src.Read(buf)
+			if n > 0 {
+				if count != nil {
+					count.Add(int64(n))
+				}
+				res := ch.Data(dir, stderr, buf[:n])
+				if werr := dst.write(res.Pass); werr != nil {
+					return
+				}
+				_ = back.write(res.Reply)
+				if res.CloseChannel {
+					closeBoth()
+					return
+				}
+			}
+			if err != nil {
+				return
+			}
+		}
+	}
+
+	var toRemote, toLocal *atomic.Int64
+	if stats != nil {
+		toRemote, toLocal = &stats.BytesClientToBackend, &stats.BytesBackendToClient
+	}
+
+	// Stderr is unidirectional: remote → local.
+	go pump(rch.Stderr(), lerr, rw, r2l, true, nil)
 
 	var wg sync.WaitGroup
 	wg.Add(2)
 	go func() {
 		defer wg.Done()
-		var src io.Reader = rch
-		if stats != nil {
-			src = &countingReader{r: rch, n: &stats.BytesBackendToClient}
-		}
-		_, _ = io.Copy(lch, src)
+		pump(rch, lw, rw, r2l, false, toLocal)
 		_ = lch.CloseWrite()
 		close(stdup)
 	}()
 	go func() {
 		defer wg.Done()
-		var src io.Reader = lch
-		if stats != nil {
-			src = &countingReader{r: lch, n: &stats.BytesClientToBackend}
-		}
-		_, _ = io.Copy(rch, src)
+		pump(lch, rw, lw, l2r, false, toRemote)
 		<-startProgSent
 		_ = rch.CloseWrite()
 		close(stddown)
