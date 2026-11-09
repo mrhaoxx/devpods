@@ -201,6 +201,8 @@ spec:
     image: alpine:3.20
     command: [sh, -c, 'while [ ! -e /tmp/go ]; do sleep 1; done; exec /devpod-webui \$(cat /tmp/args)']
     env:
+    - {name: GOGC, value: "200"}         # as the chart sets with telemetry on
+    - {name: GOMEMLIMIT, value: 921MiB}
     - {name: POD_NAME, valueFrom: {fieldRef: {fieldPath: metadata.name}}}
     - {name: POD_IP, valueFrom: {fieldRef: {fieldPath: status.podIP}}}
     volumeMounts: [{name: keys, mountPath: /keys}]

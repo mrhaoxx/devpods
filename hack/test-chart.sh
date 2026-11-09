@@ -135,6 +135,11 @@ has telemetry "- --ingest-service=devpod-webui-ingest"
 has telemetry "- --idle-cpu-pct=5"
 has telemetry "- --agent-silent-after=3m"
 has telemetry "fieldPath: status.podIP"
+# the leader decodes and writes every DevPod's telemetry: sized resources
+docHas telemetry Deployment devpod-webui "cpu: \"2\""
+docHas telemetry Deployment devpod-webui "memory: 1Gi"
+docHas telemetry Deployment devpod-webui "- {name: GOGC, value: \"200\"}"
+docHas telemetry Deployment devpod-webui "- {name: GOMEMLIMIT, value: 921MiB}"
 docHas telemetry Role devpod-webui-leader "namespace: devpod-system"
 docHas telemetry Role devpod-webui-leader 'resources: ["endpointslices"]'
 docHas telemetry Role devpod-webui-leader 'resources: ["leases"]'
@@ -151,6 +156,7 @@ has telemetry "name: devpod-ingest-key"
 lacks defaults "devpod-webui-ingest"
 lacks defaults "--ingest-"
 lacks defaults "devpod-ingest-key"
+lacks defaults "name: GOGC"
 lacks bundled "devpod-webui-ingest"
 lacks bundled "--ingest-"
 if helm template devpod "$CHART" "${WEBUI[@]}" --set telemetry.enabled=true >/dev/null 2>"$OUT/tele-noaudit.err"; then
