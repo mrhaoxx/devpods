@@ -208,7 +208,7 @@ R=("${K[@]}" -n "$NS" exec audit-e2e-runner --)
   cp /keys/gw_host /gwkeys/ssh_host_ed25519_key; cp /keys/gw_internal /gwkeys/internal/ssh_host_ed25519_key'
 STORE="--audit-clickhouse-url=clickhouse://clickhouse.$NS.svc:9000 --audit-clickhouse-database=$DB --audit-clickhouse-credentials-dir=/creds/ch --audit-s3-endpoint=http://silo.$NS.svc:9000 --audit-s3-bucket=$BUCKET --audit-s3-credentials-dir=/creds/s3"
 "${R[@]}" sh -c "/devpod-webui migrate $STORE --create-bucket --manage-lifecycle --retention-days=7"
-"${R[@]}" sh -c "POD_NAME=audit-e2e-runner nohup /devpod-gateway --listen=:2222 --host-key-dir=/gwkeys --devpod-namespace=$NS --gateway-config-name=audit-e2e --metrics-bind-address=:9100 --audit-spool-dir=/spool $STORE >/gateway.log 2>&1 &"
+"${R[@]}" sh -c "POD_NAME=audit-e2e-runner nohup /devpod-gateway --listen=:2222 --host-key-dir=/gwkeys --devpod-namespace=$NS --gateway-config-name=audit-e2e --metrics-bind-address=:9100 --audit-spool-dir=/spool --audit-spool-max-bytes=1536Mi $STORE >/gateway.log 2>&1 &"
 "${R[@]}" sh -c "nohup /devpod-webui --listen=:8080 --session-key-file=/keys/session-key --password-auth=true --admins=audit-e2e --devpod-namespace=$NS --gateway-config-name=audit-e2e --kore=off --external-url=http://127.0.0.1:18080 $STORE >/webui.log 2>&1 &"
 sleep 5
 
