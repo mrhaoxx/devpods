@@ -46,9 +46,9 @@ func TestParseExitStatusAndSignal(t *testing.T) {
 		t.Fatalf("status %d %v", st, err)
 	}
 	sig, err := ParseExitSignal(ssh.Marshal(struct {
-		Sig         string
-		Core        bool
-		Msg, Lang   string
+		Sig       string
+		Core      bool
+		Msg, Lang string
 	}{"TERM", false, "", ""}))
 	if err != nil || sig != "TERM" {
 		t.Fatalf("signal %q %v", sig, err)
