@@ -99,7 +99,7 @@ type Attr struct {
 	// Peer is the sshd-session's TCP peer, i.e. the gateway's
 	// backend_local_addr; the webui resolves the gateway session by it.
 	Peer string `json:"peer,omitempty"`
-	How  string `json:"how"` // tree | ssh_connection | sid_tty | inferred | unattributed | system
+	How  string `json:"how"` // tree | ssh_connection | sid_tty | inferred | unattributed | system | workload | untracked
 }
 
 // Container is one container-level sample (spec §6.1, §6.3).

@@ -41,10 +41,18 @@ const (
 type Env struct {
 	ProcRoot, SysRoot, DevRoot, CgroupRoot, FSRoot string
 	SSHDPid                                        func() int
+	WorkloadPid                                    func() int // nil = none
 	GPU                                            GPUCollector
 	TCP                                            procfs.TCPStats
 	TokenPath, ConfigPath                          string
 	HookDirs                                       []string
+}
+
+func (e Env) workloadPid() int {
+	if e.WorkloadPid == nil {
+		return 0
+	}
+	return e.WorkloadPid()
 }
 
 // DefaultEnv reads the real container. PID 1 passes its sshd's pid in
@@ -54,6 +62,10 @@ func DefaultEnv() Env {
 		ProcRoot: "/proc", SysRoot: "/sys", DevRoot: "/dev", CgroupRoot: "/sys/fs/cgroup", FSRoot: "/",
 		SSHDPid: func() int {
 			n, _ := strconv.Atoi(os.Getenv("SUPERVISOR_SSHD_PID"))
+			return n
+		},
+		WorkloadPid: func() int {
+			n, _ := strconv.Atoi(os.Getenv("SUPERVISOR_WORKLOAD_PID"))
 			return n
 		},
 		TokenPath: config.TokenPath, ConfigPath: config.ConfigPath, HookDirs: HookDirs,
@@ -117,7 +129,7 @@ func newAgent(cfg config.Config, env Env) *agent {
 	a := &agent{
 		cfg: cfg, env: env, bootID: ulid.Make().String(), buf: NewBuffer(cfg.BufferBytes),
 		scanner:       &procfs.Scanner{Root: env.ProcRoot},
-		attr:          newAttributor(env.SSHDPid()),
+		attr:          newAttributor(env.SSHDPid(), env.workloadPid()),
 		procs:         map[procfs.PID]*procfs.Proc{},
 		attrib:        map[procfs.PID]procfs.Attribution{},
 		cpuRates:      map[procfs.PID]float64{},
@@ -130,6 +142,13 @@ func newAgent(cfg config.Config, env Env) *agent {
 		collectors:    map[string]*collectorState{},
 	}
 	a.scanner.Clock = func() time.Time { return a.scanNow }
+	// reported in Info.collectors: the leader alerts hook_missing only
+	// where hooks run
+	if cfg.Hooks {
+		a.collectors["hooks"] = &collectorState{}
+	} else {
+		a.collectors["hooks"] = &collectorState{disabled: "disabled: config"}
+	}
 	a.sshConns, a.walkFDs = procfs.SSHConns, procfs.WalkProcFDs
 	a.tcpGate = costGate{min: time.Second, max: 30 * time.Second}
 	a.listenGate = costGate{min: snapshotEvery, max: 5 * time.Minute}
@@ -613,8 +632,9 @@ func Run(ctx context.Context, cfg config.Config, env Env) error {
 	}
 }
 
-func newAttributor(sshdPid int) *procfs.Attributor {
+func newAttributor(sshdPid, workloadPid int) *procfs.Attributor {
 	a := procfs.NewAttributor(sshdPid, SessionExe)
+	a.WorkloadPid = workloadPid
 	a.SelfPid = os.Getpid()
 	return a
 }

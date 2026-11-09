@@ -16,7 +16,7 @@ import (
 type Attribution struct {
 	Conn PID    // the sshd-session; zero when only Peer is known
 	Peer string // gateway backend_local_addr
-	How  string // tree | ssh_connection | sid_tty | inferred | unattributed | system
+	How  string // tree | ssh_connection | sid_tty | inferred | unattributed | system | workload | untracked
 }
 
 // Wire converts to the wire form.
@@ -25,7 +25,11 @@ func (a Attribution) Wire() *wire.Attr {
 }
 
 func (a Attribution) attributed() bool {
-	return a.How != "" && a.How != "unattributed" && a.How != "system"
+	switch a.How {
+	case "", "unattributed", "system", "workload", "untracked":
+		return false
+	}
+	return true
 }
 
 // Attributor keeps sticky attributions across scans.
@@ -35,6 +39,10 @@ type Attributor struct {
 	// SelfPid is the telemetry agent; it and its children (nvidia-smi …)
 	// are infrastructure like PID 1 and the sshd.
 	SelfPid int
+	// WorkloadPid is the DevPod's own command, started by the supervisor
+	// in its own process group: that tree is "workload", never a
+	// session's and never unattributed.
+	WorkloadPid int
 
 	known     map[PID]Attribution
 	peers     map[PID]string // sshd-session → peer, remembered after it exits
@@ -120,6 +128,16 @@ func (a *Attributor) decide(p *Proc, procs map[PID]*Proc, conns map[PID]string) 
 	}
 	if p.PPid != 1 && p.PPid != a.SSHDPid && a.known[p.Parent].How == "system" {
 		return Attribution{How: "system"}
+	}
+	// The DevPod's command and its process group (orphans included).
+	if a.WorkloadPid > 1 && (p.ID.Pid == a.WorkloadPid || p.PGID == a.WorkloadPid ||
+		(p.PPid != 1 && a.known[p.Parent].How == "workload")) {
+		return Attribution{How: "workload"}
+	}
+	// Entered from outside (kubectl exec: PPid 0), and its children:
+	// never inferred to whichever SSH session happens to be open.
+	if p.PPid == 0 || (p.PPid != 1 && p.PPid != a.SSHDPid && a.known[p.Parent].How == "untracked") {
+		return Attribution{How: "untracked"}
 	}
 	// 1. process tree: the session itself, or inherit from the parent.
 	if a.legit(p) {

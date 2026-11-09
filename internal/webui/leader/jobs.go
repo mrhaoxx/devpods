@@ -35,6 +35,8 @@ type JobStore interface {
 	BackendSessions(ctx context.Context, since time.Time) ([]store.BackendSession, error)
 	HookMissing(ctx context.Context, from, to time.Time) ([]store.SessionRow, error)
 	InfoSeen(ctx context.Context, since time.Time) (map[string]time.Time, error)
+	HooksSince(ctx context.Context, since time.Time) (map[string]time.Time, error)
+	UnattributedCounts(ctx context.Context, from, to time.Time) (map[string]uint64, error)
 	InsertTelemetry(ctx context.Context, b store.TelemetryBatch, token string) error
 }
 
@@ -185,13 +187,33 @@ func (j *Jobs) crossCheck(ctx context.Context, now time.Time) error {
 	if err != nil {
 		return err
 	}
+	// only where the DevPod's agent ran hooks when the session opened
+	// (not old Pods, not --telemetry-hooks=false)
+	hooks, err := j.Store.HooksSince(ctx, now.Add(-infoLookback))
+	if err != nil {
+		return err
+	}
 	for _, s := range missing {
+		if since, ok := hooks[s.DevPodUID]; !ok || since.After(s.OpenedAt) {
+			continue
+		}
 		at := to
 		if s.ClosedAt != nil {
 			at = *s.ClosedAt
 		}
 		alerts = append(alerts, store.AlertRow{TS: at, DevPodUID: s.DevPodUID, SessionID: s.SessionID, Kind: "hook_missing", Source: "webui",
 			Detail: fmt.Sprintf("%s typed into a terminal for %s but no shell-hook command was recorded", s.User, at.Sub(s.OpenedAt).Truncate(time.Second))})
+	}
+
+	// processes first seen in the window that no rule attributed: one
+	// alert per DevPod per minute (spec §5.8)
+	counts, err := j.Store.UnattributedCounts(ctx, to.Add(-time.Minute), to)
+	if err != nil {
+		return err
+	}
+	for uid, n := range counts {
+		alerts = append(alerts, store.AlertRow{TS: to, DevPodUID: uid, Kind: "unattributed", Source: "webui",
+			Detail: fmt.Sprintf("%d new process(es) attributed to no SSH session", n)})
 	}
 
 	running := j.Running(ctx)

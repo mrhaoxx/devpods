@@ -44,7 +44,8 @@ type telemetrySup struct {
 	stopCh   chan struct{}
 }
 
-func newTelemetrySup(sshdPid int) *telemetrySup {
+// newTelemetrySup: workloadPid is the user command (0 when none).
+func newTelemetrySup(sshdPid, workloadPid int) *telemetrySup {
 	argv := []string{"/opt/devpod/devpod-supervisor", "telemetry"}
 	if self, err := os.Executable(); err == nil {
 		argv[0] = self
@@ -58,11 +59,12 @@ func newTelemetrySup(sshdPid int) *telemetrySup {
 	}
 	// The agent is sequential: without a cap Go uses one P per core, and
 	// on a 104-core node each GC cycle fanned out over all of them.
-	ours := []string{"GOMEMLIMIT=" + telemetryMemLimit, "GOMAXPROCS=" + telemetryMaxProcs, "SUPERVISOR_SSHD_PID=" + strconv.Itoa(sshdPid)}
+	ours := []string{"GOMEMLIMIT=" + telemetryMemLimit, "GOMAXPROCS=" + telemetryMaxProcs, "SUPERVISOR_SSHD_PID=" + strconv.Itoa(sshdPid),
+		"SUPERVISOR_WORKLOAD_PID=" + strconv.Itoa(workloadPid)}
 	var env []string
 	for _, kv := range os.Environ() {
 		k, _, _ := strings.Cut(kv, "=")
-		if k != "GOMEMLIMIT" && k != "GOMAXPROCS" && k != "SUPERVISOR_SSHD_PID" {
+		if k != "GOMEMLIMIT" && k != "GOMAXPROCS" && k != "SUPERVISOR_SSHD_PID" && k != "SUPERVISOR_WORKLOAD_PID" {
 			env = append(env, kv)
 		}
 	}

@@ -53,8 +53,6 @@ func (h *Handler) rows(hd wire.Header, recs []wire.Record) store.TelemetryBatch 
 	var b store.TelemetryBatch
 	uid, boot := hd.DevPodUID, hd.BootID
 	fallback := at(hd.TS, time.Now())
-	unattributed := 0
-	var lastUnattributed time.Time
 	for _, r := range recs {
 		switch r.K {
 		case wire.KContainer:
@@ -104,9 +102,6 @@ func (h *Handler) rows(hd wire.Header, recs []wire.Record) store.TelemetryBatch 
 					SessionID: sid, User: user, Peer: peer(e.Attr), Attribution: how(e.Attr), Version: ver(ts)}
 				if e.Event == "process_exit" {
 					row.ExitSeen = &ts
-				} else if row.Attribution == "unattributed" && e.Pid != 1 {
-					unattributed++
-					lastUnattributed = ts
 				}
 				b.ProcRows = append(b.ProcRows, row)
 			case "untracked_entry":
@@ -146,10 +141,6 @@ func (h *Handler) rows(hd wire.Header, recs []wire.Record) store.TelemetryBatch 
 			a := r.Alert
 			b.Alerts = append(b.Alerts, store.AlertRow{TS: at(a.TS, fallback), DevPodUID: uid, Kind: a.Kind, Source: sourceSupervisor, Detail: a.Detail})
 		}
-	}
-	if unattributed > 0 {
-		b.Alerts = append(b.Alerts, store.AlertRow{TS: lastUnattributed, DevPodUID: uid, Kind: "unattributed", Source: sourceSupervisor,
-			Detail: fmt.Sprintf("%d new process(es) could not be attributed to a session", unattributed)})
 	}
 	return b
 }
