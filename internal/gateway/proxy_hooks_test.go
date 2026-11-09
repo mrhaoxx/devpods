@@ -176,7 +176,7 @@ func (h *fakeHooks) GlobalRequest(_ audit.Dir, typ string, _ []byte) error {
 	return nil
 }
 
-func (h *fakeHooks) Done() <-chan struct{}        { return h.done }
+func (h *fakeHooks) Done() <-chan struct{}      { return h.done }
 func (h *fakeHooks) Close(string, int64, int64) {}
 
 type fakeChan struct{ h *fakeHooks }

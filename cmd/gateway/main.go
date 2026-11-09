@@ -6,7 +6,6 @@
 package main
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -19,6 +18,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"syscall"
 	"text/template"
@@ -39,6 +39,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	devpodv1alpha1 "github.com/mrhaoxx/devpod/api/v1alpha1"
+	"github.com/mrhaoxx/devpod/internal/audit"
 	"github.com/mrhaoxx/devpod/internal/gateway"
 )
 
@@ -51,14 +52,16 @@ func init() {
 
 func main() {
 	var (
-		listenAddr      string
-		hostKeyDir      string
-		devpodNamespace string
-		metricsAddr     string
-		ldapSecretDir   string
+		listenAddr          string
+		hostKeyDir          string
+		devpodNamespace     string
+		metricsAddr         string
+		ldapSecretDir       string
 		httpListenAddr      string
 		httpBaseDomain      string
 		httpSubdomainSuffix string
+		sessionGrace        time.Duration
+		af                  auditFlags
 	)
 	flag.StringVar(&listenAddr, "listen", ":22", "TCP address to listen on")
 	flag.StringVar(&hostKeyDir, "host-key-dir", "/etc/devpod/gateway",
@@ -75,6 +78,19 @@ func main() {
 		"base domain for HTTP proxy routing, e.g. ktaas.approaching-ai.com")
 	flag.StringVar(&httpSubdomainSuffix, "http-subdomain-suffix", "",
 		"fixed suffix stripped from subdomain before parsing, e.g. -dev for {name}-{port}-dev.{base}")
+	flag.DurationVar(&sessionGrace, "shutdown-session-grace", 60*time.Second,
+		"on SIGTERM, how long open sessions may continue before they are closed")
+	flag.StringVar(&af.s3Endpoint, "audit-s3-endpoint", "", "audit S3 endpoint URL (empty = AWS)")
+	flag.StringVar(&af.s3Bucket, "audit-s3-bucket", "devpod-audit", "audit S3 bucket")
+	flag.StringVar(&af.s3Region, "audit-s3-region", "us-east-1", "audit S3 region")
+	flag.BoolVar(&af.s3PathStyle, "audit-s3-path-style", true, "use path-style S3 addressing")
+	flag.StringVar(&af.s3CredsDir, "audit-s3-credentials-dir", "", "directory with files access-key and secret-key")
+	flag.StringVar(&af.chURL, "audit-clickhouse-url", "", "audit ClickHouse URL, e.g. clickhouse://host:9000 (empty disables audit recording)")
+	flag.StringVar(&af.chDatabase, "audit-clickhouse-database", "devpod_audit", "audit ClickHouse database")
+	flag.StringVar(&af.chCredsDir, "audit-clickhouse-credentials-dir", "", "directory with files username and password")
+	flag.StringVar(&af.spoolDir, "audit-spool-dir", "/var/spool/devpod-audit", "local spool directory for audit data")
+	flag.StringVar(&af.spoolMax, "audit-spool-max-bytes", "21474836480", "spool size limit: bytes or a quantity such as 20Gi")
+	flag.DurationVar(&af.drainTimeout, "audit-drain-timeout", 220*time.Second, "on shutdown, how long to keep uploading spooled audit data")
 	flag.Parse()
 
 	logger := slog.New(slog.NewJSONHandler(os.Stderr, &slog.HandlerOptions{
@@ -84,6 +100,7 @@ func main() {
 
 	metricsReg := prometheus.NewRegistry()
 	gateway.MustRegisterMetrics(metricsReg)
+	audit.MustRegisterMetrics(metricsReg)
 	go func() {
 		mux := http.NewServeMux()
 		mux.Handle("/metrics", promhttp.HandlerFor(metricsReg, promhttp.HandlerOpts{}))
@@ -148,7 +165,7 @@ func main() {
 		WithSources(srcs)
 	dialer := gateway.NewDialer(internalSigner)
 
-	bannerFn, err := buildBannerFunc(gw.Spec.Banner)
+	bannerTmpl, err := parseBanner(gw.Spec.Banner)
 	if err != nil {
 		slog.Error("parse_banner_template", "err", err)
 		os.Exit(1)
@@ -175,7 +192,26 @@ func main() {
 
 	recorder := gateway.NewEventRecorder(c, clientset, devpodNamespace)
 
-	runErr := run(ctx, listenAddr, gw.Spec.Listen, hostSigner, authn, dialer, proxyKeys, bannerFn, recorder)
+	auditRec, err := buildRecorder(ctx, af)
+	if err != nil {
+		slog.Error("audit_recorder", "err", err)
+		os.Exit(1)
+	}
+	if auditRec != nil {
+		go auditRec.Run(ctx)
+		slog.Info("audit_recorder_ready", "spool", af.spoolDir)
+	}
+	ad := &auditDeps{cache: c, ns: devpodNamespace, rec: auditRec, tmpl: bannerTmpl, sessionGrace: sessionGrace}
+
+	runErr := run(ctx, listenAddr, gw.Spec.Listen, hostSigner, authn, dialer, proxyKeys, ad, recorder)
+
+	if auditRec != nil {
+		dctx, dcancel := context.WithTimeout(context.Background(), af.drainTimeout)
+		if err := auditRec.Drain(dctx); err != nil {
+			slog.Warn("audit_drain", "err", err)
+		}
+		dcancel()
+	}
 
 	// Drain identity sources on graceful shutdown so e.g. the LDAP
 	// pooled conn is closed cleanly (server sees a TCP FIN, not the
@@ -207,10 +243,9 @@ type bannerData struct {
 	Host     string // gateway pod hostname
 }
 
-// buildBannerFunc parses the configured template once. Empty template
-// → returns nil, meaning no banner is sent. Invalid template fails
-// fast at gateway startup.
-func buildBannerFunc(tmplSrc string) (func(meta ssh.ConnMetadata) string, error) {
+// parseBanner parses the configured template once. Empty template →
+// nil (no template). Invalid template fails fast at gateway startup.
+func parseBanner(tmplSrc string) (*template.Template, error) {
 	if strings.TrimSpace(tmplSrc) == "" {
 		return nil, nil
 	}
@@ -218,26 +253,7 @@ func buildBannerFunc(tmplSrc string) (func(meta ssh.ConnMetadata) string, error)
 	if err != nil {
 		return nil, fmt.Errorf("parse template: %w", err)
 	}
-	host, _ := os.Hostname()
-	return func(meta ssh.ConnMetadata) string {
-		login := meta.User()
-		user, pod, _ := gateway.ParseLoginName(login)
-		var buf bytes.Buffer
-		if err := tmpl.Execute(&buf, bannerData{
-			Now:      time.Now(),
-			ClientIP: meta.RemoteAddr().String(),
-			Login:    login,
-			User:     user,
-			Pod:      pod,
-			Host:     host,
-		}); err != nil {
-			// Stay silent on render failure; the banner is best-effort
-			// and we don't want a malformed substitution to confuse the
-			// client's auth flow.
-			return ""
-		}
-		return buf.String()
-	}, nil
+	return tmpl, nil
 }
 
 // loadKeys reads the gateway's host key + internal signing key from disk.
@@ -317,7 +333,7 @@ func loadGatewayConfig(ctx context.Context, r client.Reader) (*devpodv1alpha1.Ga
 	return &gc, nil
 }
 
-func run(ctx context.Context, addr string, listen devpodv1alpha1.ListenSpec, hostSigner ssh.Signer, authn *gateway.Authenticator, dialer *gateway.Dialer, proxyKeys map[string]string, bannerFn func(ssh.ConnMetadata) string, recorder *gateway.EventRecorder) error {
+func run(ctx context.Context, addr string, listen devpodv1alpha1.ListenSpec, hostSigner ssh.Signer, authn *gateway.Authenticator, dialer *gateway.Dialer, proxyKeys map[string]string, ad *auditDeps, recorder *gateway.EventRecorder) error {
 	ln, err := net.Listen("tcp", addr)
 	if err != nil {
 		return fmt.Errorf("listen %s: %w", addr, err)
@@ -345,32 +361,35 @@ func run(ctx context.Context, addr string, listen devpodv1alpha1.ListenSpec, hos
 	}()
 
 	g, _ := errgroup.WithContext(ctx)
+	var conns sync.Map
 	var connCount atomic.Uint64
 	for {
 		conn, err := ln.Accept()
 		if err != nil {
 			if errors.Is(ctx.Err(), context.Canceled) {
-				return g.Wait()
+				return waitWithGrace(g.Wait, &conns, ad.sessionGrace)
 			}
 			return fmt.Errorf("accept: %w", err)
 		}
 		id := connCount.Add(1)
 		slog.Info("accept", "id", id, "from", conn.RemoteAddr().String())
+		conns.Store(conn, struct{}{})
 		g.Go(func() error {
-			handle(ctx, id, conn, hostSigner, authn, dialer, proxyKeys, bannerFn, recorder)
+			defer conns.Delete(conn)
+			handle(ctx, id, conn, hostSigner, authn, dialer, proxyKeys, ad, recorder)
 			return nil
 		})
 	}
 }
 
-func handle(parent context.Context, id uint64, conn net.Conn, hostSigner ssh.Signer, authn *gateway.Authenticator, dialer *gateway.Dialer, proxyKeys map[string]string, bannerFn func(ssh.ConnMetadata) string, recorder *gateway.EventRecorder) {
+func handle(parent context.Context, id uint64, conn net.Conn, hostSigner ssh.Signer, authn *gateway.Authenticator, dialer *gateway.Dialer, proxyKeys map[string]string, ad *auditDeps, recorder *gateway.EventRecorder) {
 	defer conn.Close()
 
 	cfg := &ssh.ServerConfig{
 		ServerVersion: "SSH-2.0-devpod-gateway",
 	}
-	if bannerFn != nil {
-		cfg.BannerCallback = bannerFn
+	cfg.BannerCallback = func(meta ssh.ConnMetadata) string {
+		return bannerText(ad.gatewayConfig(parent), ad.tmpl, meta)
 	}
 	cfg.AddHostKey(hostSigner)
 
@@ -443,10 +462,14 @@ func handle(parent context.Context, id uint64, conn net.Conn, hostSigner ssh.Sig
 	}
 	clientIP := conn.RemoteAddr().String()
 	fp := srvConn.Permissions.Extensions["devpod.io/pubkey-fp"]
-	sessionID := fmt.Sprintf("sid-%d", id)
-	gateway.SessionOpen(slog.Default(), sessionID, ap, clientIP, fp)
-
 	start := time.Now()
+	sessionID := audit.NewSessionID(start)
+	gateway.SessionOpen(slog.Default(), sessionID, ap, clientIP, fp)
+	hooks, auditSess := ad.startSession(parent, audit.SessionMeta{
+		ID: sessionID, User: ap.User, DevPod: devpodName, ClientIP: clientIP, PubkeyFP: fp,
+		AuthKind: ap.Kind, ProxyAlias: ap.Alias, OpenedAt: start,
+	})
+
 	stats := &gateway.ProxyStats{}
 	sessionResult := "ok"
 	closeReason := "client_disconnect"
@@ -458,6 +481,7 @@ func handle(parent context.Context, id uint64, conn net.Conn, hostSigner ssh.Sig
 		gateway.SessionsTotal.WithLabelValues(ap.User, ap.Pod, ap.Kind, sessionResult).Inc()
 		gateway.SessionDurationSeconds.WithLabelValues(ap.User, ap.Pod, ap.Kind).Observe(dur.Seconds())
 		recorder.SessionDisconnected(parent, devpodName, ap.User, closeReason)
+		hooks.Close(closeReason, stats.BytesClientToBackend.Load(), stats.BytesBackendToClient.Load())
 	}()
 
 	endpoint := srvConn.Permissions.Extensions["devpod.io/endpoint"]
@@ -473,10 +497,13 @@ func handle(parent context.Context, id uint64, conn net.Conn, hostSigner ssh.Sig
 		return
 	}
 	defer cliConn.Close()
+	if auditSess != nil {
+		auditSess.SetBackendAddr(cliConn.LocalAddr().String())
+	}
 
 	recorder.SessionConnected(parent, devpodName, ap.User, clientIP, ap.Kind)
 	slog.Info("proxy_start", "id", id)
-	if err := gateway.Proxy(srvConn, srvChans, srvReqs, cliConn, cliChans, cliReqs, stats, nil); err != nil {
+	if err := gateway.Proxy(srvConn, srvChans, srvReqs, cliConn, cliChans, cliReqs, stats, hooks); err != nil {
 		slog.Info("proxy_end", "id", id, "err", err)
 		// "disconnected by user" (SSH_DISCONNECT_BY_APPLICATION, reason 11)
 		// is the normal way an OpenSSH client closes; not a proxy error.
