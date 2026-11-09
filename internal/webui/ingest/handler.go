@@ -29,6 +29,9 @@ const (
 	RatePerSecond = 10       // per DevPod
 	RateBurst     = 20
 	EventEvery    = time.Minute // one k8s Event per alert kind per DevPod
+	// authCacheTTL: a known DevPod UID is looked up again after this (a
+	// deleted DevPod's agent may post this much longer).
+	authCacheTTL = 30 * time.Second
 )
 
 // Handler serves POST /ingest/v1/batch on the leader.
@@ -47,6 +50,7 @@ type Handler struct {
 
 	mu       sync.Mutex
 	written  map[stream]uint64
+	known    map[string]time.Time // DevPod UID → valid until
 	limiters map[string]*rate.Limiter
 	evented  map[[2]string]time.Time
 }
@@ -107,7 +111,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
 		return
 	}
-	if _, _, ok := h.DevPods(uid); !ok {
+	if !h.knownDevPod(uid) {
 		http.Error(w, "unknown DevPod", http.StatusUnauthorized)
 		return
 	}
@@ -149,6 +153,27 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		h.event(uid, a.Kind, a.Detail)
 	}
 	writeAck(w, hd.Seq)
+}
+
+// knownDevPod checks the UID against the DevPods, caching a hit for
+// authCacheTTL (every batch is authenticated).
+func (h *Handler) knownDevPod(uid string) bool {
+	h.mu.Lock()
+	until, ok := h.known[uid]
+	h.mu.Unlock()
+	if ok && time.Now().Before(until) {
+		return true
+	}
+	if _, _, ok := h.DevPods(uid); !ok {
+		return false
+	}
+	h.mu.Lock()
+	if h.known == nil {
+		h.known = map[string]time.Time{}
+	}
+	h.known[uid] = time.Now().Add(authCacheTTL)
+	h.mu.Unlock()
+	return true
 }
 
 func writeAck(w http.ResponseWriter, seq uint64) {
@@ -216,6 +241,7 @@ func (h *Handler) Forget(uid string) {
 		}
 	}
 	delete(h.limiters, uid)
+	delete(h.known, uid)
 	for k := range h.evented {
 		if k[0] == uid {
 			delete(h.evented, k)
