@@ -181,24 +181,28 @@ type Proc struct {
 
 // ProcEvent is a process_start, process_exit or untracked_entry (§5.2).
 type ProcEvent struct {
-	TS      time.Time `json:"ts"`
-	Event   string    `json:"event"`
-	Pid     int       `json:"pid"`
-	Start   uint64    `json:"start"`
-	PPid    int       `json:"ppid"`
-	Exe     string    `json:"exe,omitempty"`
-	Cmdline string    `json:"cmdline,omitempty"`
-	UID     int       `json:"uid"`
-	Attr    *Attr     `json:"attr,omitempty"`
+	TS time.Time `json:"ts"`
+	// FirstSeen is when the process was first seen; exit events repeat
+	// it (and the start's ppid/exe/cmdline/uid) so they are complete rows.
+	FirstSeen time.Time `json:"first_seen,omitzero"`
+	Event     string    `json:"event"`
+	Pid       int       `json:"pid"`
+	Start     uint64    `json:"start"`
+	PPid      int       `json:"ppid"`
+	Exe       string    `json:"exe,omitempty"`
+	Cmdline   string    `json:"cmdline,omitempty"`
+	UID       int       `json:"uid"`
+	Attr      *Attr     `json:"attr,omitempty"`
 }
 
 // SSHConn is a legit sshd-session and its peer address (§5.4).
 type SSHConn struct {
-	TS     time.Time `json:"ts"`
-	Pid    int       `json:"pid"`
-	Start  uint64    `json:"start"`
-	Peer   string    `json:"peer"`
-	Closed bool      `json:"closed,omitempty"`
+	TS        time.Time `json:"ts"`
+	FirstSeen time.Time `json:"first_seen,omitzero"`
+	Pid       int       `json:"pid"`
+	Start     uint64    `json:"start"`
+	Peer      string    `json:"peer"`
+	Closed    bool      `json:"closed,omitempty"`
 }
 
 // Command is one shell-hook command (§5.1).

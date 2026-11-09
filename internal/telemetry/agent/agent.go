@@ -87,6 +87,7 @@ type agent struct {
 	prevTCP          map[uint64]procfs.TCPBytes
 	tcpRates         map[procfs.PID]procfs.TCPRate
 	reportedConns    map[procfs.PID]string
+	life             *lifecycle
 	net              NetCounters
 	rdma             []RDMADev
 	rdmaPrev         map[string]RDMACounters
@@ -109,6 +110,7 @@ func newAgent(cfg config.Config, env Env) *agent {
 		cpuRates:      map[procfs.PID]float64{},
 		pss:           map[procfs.PID]uint64{},
 		reportedConns: map[procfs.PID]string{},
+		life:          newLifecycle(),
 		rdmaPrev:      map[string]RDMACounters{},
 		cmds:          make(chan wire.Command, 1024),
 		alerts:        make(chan wire.Alert, 64),
@@ -201,18 +203,21 @@ func (a *agent) scanProcs(now time.Time) {
 		for i := range events {
 			e := events[i]
 			e.TS = now.UTC()
+			a.life.event(&e)
 			a.pendingAudit = append(a.pendingAudit, wire.Record{K: wire.KProcEvent, PE: &e})
 		}
 		for c, peer := range conns {
 			if a.reportedConns[c] != peer {
 				a.reportedConns[c] = peer
-				a.pendingAudit = append(a.pendingAudit, wire.Record{K: wire.KSSHConn, SC: &wire.SSHConn{TS: now.UTC(), Pid: c.Pid, Start: c.Start, Peer: peer}})
+				a.pendingAudit = append(a.pendingAudit, wire.Record{K: wire.KSSHConn, SC: &wire.SSHConn{TS: now.UTC(),
+					FirstSeen: a.life.connSeen(c, now.UTC()), Pid: c.Pid, Start: c.Start, Peer: peer}})
 			}
 		}
 		for c, peer := range a.reportedConns {
 			if _, alive := procs[c]; !alive {
 				delete(a.reportedConns, c)
-				a.pendingAudit = append(a.pendingAudit, wire.Record{K: wire.KSSHConn, SC: &wire.SSHConn{TS: now.UTC(), Pid: c.Pid, Start: c.Start, Peer: peer, Closed: true}})
+				a.pendingAudit = append(a.pendingAudit, wire.Record{K: wire.KSSHConn, SC: &wire.SSHConn{TS: now.UTC(),
+					FirstSeen: a.life.connClosed(c), Pid: c.Pid, Start: c.Start, Peer: peer, Closed: true}})
 			}
 		}
 	})
