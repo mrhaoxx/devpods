@@ -145,6 +145,9 @@ docHas telemetry Role devpod-webui-leader 'resources: ["endpointslices"]'
 docHas telemetry Role devpod-webui-leader 'resources: ["leases"]'
 docHas telemetry RoleBinding devpod-webui-leader "name: devpod-webui"
 docHas telemetry NetworkPolicy devpod-webui-ingest "port: 8081"
+# hostNetwork DevPods post from their node's IP: node CIDRs are a knob
+render telenodes "${WEBUI[@]}" "${AUDIT[@]}" --set telemetry.enabled=true --set-json 'telemetry.ingestFromCIDRs=["10.10.0.0/16"]'
+docHas telenodes NetworkPolicy devpod-webui-ingest "cidr: 10.10.0.0/16"
 docHas telemetry NetworkPolicy devpod-webui-ingest "kubernetes.io/metadata.name: devpods"
 docHas telemetry NetworkPolicy devpod-webui-ingest "app.kubernetes.io/name: devpod-webui"
 docHas telemetry Role devpod-webui 'verbs: ["create", "patch"]'

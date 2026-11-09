@@ -154,6 +154,10 @@ telemetry:
     cpuPct: 5
     gpuPct: 5
   agentSilentAfter: 3m          # alert when a Running DevPod stops reporting
+  # hostNetwork DevPods post from their node's IP, which no namespace
+  # selector matches: list the node CIDRs here or their telemetry is
+  # dropped by the ingest NetworkPolicy (when the CNI enforces it).
+  ingestFromCIDRs: []
   # The webui leader decodes and writes every DevPod's telemetry; with
   # telemetry on these replace webui.resources (sizing: see
   # docs/superpowers/notes/2026-11-telemetry-phase2-measurements.md).

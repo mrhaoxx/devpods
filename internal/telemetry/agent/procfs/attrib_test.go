@@ -6,6 +6,7 @@ package procfs
 
 import (
 	"fmt"
+	"net"
 	"os"
 	"path/filepath"
 	"testing"
@@ -418,5 +419,25 @@ func TestReadSmall(t *testing.T) {
 	}
 	if _, ok := ReadSmall(filepath.Join(dir, "missing"), buf); ok {
 		t.Error("missing file reported ok")
+	}
+}
+
+// Loopback sockets carry no network traffic: a forward through sshd
+// would be counted once per end (review #4).
+func TestCountedTCP(t *testing.T) {
+	for _, tc := range []struct {
+		src, dst string
+		want     bool
+	}{
+		{"10.0.0.5", "10.0.0.9", true},
+		{"127.0.0.1", "127.0.0.1", false},
+		{"10.0.0.5", "127.0.0.1", false},
+		{"::1", "::1", false},
+		{"::ffff:127.0.0.1", "::ffff:10.0.0.9", false},
+		{"2001:db8::1", "2001:db8::2", true},
+	} {
+		if got := CountedTCP(net.ParseIP(tc.src), net.ParseIP(tc.dst)); got != tc.want {
+			t.Errorf("%s ↔ %s: %v", tc.src, tc.dst, got)
+		}
 	}
 }

@@ -10,6 +10,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"io"
+	"net"
 	"net/netip"
 	"os"
 	"path/filepath"
@@ -112,6 +113,13 @@ func BuildSocketMap(root string, procs map[PID]*Proc) (*SocketMap, error) {
 	m := NewSocketMap(nil)
 	WalkFDs(root, procs, m.Add)
 	return m, nil
+}
+
+// CountedTCP reports whether a TCP socket carries network traffic: a
+// loopback connection would be counted once per end (and a forward
+// through sshd three times).
+func CountedTCP(src, dst net.IP) bool {
+	return !src.IsLoopback() && !dst.IsLoopback()
 }
 
 // SocketInode parses an fd target "socket:[inode]".
