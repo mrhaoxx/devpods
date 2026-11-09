@@ -158,6 +158,7 @@ CREATE TABLE IF NOT EXISTS {db}.metrics_container_1m (
     cpu_p95       AggregateFunction(quantile(0.95), Float32),
     cpu_limit     AggregateFunction(max, Float32),
     throttled_max AggregateFunction(max, UInt64),
+    throttled_min AggregateFunction(min, UInt64),
     mem_ws_avg    AggregateFunction(avg, UInt64),
     mem_ws_max    AggregateFunction(max, UInt64),
     mem_anon_avg  AggregateFunction(avg, UInt64),
@@ -178,7 +179,7 @@ ORDER BY (devpod_uid, ts)
 CREATE MATERIALIZED VIEW IF NOT EXISTS {db}.metrics_container_1m_mv TO {db}.metrics_container_1m AS
 SELECT toStartOfMinute(ts) AS ts, devpod_uid,
     avgState(cpu) AS cpu_avg, maxState(cpu) AS cpu_max, quantileState(0.95)(cpu) AS cpu_p95,
-    maxState(cpu_limit) AS cpu_limit, maxState(throttled_usec) AS throttled_max,
+    maxState(cpu_limit) AS cpu_limit, maxState(throttled_usec) AS throttled_max, minState(throttled_usec) AS throttled_min,
     avgState(mem_ws) AS mem_ws_avg, maxState(mem_ws) AS mem_ws_max,
     avgState(mem_anon) AS mem_anon_avg, avgState(mem_file) AS mem_file_avg, maxState(mem_limit) AS mem_limit,
     avgState(io_r) AS io_r_avg, avgState(io_w) AS io_w_avg,

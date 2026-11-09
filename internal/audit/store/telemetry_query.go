@@ -81,17 +81,26 @@ func (c *CH) MetricsRange(ctx context.Context, uid string, from, to time.Time, s
 	var q string
 	names := []string{"cpu", "cpu_limit", "cpu_throttled", "mem_anon", "mem_file", "mem_limit", "io_r", "io_w", "net_rx", "net_tx", "net_tcp_rx", "net_tcp_tx"}
 	if minute {
-		q = fmt.Sprintf(`SELECT %s AS b, avgMerge(cpu_avg), toFloat64(maxMerge(cpu_limit)), toFloat64(maxMerge(throttled_max)),
+		// throttled_usec is cumulative: the bucket's rate is (max - min) / seconds
+		q = fmt.Sprintf(`SELECT %s AS b, avgMerge(cpu_avg), toFloat64(maxMerge(cpu_limit)),
+			toFloat64(greatest(toInt64(maxMerge(throttled_max)) - toInt64(minMerge(throttled_min)), 0)) / %d,
 			avgMerge(mem_anon_avg), avgMerge(mem_file_avg), toFloat64(maxMerge(mem_limit)), avgMerge(io_r_avg), avgMerge(io_w_avg),
 			avgMerge(net_rx_avg), avgMerge(net_tx_avg), avgMerge(net_tcp_rx_avg), avgMerge(net_tcp_tx_avg)
-			FROM %s.metrics_container_1m WHERE devpod_uid = ? AND ts >= ? AND ts < ? GROUP BY b ORDER BY b`, bucket, c.db)
+			FROM %s.metrics_container_1m WHERE devpod_uid = ? AND ts >= ? AND ts < ? GROUP BY b ORDER BY b`, bucket, secs, c.db)
 	} else {
-		q = fmt.Sprintf(`SELECT %s AS b, avg(cpu), toFloat64(max(cpu_limit)), toFloat64(max(throttled_usec) - min(throttled_usec)) / %d,
+		// throttled_usec is cumulative: each sample's increase over the
+		// previous one (a reset counts as 0), summed per bucket
+		q = fmt.Sprintf(`SELECT %s AS b, avg(cpu), toFloat64(max(cpu_limit)), toFloat64(sum(dthr)) / %d,
 			avg(mem_anon), avg(mem_file), toFloat64(max(mem_limit)), avg(io_r), avg(io_w),
 			avg(net_rx), avg(net_tx), avg(net_tcp_rx), avg(net_tcp_tx)
-			FROM %s.metrics_container_1s WHERE devpod_uid = ? AND ts >= ? AND ts < ? GROUP BY b ORDER BY b`, bucket, secs, c.db)
+			FROM (SELECT *, greatest(toInt64(throttled_usec) - toInt64(lagInFrame(throttled_usec, 1, throttled_usec)
+			        OVER (ORDER BY ts ASC ROWS BETWEEN 1 PRECEDING AND CURRENT ROW)), 0) AS dthr
+			      FROM %s.metrics_container_1s WHERE devpod_uid = ? AND ts >= ? AND ts < ?)
+			GROUP BY b ORDER BY b`, bucket, secs, c.db)
 	}
-	rows, err := c.conn.Query(ctx, q, uid, from, to)
+	// One step before the window, so its first bucket has the previous
+	// sample to diff against (buckets before the window are dropped).
+	rows, err := c.conn.Query(ctx, q, uid, from.Add(-step), to)
 	if err != nil {
 		return nil, fmt.Errorf("container series: %w", err)
 	}
