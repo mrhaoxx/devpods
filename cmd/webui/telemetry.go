@@ -7,12 +7,15 @@ package main
 import (
 	"bytes"
 	"context"
+	"crypto/subtle"
 	"errors"
 	"flag"
 	"fmt"
 	"log/slog"
 	"net/http"
+	"net/http/pprof"
 	"os"
+	"strings"
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
@@ -189,6 +192,9 @@ func (tf *telemetryFlags) startTelemetry(ctx context.Context, cfg *rest.Config, 
 	mux.Handle("GET "+live.LivePath, live.LiveHandler(hub, token, el.IsLeader))
 	mux.Handle("GET "+live.DevPodPath, live.DevPodHandler(state, token, el.IsLeader))
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write([]byte("ok")) })
+	// CPU / heap profiles for sizing the leader, behind the replicas' token.
+	mux.Handle("GET /internal/debug/pprof/", requireToken(token, http.HandlerFunc(pprof.Index)))
+	mux.Handle("GET /internal/debug/pprof/profile", requireToken(token, http.HandlerFunc(pprof.Profile)))
 	ingestSrv := &http.Server{Addr: tf.ingestListen, Handler: mux, ReadHeaderTimeout: 5 * time.Second}
 	go func() {
 		<-ctx.Done()
@@ -291,4 +297,18 @@ func followWhileNotLeading(ctx context.Context, el *leader.Elector, addr func() 
 		live.Follow(fctx, addr, token, hub)
 		cancel()
 	}
+}
+
+func requireToken(token string, next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		got := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
+		if subtle.ConstantTimeCompare([]byte(got), []byte(token)) != 1 {
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			return
+		}
+		// pprof.Index serves /debug/pprof/<name>; map our prefix onto it
+		r2 := r.Clone(r.Context())
+		r2.URL.Path = strings.Replace(r.URL.Path, "/internal/debug/pprof/", "/debug/pprof/", 1)
+		next.ServeHTTP(w, r2)
+	})
 }

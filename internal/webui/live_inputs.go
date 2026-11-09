@@ -184,17 +184,23 @@ func (li *LiveInputs) Build(ctx context.Context) live.Inputs {
 	return in
 }
 
-// DevPodByUID finds a DevPod in the cache.
+// uidIndex is the cache index DevPodByUID uses (RegisterIndexes).
+const uidIndex = "metadata.uid"
+
+// RegisterIndexes adds the cache indexes the webui needs; call before
+// the manager starts.
+func RegisterIndexes(ctx context.Context, fi client.FieldIndexer) error {
+	return fi.IndexField(ctx, &devpodv1alpha1.DevPod{}, uidIndex, func(o client.Object) []string {
+		return []string{string(o.GetUID())}
+	})
+}
+
+// DevPodByUID finds a DevPod in the cache by UID (an index lookup: the
+// ingest authenticates every batch with it).
 func (s *Server) DevPodByUID(ctx context.Context, uid string) (*devpodv1alpha1.DevPod, bool) {
 	var list devpodv1alpha1.DevPodList
-	if err := s.Client.List(ctx, &list, client.InNamespace(s.NS), client.UnsafeDisableDeepCopy); err != nil {
+	if err := s.Client.List(ctx, &list, client.InNamespace(s.NS), client.MatchingFields{uidIndex: uid}); err != nil || len(list.Items) == 0 {
 		return nil, false
 	}
-	for i := range list.Items {
-		if string(list.Items[i].UID) == uid {
-			dp := list.Items[i].DeepCopy()
-			return dp, true
-		}
-	}
-	return nil, false
+	return &list.Items[0], true
 }
