@@ -285,6 +285,9 @@ for p in telemetry-e2e-runner telemetry-e2e-webui-0 telemetry-e2e-webui-1; do
 done
 "${K[@]}" -n "$NS" exec telemetry-e2e-runner -- sh -c 'mkdir -p /gwkeys/internal
   cp /keys/gw_host /gwkeys/ssh_host_ed25519_key; cp /keys/gw_internal /gwkeys/internal/ssh_host_ed25519_key'
+# A fresh database each run: kept runs reuse the DevPod (same UID), and
+# old rows would satisfy the checks below before this run's agent reports.
+"${K[@]}" -n "$NS" exec deploy/clickhouse -- clickhouse-client --user it --password it-password --query "DROP DATABASE IF EXISTS $DB SYNC"
 "${K[@]}" -n "$NS" exec telemetry-e2e-webui-0 -- sh -c "/devpod-webui migrate $STORE --create-bucket --manage-lifecycle --retention-days=7"
 "${K[@]}" -n "$NS" exec telemetry-e2e-runner -- sh -c "POD_NAME=telemetry-e2e-runner nohup /devpod-gateway --listen=:2222 --host-key-dir=/gwkeys --devpod-namespace=$NS --gateway-config-name=telemetry-e2e --metrics-bind-address=:9100 --audit-spool-dir=/spool --audit-spool-max-bytes=1536Mi $STORE >/gateway.log 2>&1 &"
 WEBUI_ARGS="--listen=:8080 --session-key-file=/keys/session-key --password-auth=true --admins=telemetry-e2e --devpod-namespace=$NS --gateway-config-name=telemetry-e2e --kore=off --external-url=http://127.0.0.1:18080 --ingest-key-file=/keys/ingest-key --leader-election-namespace=$NS --ingest-service=$INGEST_SVC $STORE"
@@ -352,24 +355,32 @@ with op.open(url, timeout=30) as r:
             continue
         ev = json.loads(line[6:])
         for it in ev.get("items", []):
-            if it.get("name") == name and (it.get("cpu") or 0) > limit:
-                print("cpu", it["cpu"], flush=True)
+            if it.get("name") != name:
+                continue
+            print("event", repr(time.time()), ev.get("ts"), it.get("cpu"), flush=True)
+            if (it.get("cpu") or 0) > limit:
+                print("cpu", it["cpu"], "at", repr(time.time()), flush=True)
                 sys.exit(0)
 PY
 python3 "$WORK/watch.py" "$B0/api/live/devpods?scope=mine" "$WORK/jar" telemetry-e2e-box 0.5 >"$WORK/watch.log" 2>&1 &
 WATCH=$!
 PIDS+=("$WATCH")
 waitfor 15 "live stream connected" grep -q ready "$WORK/watch.log"
-ssh "${SSHO[@]}" -i user1 -p 12222 "$LOGIN@127.0.0.1" 'timeout 10 sh -c "while :; do :; done"' >/dev/null 2>&1 &
+# The clock starts when the burner runs (it says so), not before the ssh
+# connection through the port-forward and the gateway.
+ssh "${SSHO[@]}" -i user1 -p 12222 "$LOGIN@127.0.0.1" 'echo started; timeout 12 sh -c "while :; do :; done"' >"$WORK/burner.log" 2>&1 &
 PIDS+=("$!")
-T0=$(date +%s.%N)
-for _ in $(seq 1 100); do kill -0 "$WATCH" 2>/dev/null || break; sleep 0.1; done
-T1=$(date +%s.%N)
-if kill -0 "$WATCH" 2>/dev/null; then kill "$WATCH"; die "the live stream never showed the burner above 0.5 cores in 10 s"; fi
+for _ in $(seq 1 300); do grep -q started "$WORK/burner.log" && break; sleep 0.05; done
+grep -q started "$WORK/burner.log" || die "the burner never started: $(cat "$WORK/burner.log")"
+T0=$(python3 -c 'import time; print(repr(time.time()))')
+for _ in $(seq 1 110); do kill -0 "$WATCH" 2>/dev/null || break; sleep 0.1; done
+if kill -0 "$WATCH" 2>/dev/null; then kill "$WATCH"; die "the live stream never showed the burner above 0.5 cores in 11 s"; fi
 wait "$WATCH" || die "the live stream never showed the burner above 0.5 cores: $(cat "$WORK/watch.log")"
-LAT=$(python3 -c "print(round($T1 - $T0, 1))")
-python3 -c "import sys; sys.exit(0 if $T1 - $T0 <= 5 else 1)" || die "live CPU took ${LAT}s (ssh setup included), want ≤ 5"
-echo "burner visible after ${LAT}s ($(grep cpu "$WORK/watch.log"))"
+T1=$(awk '/^cpu/ {print $4}' "$WORK/watch.log")
+LAT=$(python3 -c "print(round(max($T1 - $T0, 0), 1))")
+python3 -c "import sys; sys.exit(0 if $T1 - $T0 <= 3 else 1)" ||
+  die "live CPU took ${LAT}s after the burner started (T0=$T0), want ≤ 3; stream: $(tail -15 "$WORK/watch.log")"
+echo "burner visible ${LAT}s after it started ($(grep cpu "$WORK/watch.log"))"
 
 # --- 4. kubectl exec is an untracked entry --------------------------------
 log "untracked entry"
