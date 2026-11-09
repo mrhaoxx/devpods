@@ -29,15 +29,17 @@ func (s *Server) HandleListTemplatesForTest() http.HandlerFunc { return s.handle
 
 func (s *Server) HandleDevPodStreamForTest() http.HandlerFunc { return s.handleDevPodStream }
 
-func (s *Server) AdminForTest(username string, u *devpodv1alpha1.User) bool { return s.adminFor(username, u) }
+func (s *Server) AdminForTest(username string, u *devpodv1alpha1.User) bool {
+	return s.adminFor(username, u)
+}
 
-func (s *Server) HandleAuthConfigForTest() http.HandlerFunc   { return s.handleAuthConfig }
-func (s *Server) HandlePasswordLoginForTest() http.HandlerFunc { return s.handlePasswordLogin }
+func (s *Server) HandleAuthConfigForTest() http.HandlerFunc     { return s.handleAuthConfig }
+func (s *Server) HandlePasswordLoginForTest() http.HandlerFunc  { return s.handlePasswordLogin }
 func (s *Server) HandleChangePasswordForTest() http.HandlerFunc { return s.handleChangePassword }
-func (s *Server) HandleListUsersForTest() http.HandlerFunc    { return s.handleListUsers }
-func (s *Server) HandleCreateUserForTest() http.HandlerFunc   { return s.handleCreateUser }
-func (s *Server) HandlePatchUserForTest() http.HandlerFunc    { return s.handlePatchUser }
-func (s *Server) HandleDeleteUserForTest() http.HandlerFunc   { return s.handleDeleteUser }
+func (s *Server) HandleListUsersForTest() http.HandlerFunc      { return s.handleListUsers }
+func (s *Server) HandleCreateUserForTest() http.HandlerFunc     { return s.handleCreateUser }
+func (s *Server) HandlePatchUserForTest() http.HandlerFunc      { return s.handlePatchUser }
+func (s *Server) HandleDeleteUserForTest() http.HandlerFunc     { return s.handleDeleteUser }
 
 func (s *Server) HandleAdminListDevPodsForTest() http.HandlerFunc { return s.handleAdminListDevPods }
 
@@ -57,3 +59,6 @@ func (s *Server) HandleDevPodTopologyForTest() http.HandlerFunc { return s.handl
 func (s *Server) FreshSessionForTest(w http.ResponseWriter, r *http.Request) (Session, bool) {
 	return s.freshSession(w, r)
 }
+
+func (s *Server) HandleLiveDevPodsForTest() http.HandlerFunc  { return s.handleLiveDevPods }
+func (s *Server) HandleLiveOverviewForTest() http.HandlerFunc { return s.handleLiveOverview }

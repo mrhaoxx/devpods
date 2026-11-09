@@ -244,3 +244,19 @@ func init() {
 		os.Exit(0)
 	}
 }
+
+func (l *lazyCH) InsertTelemetry(ctx context.Context, b store.TelemetryBatch, token string) error {
+	c, err := l.get(ctx)
+	if err != nil {
+		return err
+	}
+	return c.InsertTelemetry(ctx, b, token)
+}
+
+func (l *lazyCH) OpenSessionsByBackend(ctx context.Context, since time.Time) (map[string]map[string]store.SessionRef, error) {
+	c, err := l.get(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return c.OpenSessionsByBackend(ctx, since)
+}

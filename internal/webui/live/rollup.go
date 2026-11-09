@@ -38,7 +38,7 @@ func (s *State) Snapshot(in Inputs) Snapshot {
 		}
 	}
 	users := map[string]*UserLive{}
-	requested := map[string]Quota{} // owner → requests of running DevPods
+	requested := map[string]Quota{} // owner → limits of running DevPods (quota is limit-based)
 	sessionUsers := map[string]bool{}
 
 	for _, ref := range in.DevPods {
@@ -86,7 +86,7 @@ func (s *State) Snapshot(in Inputs) Snapshot {
 			u.GPU += ref.GPURequest
 			snap.KPI.GPUUsed += ref.GPURequest
 			q := requested[ref.Owner]
-			q.CPU, q.Mem, q.GPU = q.CPU+ref.CPURequest, q.Mem+ref.MemRequest, q.GPU+ref.GPURequest
+			q.CPU, q.Mem, q.GPU = q.CPU+ref.CPULimit, q.Mem+ref.MemLimit, q.GPU+ref.GPURequest
 			requested[ref.Owner] = q
 		}
 		if n := nodes[ref.Node]; n != nil && ref.Node != "" {

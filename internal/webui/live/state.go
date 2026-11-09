@@ -16,19 +16,23 @@ import (
 // Stale is how old a sample may be before it counts as "no data".
 const Stale = 5 * time.Second
 
+// procStale: the full process list comes every 5 s.
+const procStale = 2 * Stale
+
 type connKey struct {
 	pid   int
 	start uint64
 }
 
 type podState struct {
-	at    time.Time
-	c     wire.Container
-	gpus  map[string]wire.GPU
-	rdma  map[string]wire.RDMA
-	procs map[connKey]wire.Proc // latest per-second sample per process
-	full  *wire.FullProcs
-	conns map[connKey]string // live sshd-session → peer
+	at     time.Time // last container sample
+	procAt time.Time // last process data
+	c      wire.Container
+	gpus   map[string]wire.GPU
+	rdma   map[string]wire.RDMA
+	procs  map[connKey]wire.Proc // latest per-second sample per process
+	full   *wire.FullProcs
+	conns  map[connKey]string // live sshd-session → peer
 }
 
 // State holds the latest telemetry per DevPod UID.
@@ -79,9 +83,10 @@ func (s *State) Apply(uid string, recs []wire.Record) {
 				p.procs, sawProc = map[connKey]wire.Proc{}, true
 			}
 			p.procs[connKey{r.P.Pid, r.P.Start}] = *r.P
+			p.procAt = s.now()
 		case wire.KFullProcs:
 			f := *r.Full
-			p.full = &f
+			p.full, p.procAt = &f, s.now()
 		case wire.KSSHConn:
 			k := connKey{r.SC.Pid, r.SC.Start}
 			if r.SC.Closed {
@@ -89,6 +94,17 @@ func (s *State) Apply(uid string, recs []wire.Record) {
 			} else {
 				p.conns[k] = r.SC.Peer
 			}
+		}
+	}
+}
+
+// Retain drops every DevPod for which keep is false (deleted ones).
+func (s *State) Retain(keep func(uid string) bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for uid := range s.pods {
+		if !keep(uid) {
+			delete(s.pods, uid)
 		}
 	}
 }
@@ -149,13 +165,47 @@ func (s *State) devpodLive(ref DevPodRef, now time.Time) DevPodLive {
 	return d
 }
 
+// DevPodSample is a DevPod's full latest sample (detail page "metrics"
+// event): the container sample plus every GPU and RDMA port.
+type DevPodSample struct {
+	TS        time.Time      `json:"ts"`
+	Container wire.Container `json:"container"`
+	GPUs      []wire.GPU     `json:"gpus"`
+	RDMA      []wire.RDMA    `json:"rdma"`
+}
+
+// Sample returns the latest sample unless it is stale.
+func (s *State) Sample(uid string) (DevPodSample, bool) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	p := s.pods[uid]
+	if p == nil || p.at.IsZero() || s.now().Sub(p.at) > Stale {
+		return DevPodSample{}, false
+	}
+	out := DevPodSample{TS: p.at.UTC(), Container: p.c, GPUs: []wire.GPU{}, RDMA: []wire.RDMA{}}
+	for _, g := range p.gpus {
+		out.GPUs = append(out.GPUs, g)
+	}
+	sort.Slice(out.GPUs, func(i, j int) bool { return out.GPUs[i].Index < out.GPUs[j].Index })
+	for _, r := range p.rdma {
+		out.RDMA = append(out.RDMA, r)
+	}
+	sort.Slice(out.RDMA, func(i, j int) bool {
+		if out.RDMA[i].IBDev != out.RDMA[j].IBDev {
+			return out.RDMA[i].IBDev < out.RDMA[j].IBDev
+		}
+		return out.RDMA[i].Port < out.RDMA[j].Port
+	})
+	return out, true
+}
+
 // Processes lists a DevPod's processes: the 5-second full list merged
 // with the latest per-second metrics; all=false keeps the top 10 by CPU.
 func (s *State) Processes(uid string, all bool) []ProcLive {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	p := s.pods[uid]
-	if p == nil {
+	if p == nil || p.procAt.IsZero() || s.now().Sub(p.procAt) > procStale {
 		return []ProcLive{}
 	}
 	byKey := map[connKey]*ProcLive{}

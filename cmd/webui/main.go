@@ -226,11 +226,9 @@ func main() {
 	srv.GatewayConfigName = *gcName
 
 	if tf.enabled() {
-		el, err := tf.newElector(restCfg)
-		if err != nil {
+		if err := tf.startTelemetry(ctx, restCfg, mgr, srv); err != nil {
 			fatal(err)
 		}
-		go el.Run(ctx, func(lctx context.Context) { tf.publishSelf(lctx, mgr.GetClient()) }, func() {})
 	}
 	go func() {
 		if err := mgr.Start(ctx); err != nil {
