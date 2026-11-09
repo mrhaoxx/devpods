@@ -100,14 +100,16 @@ true
      counts bytes while kubelet counts disk blocks, and exceeding the
      emptyDir sizeLimit evicts the pod (killing every session). */}}
 {{- define "devpod.audit.spoolMaxBytes" -}}
-{{- $q := toString .Values.audit.spool.sizeLimit -}}
-{{- $mi := 0 -}}
-{{- if hasSuffix "Gi" $q -}}
-{{- $mi = mul (trimSuffix "Gi" $q | atoi) 1024 -}}
-{{- else if hasSuffix "Mi" $q -}}
-{{- $mi = trimSuffix "Mi" $q | atoi -}}
-{{- else -}}
-{{- fail (printf "audit.spool.sizeLimit must be given in Mi or Gi, got %q" $q) -}}
+{{- div (mul (include "devpod.mebibytes" (toString .Values.audit.spool.sizeLimit)) 85) 100 }}Mi
 {{- end -}}
-{{- div (mul $mi 85) 100 }}Mi
+
+{{/* devpod.mebibytes: a Mi or Gi quantity string as whole MiB. */}}
+{{- define "devpod.mebibytes" -}}
+{{- if hasSuffix "Gi" . -}}
+{{- mul (trimSuffix "Gi" . | atoi) 1024 -}}
+{{- else if hasSuffix "Mi" . -}}
+{{- trimSuffix "Mi" . | atoi -}}
+{{- else -}}
+{{- fail (printf "quantity must be given in Mi or Gi, got %q" .) -}}
+{{- end -}}
 {{- end -}}
