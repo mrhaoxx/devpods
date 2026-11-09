@@ -222,3 +222,66 @@ func TestBackfillQueries(t *testing.T) {
 		t.Fatalf("info seen %v %v", seen, err)
 	}
 }
+
+// throttled_usec is a cumulative counter: the series is its rate, at the
+// 1 s resolution and from the 1-minute rollups (review #5).
+func TestMetricsRange_ThrottledIsARate(t *testing.T) {
+	c := freshDB(t)
+	ctx := context.Background()
+	end := time.Now().UTC().Truncate(time.Minute)
+	start := end.Add(-3 * time.Minute)
+	var b TelemetryBatch
+	for i := 0; i < 180; i++ { // +1000 µs throttled every second
+		b.Containers = append(b.Containers, ContainerMetricRow{TS: start.Add(time.Duration(i) * time.Second), DevPodUID: "u1", BootID: "b",
+			CPU: 1, ThrottledUsec: uint64(5_000_000 + 1000*i)})
+	}
+	if err := c.InsertTelemetry(ctx, b, "thr"); err != nil {
+		t.Fatal(err)
+	}
+	check := func(name string, s *MetricSeries) {
+		t.Helper()
+		got, first := 0, true
+		for i, v := range s.Series["cpu_throttled"] {
+			if v == nil || *v == 0 {
+				continue
+			}
+			// where the data itself begins the first sample has no
+			// predecessor: that bucket holds one delta less
+			if first && s.TS[i] <= start.Unix() {
+				first = false
+				continue
+			}
+			first = false
+			if *v < 900 || *v > 1100 {
+				t.Fatalf("%s: throttled %.0f µs/s, want ~1000: %v", name, *v, s.Series["cpu_throttled"])
+			}
+			got++
+		}
+		if got == 0 {
+			t.Fatalf("%s: no throttling at all", name)
+		}
+	}
+	s, err := c.MetricsRange(ctx, "u1", end.Add(-10*time.Minute), end, time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	check("1 s", s)
+	s, err = c.MetricsRange(ctx, "u1", end.Add(-10*time.Minute), end, 5*time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	check("5 s", s)
+	// a window starting inside the data: its first bucket is complete
+	s, err = c.MetricsRange(ctx, "u1", start.Add(30*time.Second), end, 5*time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if v := s.Series["cpu_throttled"][0]; v == nil || *v < 900 {
+		t.Fatalf("first bucket of a window inside the data: %v", s.Series["cpu_throttled"][:3])
+	}
+	s, err = c.MetricsRange(ctx, "u1", end.Add(-3*time.Hour), end, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	check("1 m rollup", s)
+}
