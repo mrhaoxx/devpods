@@ -1,0 +1,79 @@
+{{- /* The web UI behind a Gateway API HTTPRoute. hostnames[0] is canonical
+       (webui.baseURL must be https://<hostnames[0]>: cookies are Secure and
+       the CSRF check accepts that one origin); plain HTTP and the other
+       hostnames are 301-redirected to it. */ -}}
+{{- if and .Values.webui.enabled (dig "httpRoute" "enabled" false .Values.webui) }}
+{{- $r := .Values.webui.httpRoute }}
+{{- $host := required "webui.httpRoute.hostnames needs at least one hostname" (first $r.hostnames) }}
+{{- $url := required "webui.baseURL is required with webui.httpRoute (https://<hostnames[0]>)" .Values.webui.baseURL }}
+{{- if ne $url (printf "https://%s" $host) }}
+{{- fail (printf "webui.baseURL (%s) must be https://%s, the canonical httpRoute hostname" $url $host) }}
+{{- end }}
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: devpod-webui
+  namespace: {{ .Values.namespaces.system }}
+  labels: {{ include "devpod.labels" . | nindent 4 }}
+spec:
+  parentRefs:
+  - name: {{ required "webui.httpRoute.gateway.name is required" $r.gateway.name }}
+    namespace: {{ $r.gateway.namespace | default .Values.namespaces.system }}
+    {{- with $r.httpsListener }}
+    sectionName: {{ . }}
+    {{- end }}
+  hostnames:
+  - {{ $host }}
+  rules:
+  - backendRefs:
+    - name: devpod-webui
+      port: {{ .Values.webui.service.port }}
+{{- if $r.httpListener }}
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: devpod-webui-http-redirect
+  namespace: {{ .Values.namespaces.system }}
+  labels: {{ include "devpod.labels" . | nindent 4 }}
+spec:
+  parentRefs:
+  - name: {{ $r.gateway.name }}
+    namespace: {{ $r.gateway.namespace | default .Values.namespaces.system }}
+    sectionName: {{ $r.httpListener }}
+  hostnames:
+  - {{ $host }}
+  rules:
+  - filters:
+    - type: RequestRedirect
+      requestRedirect:
+        scheme: https
+        hostname: {{ $host }}
+        statusCode: 301
+{{- end }}
+{{- with rest $r.hostnames }}
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: devpod-webui-alias-redirect
+  namespace: {{ $.Values.namespaces.system }}
+  labels: {{ include "devpod.labels" $ | nindent 4 }}
+spec:
+  # No sectionName: every listener (HTTP and HTTPS) matching an alias.
+  parentRefs:
+  - name: {{ $r.gateway.name }}
+    namespace: {{ $r.gateway.namespace | default $.Values.namespaces.system }}
+  hostnames:
+  {{- range . }}
+  - {{ . }}
+  {{- end }}
+  rules:
+  - filters:
+    - type: RequestRedirect
+      requestRedirect:
+        scheme: https
+        hostname: {{ $host }}
+        statusCode: 301
+{{- end }}
+{{- end }}

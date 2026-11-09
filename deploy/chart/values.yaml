@@ -89,6 +89,15 @@ webui:
   service:
     type: ClusterIP
     port: 80
+  # Expose the UI through a Gateway API HTTPRoute (e.g. Envoy Gateway).
+  # hostnames[0] is canonical and baseURL must be https://<hostnames[0]>;
+  # plain HTTP (httpListener) and the other hostnames 301 to it.
+  httpRoute:
+    enabled: false
+    gateway: {name: "", namespace: ""}
+    hostnames: []
+    httpsListener: ""            # Gateway listener (sectionName) for HTTPS
+    httpListener: ""             # Gateway listener for plain HTTP; "" = no redirect route
   # External URL of the UI; the OAuth redirect URL becomes
   # baseURL + /auth/callback. An http:// baseURL disables the Secure
   # cookie attribute (dev/e2e only — use https in production).

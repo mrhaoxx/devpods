@@ -93,6 +93,27 @@ n=$(grep -c "name: harbor-pull" "$OUT/site.yaml" || true)
 lacks defaults "imagePullSecrets"
 lacks defaults "home-host-path"
 
+# (f) webui behind a Gateway API HTTPRoute: hostnames[0] is served over the
+# HTTPS listener; plain HTTP and the other hostnames 301 to it.
+ROUTE=(--set webui.httpRoute.enabled=true --set webui.httpRoute.gateway.name=gw
+  --set webui.httpRoute.gateway.namespace=gw-ns --set webui.httpRoute.httpsListener=https-wild
+  --set webui.httpRoute.httpListener=http
+  --set-json 'webui.httpRoute.hostnames=["devpod.example.org","devpod.alt.example.org"]')
+render route "${WEBUI[@]}" --set webui.baseURL=https://devpod.example.org "${ROUTE[@]}"
+n=$(grep -c "^kind: HTTPRoute" "$OUT/route.yaml" || true)
+[ "$n" -eq 3 ] || { echo "FAIL [route]: $n HTTPRoutes, want 3 (backend, http redirect, alias redirect)"; fail=1; }
+has route "sectionName: https-wild"
+has route "sectionName: http"
+has route "- devpod.alt.example.org"
+has route "hostname: devpod.example.org"
+has route "scheme: https"
+has route "statusCode: 301"
+has route "- --external-url=https://devpod.example.org"
+lacks defaults "kind: HTTPRoute"
+if helm template devpod "$CHART" "${WEBUI[@]}" "${ROUTE[@]}" >/dev/null 2>"$OUT/route-nourl.err"; then
+  echo "FAIL [route]: rendered without webui.baseURL"; fail=1
+fi
+
 # (d) `helm upgrade --reuse-values` from v0.1.x: the old release's values
 # replace the chart defaults, so audit.* and gatewayConfigName are absent.
 OLD="$OUT/chart-v0.1"
