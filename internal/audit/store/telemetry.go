@@ -175,3 +175,17 @@ func (c *CH) InsertTelemetry(ctx context.Context, b TelemetryBatch, token string
 		insertRows(ctx, c, "alerts", token, b.Alerts),
 	)
 }
+
+// CommandAttribution maps a process attribution rule (tree,
+// ssh_connection, sid_tty, inferred, …) to the commands table's
+// exact / inferred / unattributed.
+func CommandAttribution(how string) string {
+	switch how {
+	case "tree", "ssh_connection", "sid_tty":
+		return "exact"
+	case "inferred":
+		return "inferred"
+	default:
+		return "unattributed"
+	}
+}

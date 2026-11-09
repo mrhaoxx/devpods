@@ -351,4 +351,12 @@ func TestReadQueries_UseDateIndex(t *testing.T) {
 	check("HookMissing", err)
 	_, err = c.LastSessionByUser(ctx, time.Now().Add(-24*time.Hour))
 	check("LastSessionByUser", err)
+	_, err = c.PendingProcesses(ctx, time.Now().Add(-time.Hour))
+	check("PendingProcesses", err)
+	_, err = c.PendingCommands(ctx, time.Now().Add(-time.Hour), time.Now().Add(-7*24*time.Hour))
+	check("PendingCommands", err)
+	_, err = c.BackendSessions(ctx, time.Now().Add(-24*time.Hour))
+	check("BackendSessions", err)
+	_, err = c.InfoSeen(ctx, time.Now().Add(-time.Hour))
+	check("InfoSeen", err)
 }

@@ -98,6 +98,16 @@ func (s *State) Apply(uid string, recs []wire.Record) {
 	}
 }
 
+// LastSample returns when the DevPod's last container sample arrived.
+func (s *State) LastSample(uid string) (time.Time, bool) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if p := s.pods[uid]; p != nil && !p.at.IsZero() {
+		return p.at, true
+	}
+	return time.Time{}, false
+}
+
 // Retain drops every DevPod for which keep is false (deleted ones).
 func (s *State) Retain(keep func(uid string) bool) {
 	s.mu.Lock()
