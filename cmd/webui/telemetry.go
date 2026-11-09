@@ -220,11 +220,11 @@ func (tf *telemetryFlags) startTelemetry(ctx context.Context, cfg *rest.Config, 
 				if err := inputs.Refresh(lctx); err != nil && lctx.Err() == nil {
 					slog.Warn("telemetry: refresh presence/alerts", "err", err)
 				}
-				keep := map[string]bool{}
-				for _, d := range inputs.Build(lctx).DevPods {
-					keep[d.UID] = true
+				// prune deleted DevPods — not when the list failed (a failed
+				// list is not "every DevPod is gone")
+				if keep, err := inputs.UIDs(lctx); err == nil {
+					state.Retain(func(uid string) bool { return keep[uid] })
 				}
-				state.Retain(func(uid string) bool { return keep[uid] })
 				select {
 				case <-lctx.Done():
 					return

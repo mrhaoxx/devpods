@@ -149,3 +149,26 @@ func TestState_StaleProcessesAndRetain(t *testing.T) {
 		t.Fatal("Retain kept a deleted DevPod")
 	}
 }
+
+// A container restart (new boot) drops the old boot's sessions: their
+// close events were never sent (review #10).
+func TestState_NewBootDropsSessions(t *testing.T) {
+	now := time.Unix(1000, 0)
+	s := NewState(clock(&now))
+	s.ResolveUser = func(uid, peer string) string { return "alice" }
+	s.SetBoot("u", "b1")
+	s.Apply("u", []wire.Record{container(1, 1), {K: wire.KSSHConn, SC: &wire.SSHConn{Pid: 50, Start: 1, Peer: "10.0.0.9:1"}}})
+	in := Inputs{DevPods: []DevPodRef{{UID: "u", Name: "d", Owner: "alice", Phase: "Running"}}}
+	if got := s.Snapshot(in).DevPods["u"].Sessions; len(got) != 1 {
+		t.Fatalf("before restart: %+v", got)
+	}
+	s.SetBoot("u", "b1") // same boot: kept
+	if got := s.Snapshot(in).DevPods["u"].Sessions; len(got) != 1 {
+		t.Fatal("same boot dropped the session")
+	}
+	s.SetBoot("u", "b2")
+	s.Apply("u", []wire.Record{container(1, 1)})
+	if got := s.Snapshot(in).DevPods["u"].Sessions; len(got) != 0 {
+		t.Fatalf("ghost session after restart: %+v", got)
+	}
+}
