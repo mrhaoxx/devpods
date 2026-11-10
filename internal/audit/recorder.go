@@ -113,7 +113,7 @@ func (r *Recorder) tick(now time.Time) {
 	for _, s := range r.snapshot() {
 		s.tick(now)
 		if full && s.pol.FailClosed {
-			s.kill()
+			s.kill("audit_fail_closed")
 		}
 	}
 }

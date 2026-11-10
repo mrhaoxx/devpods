@@ -155,6 +155,35 @@ describe("audit pages", () => {
     expect((await screen.findByTestId("player")).textContent).toBe("s1/0|ended|");
   });
 
+  it("an admin can cut an open session after confirming", async () => {
+    const d = session([ch({ pty: true })]);
+    d.session.closed_at = null;
+    const calls = stubFetch({ "/api/audit/sessions/s1": d, "POST /api/audit/sessions/s1/disconnect": new Response(null, { status: 204 }) });
+    renderWithProviders(
+      <Routes>
+        <Route path="/sessions/:id" element={<SessionPage />} />
+      </Routes>,
+      { route: "/sessions/s1", me: stubMe({ admin: true }) },
+    );
+    fireEvent.click(await screen.findByRole("button", { name: "断开会话" }));
+    expect(calls.some((c) => c.method === "POST")).toBe(false); // nothing happens before confirming
+    fireEvent.click(within(await screen.findByRole("dialog")).getByRole("button", { name: "断开" }));
+    await vi.waitFor(() => expect(calls.some((c) => c.method === "POST" && c.url.pathname === "/api/audit/sessions/s1/disconnect")).toBe(true));
+  });
+
+  it("断开会话 is hidden from non-admins and on ended sessions", async () => {
+    const open = session([ch({ pty: true })]);
+    open.session.closed_at = null;
+    renderSession(open, false);
+    await screen.findByTestId("player");
+    expect(screen.queryByRole("button", { name: "断开会话" })).toBeNull();
+  });
+  it("断开会话 is hidden once the session has ended", async () => {
+    renderSession(session([ch({ pty: true })]), true);
+    await screen.findByTestId("player");
+    expect(screen.queryByRole("button", { name: "断开会话" })).toBeNull();
+  });
+
   it("open sessions in the list link 直播", async () => {
     const row = { ...session([]).session, commands: 0, files: 0, policy_hits: 0, alerts: 0 };
     stubFetch({ "/api/audit/sessions": { items: [{ ...row, session_id: "on", closed_at: null }, { ...row, session_id: "off" }], next: "" } });

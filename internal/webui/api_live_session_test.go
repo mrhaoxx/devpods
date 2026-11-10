@@ -16,6 +16,9 @@ import (
 	"time"
 
 	"golang.org/x/crypto/ssh"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+
+	devpodv1alpha1 "github.com/mrhaoxx/devpod/api/v1alpha1"
 
 	"github.com/mrhaoxx/devpod/internal/audit/rawlog"
 	"github.com/mrhaoxx/devpod/internal/audit/store"
@@ -203,6 +206,77 @@ func TestLiveSessionAPI(t *testing.T) {
 		streamLines(t, bufio.NewScanner(first.Body), 2) // the first viewer is streaming
 		if resp := open(t, s, forge(sm, "gl-bob", false)); resp.StatusCode != http.StatusTooManyRequests {
 			t.Fatalf("status %d", resp.StatusCode)
+		}
+	})
+}
+
+func TestAuditDisconnect(t *testing.T) {
+	setupSuite(t)
+	_ = k8sClient.Create(context.Background(), &devpodv1alpha1.User{ObjectMeta: metav1.ObjectMeta{Name: "gl-root"}, Spec: devpodv1alpha1.UserSpec{Admin: true}})
+	t0 := time.Unix(1794210460, 0).UTC()
+	rig := func(t *testing.T, gwStatus int, closed bool) (*webui.Server, *webui.SessionManager, *fakeAuditStore, *[]string) {
+		s, sm := newServer(t)
+		row := store.SessionRow{SessionID: "S1", User: "gl-bob", OpenedAt: t0, GatewayPod: "gw-1"}
+		if closed {
+			end := t0.Add(time.Hour)
+			row.ClosedAt = &end
+		}
+		st := &fakeAuditStore{sessions: map[string]*store.SessionDetail{"S1": {Session: row}}, presence: map[string][]string{}}
+		s.Audit = &webui.AuditDeps{Store: st, Objects: fakeObjects{}}
+		var seen []string
+		gw := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			seen = append(seen, r.Method+" "+r.URL.Path+"?"+r.URL.RawQuery+" "+r.Header.Get("Authorization"))
+			w.WriteHeader(gwStatus)
+		}))
+		t.Cleanup(gw.Close)
+		s.LiveSessions = webui.NewLiveSessions(func(context.Context, string) (string, error) {
+			return strings.TrimPrefix(gw.URL, "http://"), nil
+		}, "k3y", 1)
+		return s, sm, st, &seen
+	}
+	post := func(t *testing.T, s *webui.Server, c *http.Cookie) int {
+		t.Helper()
+		req := httptest.NewRequest("POST", "/api/audit/sessions/S1/disconnect", nil)
+		req.AddCookie(c)
+		w := httptest.NewRecorder()
+		s.Routes().ServeHTTP(w, req)
+		return w.Code
+	}
+	t.Run("admin cuts an open session", func(t *testing.T) {
+		s, sm, st, seen := rig(t, http.StatusNoContent, false)
+		if c := post(t, s, forge(sm, "gl-root", true)); c != http.StatusNoContent {
+			t.Fatalf("status %d", c)
+		}
+		if len(*seen) != 1 || (*seen)[0] != "POST /internal/kill?session=S1 Bearer k3y" {
+			t.Fatalf("gateway saw %v", *seen)
+		}
+		if acts := st.actions(); len(acts) != 1 || acts[0] != "disconnect" {
+			t.Fatalf("access log %v", acts)
+		}
+	})
+	t.Run("non-admin is refused", func(t *testing.T) {
+		s, sm, _, seen := rig(t, http.StatusNoContent, false)
+		if c := post(t, s, forge(sm, "gl-bob", false)); c != http.StatusForbidden || len(*seen) != 0 {
+			t.Fatalf("status %d, gateway saw %v", c, *seen)
+		}
+	})
+	t.Run("ended session is 409", func(t *testing.T) {
+		s, sm, _, seen := rig(t, http.StatusNoContent, true)
+		if c := post(t, s, forge(sm, "gl-root", true)); c != http.StatusConflict || len(*seen) != 0 {
+			t.Fatalf("status %d, gateway saw %v", c, *seen)
+		}
+	})
+	t.Run("gone on the gateway is 409", func(t *testing.T) {
+		s, sm, _, _ := rig(t, http.StatusNotFound, false)
+		if c := post(t, s, forge(sm, "gl-root", true)); c != http.StatusConflict {
+			t.Fatalf("status %d", c)
+		}
+	})
+	t.Run("disabled is 404", func(t *testing.T) {
+		s, sm, _, _ := rig(t, http.StatusNoContent, false)
+		s.LiveSessions = nil
+		if c := post(t, s, forge(sm, "gl-root", true)); c != http.StatusNotFound {
+			t.Fatalf("status %d", c)
 		}
 	})
 }

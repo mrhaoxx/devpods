@@ -3,13 +3,15 @@
 // scrubbed back (audit spec §16); only pty / shell channels play.
 import { useCallback, useMemo, useState } from "react";
 import { Link, useParams } from "react-router-dom";
-import { useQuery } from "@tanstack/react-query";
-import { fileContentURL, getAuditSession, rawURL, type ChannelRow, type FileEventRow } from "../../data/api";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { disconnectSession, fileContentURL, getAuditSession, rawURL, type ChannelRow, type FileEventRow } from "../../data/api";
 import { useMe } from "../../data/queries";
 import { castOffset, mergeTimeline, type TimelineItem } from "../../lib/audit";
 import { fmtBytes, fmtDuration } from "../../lib/format";
 import { useNow } from "../../lib/useNow";
 import { Badge } from "../../design/Badge";
+import { Button } from "../../design/Button";
+import { ConfirmDialog } from "../../design/ConfirmDialog";
 import { EmptyState } from "../../design/EmptyState";
 import { Panel } from "../../design/Panel";
 import { SessionPlayer, type Marker } from "./SessionPlayer";
@@ -59,6 +61,12 @@ export function SessionPage() {
     refetchInterval: (query) => (query.state.data && !query.state.data.session.closed_at ? 5000 : false),
   });
   const now = useNow(5000);
+  const qc = useQueryClient();
+  const [cutting, setCutting] = useState(false);
+  const cut = useMutation({
+    mutationFn: () => disconnectSession(id),
+    onSettled: () => void qc.invalidateQueries({ queryKey: ["audit", "session", id] }),
+  });
   const channels: ChannelRow[] = q.data?.channels ?? [];
   const defaultCh = (channels.find(replayable) ?? channels[0])?.channel_id;
   const [picked, setPicked] = useState<number | undefined>();
@@ -136,7 +144,25 @@ export function SessionPage() {
         </span>
         {s.close_reason && <span>结束：{s.close_reason}</span>}
         {s.gaps > 0 && <span className="text-fail">gap {s.gaps}</span>}
+        {me?.admin && !s.closed_at && (
+          <Button variant="danger" size="sm" className="ml-auto" disabled={cut.isPending} onClick={() => setCutting(true)}>
+            断开会话
+          </Button>
+        )}
       </header>
+      {cut.isError && (
+        <p role="alert" className="text-xs text-fail">
+          断开失败：{cut.error instanceof Error ? cut.error.message : String(cut.error)}
+        </p>
+      )}
+      <ConfirmDialog open={cutting} onOpenChange={setCutting} title="断开这个会话？" confirmLabel="断开" danger
+        onConfirm={() => {
+          setCutting(false);
+          cut.mutate();
+        }}
+      >
+        <span className="mono">{s.user}</span> 到 <span className="mono">{s.devpod}</span> 的 SSH 连接会立刻被切断，其中正在运行的前台程序会收到挂断信号。DevPod 本身不受影响，用户可以重新连接。此操作会写入访问记录。
+      </ConfirmDialog>
       <p className="mono text-[11px] text-faint">
         策略：{snapshot.join(", ") || "全部允许"} · 会话 {s.session_id}
       </p>

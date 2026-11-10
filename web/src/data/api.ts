@@ -323,6 +323,8 @@ export const castURL = (id: string, ch: number) => `/api/audit/sessions/${id}/ch
 export const liveURL = (id: string, ch: number) => `/api/audit/sessions/${id}/channels/${ch}/live`;
 export const rawURL = (id: string, ch: number, stream: "in" | "out" | "err") =>
   `/api/audit/sessions/${id}/channels/${ch}/raw?stream=${stream}`;
+/** disconnectSession: an admin cuts an open SSH session (audit spec §17). */
+export const disconnectSession = (id: string) => req<void>("POST", `/api/audit/sessions/${id}/disconnect`);
 export const fileContentURL = (eventId: string) => `/api/audit/files/${eventId}/content`;
 export const getAuditPolicyDefault = () => req<AuditPolicy>("GET", "/api/admin/audit/policy-default");
 
@@ -370,6 +372,8 @@ export const getRecent = (p: { scope?: "mine" | "all"; name?: string }) =>
   req<RecentFrame>("GET", `/api/live/devpods/recent?${p.name ? `name=${encodeURIComponent(p.name)}` : `scope=${p.scope ?? "mine"}`}`);
 export const getInfo = (n: string) => req<ContainerInfo>("GET", `/api/devpods/${n}/info`);
 export const listNodes = () => req<{ items: NodeView[]; live: boolean }>("GET", "/api/admin/nodes");
+/** Each node's CPU / memory use over the sparkline window, from ClickHouse. */
+export const getNodesRecent = () => req<RecentFrame>("GET", "/api/admin/nodes/recent");
 export const getNode = (n: string) => req<NodeDetail>("GET", `/api/admin/nodes/${n}`);
 export const listAdminUsers = () => req<{ items: AdminUserRow[]; defaultQuota: UserQuota }>("GET", "/api/admin/users");
 export const usersBatch = (body: BatchRequest) => req<{ results: BatchResult[] }>("POST", "/api/admin/users:batch", body);

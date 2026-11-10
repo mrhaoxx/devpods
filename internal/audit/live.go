@@ -295,3 +295,17 @@ func (s *Session) endWatchersLocked() {
 	}
 	s.watchers = nil
 }
+
+// Kill tears down the open session id on this gateway: its SSH
+// connection is closed and the session row records reason.
+func (r *Recorder) Kill(id, reason string) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for s := range r.sessions {
+		if s.meta.ID == id {
+			s.kill(reason)
+			return nil
+		}
+	}
+	return ErrNoSession
+}

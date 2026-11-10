@@ -526,6 +526,12 @@ func handle(parent context.Context, id uint64, conn net.Conn, hostSigner ssh.Sig
 	} else {
 		slog.Info("proxy_end", "id", id)
 	}
+	// torn down by the recorder (an admin's 断开会话, fail-closed storage):
+	// that, not the resulting transport error, is why the session ended
+	if auditSess != nil && auditSess.KillReason() != "" {
+		sessionResult = "killed"
+		closeReason = auditSess.KillReason()
+	}
 }
 
 // isCleanDisconnect returns true when err looks like a normal SSH

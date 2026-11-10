@@ -152,3 +152,31 @@ func LiveHandler(rec *Recorder, key string, maxViewers int) http.Handler {
 		}
 	})
 }
+
+// KillPath is the gateway's internal endpoint an admin's 断开会话 lands
+// on (audit spec §17).
+const KillPath = "/internal/kill"
+
+// KillHandler serves POST /internal/kill?session= to webui replicas
+// holding the shared key: 204 once the session is being torn down, 404
+// when it is not open on this gateway.
+func KillHandler(rec *Recorder, key string) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		got := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
+		if key == "" || subtle.ConstantTimeCompare([]byte(got), []byte(key)) != 1 {
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			return
+		}
+		if r.Method != http.MethodPost {
+			http.Error(w, "POST only", http.StatusMethodNotAllowed)
+			return
+		}
+		id := r.URL.Query().Get("session")
+		if err := rec.Kill(id, "admin_kill"); err != nil {
+			http.Error(w, "no such open session", http.StatusNotFound)
+			return
+		}
+		slog.Info("audit_session_killed", "session", id)
+		w.WriteHeader(http.StatusNoContent)
+	})
+}

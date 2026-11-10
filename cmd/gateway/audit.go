@@ -58,6 +58,7 @@ func startLive(ctx context.Context, rec *audit.Recorder, addr, keyFile string) e
 	}
 	mux := http.NewServeMux()
 	mux.Handle(audit.LivePath, audit.LiveHandler(rec, key, maxLiveViewers))
+	mux.Handle(audit.KillPath, audit.KillHandler(rec, key))
 	srv := &http.Server{Addr: addr, Handler: mux, ReadHeaderTimeout: 10 * time.Second}
 	go func() {
 		slog.Info("audit_live_listening", "addr", addr)

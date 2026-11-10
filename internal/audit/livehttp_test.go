@@ -100,3 +100,43 @@ func TestLiveHandler(t *testing.T) {
 		t.Fatalf("close %+v", l)
 	}
 }
+
+func TestKillHandler(t *testing.T) {
+	g := newRig(t, 1<<20)
+	s := g.start(policy.Effective{})
+	h := KillHandler(g.r, "k3y")
+	do := func(method, id, key string) int {
+		req := httptest.NewRequest(method, KillPath+"?session="+id, nil)
+		if key != "" {
+			req.Header.Set("Authorization", "Bearer "+key)
+		}
+		w := httptest.NewRecorder()
+		h.ServeHTTP(w, req)
+		return w.Code
+	}
+	if c := do(http.MethodPost, s.meta.ID, ""); c != http.StatusUnauthorized {
+		t.Fatalf("no key: %d", c)
+	}
+	if c := do(http.MethodGet, s.meta.ID, "k3y"); c != http.StatusMethodNotAllowed {
+		t.Fatalf("GET: %d", c)
+	}
+	if c := do(http.MethodPost, "nope", "k3y"); c != http.StatusNotFound {
+		t.Fatalf("unknown session: %d", c)
+	}
+	select {
+	case <-s.Done():
+		t.Fatal("killed too early")
+	default:
+	}
+	if c := do(http.MethodPost, s.meta.ID, "k3y"); c != http.StatusNoContent {
+		t.Fatalf("kill: %d", c)
+	}
+	select {
+	case <-s.Done():
+	default:
+		t.Fatal("session not torn down")
+	}
+	if s.KillReason() != "admin_kill" {
+		t.Fatalf("reason %q", s.KillReason())
+	}
+}

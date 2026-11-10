@@ -27,11 +27,12 @@ var (
 
 // Session records one SSH connection. It implements SessionHooks.
 type Session struct {
-	r        *Recorder
-	meta     SessionMeta
-	pol      policy.Effective
-	done     chan struct{}
-	killOnce sync.Once
+	r          *Recorder
+	meta       SessionMeta
+	pol        policy.Effective
+	done       chan struct{}
+	killOnce   sync.Once
+	killReason atomic.Value // string
 
 	nextCh atomic.Uint32
 	gaps   atomic.Uint32
@@ -108,7 +109,20 @@ func (s *Session) SetBackendAddr(addr string) {
 // Done is closed when a fail-closed session must be torn down.
 func (s *Session) Done() <-chan struct{} { return s.done }
 
-func (s *Session) kill() { s.killOnce.Do(func() { close(s.done) }) }
+// kill tears the session down (Done fires); the first reason sticks.
+func (s *Session) kill(reason string) {
+	s.killOnce.Do(func() {
+		s.killReason.Store(reason)
+		close(s.done)
+	})
+}
+
+// KillReason is why the session was torn down by the recorder
+// ("admin_kill", "audit_fail_closed"); "" when it was not.
+func (s *Session) KillReason() string {
+	v, _ := s.killReason.Load().(string)
+	return v
+}
 
 // --- raw stream --------------------------------------------------------------
 
