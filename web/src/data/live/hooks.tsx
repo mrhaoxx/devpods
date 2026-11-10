@@ -10,6 +10,13 @@ export function LiveHubProvider({ hub, enabled, children }: { hub: LiveHub; enab
 
 export const useLiveEnabled = () => useContext(HubContext).enabled;
 
+/** LiveEnabled re-provides the surrounding hub with live data switched
+ *  on or off (the shell turns it on when the deployment has telemetry). */
+export function LiveEnabled({ enabled, children }: { enabled: boolean; children: ReactNode }) {
+  const { hub } = useContext(HubContext);
+  return <HubContext.Provider value={{ hub, enabled }}>{children}</HubContext.Provider>;
+}
+
 const noopSub = () => () => {};
 
 /** useLiveRow keeps spec's stream open while mounted and re-renders only

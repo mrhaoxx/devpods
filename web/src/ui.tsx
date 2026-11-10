@@ -290,37 +290,10 @@ function MenuLink({ to, label, onNav }: { to: string; label: string; onNav: () =
   );
 }
 
+// Shell: the console shell (app/Shell.tsx) now provides navigation;
+// phase-1 pages that are still routed only get their content width.
 export function Shell({ children, wide }: { children: ReactNode; wide?: boolean }) {
-  const meQ = useQuery({ queryKey: ["me"], queryFn: fetchMe });
-  const loc = useLocation();
-  const onNew = loc.pathname === "/devpods/new";
-  return (
-    <div className="min-h-screen">
-      <header className="sticky top-0 z-10 border-b border-line bg-paper/85 backdrop-blur">
-        <div className={cx("mx-auto flex h-14 items-center justify-between gap-3 px-4 sm:px-6", wide ? "max-w-7xl" : "max-w-3xl")}>
-          <Link to="/" className="flex items-center gap-2">
-            <span className="text-accent" aria-hidden>◈</span>
-            <span className="mono text-sm font-semibold tracking-tight text-ink">devpod</span>
-          </Link>
-          <div className="flex items-center gap-2">
-            {meQ.data?.features?.audit && (
-              <Link to="/audit/sessions" className="mono rounded-lg px-2 py-1.5 text-sm text-muted hover:text-ink">
-                Audit
-              </Link>
-            )}
-            {!onNew && (
-              <Link to="/devpods/new" className="inline-flex items-center gap-1 rounded-lg bg-accent px-3 py-1.5 text-sm font-medium text-white transition-colors hover:bg-accent-hi">
-                <span className="hidden sm:inline">New</span>
-                <span aria-hidden>+</span>
-              </Link>
-            )}
-            <IdentityMenu me={meQ.data} />
-          </div>
-        </div>
-      </header>
-      <main className={cx("mx-auto w-full px-4 pb-16 pt-6 sm:px-6 sm:pt-10", wide ? "max-w-7xl" : "max-w-3xl")}>{children}</main>
-    </div>
-  );
+  return <div className={cx("w-full px-4 pb-16 pt-4 sm:px-6", wide ? "" : "max-w-3xl")}>{children}</div>;
 }
 
 /* Bare page for pre-auth (login). */

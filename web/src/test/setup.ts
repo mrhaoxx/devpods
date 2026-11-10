@@ -19,6 +19,19 @@ if (typeof window !== "undefined") {
         dispatchEvent: () => false,
       }) as MediaQueryList;
   }
+  if (!("EventSource" in window)) {
+    // streams stay silent in component tests unless a test drives them
+    class ES {
+      onopen = null;
+      onmessage = null;
+      onerror = null;
+      constructor(public url: string) {}
+      addEventListener() {}
+      close() {}
+    }
+    (window as unknown as { EventSource: unknown }).EventSource = ES;
+    (globalThis as unknown as { EventSource: unknown }).EventSource = ES;
+  }
   if (!("ResizeObserver" in window)) {
     class RO {
       observe() {}
