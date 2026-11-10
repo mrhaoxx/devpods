@@ -68,3 +68,4 @@ func (s *Server) HandleDevPodInfoForTest() http.HandlerFunc      { return s.hand
 func (s *Server) HandleAdminNodesForTest() http.HandlerFunc      { return s.handleAdminNodes }
 func (s *Server) HandleAdminNodeForTest() http.HandlerFunc       { return s.handleAdminNode }
 func (s *Server) HandleDevPodProcessesForTest() http.HandlerFunc { return s.handleDevPodProcesses }
+func (s *Server) HandleUsersBatchForTest() http.HandlerFunc      { return s.handleUsersBatch }

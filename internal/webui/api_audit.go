@@ -5,6 +5,7 @@
 package webui
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -17,6 +18,7 @@ import (
 	"strings"
 	"time"
 
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
@@ -510,16 +512,22 @@ func (s *Server) handlePutAuditPolicy(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	name := r.PathValue("name")
-	var u devpodv1alpha1.User
-	if err := s.Client.Get(r.Context(), types.NamespacedName{Name: name}, &u); err != nil {
-		s.writeErr(w, http.StatusNotFound, "NOT_FOUND", "user not found (LDAP-only users follow the cluster default)", nil)
-		return
-	}
-	u.Spec.AuditPolicy = pol
-	if err := s.Client.Update(r.Context(), &u); err != nil {
+	if err := s.setAuditPolicy(r.Context(), name, pol); err != nil {
+		if apierrors.IsNotFound(err) {
+			s.writeErr(w, http.StatusNotFound, "NOT_FOUND", "user not found (LDAP-only users follow the cluster default)", nil)
+			return
+		}
 		s.writeErr(w, http.StatusBadRequest, "BAD_REQUEST", "update rejected", err.Error())
 		return
 	}
 	_ = s.insertAccess(r, sess.User, "edit_policy", "", "user/"+name) // the edit already happened
-	s.writeJSON(w, http.StatusOK, u.Spec.AuditPolicy)
+	s.writeJSON(w, http.StatusOK, pol)
+}
+
+// setAuditPolicy sets (nil: clears) a user's policy override.
+func (s *Server) setAuditPolicy(ctx context.Context, name string, pol *devpodv1alpha1.AuditPolicy) error {
+	return s.updateUser(ctx, name, func(u *devpodv1alpha1.User) error {
+		u.Spec.AuditPolicy = pol
+		return nil
+	})
 }

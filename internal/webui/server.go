@@ -55,6 +55,7 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("POST /api/admin/users", s.handleCreateUser)
 	mux.HandleFunc("PATCH /api/admin/users/{name}", s.handlePatchUser)
 	mux.HandleFunc("DELETE /api/admin/users/{name}", s.handleDeleteUser)
+	mux.HandleFunc("POST /api/admin/users:batch", s.handleUsersBatch)
 	mux.HandleFunc("GET /api/admin/devpods", s.handleAdminListDevPods)
 	mux.HandleFunc("GET /api/kore/topology", s.handleKoreTopology)
 	mux.HandleFunc("GET /api/templates", s.handleListTemplates)

@@ -58,6 +58,22 @@ type adminUser struct {
 	LiveUsage *liveUsage `json:"liveUsage,omitempty"`
 	// LastSession is the user's latest SSH session (absent without ClickHouse).
 	LastSession *time.Time `json:"lastSession,omitempty"`
+	// Source: oidc (GitLab login), password (built-in), ldap (neither:
+	// keys and identity come from LDAP or kubectl).
+	Source       string `json:"source"`
+	CustomPolicy bool   `json:"customPolicy"`
+	Pubkeys      int    `json:"pubkeys"`
+}
+
+func userSource(u *devpodv1alpha1.User) string {
+	switch {
+	case u.Spec.OIDCSubject != "":
+		return "oidc"
+	case u.Spec.PasswordHash != "":
+		return "password"
+	default:
+		return "ldap"
+	}
 }
 
 type liveUsage struct {
@@ -128,11 +144,14 @@ func (s *Server) handleListUsers(w http.ResponseWriter, r *http.Request) {
 	items := make([]adminUser, 0, len(users.Items))
 	for _, u := range users.Items {
 		au := adminUser{
-			Name:        u.Name,
-			DisplayName: u.Spec.DisplayName,
-			Admin:       u.Spec.Admin,
-			HasPassword: u.Spec.PasswordHash != "",
-			Quota:       u.Spec.Quota,
+			Name:         u.Name,
+			DisplayName:  u.Spec.DisplayName,
+			Admin:        s.adminFor(u.Name, &u),
+			HasPassword:  u.Spec.PasswordHash != "",
+			Quota:        u.Spec.Quota,
+			Source:       userSource(&u),
+			CustomPolicy: u.Spec.AuditPolicy != nil,
+			Pubkeys:      len(u.Spec.Pubkeys),
 		}
 		if lu, ok := live[u.Name]; ok {
 			au.LiveUsage = &lu
@@ -197,7 +216,7 @@ func (s *Server) handleCreateUser(w http.ResponseWriter, r *http.Request) {
 		Spec: devpodv1alpha1.UserSpec{
 			DisplayName:  req.DisplayName,
 			PasswordHash: hash,
-			// Admin is deliberately NOT set — it is kubectl-managed only.
+			// Admin is never set at creation; PATCH {"admin":true} grants it.
 		},
 	}
 	if err := s.Client.Create(r.Context(), u); err != nil {
@@ -212,7 +231,8 @@ func (s *Server) handleCreateUser(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handlePatchUser(w http.ResponseWriter, r *http.Request) {
-	if _, ok := s.requireAdmin(w, r); !ok {
+	sess, ok := s.requireAdmin(w, r)
+	if !ok {
 		return
 	}
 	name := r.PathValue("name")
@@ -220,6 +240,7 @@ func (s *Server) handlePatchUser(w http.ResponseWriter, r *http.Request) {
 		Password    *string     `json:"password,omitempty"`
 		DisplayName *string     `json:"displayName,omitempty"`
 		Quota       *quotaPatch `json:"quota,omitempty"`
+		Admin       *bool       `json:"admin,omitempty"`
 	}
 	dec := json.NewDecoder(r.Body)
 	dec.DisallowUnknownFields()
@@ -250,6 +271,13 @@ func (s *Server) handlePatchUser(w http.ResponseWriter, r *http.Request) {
 	}
 	if req.DisplayName != nil {
 		u.Spec.DisplayName = *req.DisplayName
+	}
+	if req.Admin != nil {
+		if !*req.Admin && name == sess.User {
+			s.writeErr(w, http.StatusBadRequest, "BAD_REQUEST", "you cannot remove your own admin flag", nil)
+			return
+		}
+		u.Spec.Admin = *req.Admin
 	}
 	if req.Quota != nil {
 		q, err := req.Quota.build()
