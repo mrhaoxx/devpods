@@ -1,0 +1,132 @@
+// 终端 (UI spec §5.12): a full-page terminal in its own tab. The webui
+// bridges it to the SSH gateway as the logged-in user, so it is recorded
+// like any SSH session. Binary frames carry terminal bytes; a text frame
+// is a control message ({"type":"resize"}).
+import { useCallback, useEffect, useRef, useState } from "react";
+import { Link, Navigate, useParams } from "react-router-dom";
+import { Terminal } from "@xterm/xterm";
+import { FitAddon } from "@xterm/addon-fit";
+import "@xterm/xterm/css/xterm.css";
+import { ApiFailure, probeShell, shellSocketURL } from "../../data/api";
+import { useMe } from "../../data/queries";
+import { Button } from "../../design/Button";
+
+type State = { kind: "connecting" } | { kind: "open" } | { kind: "closed"; reason: string };
+
+const cssVar = (name: string, fallback: string) => getComputedStyle(document.documentElement).getPropertyValue(name).trim() || fallback;
+const termTheme = () => ({
+  background: cssVar("--color-surface", "#ffffff"),
+  foreground: cssVar("--color-ink", "#1f2328"),
+  cursor: cssVar("--color-ink", "#1f2328"),
+  selectionBackground: cssVar("--color-accent-soft", "#ddf4ff"),
+});
+
+const REASONS: [RegExp, string][] = [
+  [/^shell exited with status (\d+)$/, "shell 已退出（状态码 $1）"],
+  [/^shell exited$/, "shell 已退出"],
+];
+function reasonText(reason: string): string {
+  for (const [re, zh] of REASONS) if (re.test(reason)) return reason.replace(re, zh);
+  return reason || "连接已断开";
+}
+
+export function ShellPage() {
+  const { name = "" } = useParams();
+  const me = useMe();
+  const host = useRef<HTMLDivElement>(null);
+  const term = useRef<Terminal | null>(null);
+  const sock = useRef<WebSocket | null>(null);
+  const [state, setState] = useState<State>({ kind: "connecting" });
+  const [attempt, setAttempt] = useState(0);
+
+  useEffect(() => {
+    document.title = `${name} · 终端`;
+  }, [name]);
+
+  useEffect(() => {
+    if (!host.current) return;
+    const t = new Terminal({ cursorBlink: true, fontSize: 13, fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Consolas, monospace', theme: termTheme(), scrollback: 5000 });
+    const fit = new FitAddon();
+    t.loadAddon(fit);
+    t.open(host.current);
+    fit.fit();
+    term.current = t;
+    const enc = new TextEncoder();
+    const data = t.onData((d) => {
+      if (sock.current?.readyState === WebSocket.OPEN) sock.current.send(enc.encode(d));
+    });
+    const resize = t.onResize(({ cols, rows }) => {
+      if (sock.current?.readyState === WebSocket.OPEN) sock.current.send(JSON.stringify({ type: "resize", cols, rows }));
+    });
+    const ro = new ResizeObserver(() => fit.fit());
+    ro.observe(host.current);
+    const mo = new MutationObserver(() => (t.options.theme = termTheme()));
+    mo.observe(document.documentElement, { attributes: true, attributeFilter: ["data-theme"] });
+    return () => {
+      mo.disconnect();
+      ro.disconnect();
+      data.dispose();
+      resize.dispose();
+      t.dispose();
+      term.current = null;
+    };
+  }, []);
+
+  useEffect(() => {
+    const t = term.current;
+    if (!t || !name) return;
+    setState({ kind: "connecting" });
+    const ws = new WebSocket(shellSocketURL(name, t.cols, t.rows));
+    ws.binaryType = "arraybuffer";
+    sock.current = ws;
+    let opened = false;
+    ws.onopen = () => {
+      opened = true;
+      setState({ kind: "open" });
+      t.focus();
+    };
+    ws.onmessage = (m) => {
+      if (typeof m.data !== "string") t.write(new Uint8Array(m.data as ArrayBuffer)); // binary frames are terminal output
+    };
+    ws.onclose = (e) => {
+      if (sock.current !== ws) return;
+      sock.current = null;
+      if (opened) return setState({ kind: "closed", reason: reasonText(e.reason) });
+      // the handshake failed: ask the server why
+      probeShell(name).then(
+        () => setState({ kind: "closed", reason: "无法连接：SSH 网关拒绝了连接，或同时打开的终端已达上限" }),
+        (err: unknown) => setState({ kind: "closed", reason: err instanceof ApiFailure ? err.body.message : "无法连接" }),
+      );
+    };
+    return () => {
+      sock.current = null;
+      ws.close();
+    };
+  }, [name, attempt]);
+
+  const reconnect = useCallback(() => {
+    term.current?.reset();
+    setAttempt((n) => n + 1);
+  }, []);
+
+  if (me.isError) return <Navigate to="/login" replace />;
+  return (
+    <div className="flex h-screen flex-col bg-surface">
+      <header className="flex items-center gap-3 border-b border-line px-3 py-1.5 text-xs">
+        <Link to={`/devpods/${name}`} className="mono font-semibold text-ink hover:text-accent">
+          {name}
+        </Link>
+        <span className="text-muted">终端 · 经 SSH 网关，会话会被记录</span>
+        <span role="status" className="ml-auto text-muted">
+          {state.kind === "connecting" ? "连接中…" : state.kind === "open" ? "已连接" : state.reason}
+        </span>
+        {state.kind === "closed" && (
+          <Button variant="primary" onClick={reconnect}>
+            重新连接
+          </Button>
+        )}
+      </header>
+      <div ref={host} className="min-h-0 flex-1 p-1" />
+    </div>
+  );
+}

@@ -1,0 +1,59 @@
+{{- if include "devpod.http.on" $ }}
+{{- /* The gateway's HTTP proxy (DevPod ports as {id}-{port} hostnames):
+       the key it shares with the webui (kept across upgrades), a
+       ClusterIP Service, and optionally the wildcard HTTPRoute. */}}
+{{- $existing := lookup "v1" "Secret" .Values.namespaces.system "devpod-http-key" }}
+apiVersion: v1
+kind: Secret
+metadata:
+  name: devpod-http-key
+  namespace: {{ .Values.namespaces.system }}
+  labels: {{ include "devpod.labels" . | nindent 4 }}
+  annotations:
+    "helm.sh/resource-policy": keep
+type: Opaque
+data:
+  {{- if and $existing (index ($existing.data | default dict) "key") }}
+  key: {{ index $existing.data "key" }}
+  {{- else }}
+  key: {{ randAlphaNum 64 | b64enc }}
+  {{- end }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: devpod-gateway-http
+  namespace: {{ .Values.namespaces.system }}
+  labels: {{ include "devpod.labels" . | nindent 4 }}
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: devpod-gateway
+  ports:
+  - name: http
+    port: 80
+    targetPort: http
+{{- $r := .Values.gateway.http.route }}
+{{- if $r.enabled }}
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: devpod-gateway-http
+  namespace: {{ .Values.namespaces.system }}
+  labels: {{ include "devpod.labels" . | nindent 4 }}
+spec:
+  parentRefs:
+  - name: {{ required "gateway.http.route.gateway.name is required" $r.gateway.name }}
+    namespace: {{ $r.gateway.namespace | default .Values.namespaces.system }}
+    {{- with $r.httpsListener }}
+    sectionName: {{ . }}
+    {{- end }}
+  hostnames:
+  - {{ printf "*.%s" .Values.gateway.http.baseDomain | quote }}
+  rules:
+  - backendRefs:
+    - name: devpod-gateway-http
+      port: 80
+{{- end }}
+{{- end }}

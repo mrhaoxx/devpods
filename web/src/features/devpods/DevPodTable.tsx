@@ -5,7 +5,7 @@ import { Link } from "react-router-dom";
 import { useQueryClient } from "@tanstack/react-query";
 import * as Menu from "@radix-ui/react-dropdown-menu";
 import type { SortingState } from "@tanstack/react-table";
-import { deleteDevPod, patchDevPod, patchDevPodSpec, redeployDevPod, sshCommand, type LiveItem } from "../../data/api";
+import { deleteDevPod, patchDevPod, patchDevPodSpec, redeployDevPod, sshCommand, type LiveItem, shellPath } from "../../data/api";
 import { useDevPodMutations, useDevPods, useMe, useRecent } from "../../data/queries";
 import { devpodsStream } from "../../data/live/streams";
 import { useLiveEnabled, useLiveRow, useLiveValues } from "../../data/live/hooks";
@@ -51,6 +51,11 @@ function RowMenu({ r, onDelete }: { r: Row; onDelete: (r: Row) => void }) {
           <Menu.Item className="cursor-pointer rounded px-2 py-1 outline-none data-[highlighted]:bg-sunk" onSelect={() => void copyText(sshCommand(me, r.owner, r.name))}>
             复制 SSH 命令
           </Menu.Item>
+          {me?.features.webshell && r.phase === "Running" && (
+            <Menu.Item className="cursor-pointer rounded px-2 py-1 outline-none data-[highlighted]:bg-sunk" onSelect={() => window.open(shellPath(r.name), "_blank", "noopener")}>
+              终端
+            </Menu.Item>
+          )}
           <Menu.Item
             className="cursor-pointer rounded px-2 py-1 outline-none data-[highlighted]:bg-sunk"
             onSelect={() => setRunning.mutate({ name: r.name, running: !r.dp.spec.running })}

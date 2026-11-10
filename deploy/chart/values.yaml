@@ -50,6 +50,21 @@ gateway:
   service:
     type: ClusterIP
     port: 22
+  # HTTP proxy: ports of a DevPod published as
+  # https://{id}-{port}{suffix}.{baseDomain}, where {id} is the DevPod's
+  # random id. Private by default (the console signs the owner,
+  # collaborators and admins in); the owner can make a port public.
+  # User programs run on these hostnames, so prefer a domain of their own
+  # (e.g. *.example-usercontent.com) over one shared with other services.
+  http:
+    enabled: false
+    baseDomain: ""               # e.g. apps.example.com; needs wildcard DNS + TLS for *.baseDomain
+    suffix: ""                   # fixed part after the port, e.g. "-devpod"
+    # Gateway API route for *.baseDomain → the gateway's HTTP port.
+    route:
+      enabled: false
+      gateway: {name: "", namespace: ""}
+      httpsListener: ""
   # SSH front proxies allowed to log in on behalf of users, as
   # [{alias: openng, pubkey: "ssh-ed25519 AAAA… openng"}].
   trustedProxyKeys: []
@@ -120,6 +135,16 @@ webui:
   # Appended to the SSH login as <owner>+<pod>+<suffix> (e.g. a proxy /
   # routing token). Empty → the plain <owner>+<pod> form.
   sshLoginSuffix: ""
+  # Web terminal: the webui connects to the SSH gateway as the logged-in
+  # user with its own key, so the shell is recorded like any session.
+  # Two steps: enable it, read the key's public half from the webui log
+  # ("webshell_enabled pubkey=…"), then set publicKey — that lists the
+  # key under the gateway's trustedProxyKeys (alias "webui"); gateways
+  # read that list at start.
+  webshell:
+    enabled: false
+    publicKey: ""                # "ssh-ed25519 AAAA…"
+    gatewayHostKey: ""           # optional: pin the gateway's host key
   gitlab:
     issuerURL: ""
     clientID: ""

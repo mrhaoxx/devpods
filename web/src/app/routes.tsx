@@ -15,6 +15,8 @@ import { SessionPage } from "../features/audit/SessionPage";
 import { CommandsPage, FilesPage } from "../features/audit/SearchPages";
 import { AccessLogPage, AlertsPage, PolicyPage } from "../features/audit/AdminPages";
 import { NodesPage } from "../features/nodes/NodesPage";
+import { HttpAuthPage } from "../features/devpods/HttpAuthPage";
+import { ShellPage } from "../features/shell/ShellPage";
 
 function SessionRedirect() {
   const { id } = useParams();
@@ -25,10 +27,13 @@ export function AppRoutes() {
   return (
     <Routes>
       <Route path="/login" element={<LoginPage />} />
+      {/* the web terminal fills its own tab, outside the console shell */}
+      <Route path="/devpods/:name/shell" element={<ShellPage />} />
       <Route element={<Shell />}>
         <Route index element={<MyDevPodsPage />} />
         <Route path="devpods/new" element={<Navigate to="/?new=1" replace />} />
         <Route path="devpods/:name" element={<DetailPage />} />
+        <Route path="http-auth" element={<HttpAuthPage />} />
         <Route path="settings" element={<SettingsPage />} />
         <Route path="settings/pubkeys" element={<Navigate to="/settings" replace />} />
         <Route path="settings/password" element={<Navigate to="/settings" replace />} />

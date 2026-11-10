@@ -6,6 +6,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -60,6 +61,8 @@ func main() {
 		httpListenAddr      string
 		httpBaseDomain      string
 		httpSubdomainSuffix string
+		httpAuthKeyFile     string
+		httpLoginURL        string
 		sessionGrace        time.Duration
 		gcName              string
 		af                  auditFlags
@@ -79,6 +82,10 @@ func main() {
 		"base domain for HTTP proxy routing, e.g. ktaas.approaching-ai.com")
 	flag.StringVar(&httpSubdomainSuffix, "http-subdomain-suffix", "",
 		"fixed suffix stripped from subdomain before parsing, e.g. -dev for {name}-{port}-dev.{base}")
+	flag.StringVar(&httpAuthKeyFile, "http-auth-key-file", "",
+		"key shared with the webui that signs HTTP proxy tickets and cookies; without it only public ports are served")
+	flag.StringVar(&httpLoginURL, "http-login-url", "",
+		"webui URL a browser is sent to for access to a private port, e.g. https://devpod.example.com/http-auth")
 	flag.StringVar(&gcName, "gateway-config-name", "default", "name of the cluster-scoped GatewayConfig this gateway reads")
 	flag.DurationVar(&sessionGrace, "shutdown-session-grace", 60*time.Second,
 		"on SIGTERM, how long open sessions may continue before they are closed")
@@ -177,6 +184,15 @@ func main() {
 
 	if httpListenAddr != "" && httpBaseDomain != "" {
 		hp := gateway.NewHTTPProxy(c, devpodNamespace, httpBaseDomain, httpSubdomainSuffix)
+		hp.LoginURL = httpLoginURL
+		if httpAuthKeyFile != "" {
+			key, err := os.ReadFile(httpAuthKeyFile)
+			if err != nil || len(bytes.TrimSpace(key)) == 0 {
+				slog.Error("http_auth_key", "file", httpAuthKeyFile, "err", err)
+				os.Exit(1)
+			}
+			hp.Key = bytes.TrimSpace(key)
+		}
 		httpServer := &http.Server{
 			Addr:              httpListenAddr,
 			Handler:           hp,

@@ -1,0 +1,22 @@
+{{- if and .Values.webui.enabled (.Values.webui.webshell | default dict).enabled }}
+{{- /* The webui's SSH key for the web terminal (UI spec §5.12); kept
+       across upgrades. Its public half goes into
+       webui.webshell.publicKey, which lists it as a trusted proxy on
+       the gateway (Helm cannot derive it: the webui logs it at start). */}}
+{{- $existing := lookup "v1" "Secret" .Values.namespaces.system "devpod-webshell-key" }}
+apiVersion: v1
+kind: Secret
+metadata:
+  name: devpod-webshell-key
+  namespace: {{ .Values.namespaces.system }}
+  labels: {{ include "devpod.labels" . | nindent 4 }}
+  annotations:
+    "helm.sh/resource-policy": keep
+type: Opaque
+data:
+  {{- if and $existing (index ($existing.data | default dict) "id_ed25519") }}
+  id_ed25519: {{ index $existing.data "id_ed25519" }}
+  {{- else }}
+  id_ed25519: {{ genPrivateKey "ed25519" | b64enc }}
+  {{- end }}
+{{- end }}

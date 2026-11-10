@@ -91,6 +91,8 @@ func main() {
 		"external base URL of the UI (https → Secure cookies + Origin check); defaults to the OAuth redirect's origin")
 	af := addAuditFlags(flag.CommandLine)
 	tf := addTelemetryFlags(flag.CommandLine)
+	hf := addHTTPProxyFlags(flag.CommandLine)
+	wf := addWebshellFlags(flag.CommandLine)
 	gcName := flag.String("gateway-config-name", "default", "GatewayConfig holding the cluster default audit policy")
 	flag.Parse()
 
@@ -232,6 +234,13 @@ func main() {
 		}
 	}
 	srv.GatewayConfigName = *gcName
+	if srv.HTTPProxy, err = hf.build(); err != nil {
+		slog.Error("http proxy", "err", err)
+		os.Exit(1)
+	}
+	if srv.Webshell, err = wf.build(); err != nil {
+		fatal(err)
+	}
 
 	waitTelemetry := func() {}
 	if tf.enabled() {

@@ -38,6 +38,8 @@ type Server struct {
 	DefaultQuota devpodv1alpha1.UserQuota
 	KoreEnabled  bool
 	Origin       string // allowed Origin for mutating requests
+	// HTTPProxy: DevPod ports published through the gateway; nil = off.
+	HTTPProxy *HTTPProxy
 
 	// PubkeySelfService gates the pubkey management surface. Disable
 	// on deployments where LDAP (not the User CRD) owns SSH keys.
@@ -74,6 +76,10 @@ type Server struct {
 	// LiveSessions relays live session views from the gateways (audit
 	// spec §16); nil disables live viewing.
 	LiveSessions *LiveSessions
+
+	// Webshell bridges browser terminals to the SSH gateway; nil turns
+	// the web terminal off.
+	Webshell *Webshell
 }
 
 type apiBody struct {

@@ -78,6 +78,8 @@ func (s *Server) handleMe(w http.ResponseWriter, r *http.Request) {
 			"passwordAuth":      s.PasswordAuth,
 			"audit":             s.Audit != nil,
 			"telemetry":         s.Live != nil && s.Live.Hub != nil,
+			"webshell":          s.Webshell != nil,
+			"httpProxy":         s.HTTPProxy != nil,
 			// node reservations arrive with the reservation backend
 			"reservations": false,
 		},

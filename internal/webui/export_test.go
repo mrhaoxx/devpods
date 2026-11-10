@@ -89,3 +89,7 @@ func SetLiveHistoryBytesForTest(n int64) func() {
 var SumRecentByNodeForTest = sumRecentByNode
 
 func (s *Server) HandleRedeployDevPodForTest() http.HandlerFunc { return s.handleRedeployDevPod }
+
+func (s *Server) HandleGetHTTPForTest() http.HandlerFunc    { return s.handleGetHTTP }
+func (s *Server) HandlePutHTTPForTest() http.HandlerFunc    { return s.handlePutHTTP }
+func (s *Server) HandleHTTPTicketForTest() http.HandlerFunc { return s.handleHTTPTicket }

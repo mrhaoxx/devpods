@@ -6,6 +6,7 @@ import { Link, useNavigate, useParams } from "react-router-dom";
 import { useQueryClient } from "@tanstack/react-query";
 import {
   ApiFailure,
+  shellPath,
   sshCommand,
   sshConfig,
   watchDevPod,
@@ -33,6 +34,7 @@ import { SessionList } from "./SessionsTab";
 import { EventList } from "./EventsTab";
 import { MonitorTab } from "./MonitorTab";
 import { ContainerTab } from "./ContainerTab";
+import { PortsPanel } from "./PortsPanel";
 
 const schema = {
   tab: { kind: "string", default: "monitor" },
@@ -157,6 +159,11 @@ export function DetailPage() {
         <StatusDot phase={dp.status?.phase} />
         {runningPhase && pod?.startedAt && <span className="mono text-xs text-muted">已运行 {fmtAge(pod.startedAt, now)}</span>}
         <span className="flex-1" />
+        {me?.features.webshell && runningPhase && (
+          <Button onClick={() => window.open(shellPath(name), "_blank", "noopener")} title="在新标签页打开终端（经 SSH 网关，会话会被记录）">
+            终端
+          </Button>
+        )}
         {me && (
           <Button onClick={() => void copyText(ssh)} title={ssh}>
             复制 SSH
@@ -229,7 +236,12 @@ export function DetailPage() {
           <SessionList items={sessions.data?.items} error={sessions.error} now={now} />
         </Panel>
       )}
-      {url.tab === "container" && <ContainerTab name={name} />}
+      {url.tab === "container" && (
+        <div className="space-y-3">
+          {me?.features.httpProxy && <PortsPanel name={name} />}
+          <ContainerTab name={name} />
+        </div>
+      )}
       {url.tab === "events" && (
         <Panel title="事件">
           <EventList events={events} />

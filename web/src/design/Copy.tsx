@@ -18,7 +18,7 @@ export async function copyText(text: string): Promise<boolean> {
   }
 }
 
-function useCopied(): [boolean, (v: string) => void] {
+export function useCopied(): [boolean, (v: string) => void] {
   const [done, setDone] = useState(false);
   return [
     done,

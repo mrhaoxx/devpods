@@ -43,6 +43,13 @@ spec:
         - --audit-live-listen=:8082
         - --audit-live-key-file=/etc/devpod/live/key
         {{- end }}
+        {{- if include "devpod.http.on" $ }}
+        - --http-listen=:8090
+        - --http-base-domain={{ .Values.gateway.http.baseDomain }}
+        - --http-subdomain-suffix={{ .Values.gateway.http.suffix }}
+        - --http-auth-key-file=/etc/devpod/http/key
+        - --http-login-url={{ required "webui.baseURL is required with gateway.http" .Values.webui.baseURL }}/http-auth
+        {{- end }}
         env:
         - name: POD_NAME
           valueFrom: {fieldRef: {fieldPath: metadata.name}}
@@ -54,6 +61,9 @@ spec:
         - {name: metrics, containerPort: 8080}
         {{- if include "devpod.audit.on" $ }}
         - {name: live, containerPort: 8082}
+        {{- end }}
+        {{- if include "devpod.http.on" $ }}
+        - {name: http, containerPort: 8090}
         {{- end }}
         # SSH listens on port 22 (privileged). Grant only NET_BIND_SERVICE
         # so the container can bind <1024 without running as root.
@@ -75,6 +85,9 @@ spec:
         - {name: audit-spool, mountPath: /var/spool/devpod-audit}
         - {name: live-key, mountPath: /etc/devpod/live, readOnly: true}
         {{- include "devpod.audit.mounts" . | nindent 8 }}
+        {{- end }}
+        {{- if include "devpod.http.on" $ }}
+        - {name: http-key, mountPath: /etc/devpod/http, readOnly: true}
         {{- end }}
         {{- if .Values.gateway.ldap.enabled }}
         - name: ldap-secrets
@@ -102,6 +115,11 @@ spec:
       - name: live-key
         secret:
           secretName: devpod-live-key
+      {{- end }}
+      {{- if include "devpod.http.on" $ }}
+      - name: http-key
+        secret:
+          secretName: devpod-http-key
       {{- end }}
       {{- if .Values.gateway.ldap.enabled }}
       - name: ldap-secrets

@@ -50,7 +50,7 @@ export interface Me {
   nameBudget: number;
   quota: { maxDevPods?: number; compute?: Record<string, string>; storage?: string };
   usage: { devpods: number; running: number; compute: Record<string, string>; storage: string };
-  features: { pubkeySelfService: boolean; kore: boolean; passwordAuth: boolean; audit?: boolean; telemetry?: boolean; reservations?: boolean };
+  features: { pubkeySelfService: boolean; kore: boolean; passwordAuth: boolean; audit?: boolean; telemetry?: boolean; reservations?: boolean; webshell?: boolean; httpProxy?: boolean };
   hasPassword: boolean;
   ssh: { host: string; port: number; loginSuffix?: string };
 }
@@ -385,3 +385,18 @@ export const importUsers = (csv: string, dryRun: boolean) =>
   });
 export const setUserAdmin = (name: string, admin: boolean) => req<void>("PATCH", `/api/admin/users/${name}`, { admin });
 export const search = (q: string) => req<SearchResult>("GET", `/api/search?q=${encodeURIComponent(q)}`);
+
+/** shellPath: the web terminal page of a DevPod (opened in its own tab). */
+export const shellPath = (name: string) => `/devpods/${name}/shell`;
+/** shellSocketURL: the terminal WebSocket (UI spec §5.12). */
+export const shellSocketURL = (name: string, cols: number, rows: number, loc: Pick<Location, "protocol" | "host"> = window.location) =>
+  `${loc.protocol === "https:" ? "wss" : "ws"}://${loc.host}/api/devpods/${name}/shell?cols=${cols}&rows=${rows}`;
+/** probeShell asks why a terminal cannot be opened (a failed WebSocket handshake hides its status). */
+export const probeShell = (name: string) => req<void>("GET", `/api/devpods/${name}/shell?probe=1`);
+
+/* api_http.go: DevPod ports published through the gateway's HTTP proxy */
+export type HttpView = { id: string; urlTemplate: string; publicPorts: number[] };
+export const getHttp = (n: string) => req<HttpView>("GET", `/api/devpods/${n}/http`);
+export const putHttp = (n: string, body: { publicPorts?: number[]; reset?: boolean }) => req<HttpView>("PUT", `/api/devpods/${n}/http`, body);
+/** httpTicket: the URL that signs this browser in on a private port's hostname. */
+export const httpTicket = (host: string, rd: string) => req<{ url: string }>("POST", "/api/http/ticket", { host, rd });
