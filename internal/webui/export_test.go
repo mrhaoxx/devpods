@@ -93,3 +93,10 @@ func (s *Server) HandleRedeployDevPodForTest() http.HandlerFunc { return s.handl
 func (s *Server) HandleGetHTTPForTest() http.HandlerFunc    { return s.handleGetHTTP }
 func (s *Server) HandlePutHTTPForTest() http.HandlerFunc    { return s.handlePutHTTP }
 func (s *Server) HandleHTTPTicketForTest() http.HandlerFunc { return s.handleHTTPTicket }
+
+func (s *Server) HandleCreateReservationForTest() http.HandlerFunc { return s.handleCreateReservation }
+func (s *Server) HandlePatchReservationForTest() http.HandlerFunc  { return s.handlePatchReservation }
+func (s *Server) HandleDeleteReservationForTest() http.HandlerFunc { return s.handleDeleteReservation }
+func (s *Server) HandleListReservationsForTest() http.HandlerFunc  { return s.handleListReservations }
+func (s *Server) HandleNodesForTest() http.HandlerFunc             { return s.handleNodes }
+func (s *Server) HandleSetReservableForTest() http.HandlerFunc     { return s.handleSetReservable }

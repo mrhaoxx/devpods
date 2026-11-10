@@ -170,14 +170,14 @@ export type K8sEvent = {
 // reads a handful of paths and must tolerate schema growth.
 export type ContainerSpec = { name: string; image?: string; resources?: { limits?: Record<string, string> } };
 export type DevPod = {
-  metadata: { name: string; uid?: string; creationTimestamp?: string };
+  metadata: { name: string; uid?: string; creationTimestamp?: string; annotations?: Record<string, string> };
   spec: {
     owner: string;
     running: boolean;
     shell?: string;
     collaborators?: string[];
     persistence?: { size: string; mountPath?: string };
-    pod?: { spec?: { containers?: ContainerSpec[] } };
+    pod?: { spec?: { containers?: ContainerSpec[]; nodeSelector?: Record<string, string> } };
   };
   status?: {
     phase?: string;
@@ -186,6 +186,7 @@ export type DevPod = {
     hibernatedAt?: string;
     retryCount?: number;
     lastFailureAt?: string;
+    conditions?: { type: string; status: string; message?: string }[];
   };
 };
 
@@ -408,3 +409,43 @@ export const listTokens = () => req<{ items: TokenView[]; scopes: TokenScope[] }
 export const createToken = (body: { name: string; scopes: string[]; devpods: string[]; expiresInDays: number }) =>
   req<{ token: string; info: TokenView }>("POST", "/api/me/tokens", body);
 export const deleteToken = (id: string) => req<void>("DELETE", `/api/me/tokens/${id}`);
+
+/* api_reservations.go: node choice and node reservations */
+export type NodeChoice = {
+  name: string;
+  ready: boolean;
+  cpu: { allocatable: number; allocated: number };
+  mem: { allocatable: number; allocated: number };
+  gpuModel?: string;
+  gpuTotal: number;
+  gpuUsed: number;
+  reservable: boolean;
+  pending: number;
+  held: { user: string; until: string } | null;
+  next: { user: string; start: string } | null;
+  /** my DevPods may be pinned here now */
+  selectable: boolean;
+  reason?: string;
+};
+export const listNodeChoices = () => req<{ items: NodeChoice[] }>("GET", "/api/nodes");
+export type Reservation = {
+  id: string;
+  segments: string[];
+  node: string;
+  user: string;
+  start: string;
+  end: string;
+  phase: "Upcoming" | "Active" | "Ended" | "Cancelled";
+  mine: boolean;
+  cancelledBy?: string;
+};
+export type ReservationRules = { granularitySeconds: number; maxDurationSeconds: number; maxAdvanceSeconds: number; clearNoticeSeconds: number; timezone: string; now: string };
+export const getReservationRules = () => req<ReservationRules>("GET", "/api/reservations/rules");
+export const listReservations = (from: string, to: string) => req<{ items: Reservation[] }>("GET", `/api/reservations?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}`);
+type Period = { node: string; start: string; end: string };
+/** previewReservation checks a period without creating it. */
+export const previewReservation = (p: Period) => req<{ willHibernate: number }>("POST", "/api/reservations?dryRun=true", p);
+export const createReservation = (p: Period) => req<Reservation>("POST", "/api/reservations", p);
+export const patchReservation = (id: string, body: { start?: string; end?: string }) => req<Reservation>("PATCH", `/api/reservations/${id}`, body);
+export const deleteReservation = (id: string) => req<void>("DELETE", `/api/reservations/${id}`);
+export const setReservable = (node: string, reservable: boolean) => req<{ reservable: boolean; pending: number }>("PUT", `/api/admin/nodes/${node}/reservable`, { reservable });

@@ -4,7 +4,8 @@
 import * as Dialog from "@radix-ui/react-dialog";
 import { useState } from "react";
 import type { SpecPatch } from "../../data/types";
-import { useNodes } from "../../data/queries";
+import { useNodeChoices } from "../../data/queries";
+import { fmtTime } from "../../lib/reservations";
 import { Button } from "../../design/Button";
 import { Field, Input } from "../../design/Form";
 
@@ -33,7 +34,7 @@ export function migrateTargets(devpods: string[], nodes: string[]): [string, str
 }
 
 function MigrateBody({ devpods, picked, setPicked, unpin, setUnpin }: { devpods: string[]; picked: string[]; setPicked: (n: string[]) => void; unpin: boolean; setUnpin: (b: boolean) => void }) {
-  const nodes = useNodes().data?.items ?? [];
+  const nodes = useNodeChoices().data?.items ?? [];
   const pairs = migrateTargets(devpods, picked);
   return (
     <div className="space-y-2 text-xs">
@@ -49,14 +50,16 @@ function MigrateBody({ devpods, picked, setPicked, unpin, setUnpin }: { devpods:
               <button
                 key={n.name}
                 type="button"
-                disabled={!n.ready}
+                disabled={!n.selectable}
                 aria-pressed={at >= 0}
-                title={n.ready ? undefined : "节点未就绪"}
+                title={!n.selectable && n.held ? `${n.held.user} 预约至 ${fmtTime(n.held.until)}` : n.next ? `将于 ${fmtTime(n.next.start)} 被 ${n.next.user} 预约，届时自动休眠` : n.ready ? undefined : "节点未就绪"}
                 onClick={() => setPicked(at >= 0 ? picked.filter((x) => x !== n.name) : [...picked, n.name])}
                 className={`mono inline-flex items-center gap-1 rounded-md border px-2 py-0.5 disabled:opacity-40 ${at >= 0 ? "border-accent bg-accent-soft text-accent" : "border-line text-muted hover:text-ink"}`}
               >
                 {at >= 0 && <span className="rounded bg-accent px-1 text-[10px] text-white">{at + 1}</span>}
                 {n.name}
+                {!n.selectable && <span className="font-sans text-[10px]">已被预约</span>}
+                {n.selectable && !n.ready && <span className="font-sans text-[10px]">未就绪</span>}
               </button>
             );
           })}

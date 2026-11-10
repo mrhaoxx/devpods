@@ -89,6 +89,13 @@ spec:
         {{- if include "devpod.cli.on" $ }}
         - --cli-api-key-file=/etc/devpod/cli/key
         {{- end }}
+        {{- if dig "enabled" false (.Values.reservation | default dict) }}
+        - --reservations=true
+        - --reservation-granularity={{ .Values.reservation.granularity }}
+        - --reservation-max-duration={{ .Values.reservation.maxDuration }}
+        - --reservation-max-advance={{ .Values.reservation.maxAdvance }}
+        - --reservation-clear-notice={{ .Values.reservation.clearNotice }}
+        {{- end }}
         {{- if include "devpod.telemetry.on" $ }}
         - --ingest-listen=:8081
         - --ingest-key-file=/etc/devpod/ingest/key

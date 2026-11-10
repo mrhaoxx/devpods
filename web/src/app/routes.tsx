@@ -16,6 +16,7 @@ import { CommandsPage, FilesPage } from "../features/audit/SearchPages";
 import { AccessLogPage, AlertsPage, PolicyPage } from "../features/audit/AdminPages";
 import { NodesPage } from "../features/nodes/NodesPage";
 import { HttpAuthPage } from "../features/devpods/HttpAuthPage";
+import { ReservationsPage } from "../features/reservations/ReservationsPage";
 import { ShellPage } from "../features/shell/ShellPage";
 
 function SessionRedirect() {
@@ -34,6 +35,7 @@ export function AppRoutes() {
         <Route path="devpods/new" element={<Navigate to="/?new=1" replace />} />
         <Route path="devpods/:name" element={<DetailPage />} />
         <Route path="http-auth" element={<HttpAuthPage />} />
+        <Route path="reservations" element={<ReservationsPage />} />
         <Route path="settings" element={<SettingsPage />} />
         <Route path="settings/pubkeys" element={<Navigate to="/settings" replace />} />
         <Route path="settings/password" element={<Navigate to="/settings" replace />} />

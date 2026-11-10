@@ -21,6 +21,19 @@ rules:
 - apiGroups: ["devpod.io"]
   resources: ["users/finalizers"]
   verbs: ["update"]
+{{- if dig "enabled" false (.Values.reservation | default dict) }}
+# Node reservations: the controller walks each one along its timeline
+# (the webui creates them).
+- apiGroups: ["devpod.io"]
+  resources: ["reservations"]
+  verbs: ["get","list","watch","update","patch","delete"]
+- apiGroups: ["devpod.io"]
+  resources: ["reservations/status"]
+  verbs: ["get","update","patch"]
+- apiGroups: ["devpod.io"]
+  resources: ["reservations/finalizers"]
+  verbs: ["update"]
+{{- end }}
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding

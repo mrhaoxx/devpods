@@ -11,7 +11,7 @@ import { MetricCell } from "../../design/MetricCell";
 import { StatusDot, phaseLabel } from "../../design/StatusDot";
 import { Badge } from "../../design/Badge";
 import { fmtAge, fmtBytes, fmtCores, fmtRate, parseQuantity } from "../../lib/format";
-import { phaseSummary } from "./status";
+import { phaseSummary, reservationNotes } from "./status";
 import { sparkSeries } from "../../lib/spark";
 
 export type Row = {
@@ -169,6 +169,11 @@ export function devpodColumns(opts: { admin: boolean; me?: Me; actions: (r: Row)
             {r.name}
           </Link>
           {r.phase !== "Running" && <span className="text-[11px] text-muted">{phaseLabel(r.phase)}</span>}
+          {reservationNotes(r.dp).map((n) => (
+            <Badge key={n.type} tone={n.tone} title={n.message}>
+              {n.label}
+            </Badge>
+          ))}
         </span>
       ),
     },

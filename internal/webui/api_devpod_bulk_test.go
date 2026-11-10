@@ -50,8 +50,8 @@ func TestDevPodMigrateAndRedeploy(t *testing.T) {
 		return dp.Spec.Pod.Spec.NodeSelector
 	}
 
-	t.Run("migrate is admin only, to a node that exists", func(t *testing.T) {
-		patch(alice, `{"node":"mg-node-1"}`, http.StatusForbidden)
+	t.Run("migrate pins to a node that exists (owners too: the node rule decides)", func(t *testing.T) {
+		patch(alice, `{"node":"no-such-node"}`, http.StatusBadRequest)
 		patch(root, `{"node":"no-such-node"}`, http.StatusBadRequest)
 		// the node may not be in the cache yet
 		deadline := time.Now().Add(10 * time.Second)

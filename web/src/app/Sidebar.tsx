@@ -65,7 +65,7 @@ export function Sidebar({ me, onNavigate }: { me: Me; onNavigate?: () => void })
 
   const userItems: Item[] = [
     { to: "/", label: "我的 DevPod", icon: "▦", count: mine.data ? String(mine.data.items.length) : undefined, end: true },
-    // 预约 arrives with the reservation backend (features.reservations)
+    ...(me.features.reservations ? [{ to: "/reservations", label: "节点预约", icon: "▥" }] : []),
     ...(audit ? [{ to: "/sessions", label: "我的会话", icon: "◷" }] : []),
   ];
   const settings: Item[] = [{ to: "/settings", label: "SSH 密钥 · 密码", icon: "⚙" }];

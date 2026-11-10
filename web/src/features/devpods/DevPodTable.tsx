@@ -176,7 +176,7 @@ export function DevPodTable({ scope }: { scope: "mine" | "all" }) {
           empty={<EmptyState title={list.isLoading ? "加载中…" : rows.length ? "没有符合条件的 DevPod" : "还没有 DevPod"} />}
           bulkBar={(sel, clear) => (
             <>
-              {admin && <Button onClick={() => setDialog({ kind: "migrate", rows: sel, clear })}>迁移…</Button>}
+              <Button onClick={() => setDialog({ kind: "migrate", rows: sel, clear })}>迁移…</Button>
               <Button onClick={() => void bulk("休眠", sel, (r) => patchDevPod(r.name, false)).then(clear)}>休眠</Button>
               <Button onClick={() => void bulk("启动", sel, (r) => patchDevPod(r.name, true)).then(clear)}>启动</Button>
               <Button onClick={() => setDialog({ kind: "collaborators", rows: sel, clear })}>协作者…</Button>

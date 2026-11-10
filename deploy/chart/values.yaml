@@ -165,6 +165,19 @@ webui:
     maxDevPods: 3
     compute: {cpu: "8", memory: "16Gi"}
     storage: "50Gi"
+# Node reservations: a user holds a whole node for a time slot; only
+# their DevPods run on it meanwhile, others' are hibernated at the start
+# and the holder's at the end. Nodes are made reservable by label
+# devpod.io/reservable=true (the console's node page). The controller and
+# the webui read the same rules.
+reservation:
+  enabled: false
+  granularity: 30m         # starts and ends align to this
+  maxDuration: 24h         # longest single reservation; 0 = no limit
+  maxAdvance: 336h         # how far ahead one may reserve; 0 = no limit
+  clearNotice: 30m         # other DevPods on the node are warned this long before the start
+  endingNotice: "30m,5m"   # the holder's DevPods are warned at these moments before the end
+  retention: 720h          # ended / cancelled reservations are kept this long
 
 # Live telemetry (phase 2 of the audit spec): every DevPod's supervisor
 # samples cgroup / process / GPU / RDMA metrics and posts them to the

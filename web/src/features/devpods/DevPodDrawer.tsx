@@ -1,5 +1,7 @@
 // 新建 / 编辑 DevPod (UI spec §5.6). The node picker arrives with the
 // reservation backend (plan ruling R1).
+import { NodePicker } from "./NodePicker";
+import { fmtTime } from "../../lib/reservations";
 import { useMemo, useState, type FormEvent } from "react";
 import { useNavigate } from "react-router-dom";
 import { useQueryClient } from "@tanstack/react-query";
@@ -35,6 +37,8 @@ export function DevPodDrawer(p: Props) {
   const [shell, setShell] = useState(p.devpod?.spec.shell ?? "");
   const [persist, setPersist] = useState("");
   const [collab, setCollab] = useState((p.devpod?.spec.collaborators ?? []).join(", "));
+  const pinned = p.devpod?.spec.pod?.spec?.nodeSelector?.["kubernetes.io/hostname"] ?? "";
+  const [node, setNode] = useState(pinned);
   const [serverErr, setServerErr] = useState<{ fields: Partial<Record<QuotaField, string>>; text?: string } | null>(null);
   const [busy, setBusy] = useState(false);
 
@@ -64,10 +68,14 @@ export function DevPodDrawer(p: Props) {
       cpu !== (lim.cpu ?? "") ||
       memory !== (lim.memory ?? "") ||
       gpu !== (lim["nvidia.com/gpu"] ?? "") ||
-      shell !== (p.devpod?.spec.shell ?? ""));
+      shell !== (p.devpod?.spec.shell ?? "") ||
+      node !== pinned);
 
   const fail = (e: unknown) => {
-    if (e instanceof ApiFailure && e.code === "QUOTA_EXCEEDED") setServerErr({ fields: serverQuotaErrors(e.body.detail), text: e.body.message });
+    if (e instanceof ApiFailure && e.code === "NODE_RESERVED") {
+      const d = e.body.detail as { node?: string; user?: string; until?: string } | undefined;
+      setServerErr({ fields: {}, text: d?.until ? `节点 ${d.node} 正被 ${d.user} 预约至 ${fmtTime(d.until)}，现在不能使用。` : e.body.message });
+    } else if (e instanceof ApiFailure && e.code === "QUOTA_EXCEEDED") setServerErr({ fields: serverQuotaErrors(e.body.detail), text: e.body.message });
     else setServerErr({ fields: {}, text: e instanceof ApiFailure ? e.body.message : String(e) });
   };
 
@@ -84,6 +92,7 @@ export function DevPodDrawer(p: Props) {
         if (gpu !== (lim["nvidia.com/gpu"] ?? "")) body.gpu = gpu;
         if (shell !== (p.devpod.spec.shell ?? "")) body.shell = shell;
         if (collaborators.join(",") !== (p.devpod.spec.collaborators ?? []).join(",")) body.collaborators = collaborators;
+        if (node !== pinned) body.node = node;
         await patchDevPodSpec(p.devpod.metadata.name, body);
         void qc.invalidateQueries({ queryKey: ["devpod", p.devpod.metadata.name] });
       } else {
@@ -97,6 +106,7 @@ export function DevPodDrawer(p: Props) {
           if (persist) body.persistence = { size: persist, mountPath: "/home/dev" };
           if (overlay) body.templateRef = overlay;
         }
+        if (yaml === null && node) body.node = node;
         if (yaml === null && collaborators.length) body.collaborators = collaborators;
         const dp = await createDevPod(body);
         nav(`/devpods/${dp.metadata.name}`);
@@ -205,6 +215,7 @@ export function DevPodDrawer(p: Props) {
                 </Select>
               </Field>
             )}
+            <NodePicker value={node} onChange={setNode} />
             <Field label="协作者" hint="用户名，逗号分隔">
               <Input aria-label="协作者" value={collab} onChange={(e) => setCollab(e.target.value)} className="mono" />
             </Field>

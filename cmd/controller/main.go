@@ -11,6 +11,8 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"strings"
+	"time"
 
 	"go.uber.org/zap/zapcore"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -58,6 +60,11 @@ func main() {
 		ingestURL            string
 		ingestKeyFile        string
 		tel                  = config.DefaultConfig()
+
+		reservations     bool
+		rsvClearNotice   time.Duration
+		rsvEndingNotices string
+		rsvRetention     time.Duration
 	)
 
 	flag.StringVar(&metricsAddr, "metrics-bind-address", ":8080", "metrics endpoint bind address")
@@ -87,6 +94,10 @@ func main() {
 	flag.BoolVar(&tel.GPU, "telemetry-gpu", tel.GPU, "collect GPU metrics (nvidia-smi)")
 	flag.BoolVar(&tel.RDMA, "telemetry-rdma", tel.RDMA, "collect RDMA counters")
 	flag.BoolVar(&tel.Hooks, "telemetry-hooks", tel.Hooks, "record shell commands via profile hooks")
+	flag.BoolVar(&reservations, "reservations", false, "enable node reservations (needs the Reservation CRD)")
+	flag.DurationVar(&rsvClearNotice, "reservation-clear-notice", 30*time.Minute, "how long before a reservation starts the other DevPods on the node are warned")
+	flag.StringVar(&rsvEndingNotices, "reservation-ending-notice", "30m,5m", "comma-separated moments before a reservation ends at which the holder's DevPods are warned")
+	flag.DurationVar(&rsvRetention, "reservation-retention", 720*time.Hour, "how long ended or cancelled reservations are kept")
 	flag.Parse()
 
 	ctrl.SetLogger(zap.New(zap.UseFlagOptions(&opts)))
@@ -147,8 +158,24 @@ func main() {
 		GatewayNamespace:   gatewayNamespace,
 		GatewayInternalPub: internalPub,
 		Telemetry:          telemetrySettings(ingestKeyFile, ingestURL, gatewayNamespace, tel),
+		Reservations:       reservations,
 	}).SetupWithManager(mgr); err != nil {
 		die(err, "set up DevPodReconciler")
+	}
+	if reservations {
+		notices, err := parseDurations(rsvEndingNotices)
+		if err != nil {
+			die(err, "--reservation-ending-notice")
+		}
+		if err := (&controllers.ReservationReconciler{
+			Client:        mgr.GetClient(),
+			Namespace:     devPodNamespace,
+			ClearNotice:   rsvClearNotice,
+			EndingNotices: notices,
+			Retention:     rsvRetention,
+		}).SetupWithManager(mgr); err != nil {
+			die(err, "set up ReservationReconciler")
+		}
 	}
 	if err := (&controllers.UserReconciler{
 		Client: mgr.GetClient(),
@@ -189,4 +216,20 @@ func telemetrySettings(keyFile, url, gatewayNS string, defaults config.Config) *
 		url = fmt.Sprintf("http://devpod-webui-ingest.%s.svc:%d/ingest/v1/batch", gatewayNS, render.IngestPort)
 	}
 	return &render.TelemetrySettings{IngestURL: url, Key: bytes.TrimSpace(key), Defaults: defaults}
+}
+
+// parseDurations reads "30m,5m".
+func parseDurations(s string) ([]time.Duration, error) {
+	var out []time.Duration
+	for _, f := range strings.Split(s, ",") {
+		if f = strings.TrimSpace(f); f == "" {
+			continue
+		}
+		d, err := time.ParseDuration(f)
+		if err != nil || d <= 0 {
+			return nil, fmt.Errorf("invalid duration %q", f)
+		}
+		out = append(out, d)
+	}
+	return out, nil
 }

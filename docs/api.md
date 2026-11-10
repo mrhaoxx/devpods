@@ -37,6 +37,7 @@ Revoking a token in the console takes effect at once.
 | `metrics:read` | Live and historical metrics, processes, container facts |
 | `shell` | Open the web terminal (WebSocket) |
 | `http:read` / `http:write` / `http:connect` | See port links / make ports public, reset the address / get a ticket for a private port |
+| `reservations:read` / `reservations:write` | See the node reservation timeline / reserve, move, extend, cancel |
 | `audit:read` | Sessions, commands, file records, replays (your own) |
 | `keys:read` / `keys:write` | SSH public keys |
 | `admin:read` | Act as admin for reads (everyone's DevPods, nodes, users, audit). Admins only |
@@ -68,6 +69,31 @@ curl -X DELETE -H "Authorization: Bearer $TOKEN" $DEVPOD/api/devpods/alice-train
 Errors are JSON: `{"code": "SCOPE", "message": "…", "detail": …}` with the
 matching HTTP status (`401` bad or expired token, `403` scope or permission,
 `404` not found or not yours, `409` conflict / quota).
+
+## Nodes and reservations
+
+`GET /api/nodes` (scope `devpods:read`) lists the nodes a DevPod can be pinned
+to: capacity, whether the node is open for reservation, who holds it now
+(`held`), the next reservation by someone else (`next`) and whether your own
+DevPods may go there (`selectable`). Pin with `"node"` on create or
+`PATCH /api/devpods/{name} {"node": "<name>"}` (`""` unpins). A node someone
+else holds answers `409 NODE_RESERVED` with `detail {node, user, until}`.
+
+```sh
+# what would a reservation do? (nothing is created)
+curl -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
+  -d '{"node":"g206","start":"2026-11-12T06:00:00Z","end":"2026-11-12T10:00:00Z"}' \
+  "$DEVPOD/api/reservations?dryRun=true"        # → {"willHibernate": 2}
+
+# reserve, extend a started one, release
+curl … -d '{"node":"g206","start":"…","end":"…"}' $DEVPOD/api/reservations
+curl -X PATCH … -d '{"end":"2026-11-12T12:00:00Z"}' $DEVPOD/api/reservations/<id>
+curl -X DELETE … $DEVPOD/api/reservations/<id>
+```
+
+Times are RFC 3339 and must fall on the granularity from
+`GET /api/reservations/rules`. A period that overlaps someone else's answers
+`409 RESERVATION_CONFLICT` with the winner in `detail`.
 
 ## Without a token: the CLI over SSH
 

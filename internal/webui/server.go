@@ -87,6 +87,13 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("POST /api/me/tokens", s.handleCreateToken)
 	mux.HandleFunc("DELETE /api/me/tokens/{id}", s.handleDeleteToken)
 	mux.HandleFunc("GET /api/openapi.json", s.handleOpenAPI)
+	mux.HandleFunc("GET /api/nodes", s.handleNodes)
+	mux.HandleFunc("GET /api/reservations", s.handleListReservations)
+	mux.HandleFunc("GET /api/reservations/rules", s.handleReservationRules)
+	mux.HandleFunc("POST /api/reservations", s.handleCreateReservation)
+	mux.HandleFunc("PATCH /api/reservations/{id}", s.handlePatchReservation)
+	mux.HandleFunc("DELETE /api/reservations/{id}", s.handleDeleteReservation)
+	mux.HandleFunc("PUT /api/admin/nodes/{name}/reservable", s.handleSetReservable)
 	mux.HandleFunc("GET /api/devpods/{name}/shell", s.handleDevPodShell)
 	mux.HandleFunc("GET /api/devpods/{name}/events", s.handleDevPodEvents)
 	// Single SSE connection carrying both DevPod status and its events.

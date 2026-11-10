@@ -74,20 +74,21 @@ describe("DevPodTable", () => {
     expect(screen.queryByRole("button", { name: /GPU only/ })).toBeNull();
   });
 
-  it("my DevPods can be selected for bulk actions, without 迁移", async () => {
+  it("my DevPods can be selected for bulk actions", async () => {
     stubFetch({ "/api/devpods": { items: [list.items[0]], pods: {} } });
     renderWithProviders(<DevPodTable scope="mine" />);
     await screen.findByRole("link", { name: "alice-a" });
     fireEvent.click(screen.getByLabelText("选择 alice-a"));
     const bar = within(screen.getByRole("toolbar", { name: "批量操作" }));
-    expect(bar.getAllByRole("button").map((b) => b.textContent)).toEqual(["休眠", "启动", "协作者…", "设置镜像…", "重新部署…", "删除…", "取消选择"]);
+    // 迁移 is open to everyone now: the node rule decides, not the role
+    expect(bar.getAllByRole("button").map((b) => b.textContent)).toEqual(["迁移…", "休眠", "启动", "协作者…", "设置镜像…", "重新部署…", "删除…", "取消选择"]);
   });
 
   it("bulk 设置镜像 patches every selected DevPod; 迁移 sends the node", async () => {
     const ok = { devpod: list.items[0], rebuild: true };
     const calls = stubFetch({
       "/api/devpods": list,
-      "/api/admin/nodes": { items: [{ name: "g206", ready: true }, { name: "g207", ready: true }, { name: "g208", ready: true }], live: false },
+      "/api/nodes": { items: ["g206", "g207", "g208"].map((name) => ({ name, ready: true, selectable: true, held: null, next: null })).concat([{ name: "g209", ready: true, selectable: false, held: { user: "bob", until: "2026-11-12T09:00:00Z" } as never, next: null }]) },
       "PATCH /api/devpods/alice-a": ok,
       "PATCH /api/devpods/bob-c": ok,
     });
@@ -108,6 +109,8 @@ describe("DevPodTable", () => {
     fireEvent.click(screen.getByRole("button", { name: "迁移…" }));
     const apply2 = () => screen.getByRole("button", { name: "应用" }) as HTMLButtonElement;
     expect(apply2().disabled).toBe(true);
+    // a node someone else holds cannot be picked
+    expect(((await screen.findByRole("button", { name: /g209/ })) as HTMLButtonElement).disabled).toBe(true);
     fireEvent.click(await screen.findByRole("button", { name: "g207" }));
     fireEvent.click(screen.getByRole("button", { name: "g206" }));
     fireEvent.click(screen.getByRole("button", { name: "g208" }));

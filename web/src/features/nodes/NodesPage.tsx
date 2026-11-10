@@ -3,10 +3,11 @@
 // Reservation columns arrive with the reservation backend (ruling R1).
 import { useMemo, useState } from "react";
 import { Link } from "react-router-dom";
-import { useQueryClient } from "@tanstack/react-query";
+import { useQueryClient, useMutation } from "@tanstack/react-query";
 import type { ColumnDef, SortingState } from "@tanstack/react-table";
 import { patchDevPod, type KoreNode, type NodeLive, type NodeView } from "../../data/api";
-import { useNode, useNodes, useNodesRecent } from "../../data/queries";
+import { useMe, useNode, useNodeChoices, useNodes, useNodesRecent } from "../../data/queries";
+import { setReservable } from "../../data/api";
 import { overviewStream } from "../../data/live/streams";
 import { useLiveRow } from "../../data/live/hooks";
 import { DataTable } from "../../design/DataTable";
@@ -62,6 +63,28 @@ function matchesLabel(labels: Record<string, string>, f: string): boolean {
   return Object.entries(labels).some(([lk, lv]) => (lk === k || lk.endsWith(`/${k}`)) && lv === v);
 }
 
+/** 可预约: admins open a node for reservation (the node label). Turning it
+ *  off leaves reservations already made to run their course. */
+function ReservableSwitch({ name }: { name: string }) {
+  const qc = useQueryClient();
+  const me = useMe().data;
+  const node = useNodeChoices(!!me?.features.reservations).data?.items.find((n) => n.name === name);
+  const set = useMutation({
+    mutationFn: (on: boolean) => setReservable(name, on),
+    onSettled: () => void qc.invalidateQueries({ queryKey: ["node-choices"] }),
+  });
+  if (!me?.features.reservations) return <span className="text-faint">—</span>;
+  const on = set.isPending ? !!set.variables : !!node?.reservable;
+  return (
+    <span className="inline-flex items-center gap-1.5">
+      <input type="checkbox" role="switch" aria-label={`${name} 可预约`} checked={on} disabled={set.isPending || !node} onChange={(e) => set.mutate(e.target.checked)} />
+      {!on && !!node?.pending && <span className="text-[11px] text-warm">还有 {node.pending} 个未结束的预约</span>}
+      {on && node?.held && <span className="text-[11px] text-muted">{node.held.user} 使用中</span>}
+      {set.isError && <span className="text-[11px] text-fail">保存失败</span>}
+    </span>
+  );
+}
+
 const columns: ColumnDef<NodeView, unknown>[] = [
   {
     id: "name",
@@ -77,6 +100,13 @@ const columns: ColumnDef<NodeView, unknown>[] = [
         {!n.ready && <Badge tone="idle">NotReady</Badge>}
       </span>
     ),
+  },
+  {
+    id: "reservable",
+    header: "可预约",
+    enableSorting: false,
+    meta: { priority: 3, width: 150 },
+    cell: ({ row: { original: n } }) => <ReservableSwitch name={n.name} />,
   },
   {
     id: "cpu",

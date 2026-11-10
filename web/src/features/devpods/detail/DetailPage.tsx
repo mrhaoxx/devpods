@@ -1,6 +1,8 @@
 // DevPod 详情 (UI spec §5.2). One SSE connection carries status, events,
 // metrics and processes; with live data off, status and events come
 // from the plain detail stream instead.
+import { Notice } from "../../../design/Form";
+import { reservationNotes } from "../status";
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import { useQueryClient } from "@tanstack/react-query";
@@ -154,6 +156,12 @@ export function DetailPage() {
 
   return (
     <div className="space-y-3 p-3">
+      {reservationNotes(dp).map((n) => (
+        <Notice key={n.type} tone={n.tone}>
+          <span className="font-medium">{n.label}</span>
+          {n.message && `：${n.message}`}
+        </Notice>
+      ))}
       <header className="flex flex-wrap items-center gap-2">
         <h2 className="mono text-base font-semibold">{dp.metadata.name}</h2>
         <StatusDot phase={dp.status?.phase} />

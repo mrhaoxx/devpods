@@ -81,7 +81,7 @@ func (s *Server) handleMe(w http.ResponseWriter, r *http.Request) {
 			"webshell":          s.Webshell != nil,
 			"httpProxy":         s.HTTPProxy != nil,
 			// node reservations arrive with the reservation backend
-			"reservations": false,
+			"reservations": s.Reservations != nil,
 		},
 		"hasPassword": hasPassword,
 		"ssh":         map[string]any{"host": s.SSHHost, "port": s.SSHPort, "loginSuffix": s.SSHLoginSuffix},

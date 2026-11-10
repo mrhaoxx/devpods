@@ -93,6 +93,7 @@ func main() {
 	tf := addTelemetryFlags(flag.CommandLine)
 	hf := addHTTPProxyFlags(flag.CommandLine)
 	cf := addCLIFlags(flag.CommandLine)
+	rf := addReservationFlags(flag.CommandLine)
 	wf := addWebshellFlags(flag.CommandLine)
 	gcName := flag.String("gateway-config-name", "default", "GatewayConfig holding the cluster default audit policy")
 	flag.Parse()
@@ -235,6 +236,10 @@ func main() {
 		}
 	}
 	srv.GatewayConfigName = *gcName
+	if srv.Reservations, err = rf.build(); err != nil {
+		slog.Error("reservations", "err", err)
+		os.Exit(1)
+	}
 	if srv.CLIKey, err = cf.key(); err != nil {
 		slog.Error("cli key", "err", err)
 		os.Exit(1)

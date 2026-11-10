@@ -61,6 +61,8 @@ var Scopes = []Scope{
 	{ID: "http:read", Group: "访问", Label: "查看端口链接"},
 	{ID: "http:write", Group: "访问", Label: "公开 / 取消公开端口、重置链接"},
 	{ID: "http:connect", Group: "访问", Label: "换取私有端口的访问票据"},
+	{ID: "reservations:read", Group: "预约", Label: "查看节点预约时间轴"},
+	{ID: "reservations:write", Group: "预约", Label: "预约、修改、延长、取消节点"},
 	{ID: "audit:read", Group: "审计", Label: "查看会话、命令、文件记录和回放"},
 	{ID: "keys:read", Group: "账号", Label: "查看 SSH 公钥"},
 	{ID: "keys:write", Group: "账号", Label: "修改 SSH 公钥"},
@@ -99,6 +101,14 @@ var apiRoutes = []apiRoute{
 	{"PATCH /api/devpods/{name}", scopePatch, "Edit a DevPod: {running} (devpods:power) or {image, cpu, memory, gpu, shell, collaborators, node} (devpods:update)"},
 	{"POST /api/devpods/{name}/redeploy", "devpods:power", "Recreate the Pod"},
 	{"DELETE /api/devpods/{name}", "devpods:delete", "Delete a DevPod"},
+
+	{"GET /api/nodes", "devpods:read", "Nodes a DevPod can be pinned to, with capacity and reservation state"},
+	{"GET /api/reservations", "reservations:read", "Node reservation timeline (?from=&to=&node=)"},
+	{"GET /api/reservations/rules", scopeAny, "Reservation rules: granularity, limits, timezone"},
+	{"POST /api/reservations", "reservations:write", "Reserve a node: {node, start, end}; ?dryRun=true answers {willHibernate}"},
+	{"PATCH /api/reservations/{id}", "reservations:write", "Move a reservation that has not started, or extend one that has: {start?, end?}"},
+	{"DELETE /api/reservations/{id}", "reservations:write", "Cancel, or release early"},
+	{"PUT /api/admin/nodes/{name}/reservable", "admin:write", "Open or close a node for reservation: {reservable}"},
 
 	{"GET /api/live/devpods", "metrics:read", "Server-sent events: live CPU / memory / GPU / network of my DevPods"},
 	{"GET /api/live/devpods/recent", "metrics:read", "CPU and memory of the last 15 minutes"},

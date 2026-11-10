@@ -42,6 +42,8 @@ type Server struct {
 	// CLIKey lets the SSH gateway act for a user it authenticated (the
 	// CLI over SSH); empty = off.
 	CLIKey []byte
+	// Reservations: node reservation rules; nil = off.
+	Reservations *ReservationRules
 	// HTTPProxy: DevPod ports published through the gateway; nil = off.
 	HTTPProxy *HTTPProxy
 
@@ -222,6 +224,9 @@ type CreateRequest struct {
 	Persistence   *devpodv1alpha1.PersistenceSpec `json:"persistence,omitempty"`
 	GPU           string                          `json:"gpu,omitempty"` // nvidia.com/gpu limit
 	Collaborators []string                        `json:"collaborators,omitempty"`
+	// Node pins the DevPod to a node (form path; YAML sets the hostname
+	// node selector itself). Refused while someone else holds the node.
+	Node string `json:"node,omitempty"`
 }
 
 // listScope reads ?scope=mine|all; all is for admins (the console's
@@ -385,6 +390,27 @@ func (s *Server) handleCreateDevPod(w http.ResponseWriter, r *http.Request) {
 	}
 	if !s.checkQuotaFor(w, r, sess, dp, "") {
 		return
+	}
+	if req.Node != "" {
+		if dp.Spec.Pod == nil {
+			s.writeErr(w, http.StatusBadRequest, "BAD_REQUEST", "only pod workloads can be pinned to a node", nil)
+			return
+		}
+		if dp.Spec.Pod.Spec.NodeSelector == nil {
+			dp.Spec.Pod.Spec.NodeSelector = map[string]string{}
+		}
+		dp.Spec.Pod.Spec.NodeSelector[hostnameLabel] = req.Node
+	}
+	if node := pinnedNode(dp); node != "" {
+		var n corev1.Node
+		if err := s.Client.Get(r.Context(), types.NamespacedName{Name: node}, &n); err != nil {
+			s.writeErr(w, http.StatusBadRequest, "BAD_REQUEST", fmt.Sprintf("node %q not found", node), nil)
+			return
+		}
+		if apiErr := s.pinErr(r.Context(), dp.Spec.Owner, node); apiErr != nil {
+			s.writeErr(w, apiErr.status, apiErr.Code, apiErr.Message, apiErr.Detail)
+			return
+		}
 	}
 
 	if err := s.Client.Create(r.Context(), dp); err != nil {
@@ -622,6 +648,12 @@ func (s *Server) patchDevPod(r *http.Request, sess Session, dp *devpodv1alpha1.D
 	if equality.Semantic.DeepEqual(before.Spec, dp.Spec) {
 		return PatchResponse{DevPod: dp}, nil // no-op
 	}
+	// starting a DevPod pinned to a node someone else holds now
+	if dp.Spec.Running && !before.Spec.Running {
+		if apiErr := s.pinErr(r.Context(), dp.Spec.Owner, pinnedNode(dp)); apiErr != nil {
+			return PatchResponse{}, apiErr
+		}
+	}
 	if !sess.Admin && req.editsSpec() {
 		if err := RequireLimits(&dp.Spec.Pod.Spec); err != nil {
 			return PatchResponse{}, &serverErr{http.StatusBadRequest, "BAD_REQUEST", err.Error(), nil}
@@ -649,9 +681,6 @@ const hostnameLabel = "kubernetes.io/hostname"
 
 // applyNode pins dp to node ("" unpins).
 func (s *Server) applyNode(r *http.Request, sess Session, dp *devpodv1alpha1.DevPod, node string) *serverErr {
-	if !sess.Admin {
-		return &serverErr{http.StatusForbidden, "FORBIDDEN", "only admins can migrate a DevPod", nil}
-	}
 	if dp.Spec.Pod == nil {
 		return &serverErr{http.StatusBadRequest, "BAD_REQUEST", "only pod workloads can be migrated", nil}
 	}
@@ -672,7 +701,8 @@ func (s *Server) applyNode(r *http.Request, sess Session, dp *devpodv1alpha1.Dev
 		dp.Spec.Pod.Spec.NodeSelector = sel
 	}
 	sel[hostnameLabel] = node
-	return nil
+	// the node rule is judged by the DevPod's owner, whoever asks
+	return s.pinErr(r.Context(), dp.Spec.Owner, node)
 }
 
 // handleRedeployDevPod serves POST /api/devpods/{name}/redeploy: it

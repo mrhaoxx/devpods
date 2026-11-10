@@ -23,7 +23,9 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
+	"sigs.k8s.io/controller-runtime/pkg/handler"
 	"sigs.k8s.io/controller-runtime/pkg/log"
+	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	devpodv1alpha1 "github.com/mrhaoxx/devpod/api/v1alpha1"
 	"github.com/mrhaoxx/devpod/internal/render"
@@ -54,6 +56,16 @@ type DevPodReconciler struct {
 	// OpenSSH authorized_keys-line form, embedded into every per-DevPod
 	// host-key Secret as the sidecar's sole authorized key.
 	GatewayInternalPub []byte
+
+	// Reservations turns on the node-reservation rules (reservation spec
+	// §4): Pods keep off nodes someone else holds, and a DevPod pinned to
+	// such a node waits without a Pod. Now is the clock (nil = time.Now).
+	Reservations bool
+	Now          func() time.Time
+
+	// excluded is set within a single reconcile pass: the nodes other
+	// users hold right now, kept off a Pod created in this pass.
+	excluded []string
 
 	// requeueAfter is set within a single reconcile pass when the
 	// controller wants to delay before retrying (e.g. failure backoff).
@@ -110,6 +122,11 @@ func (r *DevPodReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 		if err := r.hibernate(ctx, &dp); err != nil {
 			return ctrl.Result{}, err
 		}
+		if r.Reservations { // a stopped DevPod waits for nothing
+			if _, err := setDevPodCondition(ctx, r.Client, &dp, devpodv1alpha1.ConditionNodeReserved, false, ""); err != nil {
+				return ctrl.Result{}, err
+			}
+		}
 		return ctrl.Result{}, r.updateStatus(ctx, &dp)
 	}
 
@@ -127,7 +144,16 @@ func (r *DevPodReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 		return ctrl.Result{}, nil
 	}
 
-	r.requeueAfter = 0
+	r.requeueAfter, r.excluded = 0, nil
+	if r.Reservations {
+		wait, err := r.reservationGate(ctx, &dp)
+		if err != nil {
+			return ctrl.Result{}, err
+		}
+		if wait > 0 { // pinned to a node someone else holds: no Pod until it is free
+			return ctrl.Result{RequeueAfter: wait}, r.updateStatus(ctx, &dp)
+		}
+	}
 	if err := r.applyAll(ctx, &dp); err != nil {
 		return ctrl.Result{}, err
 	}
@@ -135,6 +161,68 @@ func (r *DevPodReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 		return ctrl.Result{RequeueAfter: r.requeueAfter}, nil
 	}
 	return ctrl.Result{}, nil
+}
+
+func (r *DevPodReconciler) now() time.Time {
+	if r.Now != nil {
+		return r.Now()
+	}
+	return time.Now()
+}
+
+// reservationGate applies the reservation rules to a running DevPod. It
+// records the nodes other users hold (r.excluded). A DevPod pinned to
+// one of them, with no Pod yet, gets the NodeReserved condition and a
+// positive wait (until that reservation ends); otherwise the condition
+// is cleared and the wait is zero. A Pod that already runs there is left
+// to the reservation's own clearing step.
+func (r *DevPodReconciler) reservationGate(ctx context.Context, dp *devpodv1alpha1.DevPod) (time.Duration, error) {
+	var all devpodv1alpha1.ReservationList
+	if err := r.List(ctx, &all); err != nil {
+		return 0, fmt.Errorf("list reservations: %w", err)
+	}
+	now := r.now()
+	held := heldByOthers(all.Items, dp.Spec.Owner, now)
+	for node := range held {
+		r.excluded = append(r.excluded, node)
+	}
+	if res, ok := held[PinnedNode(dp)]; ok {
+		var pod corev1.Pod
+		err := r.Get(ctx, types.NamespacedName{Name: render.PodName(dp), Namespace: r.GwConfig.Spec.DevPodNamespace}, &pod)
+		if err != nil && !apierrors.IsNotFound(err) {
+			return 0, fmt.Errorf("get pod: %w", err)
+		}
+		if apierrors.IsNotFound(err) {
+			msg := fmt.Sprintf("%s 被 %s 预约至 %s", res.Spec.Node, res.Spec.User, clock(res.Spec.End.Time))
+			if _, err := setDevPodCondition(ctx, r.Client, dp, devpodv1alpha1.ConditionNodeReserved, true, msg); err != nil {
+				return 0, err
+			}
+			return max(res.Spec.End.Time.Sub(now), time.Second), nil
+		}
+	}
+	_, err := setDevPodCondition(ctx, r.Client, dp, devpodv1alpha1.ConditionNodeReserved, false, "")
+	return 0, err
+}
+
+// reservationDevPods maps a Reservation event to the running DevPods
+// pinned to its node: one of them may be waiting for the node, or must
+// start waiting.
+func (r *DevPodReconciler) reservationDevPods(ctx context.Context, obj client.Object) []reconcile.Request {
+	res, ok := obj.(*devpodv1alpha1.Reservation)
+	if !ok {
+		return nil
+	}
+	var list devpodv1alpha1.DevPodList
+	if err := r.List(ctx, &list, client.InNamespace(r.GwConfig.Spec.DevPodNamespace)); err != nil {
+		return nil
+	}
+	var out []reconcile.Request
+	for i := range list.Items {
+		if dp := &list.Items[i]; dp.Spec.Running && PinnedNode(dp) == res.Spec.Node {
+			out = append(out, reconcile.Request{NamespacedName: client.ObjectKeyFromObject(dp)})
+		}
+	}
+	return out
 }
 
 // applyAll renders and applies the full object set for one DevPod.
@@ -339,6 +427,7 @@ func (r *DevPodReconciler) updateStatus(ctx context.Context, dp *devpodv1alpha1.
 			}
 		} else {
 			desired.Phase = devpodv1alpha1.DevPodPending
+			desired.Message = reservedMessage(dp) // waiting for a reserved node
 		}
 	}
 
@@ -511,6 +600,11 @@ func (r *DevPodReconciler) applyPodWithDriftRecreate(ctx context.Context, dp *de
 			}
 			return nil
 		}
+		if r.Reservations {
+			// affinity is immutable: keep the exclusion the Pod was created
+			// with, whatever is reserved now
+			pod.Spec.Affinity = live.Spec.Affinity.DeepCopy()
+		}
 	case apierrors.IsNotFound(err):
 		// First create — check backoff before recreating.
 		if dp.Status.LastFailureAt != nil {
@@ -521,6 +615,10 @@ func (r *DevPodReconciler) applyPodWithDriftRecreate(ctx context.Context, dp *de
 				return nil
 			}
 		}
+		// Keep a new Pod off nodes other users hold right now (reservation
+		// spec §4.1). Added after the hash on purpose: reservations coming
+		// and going must never read as drift and recreate a running Pod.
+		excludeNodes(pod, r.excluded)
 	default:
 		return fmt.Errorf("get live pod: %w", err)
 	}
@@ -660,12 +758,15 @@ func podFailureMessage(pod *corev1.Pod) string {
 
 // SetupWithManager registers the controller with mgr.
 func (r *DevPodReconciler) SetupWithManager(mgr ctrl.Manager) error {
-	return ctrl.NewControllerManagedBy(mgr).
+	b := ctrl.NewControllerManagedBy(mgr).
 		For(&devpodv1alpha1.DevPod{}).
 		Owns(&corev1.Pod{}).
 		Owns(&corev1.Service{}).
 		Owns(&corev1.Secret{}).
 		Owns(&corev1.PersistentVolumeClaim{}).
-		Owns(&networkingv1.NetworkPolicy{}).
-		Complete(r)
+		Owns(&networkingv1.NetworkPolicy{})
+	if r.Reservations {
+		b = b.Watches(&devpodv1alpha1.Reservation{}, handler.EnqueueRequestsFromMapFunc(r.reservationDevPods))
+	}
+	return b.Complete(r)
 }

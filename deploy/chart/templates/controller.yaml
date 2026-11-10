@@ -33,6 +33,12 @@ spec:
         {{- with .Values.controller.homeHostPath }}
         - --home-host-path={{ . }}
         {{- end }}
+        {{- if dig "enabled" false (.Values.reservation | default dict) }}
+        - --reservations=true
+        - --reservation-clear-notice={{ .Values.reservation.clearNotice }}
+        - --reservation-ending-notice={{ .Values.reservation.endingNotice }}
+        - --reservation-retention={{ .Values.reservation.retention }}
+        {{- end }}
         {{- if include "devpod.telemetry.on" $ }}
         - --ingest-url={{ include "devpod.telemetry.ingestURL" . }}
         - --ingest-key-file=/etc/devpod/ingest/key

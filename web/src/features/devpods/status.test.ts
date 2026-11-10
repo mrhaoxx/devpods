@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { phaseSummary } from "./status";
+import { phaseSummary, reservationNotes } from "./status";
 import type { DevPod } from "../../data/api";
 
 const now = new Date("2026-11-10T12:00:00Z");
@@ -27,5 +27,20 @@ describe("phaseSummary", () => {
   it("Failed shows the reason and the retry countdown", () => {
     const s = phaseSummary(dp({}, { phase: "Failed", message: "ImagePullBackOff", retryCount: 2, lastFailureAt: "2026-11-10T11:59:50Z" }), undefined, now);
     expect(s).toBe("ImagePullBackOff · 10s 后重试");
+  });
+});
+
+describe("reservationNotes", () => {
+  const dp = (o: { running?: boolean; ann?: Record<string, string>; conditions?: { type: string; status: string; message?: string }[] }) =>
+    ({ metadata: { name: "a", annotations: o.ann }, spec: { owner: "u", running: o.running ?? true }, status: { conditions: o.conditions } }) as DevPod;
+  it("shows the controller's conditions, and says a NodeReserved DevPod starts by itself", () => {
+    const notes = reservationNotes(dp({ conditions: [{ type: "NodeReserved", status: "True", message: "g206 被 alice 预约至 17:00" }, { type: "ReservationEnding", status: "False" }] }));
+    expect(notes.map((n) => n.label)).toEqual(["节点被预约"]);
+    expect(notes[0].message).toBe("g206 被 alice 预约至 17:00。节点空出来后会自动启动，不需要操作。");
+  });
+  it("被预约清场休眠 only while the DevPod is stopped", () => {
+    const ann = { "devpod.io/hibernated-by": "reservation/r1" };
+    expect(reservationNotes(dp({ running: false, ann })).map((n) => n.label)).toEqual(["被预约清场休眠"]);
+    expect(reservationNotes(dp({ running: true, ann }))).toEqual([]);
   });
 });

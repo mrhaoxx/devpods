@@ -55,6 +55,16 @@ rules:
 - apiGroups: [""]
   resources: ["nodes"]
   verbs: ["get", "list", "watch"]
+{{- if dig "enabled" false (.Values.reservation | default dict) }}
+# Node reservations: users reserve through the webui; the 可预约 switch
+# patches the node's devpod.io/reservable label.
+- apiGroups: ["devpod.io"]
+  resources: ["reservations"]
+  verbs: ["get", "list", "watch", "create", "update", "delete"]
+- apiGroups: [""]
+  resources: ["nodes"]
+  verbs: ["patch"]
+{{- end }}
 # Read-only: the audit policy endpoints show the cluster default.
 - apiGroups: ["devpod.io"]
   resources: ["gatewayconfigs"]
