@@ -14,7 +14,7 @@ import {
   type K8sEvent,
   type ProcLive,
 } from "../../../data/api";
-import { qk, useAuditSessions, useDevPod, useDevPodMutations, useMe } from "../../../data/queries";
+import { qk, useAuditSessions, useDevPod, useDevPodMutations, useMe, useMetrics } from "../../../data/queries";
 import { devpodStream } from "../../../data/live/streams";
 import { useLiveEnabled, useLiveRow } from "../../../data/live/hooks";
 import { StatusDot } from "../../../design/StatusDot";
@@ -35,7 +35,7 @@ import { MonitorTab } from "./MonitorTab";
 import { ContainerTab } from "./ContainerTab";
 
 const schema = {
-  tab: { kind: "string", default: "overview" },
+  tab: { kind: "string", default: "monitor" },
   edit: { kind: "bool", default: false },
 } satisfies Schema;
 
@@ -103,6 +103,7 @@ export function DetailPage() {
   const allProcs = url.tab === "processes";
   const spec = useMemo(() => devpodStream(name, allProcs, onOther), [name, allProcs, onOther]);
   const metrics = useLiveRow<DevPodSample>(spec, "metrics");
+  const recent = useMetrics(name, "15m"); // the cards' sparklines start from history
   const procs = useLiveRow<ProcLive[]>(spec, "processes");
   // without live data the detail stream still carries status and events
   useEffect(() => {
@@ -140,8 +141,8 @@ export function DetailPage() {
   const b = d.binding;
   const kore = b?.pool ? `pool ${b.pool}` : b?.allocatedCpuset ? `pin ${b.allocatedCpuset}${b.reservedNuma ? ` · NUMA ${b.reservedNuma}` : ""}` : b ? "绑定中" : "";
   const tabs: [string, string][] = [
-    ["overview", "概览"],
     ["monitor", "监控"],
+    ["overview", "概览"],
     ["processes", "进程"],
     ...(audit ? ([["sessions", "会话"]] as [string, string][]) : []),
     ["container", "容器"],
@@ -178,7 +179,7 @@ export function DetailPage() {
       </div>
       {dp.status?.message && !runningPhase && <div className="rounded-md bg-warm-soft px-3 py-1.5 text-xs text-warm">{dp.status.message}</div>}
 
-      <LiveCards row={live ? metrics.row : undefined} />
+      <LiveCards row={live ? metrics.row : undefined} hist={recent.data} />
 
       <div role="tablist" className="flex gap-1 border-b border-line text-xs">
         {tabs.map(([id, label]) => (

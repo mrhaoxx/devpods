@@ -5,6 +5,7 @@ import type { DevPodSample, MetricSeries } from "../../../data/api";
 type S = (number | null)[];
 export type ChartSet = {
   ts: number[]; // ms
+  stepMs: number; // the width of one point
   cpu: { used: S; limit: S; throttled: S };
   mem: { anon: S; file: S; limit: S };
   gpu: Record<string, { name?: string; util: S; mem: S; power: S; temp: S }>;
@@ -28,6 +29,7 @@ export function chartsFromSeries(s: MetricSeries): ChartSet {
   }
   return {
     ts: s.ts.map((t) => t * 1000),
+    stepMs: s.step * 1000,
     cpu: { used: get("cpu"), limit: get("cpu_limit"), throttled: get("cpu_throttled") },
     mem: { anon: get("mem_anon"), file: get("mem_file"), limit: get("mem_limit") },
     gpu,
@@ -76,6 +78,7 @@ export function chartsFromLive(history: ReadonlyArray<{ ts: number; value: DevPo
   });
   return {
     ts: history.map((h) => h.ts),
+    stepMs: 1000,
     cpu: { used: c("cpu"), limit: c("cpu_limit"), throttled },
     mem: { anon: c("mem_anon"), file: c("mem_file"), limit: c("mem_limit") },
     gpu,
@@ -89,4 +92,34 @@ export function chartsFromLive(history: ReadonlyArray<{ ts: number; value: DevPo
 export function lastLimit(s: S): number | null {
   for (let i = s.length - 1; i >= 0; i--) if (s[i] != null && s[i]! > 0) return s[i];
   return null;
+}
+
+/** mergeLive extends history with the live samples that fall after its
+ *  last bucket and keeps only the last rangeMs (the chart's right edge
+ *  moves every second; a reload shows the same curve from history). */
+export function mergeLive(hist: ChartSet, live: ChartSet, rangeMs: number, nowMs: number): ChartSet {
+  const last = hist.ts.length ? hist.ts[hist.ts.length - 1] + hist.stepMs : -Infinity;
+  const take = live.ts.map((t, i) => (t >= last ? i : -1)).filter((i) => i >= 0);
+  const ts = [...hist.ts, ...take.map((i) => live.ts[i])];
+  const from = ts.findIndex((t) => t >= nowMs - rangeMs);
+  const keep = from < 0 ? ts.length : from;
+  const cat = (h: S | undefined, l: S | undefined): S =>
+    [...(h ?? nulls(hist.ts.length)), ...take.map((i) => (l ? l[i] : null))].slice(keep);
+  const group = <T extends Record<string, S | string | undefined>>(h: T | undefined, l: T | undefined, keys: (keyof T)[]): T => {
+    const out = { ...(h ?? l) } as Record<string, unknown>;
+    for (const k of keys) out[k as string] = cat(h?.[k] as S | undefined, l?.[k] as S | undefined);
+    return out as T;
+  };
+  const byKey = <T extends Record<string, S | string | undefined>>(h: Record<string, T>, l: Record<string, T>, keys: (keyof T)[]) =>
+    Object.fromEntries([...new Set([...Object.keys(h), ...Object.keys(l)])].map((k) => [k, group(h[k], l[k], keys)]));
+  return {
+    ts: ts.slice(keep),
+    stepMs: hist.stepMs,
+    cpu: group(hist.cpu, live.cpu, ["used", "limit", "throttled"]),
+    mem: group(hist.mem, live.mem, ["anon", "file", "limit"]),
+    gpu: byKey(hist.gpu, live.gpu, ["util", "mem", "power", "temp"]),
+    net: group(hist.net, live.net, ["rx", "tx", "tcpRx", "tcpTx"]),
+    rdma: byKey(hist.rdma, live.rdma, ["rx", "tx", "cnp", "retrans"]),
+    io: group(hist.io, live.io, ["r", "w"]),
+  };
 }

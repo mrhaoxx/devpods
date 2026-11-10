@@ -6,9 +6,9 @@ import { useQueryClient } from "@tanstack/react-query";
 import * as Menu from "@radix-ui/react-dropdown-menu";
 import type { SortingState } from "@tanstack/react-table";
 import { deleteDevPod, patchDevPod, sshCommand, type LiveItem } from "../../data/api";
-import { useDevPodMutations, useDevPods, useMe } from "../../data/queries";
+import { useDevPodMutations, useDevPods, useMe, useRecent } from "../../data/queries";
 import { devpodsStream } from "../../data/live/streams";
-import { useLiveRow, useLiveValues } from "../../data/live/hooks";
+import { useLiveEnabled, useLiveRow, useLiveValues } from "../../data/live/hooks";
 import { DataTable } from "../../design/DataTable";
 import { Chip } from "../../design/Chip";
 import { Button } from "../../design/Button";
@@ -74,6 +74,7 @@ export function DevPodTable({ scope }: { scope: "mine" | "all" }) {
   const now = useNow(10_000);
   const spec = devpodsStream(scope);
   const { status } = useLiveRow(spec, "");
+  const recent = useRecent({ scope }, useLiveEnabled());
   const [confirm, setConfirm] = useState<{ rows: Row[]; bulk: boolean } | null>(null);
   const [outcome, setOutcome] = useState<Outcome | null>(null);
   const { remove } = useDevPodMutations();
@@ -105,7 +106,7 @@ export function DevPodTable({ scope }: { scope: "mine" | "all" }) {
 
   const failed = outcome?.results.filter((r) => !r.ok) ?? [];
   return (
-    <TableCtx.Provider value={{ scope, now }}>
+    <TableCtx.Provider value={{ scope, now, recent: recent.data }}>
       <div className="flex flex-wrap items-center gap-2 border-b border-line px-3 py-2">
         <Input
           aria-label="过滤"

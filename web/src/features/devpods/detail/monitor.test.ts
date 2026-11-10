@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { chartsFromLive, chartsFromSeries } from "./monitor";
+import { chartsFromLive, chartsFromSeries, mergeLive } from "./monitor";
 import type { DevPodSample, MetricSeries } from "../../../data/api";
 
 const series: MetricSeries = {
@@ -54,5 +54,15 @@ describe("monitor data", () => {
     expect(c.rdma["mlx5_0/1"].retrans).toEqual([null, 3]);
     expect(c.rdma["mlx5_0/1"].scope).toBe("VF");
     expect(c.cpu.used).toEqual([1, 1]);
+  });
+  it("mergeLive appends only samples past the history's last bucket and keeps the window", () => {
+    const hist = chartsFromSeries({ step: 5, ts: [0, 5], series: { cpu: [1, 2] } });
+    const lv = chartsFromLive([4, 9, 11].map((s, i) => ({ ...live(s * 1000, {}), value: { ...live(0, {}).value, container: { cpu: [9, 3, 4][i] } as DevPodSample["container"] } })));
+    const m = mergeLive(hist, lv, 10_000, 11_000);
+    expect(m.ts).toEqual([5_000, 11_000]);
+    expect(m.cpu.used).toEqual([2, 4]);
+    expect(m.mem.anon).toHaveLength(2);
+    expect(Object.keys(m.rdma)).toEqual(["mlx5_0/1"]);
+    expect(m.rdma["mlx5_0/1"].rx).toEqual([null, 10]);
   });
 });

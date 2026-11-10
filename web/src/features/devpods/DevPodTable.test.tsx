@@ -73,4 +73,17 @@ describe("DevPodTable", () => {
     expect(screen.queryByRole("button", { name: /GPU only/ })).toBeNull();
     expect(screen.queryByLabelText("选择 alice-a")).toBeNull();
   });
+
+  it("draws the CPU sparkline from history on load", async () => {
+    const t = Math.floor(Date.now() / 1000);
+    stubFetch({
+      "/api/devpods": { items: [list.items[0]], pods: list.pods },
+      "/api/live/devpods/recent": { step: 15, ts: [t - 60, t - 45, t - 30], items: { "alice-a": { cpu: [1, 2, 3], mem: [1, 1, 1] } } },
+    });
+    const me = stubMe();
+    me.features.telemetry = true;
+    renderWithProviders(<DevPodTable scope="mine" />, { me, liveEnabled: true });
+    const row = (await screen.findByRole("link", { name: "alice-a" })).closest("tr")!;
+    await waitFor(() => expect(row.querySelector("polyline")).toBeTruthy());
+  });
 });

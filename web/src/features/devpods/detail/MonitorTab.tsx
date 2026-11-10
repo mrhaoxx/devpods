@@ -1,5 +1,5 @@
-// 监控 (UI spec §5.2): 实时 1s from the live ring, 15m–7d from history
-// (the server switches to minute data beyond its 1 s retention).
+// 监控 (UI spec §5.2, feedback round 1): history from ClickHouse for 15m–7d,
+// the live tail appended on the ranges up to 1h; opens on 1h.
 import { useMemo, useState } from "react";
 import type { DevPodSample, MetricRange } from "../../../data/api";
 import { ApiFailure } from "../../../data/api";
@@ -10,16 +10,21 @@ import { EmptyState } from "../../../design/EmptyState";
 import { Select } from "../../../design/Form";
 import { useUrlState, type Schema } from "../../../lib/urlState";
 import { fmtBytes, fmtCores, fmtRate } from "../../../lib/format";
-import { chartsFromLive, chartsFromSeries, lastLimit, type ChartSet } from "./monitor";
+import { chartsFromLive, chartsFromSeries, lastLimit, mergeLive, type ChartSet } from "./monitor";
 
-const RANGES: [string, string][] = [
-  ["live", "实时 1s"],
-  ["15m", "15m"],
-  ["1h", "1h"],
-  ["24h", "24h"],
-  ["7d", "7d"],
-];
-const schema = { range: { kind: "string", default: "live" } } satisfies Schema;
+// Grafana-like presets; history from ClickHouse, the live tail appended
+// for the short ones (UI feedback round 1).
+const RANGE_MS: Record<string, number> = {
+  "15m": 15 * 60e3,
+  "1h": 3600e3,
+  "3h": 3 * 3600e3,
+  "6h": 6 * 3600e3,
+  "12h": 12 * 3600e3,
+  "24h": 24 * 3600e3,
+  "7d": 7 * 24 * 3600e3,
+};
+const RANGES = Object.keys(RANGE_MS);
+const schema = { range: { kind: "string", default: "1h" } } satisfies Schema;
 const palette = ["--color-accent", "--color-run", "--color-warm", "--color-fail", "--color-idle"];
 type GpuMetric = "util" | "mem" | "power" | "temp";
 const gpuMetric: Record<GpuMetric, [string, (v: number) => string]> = {
@@ -118,7 +123,7 @@ function Charts({ c, live }: { c: ChartSet; live: boolean }) {
           live &&
           rdmas.length > 0 && (
             <label className="inline-flex items-center gap-1 text-[11px] text-muted">
-              <input type="checkbox" checked={rdmaHealth} onChange={(e) => setRdmaHealth(e.target.checked)} /> CNP / 重传
+              <input type="checkbox" checked={rdmaHealth} onChange={(e) => setRdmaHealth(e.target.checked)} /> CNP / 重传（实时）
             </label>
           )
         }
@@ -163,29 +168,33 @@ function Charts({ c, live }: { c: ChartSet; live: boolean }) {
 
 export function MonitorTab({ name, history }: { name: string; history?: ReadonlyArray<{ ts: number; value: DevPodSample }> }) {
   const [url, setUrl] = useUrlState(schema);
-  const live = url.range === "live";
-  const hist = useMetrics(name, live ? undefined : (url.range as MetricRange));
+  const range = RANGE_MS[url.range] ? url.range : "1h";
+  const rangeMs = RANGE_MS[range];
+  const hist = useMetrics(name, range as MetricRange);
+  // the live tail extends the short ranges second by second
+  const live = rangeMs <= 3600e3 && !!history?.length;
   const charts = useMemo(() => {
-    if (live) return history && history.length ? chartsFromLive(history) : null;
-    return hist.data ? chartsFromSeries(hist.data) : null;
-  }, [live, history, hist.data]);
+    if (!hist.data) return null;
+    const base = chartsFromSeries(hist.data);
+    return live ? mergeLive(base, chartsFromLive(history!), rangeMs, Date.now()) : base;
+  }, [hist.data, history, live, rangeMs]);
   return (
     <div className="space-y-3">
       <div role="radiogroup" aria-label="时间范围" className="inline-flex rounded-md border border-line bg-sunk p-0.5 text-xs">
-        {RANGES.map(([id, label]) => (
+        {RANGES.map((id) => (
           <button
             key={id}
             type="button"
             role="radio"
-            aria-checked={url.range === id}
+            aria-checked={range === id}
             onClick={() => setUrl({ range: id })}
-            className={`rounded px-2.5 py-0.5 ${url.range === id ? "bg-surface font-medium shadow-sm" : "text-muted hover:text-ink"}`}
+            className={`rounded px-2.5 py-0.5 ${range === id ? "bg-surface font-medium shadow-sm" : "text-muted hover:text-ink"}`}
           >
-            {label}
+            {id}
           </button>
         ))}
       </div>
-      {!live && hist.isError ? (
+      {hist.isError ? (
         <EmptyState
           tone="error"
           title="历史数据暂不可用"
@@ -194,7 +203,7 @@ export function MonitorTab({ name, history }: { name: string; history?: Readonly
       ) : charts ? (
         <Charts c={charts} live={live} />
       ) : (
-        <EmptyState title={live ? "等待实时数据…" : "加载中…"} hint={live && !history ? "监控在 Pod 下次重建后生效" : undefined} />
+        <EmptyState title="加载中…" />
       )}
     </div>
   );

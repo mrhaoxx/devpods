@@ -21,9 +21,13 @@ export function MetricCell({
   hint?: string;
 }) {
   if (value == null) {
+    const hasCurve = spark?.some((v) => v != null);
     return (
-      <span className="text-faint" title={hint} aria-label={hint}>
-        —
+      <span className="inline-flex min-w-0 items-center gap-1.5">
+        {hasCurve && <Sparkline values={spark!} max={sparkMax} width={48} height={14} />}
+        <span className="text-faint" title={hasCurve ? undefined : hint} aria-label={hasCurve ? undefined : hint}>
+          —
+        </span>
       </span>
     );
   }

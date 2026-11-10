@@ -152,7 +152,9 @@ export type WireSnapshot = {
 export type ContainerInfo = { info: WireInfo; infoTs: string; snapshot?: WireSnapshot; snapshotTs?: string };
 
 /* audit/store/telemetry_query.go */
-export type MetricRange = "15m" | "1h" | "24h" | "7d";
+export type MetricRange = "15m" | "1h" | "3h" | "6h" | "12h" | "24h" | "7d";
+/** api_metrics.go handleLiveRecent: 15 min of CPU / memory by DevPod name. */
+export type RecentFrame = { step: number; ts: number[]; items: Record<string, { cpu: (number | null)[]; mem: (number | null)[] }> };
 export type MetricSeries = { step: number; ts: number[]; series: Record<string, (number | null)[]> };
 
 /* api_nodes.go */

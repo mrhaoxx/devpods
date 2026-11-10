@@ -4,7 +4,7 @@
 import { createContext, useContext } from "react";
 import { Link } from "react-router-dom";
 import type { ColumnDef } from "@tanstack/react-table";
-import type { DevPod, LiveItem, Me, PodInfo } from "../../data/api";
+import type { DevPod, LiveItem, Me, PodInfo, RecentFrame } from "../../data/api";
 import { devpodsStream } from "../../data/live/streams";
 import { useLiveRow } from "../../data/live/hooks";
 import { MetricCell } from "../../design/MetricCell";
@@ -12,6 +12,7 @@ import { StatusDot, phaseLabel } from "../../design/StatusDot";
 import { Badge } from "../../design/Badge";
 import { fmtAge, fmtBytes, fmtCores, fmtRate, parseQuantity } from "../../lib/format";
 import { phaseSummary } from "./status";
+import { sparkSeries } from "../../lib/spark";
 
 export type Row = {
   dp: DevPod;
@@ -44,7 +45,7 @@ export function toRow(dp: DevPod, pod?: PodInfo): Row {
 }
 
 /** Shared by the cells: scope of the live stream and a coarse clock. */
-export const TableCtx = createContext<{ scope: "mine" | "all"; now: Date }>({ scope: "mine", now: new Date() });
+export const TableCtx = createContext<{ scope: "mine" | "all"; now: Date; recent?: RecentFrame }>({ scope: "mine", now: new Date() });
 
 function useLive(name: string) {
   const { scope } = useContext(TableCtx);
@@ -54,7 +55,7 @@ function useLive(name: string) {
 const running = (r: Row) => r.phase === "Running";
 
 function CpuCell({ r }: { r: Row }) {
-  const { now } = useContext(TableCtx);
+  const { now, recent } = useContext(TableCtx);
   const live = useLive(r.name);
   if (!running(r)) {
     const s = phaseSummary(r.dp, r.pod, now) ?? "";
@@ -70,7 +71,11 @@ function CpuCell({ r }: { r: Row }) {
     <MetricCell
       value={v}
       text={v == null ? undefined : `${fmtCores(v)}/${fmtCores(limit)}`}
-      spark={live?.history.map((h) => h.value.cpu)}
+      spark={sparkSeries(
+        recent?.items[r.name] && { ts: recent.ts, v: recent.items[r.name].cpu },
+        (live?.history ?? []).map((h) => ({ ts: h.ts, v: h.value.cpu })),
+        Date.now(),
+      )}
       sparkMax={limit || undefined}
     />
   );

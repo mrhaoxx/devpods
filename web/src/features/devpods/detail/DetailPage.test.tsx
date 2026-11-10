@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { act, fireEvent, screen } from "@testing-library/react";
+import { act, fireEvent, screen, waitFor } from "@testing-library/react";
 import { Route, Routes, useLocation } from "react-router-dom";
 import { DetailPage } from "./DetailPage";
 import { renderWithProviders, stubFetch, stubMe } from "../../../test/render";
@@ -18,12 +18,16 @@ function Where() {
   return <div data-testid="where">{l.search}</div>;
 }
 
+let calls: ReturnType<typeof stubFetch> = [];
+
 function setup(opts: { route?: string; admin?: boolean; live?: boolean } = {}) {
-  stubFetch({
+  const cs = stubFetch({
     "/api/devpods/alice-x": { devpod: dp, pod: { node: "g206", ip: "10.1.2.3", startedAt: "2026-11-10T10:00:00Z" } },
     "/api/audit/sessions": { items: [], next: "" },
     "/api/templates": { items: [] },
+    "/api/devpods/alice-x/metrics": (u: URL) => ({ step: u.searchParams.get("range") === "15m" ? 1 : 5, ts: [Math.floor(Date.now() / 1000) - 60], series: { cpu: [2.5] } }),
   });
+  calls = cs;
   const conns: { url: string; h: SseHandlers }[] = [];
   const hub = new LiveHub({
     open: (url, h) => {
@@ -109,5 +113,19 @@ describe("DevPod detail", () => {
     setup();
     await screen.findByRole("heading", { name: "alice-x" });
     expect(screen.queryByText("Owner")).toBeNull();
+  });
+
+  it("opens on 监控 with the last hour from history", async () => {
+    setup();
+    await screen.findByRole("heading", { name: "alice-x" });
+    expect(screen.getByRole("tab", { name: "监控" }).getAttribute("aria-selected")).toBe("true");
+    expect(screen.getByRole("radio", { name: "1h" }).getAttribute("aria-checked")).toBe("true");
+    await waitFor(() => expect(calls.some((c) => c.url.pathname === "/api/devpods/alice-x/metrics" && c.url.searchParams.get("range") === "1h")).toBe(true));
+  });
+
+  it("card sparklines come from history before any live sample", async () => {
+    setup();
+    await screen.findByRole("heading", { name: "alice-x" });
+    await waitFor(() => expect(screen.getByTestId("card-cpu").querySelector("polyline")).toBeTruthy());
   });
 });

@@ -356,6 +356,7 @@ import type {
   NodeDetail,
   NodeView,
   PatchResult,
+  RecentFrame,
   SearchResult,
   SpecPatch,
 } from "./types";
@@ -363,6 +364,8 @@ import type {
 export const patchDevPodSpec = (n: string, body: SpecPatch) => req<PatchResult>("PATCH", `/api/devpods/${n}`, body);
 export const getMetrics = (n: string, range: MetricRange) =>
   req<MetricSeries>("GET", `/api/devpods/${n}/metrics?range=${range}`);
+export const getRecent = (p: { scope?: "mine" | "all"; name?: string }) =>
+  req<RecentFrame>("GET", `/api/live/devpods/recent?${p.name ? `name=${encodeURIComponent(p.name)}` : `scope=${p.scope ?? "mine"}`}`);
 export const getInfo = (n: string) => req<ContainerInfo>("GET", `/api/devpods/${n}/info`);
 export const listNodes = () => req<{ items: NodeView[]; live: boolean }>("GET", "/api/admin/nodes");
 export const getNode = (n: string) => req<NodeDetail>("GET", `/api/admin/nodes/${n}`);
