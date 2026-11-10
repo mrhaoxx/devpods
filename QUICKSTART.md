@@ -202,6 +202,21 @@ Expose `svc/devpod-webui` via your Ingress at `webui.baseURL` (TLS at
 the Ingress; an `http://` baseURL disables the Secure cookie attribute
 and is for dev/e2e only).
 
+What users and admins get:
+
+- Everyone: **我的 DevPod** (live per-second metrics in every row, create
+  and edit in a drawer with a live quota check), the DevPod page (live
+  cards, 监控 charts from 1 s to 7 days, 进程, 会话, 容器, 事件), 设置
+  (SSH keys, password), ⌘K / Ctrl+K search, light/dark theme.
+- Admins (`webui.admins` or `User.spec.admin`): 集群总览, 全部 DevPod
+  (bulk 休眠 / 启动 / 删除), 节点 (allocation, GPU occupants, Kore
+  topology), 用户与配额 (quota bars, batch 设配额 / 设审计策略 / 重置密码 /
+  休眠, CSV import `username,displayName[,password]`). Admins can grant
+  admin to others from the user drawer.
+- Live numbers come from the telemetry agent (`telemetry.enabled`,
+  section 6d of the audit spec); a DevPod reports once its Pod is next
+  recreated, and shows "—" until then.
+
 CPU-binding (Kore) is template-mediated: ordinary users can only pick
 admin-curated `DevPodTemplate` CRs — raw `kore.zjusct.io/*` annotations
 are rejected. Seed templates with kubectl (admin UI comes in M2):

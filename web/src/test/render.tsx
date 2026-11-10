@@ -6,7 +6,7 @@ import { vi } from "vitest";
 import { render } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { MemoryRouter } from "react-router-dom";
-import type { Me } from "../api";
+import type { Me } from "../data/api";
 import { LiveHub } from "../data/live/LiveHub";
 import { LiveHubProvider } from "../data/live/hooks";
 
