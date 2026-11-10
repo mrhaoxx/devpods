@@ -1,17 +1,32 @@
-// Time series chart (UI spec §5.2 monitor tab) on ECharts: 2px lines in
-// the fixed chart palette, hairline grid, a crosshair tooltip listing
-// every series, and a legend row of our own showing each series' latest
-// value (click to hide a series). Colors are theme variables, re-read
+// Time series chart (UI spec §5.2 monitor tab) on ECharts, modelled on
+// Grafana's panel: thin lines in the fixed chart palette, a faint grid,
+// a crosshair shared by every chart on the page with a tooltip listing
+// all series, drag to zoom (double-click resets), and the legend below
+// with each series' latest value (click: only this one; ctrl / ⌘ click:
+// toggle). Colors are theme variables, re-read
 // when the theme changes; data updates redraw in place.
 import { useEffect, useMemo, useRef, useState } from "react";
 import * as echarts from "echarts/core";
 import { LineChart } from "echarts/charts";
-import { GridComponent, MarkLineComponent, TooltipComponent } from "echarts/components";
+import { DataZoomComponent, GridComponent, MarkLineComponent, ToolboxComponent, TooltipComponent } from "echarts/components";
 import { CanvasRenderer } from "echarts/renderers";
-import { chartOption, fmtTipTime, latest, type ChartSeries, type ChartTheme } from "./chartData";
+import { chartOption, fmtTipTime, latest, nextHidden, type ChartSeries, type ChartTheme } from "./chartData";
 
 export type { ChartSeries };
-echarts.use([LineChart, GridComponent, TooltipComponent, MarkLineComponent, CanvasRenderer]);
+echarts.use([LineChart, GridComponent, TooltipComponent, MarkLineComponent, ToolboxComponent, DataZoomComponent, CanvasRenderer]);
+let canvasOK: boolean | undefined;
+const hasCanvas = () => {
+  if (canvasOK === undefined) {
+    try {
+      canvasOK = !!document.createElement("canvas").getContext("2d");
+    } catch {
+      canvasOK = false;
+    }
+  }
+  return canvasOK;
+};
+const GROUP = "devpod-timeseries"; // charts in it share the crosshair
+let connected = false;
 
 const cssVar = (name: string) => getComputedStyle(document.documentElement).getPropertyValue(name).trim() || "#888";
 const readTheme = (): ChartTheme => ({
@@ -49,12 +64,12 @@ function tip(params: TipParam[], th: ChartTheme, yFormat: (v: number) => string)
     const key = document.createElement("span");
     key.style.cssText = `width:10px;height:2px;border-radius:1px;background:${p.color};flex:none`;
     const val = document.createElement("span");
-    val.style.cssText = "font-weight:600;font-variant-numeric:tabular-nums";
+    val.style.cssText = "font-weight:600;font-variant-numeric:tabular-nums;margin-left:auto;padding-left:12px";
     val.textContent = p.value[1] == null ? "—" : yFormat(p.value[1]);
     const name = document.createElement("span");
     name.style.cssText = `color:${th.muted}`;
     name.textContent = p.seriesName;
-    row.append(key, val, name);
+    row.append(key, name, val);
     box.append(row);
   }
   return box;
@@ -86,13 +101,16 @@ export function TimeSeriesChart({
 
   useEffect(() => {
     if (!el.current) return;
-    let c: echarts.ECharts;
-    try {
-      c = echarts.init(el.current, undefined, { renderer: "canvas" });
-    } catch {
-      return; // no canvas (tests): the legend row still shows the values
-    }
+    if (!hasCanvas()) return; // no canvas (tests): the legend still shows the values
+    const c = echarts.init(el.current, undefined, { renderer: "canvas" });
     chart.current = c;
+    c.group = GROUP;
+    if (!connected) {
+      echarts.connect(GROUP);
+      connected = true;
+    }
+    const reset = () => c.dispatchAction({ type: "dataZoom", start: 0, end: 100 });
+    c.getZr().on("dblclick", reset);
     const ro = new ResizeObserver(() => c.resize());
     ro.observe(el.current);
     return () => {
@@ -108,19 +126,16 @@ export function TimeSeriesChart({
     if (!c) return;
     const opt = chartOption({ ts, series, hidden, stacked, limit, yFormat: (v) => fmt.current(v) }, th);
     (opt.tooltip as Record<string, unknown>).formatter = (params: TipParam[]) => tip(params, th, (v) => fmt.current(v));
-    c.setOption(opt, { notMerge: true, lazyUpdate: true });
+    // merged, so a zoom survives the data ticking in every second
+    c.setOption(opt, { replaceMerge: ["series"] });
+    c.dispatchAction({ type: "takeGlobalCursor", key: "dataZoomSelect", dataZoomSelectActive: true });
   });
 
-  const toggle = (label: string) =>
-    setHidden((h) => {
-      const n = new Set(h);
-      if (!n.delete(label)) n.add(label);
-      return n;
-    });
-
+  const labels = series.map((x) => x.label);
   return (
     <figure className="m-0 min-w-0">
-      <div className="mb-1 flex flex-wrap items-center gap-x-3 gap-y-0.5 px-1 text-[11px]">
+      <div ref={el} style={{ height }} className="w-full min-w-0" title="拖拽框选放大，双击还原" />
+      <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-0.5 px-1 text-[11px]">
         {series.map((s) => {
           const v = latest(s.values);
           const off = hidden.has(s.label);
@@ -129,8 +144,8 @@ export function TimeSeriesChart({
               key={s.label}
               type="button"
               aria-pressed={!off}
-              title={off ? "点击显示" : "点击隐藏"}
-              onClick={() => toggle(s.label)}
+              title="点击只看这一条；Ctrl / ⌘ 点击开关"
+              onClick={(e) => setHidden((h) => nextHidden(h, labels, s.label, e.ctrlKey || e.metaKey || e.shiftKey))}
               className={`inline-flex min-w-0 items-center gap-1.5 rounded px-1 py-0.5 hover:bg-sunk ${off ? "opacity-40" : ""}`}
             >
               <span className="h-0.5 w-3 shrink-0 rounded-full" style={{ background: `var(${s.color})` }} aria-hidden />
@@ -145,7 +160,6 @@ export function TimeSeriesChart({
           </span>
         )}
       </div>
-      <div ref={el} style={{ height }} className="w-full min-w-0" />
     </figure>
   );
 }

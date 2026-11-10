@@ -57,7 +57,7 @@ export function chartOption(c: ChartInput, th: ChartTheme): Record<string, unkno
       max: c.ts[c.ts.length - 1],
       axisLine: { lineStyle: { color: th.line } },
       axisTick: { show: false },
-      splitLine: { show: false },
+      splitLine: { show: true, lineStyle: { color: th.line, width: 1, opacity: 0.6 } },
       axisLabel: { color: th.muted, fontSize: 11, hideOverlap: true, formatter: (v: number) => fmtAxisTime(v, span) },
     },
     yAxis: {
@@ -79,6 +79,9 @@ export function chartOption(c: ChartInput, th: ChartTheme): Record<string, unkno
       extraCssText: "box-shadow:0 4px 14px rgba(0,0,0,.12);border-radius:6px;",
       axisPointer: { type: "line", lineStyle: { color: th.lineStrong, width: 1, type: "solid" } },
     },
+    // Grafana-style drag to zoom: the (off-screen) toolbox owns the
+    // brush; the chart keeps it armed and double-click resets it
+    toolbox: { show: true, top: -100, feature: { dataZoom: { yAxisIndex: "none" } } },
     series: shown.map((s, i) => {
       const color = th.color(s.color);
       return {
@@ -91,7 +94,7 @@ export function chartOption(c: ChartInput, th: ChartTheme): Record<string, unkno
         symbolSize: 7,
         connectNulls: false,
         sampling: "lttb",
-        lineStyle: { width: c.stacked ? 1.5 : 2, color, join: "round", cap: "round" },
+        lineStyle: { width: 1.5, color, join: "round", cap: "round" },
         itemStyle: { color, borderColor: th.surface, borderWidth: 2 },
         emphasis: { disabled: true },
         areaStyle:
@@ -116,4 +119,17 @@ export function chartOption(c: ChartInput, th: ChartTheme): Record<string, unkno
       };
     }),
   };
+}
+
+/** nextHidden: a legend click, Grafana style. A plain click shows only
+ *  that series (again: all of them); with multi it toggles just it. */
+export function nextHidden(hidden: ReadonlySet<string>, labels: string[], label: string, multi: boolean): Set<string> {
+  if (multi) {
+    const n = new Set(hidden);
+    if (!n.delete(label)) n.add(label);
+    return n.size === labels.length ? new Set() : n;
+  }
+  const others = labels.filter((l) => l !== label);
+  const isolated = !hidden.has(label) && others.length > 0 && others.every((l) => hidden.has(l));
+  return isolated ? new Set() : new Set(others);
 }
