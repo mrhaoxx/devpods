@@ -13,6 +13,7 @@ import (
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/equality"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -158,8 +159,17 @@ func (s *Server) rejectKore(w http.ResponseWriter, sess Session, dp *devpodv1alp
 // checkQuotaFor runs the quota gate for proposed. exclude names a
 // DevPod to leave out of "existing" (the one being updated).
 func (s *Server) checkQuotaFor(w http.ResponseWriter, r *http.Request, sess Session, proposed *devpodv1alpha1.DevPod, exclude string) bool {
+	if apiErr := s.quotaErrFor(r, sess, proposed, exclude); apiErr != nil {
+		s.writeErr(w, apiErr.status, apiErr.Code, apiErr.Message, apiErr.Detail)
+		return false
+	}
+	return true
+}
+
+// quotaErrFor is checkQuotaFor without writing the response.
+func (s *Server) quotaErrFor(r *http.Request, sess Session, proposed *devpodv1alpha1.DevPod, exclude string) *serverErr {
 	if sess.Admin {
-		return true
+		return nil
 	}
 	var u devpodv1alpha1.User
 	userPtr := &u
@@ -168,8 +178,7 @@ func (s *Server) checkQuotaFor(w http.ResponseWriter, r *http.Request, sess Sess
 	}
 	owned, err := s.ownedDevPods(r, sess.User)
 	if err != nil {
-		s.writeErr(w, http.StatusInternalServerError, "INTERNAL", err.Error(), nil)
-		return false
+		return &serverErr{http.StatusInternalServerError, "INTERNAL", err.Error(), nil}
 	}
 	var existing []devpodv1alpha1.DevPod
 	for _, dp := range owned {
@@ -178,24 +187,25 @@ func (s *Server) checkQuotaFor(w http.ResponseWriter, r *http.Request, sess Sess
 		}
 	}
 	if qErr := CheckQuota(EffectiveQuota(userPtr, s.DefaultQuota), existing, proposed); qErr != nil {
-		s.writeErr(w, http.StatusConflict, "QUOTA_EXCEEDED", qErr.Error(), qErr.Violations)
-		return false
+		return &serverErr{http.StatusConflict, "QUOTA_EXCEEDED", qErr.Error(), qErr.Violations}
 	}
-	return true
+	return nil
 }
 
 // CreateRequest is the POST /api/devpods body. Either YAML (raw
 // DevPod manifest) or the structured fields; TemplateRef composes
 // with both (preset templates require no pod, overlays require one).
 type CreateRequest struct {
-	Name        string                          `json:"name,omitempty"` // suffix; full name = "<owner>-<name>"
-	TemplateRef string                          `json:"templateRef,omitempty"`
-	YAML        string                          `json:"yaml,omitempty"`
-	Image       string                          `json:"image,omitempty"`
-	CPU         string                          `json:"cpu,omitempty"`
-	Memory      string                          `json:"memory,omitempty"`
-	Shell       string                          `json:"shell,omitempty"`
-	Persistence *devpodv1alpha1.PersistenceSpec `json:"persistence,omitempty"`
+	Name          string                          `json:"name,omitempty"` // suffix; full name = "<owner>-<name>"
+	TemplateRef   string                          `json:"templateRef,omitempty"`
+	YAML          string                          `json:"yaml,omitempty"`
+	Image         string                          `json:"image,omitempty"`
+	CPU           string                          `json:"cpu,omitempty"`
+	Memory        string                          `json:"memory,omitempty"`
+	Shell         string                          `json:"shell,omitempty"`
+	Persistence   *devpodv1alpha1.PersistenceSpec `json:"persistence,omitempty"`
+	GPU           string                          `json:"gpu,omitempty"` // nvidia.com/gpu limit
+	Collaborators []string                        `json:"collaborators,omitempty"`
 }
 
 func (s *Server) handleListDevPods(w http.ResponseWriter, r *http.Request) {
@@ -369,23 +379,19 @@ func (s *Server) buildDevPod(sess Session, req CreateRequest) (*devpodv1alpha1.D
 	dp := &devpodv1alpha1.DevPod{
 		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: s.NS},
 		Spec: devpodv1alpha1.DevPodSpec{
-			Owner:       sess.User,
-			Running:     true,
-			Shell:       req.Shell,
-			Persistence: req.Persistence,
+			Owner:         sess.User,
+			Running:       true,
+			Shell:         req.Shell,
+			Persistence:   req.Persistence,
+			Collaborators: req.Collaborators,
 		},
 	}
 	if req.Image != "" { // absent for preset-template creates
 		limits := corev1.ResourceList{}
-		for res, val := range map[corev1.ResourceName]string{corev1.ResourceCPU: req.CPU, corev1.ResourceMemory: req.Memory} {
-			if val == "" {
-				continue
+		for res, val := range map[corev1.ResourceName]string{corev1.ResourceCPU: req.CPU, corev1.ResourceMemory: req.Memory, resourceGPU: req.GPU} {
+			if err := setLimit(limits, res, val); err != nil {
+				return nil, err
 			}
-			q, err := resource.ParseQuantity(val)
-			if err != nil {
-				return nil, &serverErr{http.StatusBadRequest, "BAD_REQUEST", fmt.Sprintf("invalid %s quantity %q", res, val), nil}
-			}
-			limits[res] = q
 		}
 		dp.Spec.Pod = &devpodv1alpha1.PodWorkloadSpec{
 			Spec: corev1.PodSpec{
@@ -400,9 +406,97 @@ func (s *Server) buildDevPod(sess Session, req CreateRequest) (*devpodv1alpha1.D
 	return dp, nil
 }
 
-// PatchRequest is the PATCH body. M1 supports only the running flag.
+// setLimit parses val into limits[res]; "" (and "0" for the GPU) drops
+// the limit.
+func setLimit(limits corev1.ResourceList, res corev1.ResourceName, val string) *serverErr {
+	if val == "" || (res == resourceGPU && val == "0") {
+		delete(limits, res)
+		return nil
+	}
+	q, err := resource.ParseQuantity(val)
+	if err != nil || q.Sign() < 0 {
+		return &serverErr{http.StatusBadRequest, "BAD_REQUEST", fmt.Sprintf("invalid %s quantity %q", res, val), nil}
+	}
+	limits[res] = q
+	return nil
+}
+
+// PatchRequest is the PATCH body: the running flag plus the editable
+// fields of the edit drawer (UI spec §5.6). Absent fields stay as they
+// are; persistence is immutable after creation.
 type PatchRequest struct {
-	Running *bool `json:"running"`
+	Running       *bool                           `json:"running,omitempty"`
+	Image         *string                         `json:"image,omitempty"`
+	CPU           *string                         `json:"cpu,omitempty"`
+	Memory        *string                         `json:"memory,omitempty"`
+	GPU           *string                         `json:"gpu,omitempty"`
+	Shell         *string                         `json:"shell,omitempty"`
+	Collaborators *[]string                       `json:"collaborators,omitempty"`
+	Persistence   *devpodv1alpha1.PersistenceSpec `json:"persistence,omitempty"`
+}
+
+// PatchResponse: Rebuild reports that a running DevPod's Pod is being
+// recreated (its sessions drop).
+type PatchResponse struct {
+	DevPod  *devpodv1alpha1.DevPod `json:"devpod"`
+	Rebuild bool                   `json:"rebuild"`
+}
+
+func (req *PatchRequest) editsSpec() bool {
+	return req.Image != nil || req.CPU != nil || req.Memory != nil || req.GPU != nil
+}
+
+// applyEdits applies req's spec edits to dp.
+func applyEdits(dp *devpodv1alpha1.DevPod, req *PatchRequest) *serverErr {
+	if req.Persistence != nil && !equality.Semantic.DeepEqual(req.Persistence, dp.Spec.Persistence) {
+		return &serverErr{http.StatusBadRequest, "IMMUTABLE", "persistence cannot change after creation", nil}
+	}
+	if req.Shell != nil {
+		dp.Spec.Shell = *req.Shell
+	}
+	if req.Collaborators != nil {
+		dp.Spec.Collaborators = *req.Collaborators
+	}
+	if !req.editsSpec() {
+		return nil
+	}
+	if dp.Spec.Pod == nil {
+		return &serverErr{http.StatusBadRequest, "BAD_REQUEST", "only pod workloads can be edited", nil}
+	}
+	name := targetContainerName(dp)
+	var c *corev1.Container
+	for i := range dp.Spec.Pod.Spec.Containers {
+		if dp.Spec.Pod.Spec.Containers[i].Name == name {
+			c = &dp.Spec.Pod.Spec.Containers[i]
+		}
+	}
+	if c == nil {
+		return &serverErr{http.StatusBadRequest, "BAD_REQUEST", fmt.Sprintf("target container %q not found", name), nil}
+	}
+	if req.Image != nil {
+		if *req.Image == "" {
+			return &serverErr{http.StatusBadRequest, "BAD_REQUEST", "image cannot be empty", nil}
+		}
+		c.Image = *req.Image
+	}
+	if c.Resources.Limits == nil {
+		c.Resources.Limits = corev1.ResourceList{}
+	}
+	for res, val := range map[corev1.ResourceName]*string{corev1.ResourceCPU: req.CPU, corev1.ResourceMemory: req.Memory, resourceGPU: req.GPU} {
+		if val == nil {
+			continue
+		}
+		if err := setLimit(c.Resources.Limits, res, *val); err != nil {
+			return err
+		}
+		// requests above the new limit would be rejected by the apiserver
+		if q, ok := c.Resources.Requests[res]; ok {
+			if lim, has := c.Resources.Limits[res]; !has || q.Cmp(lim) > 0 {
+				delete(c.Resources.Requests, res)
+			}
+		}
+	}
+	return nil
 }
 
 func (s *Server) handlePatchDevPod(w http.ResponseWriter, r *http.Request) {
@@ -421,21 +515,62 @@ func (s *Server) handlePatchDevPod(w http.ResponseWriter, r *http.Request) {
 		s.writeErr(w, http.StatusBadRequest, "BAD_REQUEST", "malformed request body: "+err.Error(), nil)
 		return
 	}
-	if req.Running == nil || *req.Running == dp.Spec.Running {
-		s.writeJSON(w, http.StatusOK, dp) // no-op
-		return
-	}
-	dp.Spec.Running = *req.Running
-	if *req.Running { // waking re-enters the compute quota
-		if !s.checkQuotaFor(w, r, sess, dp, dp.Name) {
+	// The cached copy can trail the controller's status writes; on a
+	// version conflict re-read from the API server and apply again.
+	for attempt := 0; ; attempt++ {
+		resp, apiErr := s.patchDevPod(r, sess, dp, &req)
+		if apiErr == nil {
+			s.writeJSON(w, http.StatusOK, resp)
 			return
 		}
+		if apiErr.Code != "CONFLICT" || attempt >= 4 {
+			s.writeErr(w, apiErr.status, apiErr.Code, apiErr.Message, apiErr.Detail)
+			return
+		}
+		fresh := &devpodv1alpha1.DevPod{}
+		if err := s.Reader.Get(r.Context(), client.ObjectKeyFromObject(dp), fresh); err != nil {
+			s.writeErr(w, http.StatusInternalServerError, "INTERNAL", err.Error(), nil)
+			return
+		}
+		dp = fresh
 	}
+}
+
+// patchDevPod applies req to dp and writes it; a version conflict comes
+// back as code CONFLICT.
+func (s *Server) patchDevPod(r *http.Request, sess Session, dp *devpodv1alpha1.DevPod, req *PatchRequest) (PatchResponse, *serverErr) {
+	before := dp.DeepCopy()
+	dp = dp.DeepCopy()
+	if req.Running != nil {
+		dp.Spec.Running = *req.Running
+	}
+	if apiErr := applyEdits(dp, req); apiErr != nil {
+		return PatchResponse{}, apiErr
+	}
+	if equality.Semantic.DeepEqual(before.Spec, dp.Spec) {
+		return PatchResponse{DevPod: dp}, nil // no-op
+	}
+	if !sess.Admin && req.editsSpec() {
+		if err := RequireLimits(&dp.Spec.Pod.Spec); err != nil {
+			return PatchResponse{}, &serverErr{http.StatusBadRequest, "BAD_REQUEST", err.Error(), nil}
+		}
+	}
+	// waking, or resizing a running DevPod, re-enters the compute quota
+	if dp.Spec.Running && (!before.Spec.Running || req.editsSpec()) {
+		if apiErr := s.quotaErrFor(r, sess, dp, dp.Name); apiErr != nil {
+			return PatchResponse{}, apiErr
+		}
+	}
+	// the Pod is recreated when its rendered spec changes while running
+	rebuild := before.Spec.Running && dp.Spec.Running &&
+		(!equality.Semantic.DeepEqual(before.Spec.Pod, dp.Spec.Pod) || before.Spec.Shell != dp.Spec.Shell)
 	if err := s.Client.Update(r.Context(), dp); err != nil {
-		s.writeErr(w, http.StatusBadRequest, "BAD_REQUEST", "update rejected", err.Error())
-		return
+		if apierrors.IsConflict(err) {
+			return PatchResponse{}, &serverErr{http.StatusConflict, "CONFLICT", "the DevPod changed meanwhile", err.Error()}
+		}
+		return PatchResponse{}, &serverErr{http.StatusBadRequest, "BAD_REQUEST", "update rejected", err.Error()}
 	}
-	s.writeJSON(w, http.StatusOK, dp)
+	return PatchResponse{DevPod: dp, Rebuild: rebuild}, nil
 }
 
 func (s *Server) handleDeleteDevPod(w http.ResponseWriter, r *http.Request) {

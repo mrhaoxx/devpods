@@ -172,3 +172,22 @@ func TestState_NewBootDropsSessions(t *testing.T) {
 		t.Fatalf("ghost session after restart: %+v", got)
 	}
 }
+
+func TestSnapshotIdle(t *testing.T) {
+	now := time.Unix(100000, 0)
+	s := NewState(clock(&now))
+	snap := s.Snapshot(Inputs{
+		DevPods: []DevPodRef{
+			{UID: "a", Name: "a", Owner: "bob", Phase: "Running"},
+			{UID: "b", Name: "b", Owner: "bob", Phase: "Running"},
+		},
+		Idle: map[string]bool{"a": true},
+	})
+	if !snap.DevPods["a"].Idle || snap.DevPods["b"].Idle {
+		t.Fatalf("idle flags: a=%v b=%v", snap.DevPods["a"].Idle, snap.DevPods["b"].Idle)
+	}
+	b, _ := json.Marshal(snap.DevPods["a"])
+	if !strings.Contains(string(b), `"idle":true`) {
+		t.Fatalf("json: %s", b)
+	}
+}

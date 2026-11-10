@@ -77,6 +77,9 @@ func (s *Server) handleMe(w http.ResponseWriter, r *http.Request) {
 			"kore":              s.KoreEnabled,
 			"passwordAuth":      s.PasswordAuth,
 			"audit":             s.Audit != nil,
+			"telemetry":         s.Live != nil && s.Live.Hub != nil,
+			// node reservations arrive with the reservation backend
+			"reservations": false,
 		},
 		"hasPassword": hasPassword,
 		"ssh":         map[string]any{"host": s.SSHHost, "port": s.SSHPort, "loginSuffix": s.SSHLoginSuffix},

@@ -48,6 +48,7 @@ func (s *State) Snapshot(in Inputs) Snapshot {
 				d.Sessions = append(d.Sessions, SessionLive{User: u})
 			}
 		}
+		d.Idle = in.Idle[ref.UID]
 		snap.DevPods[ref.UID] = d
 		running := ref.Phase == "Running"
 		switch ref.Phase {

@@ -41,6 +41,9 @@ type DevPodLive struct {
 	IOR      *float64      `json:"ioR"`
 	IOW      *float64      `json:"ioW"`
 	Sessions []SessionLive `json:"sessions"`
+	// Idle: the leader's idle definition holds (no session for 24 h, CPU
+	// and GPU averages under 5 %; UI spec §5.3).
+	Idle bool `json:"idle"`
 }
 
 // CardLive is one GPU slot of a node.
