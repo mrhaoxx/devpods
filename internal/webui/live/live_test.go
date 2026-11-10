@@ -107,7 +107,8 @@ func TestSnapshot_JSONFieldNames(t *testing.T) {
 		keys = append(keys, k)
 	}
 	sort.Strings(keys)
-	want := "cpu,cpuLimit,gpu,ioR,ioW,mem,memLimit,netKind,netRx,netTx,rdmaKind,rdmaRx,rdmaTx,sessions"
+	// UI spec §6.1 plus idle (the §5.1 "空转 >24h" filter)
+	want := "cpu,cpuLimit,gpu,idle,ioR,ioW,mem,memLimit,netKind,netRx,netTx,rdmaKind,rdmaRx,rdmaTx,sessions"
 	if strings.Join(keys, ",") != want {
 		t.Fatalf("DevPodLive keys %v, want UI spec §6.1 %s", keys, want)
 	}
