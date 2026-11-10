@@ -83,6 +83,7 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("GET /api/admin/nodes", s.handleAdminNodes)
 	mux.HandleFunc("GET /api/admin/nodes/{name}", s.handleAdminNode)
 	mux.HandleFunc("GET /api/admin/live/overview", s.handleLiveOverview)
+	mux.HandleFunc("GET /api/search", s.handleSearch)
 	mux.HandleFunc("/api/", func(w http.ResponseWriter, r *http.Request) {
 		s.writeErr(w, http.StatusNotFound, "NOT_FOUND", "no such endpoint", nil)
 	})
