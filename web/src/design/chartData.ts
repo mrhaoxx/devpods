@@ -1,5 +1,5 @@
-// The ECharts option for a time series chart, built as plain data so it
-// can be tested without a canvas.
+// Data shaping for the time series chart, kept free of the canvas so it
+// can be tested.
 export type ChartSeries = {
   label: string;
   values: (number | null)[];
@@ -36,89 +36,38 @@ export function fmtTipTime(ms: number): string {
   return `${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
 }
 
-const rgba = (hex: string, a: number) => {
+export const rgba = (hex: string, a: number) => {
   const m = /^#?([0-9a-f]{6})$/i.exec(hex.trim());
   if (!m) return hex;
   const n = parseInt(m[1], 16);
   return `rgba(${n >> 16},${(n >> 8) & 255},${n & 255},${a})`;
 };
 
-export function chartOption(c: ChartInput, th: ChartTheme): Record<string, unknown> {
-  const span = c.ts.length ? c.ts[c.ts.length - 1] - c.ts[0] : 0;
-  const shown = c.series.filter((s) => !c.hidden?.has(s.label));
-  const limit = c.limit ?? null;
-  return {
-    animation: false,
-    grid: { left: 4, right: 10, top: 10, bottom: 2, containLabel: true },
-    textStyle: { fontFamily: "inherit" },
-    xAxis: {
-      type: "time",
-      min: c.ts[0],
-      max: c.ts[c.ts.length - 1],
-      axisLine: { lineStyle: { color: th.line } },
-      axisTick: { show: false },
-      splitLine: { show: true, lineStyle: { color: th.line, width: 1, opacity: 0.6 } },
-      axisLabel: { color: th.muted, fontSize: 11, hideOverlap: true, formatter: (v: number) => fmtAxisTime(v, span) },
-    },
-    yAxis: {
-      type: "value",
-      min: 0,
-      max: limit != null ? (v: { max: number }) => Math.max(v.max, limit) * 1.06 : undefined,
-      splitNumber: 3,
-      axisLabel: { color: th.muted, fontSize: 11, formatter: (v: number) => c.yFormat(v) },
-      splitLine: { lineStyle: { color: th.line, width: 1 } },
-    },
-    tooltip: {
-      trigger: "axis",
-      confine: true,
-      transitionDuration: 0,
-      backgroundColor: th.surface,
-      borderColor: th.line,
-      borderWidth: 1,
-      padding: [6, 8],
-      extraCssText: "box-shadow:0 4px 14px rgba(0,0,0,.12);border-radius:6px;",
-      axisPointer: { type: "line", lineStyle: { color: th.lineStrong, width: 1, type: "solid" } },
-    },
-    // Grafana-style drag to zoom: the (off-screen) toolbox owns the
-    // brush; the chart keeps it armed and double-click resets it
-    toolbox: { show: true, top: -100, feature: { dataZoom: { yAxisIndex: "none" } } },
-    series: shown.map((s, i) => {
-      const color = th.color(s.color);
-      return {
-        name: s.label,
-        type: "line",
-        data: c.ts.map((t, k) => [t, s.values[k] ?? null]),
-        stack: c.stacked ? "all" : undefined,
-        showSymbol: false,
-        symbol: "circle",
-        symbolSize: 7,
-        connectNulls: false,
-        sampling: "lttb",
-        lineStyle: { width: 1.5, color, join: "round", cap: "round" },
-        itemStyle: { color, borderColor: th.surface, borderWidth: 2 },
-        emphasis: { disabled: true },
-        areaStyle:
-          c.stacked || s.fill
-            ? {
-                color: c.stacked
-                  ? rgba(color, 0.22)
-                  : { type: "linear", x: 0, y: 0, x2: 0, y2: 1, colorStops: [{ offset: 0, color: rgba(color, 0.2) }, { offset: 1, color: rgba(color, 0.02) }] },
-              }
-            : undefined,
-        markLine:
-          i === 0 && limit != null
-            ? {
-                silent: true,
-                symbol: "none",
-                animation: false,
-                lineStyle: { color: th.faint, width: 1, type: "solid" },
-                label: { formatter: `限额 ${c.yFormat(limit)}`, position: "insideEndTop", color: th.muted, fontSize: 10, distance: 2 },
-                data: [{ yAxis: limit }],
-              }
-            : undefined,
-      };
+/** stackSeries sums each layer onto the ones below it; a null stays a
+ *  gap in its own layer and counts as 0 for the layers above. */
+export function stackSeries(series: (number | null)[][]): (number | null)[][] {
+  const sum: number[] = [];
+  return series.map((layer) =>
+    layer.map((v, i) => {
+      if (v == null) return null;
+      sum[i] = (sum[i] ?? 0) + v;
+      return sum[i];
     }),
-  };
+  );
+}
+
+export type Plotted = { label: string; color: string; fill: boolean; raw: (number | null)[]; drawn: (number | null)[] };
+/** plotData lays the visible series out for uPlot: seconds on x, and for
+ *  a stacked chart cumulative layers listed top first, so each lower
+ *  layer paints over the one above it. */
+export function plotData(c: ChartInput): { x: number[]; series: Plotted[]; yMax: number } {
+  const shown = c.series.filter((s) => !c.hidden?.has(s.label));
+  const drawn = c.stacked ? stackSeries(shown.map((s) => s.values)) : shown.map((s) => s.values);
+  let series = shown.map((s, i) => ({ label: s.label, color: s.color, fill: !!c.stacked || !!s.fill, raw: s.values, drawn: drawn[i] }));
+  if (c.stacked) series = series.reverse();
+  let yMax = c.limit ?? 0;
+  for (const s of series) for (const v of s.drawn) if (v != null && v > yMax) yMax = v;
+  return { x: c.ts.map((t) => t / 1000), series, yMax: yMax > 0 ? yMax * 1.06 : 1 };
 }
 
 /** nextHidden: a legend click, Grafana style. A plain click shows only

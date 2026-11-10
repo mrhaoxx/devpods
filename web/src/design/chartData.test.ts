@@ -1,10 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { chartOption, fmtAxisTime, latest, nextHidden, type ChartTheme } from "./chartData";
+import { fmtAxisTime, latest, nextHidden, plotData } from "./chartData";
 
-const th: ChartTheme = { ink: "#111", muted: "#666", faint: "#999", line: "#ddd", lineStrong: "#bbb", surface: "#fff", color: (n) => (n === "--chart-1" ? "#2a78d6" : "#eb6834") };
-type S = { name: string; data: unknown[]; stack?: string; areaStyle?: unknown; markLine?: { data: unknown[]; label: { formatter: string } }; lineStyle: { color: string; width: number } };
 
-describe("chart option", () => {
+describe("chart data", () => {
   const base = {
     ts: [1000, 2000],
     series: [
@@ -13,23 +11,25 @@ describe("chart option", () => {
     ],
     yFormat: (v: number) => `${v}c`,
   };
-  it("pairs values with timestamps, keeps gaps, colors by slot", () => {
-    const s = chartOption(base, th).series as S[];
-    expect(s.map((x) => x.name)).toEqual(["a", "b"]);
-    expect(s[0].data).toEqual([[1000, 1], [2000, null]]);
-    expect(s[0].lineStyle).toMatchObject({ color: "#2a78d6", width: 1.5 });
-    expect(s[0].areaStyle).toBeTruthy();
-    expect(s[1].areaStyle).toBeUndefined();
+  it("plots seconds on x, keeps gaps, and leaves room above the highest value", () => {
+    const p = plotData(base);
+    expect(p.x).toEqual([1, 2]);
+    expect(p.series.map((s) => [s.label, s.fill, s.drawn])).toEqual([
+      ["a", true, [1, null]],
+      ["b", false, [2, 3]],
+    ]);
+    expect(p.yMax).toBeCloseTo(3 * 1.06);
   });
-  it("draws the limit as one labelled reference line", () => {
-    const s = chartOption({ ...base, limit: 8 }, th).series as S[];
-    expect(s[0].markLine).toMatchObject({ data: [{ yAxis: 8 }], label: { formatter: "限额 8c" } });
-    expect(s[1].markLine).toBeUndefined();
+  it("the limit is always inside the y range", () => {
+    expect(plotData({ ...base, limit: 8 }).yMax).toBeCloseTo(8 * 1.06);
   });
-  it("stacks when asked and drops hidden series", () => {
-    const s = chartOption({ ...base, stacked: true, hidden: new Set(["a"]) }, th).series as S[];
-    expect(s.map((x) => x.name)).toEqual(["b"]);
-    expect(s[0].stack).toBe("all");
+  it("stacks cumulatively, top layer first, and drops hidden series", () => {
+    const p = plotData({ ...base, stacked: true });
+    expect(p.series.map((s) => [s.label, s.drawn, s.raw])).toEqual([
+      ["b", [3, 3], [2, 3]],
+      ["a", [1, null], [1, null]],
+    ]);
+    expect(plotData({ ...base, hidden: new Set(["a"]) }).series.map((s) => s.label)).toEqual(["b"]);
   });
   it("latest skips trailing gaps; the axis shows dates only for long ranges", () => {
     expect(latest([1, 2, null])).toBe(2);
