@@ -38,6 +38,7 @@ type nvidiaSMI struct {
 	minBackoff time.Duration
 	cancel     context.CancelFunc
 	starts     atomic.Int64
+	child      atomic.Int64 // the running nvidia-smi, 0 between runs
 
 	mu     sync.Mutex
 	latest map[string]wire.GPU
@@ -80,26 +81,18 @@ func (n *nvidiaSMI) Latest() ([]wire.GPU, bool) {
 	return out, len(out) > 0
 }
 
+// ChildPid is the running nvidia-smi's pid (0 between runs); the agent
+// counts that process as infrastructure.
+func (n *nvidiaSMI) ChildPid() int { return int(n.child.Load()) }
+
 func (n *nvidiaSMI) loop(ctx context.Context) {
 	delay := n.minBackoff
 	for ctx.Err() == nil {
-		n.starts.Add(1)
 		started := time.Now()
-		cmd := exec.CommandContext(ctx, n.path, "--query-gpu="+nvidiaQuery, "--format=csv,noheader,nounits", "-lms", "1000")
-		out, err := cmd.StdoutPipe()
-		if err == nil {
-			err = cmd.Start()
-		}
-		if err == nil {
-			sc := bufio.NewScanner(out)
-			for sc.Scan() {
-				if g, err := parseNvidiaCSV(sc.Text()); err == nil {
-					n.mu.Lock()
-					n.latest[g.UUID], n.seen[g.UUID] = g, time.Now()
-					n.mu.Unlock()
-				}
-			}
-			_ = cmd.Wait()
+		// a panic (say, on odd output) ends this run only: GPU samples
+		// resume after the backoff, and PID 1 never sees it
+		if err := safely("nvidia-smi", func() { n.runOnce(ctx) }); err != nil {
+			fmt.Fprintln(os.Stderr, err)
 		}
 		if time.Since(started) > 10*time.Minute {
 			delay = n.minBackoff
@@ -111,6 +104,33 @@ func (n *nvidiaSMI) loop(ctx context.Context) {
 		}
 		delay = min(delay*2, 60*time.Second)
 	}
+}
+
+// runOnce runs nvidia-smi until its output ends. The agent lives in PID 1,
+// whose reap loop (wait4(-1)) may collect the child before Wait does;
+// Wait then fails with ECHILD, which changes nothing here: the end of
+// stdout is what ends a run.
+func (n *nvidiaSMI) runOnce(ctx context.Context) {
+	n.starts.Add(1)
+	cmd := exec.CommandContext(ctx, n.path, "--query-gpu="+nvidiaQuery, "--format=csv,noheader,nounits", "-lms", "1000")
+	out, err := cmd.StdoutPipe()
+	if err == nil {
+		err = cmd.Start()
+	}
+	if err != nil {
+		return
+	}
+	n.child.Store(int64(cmd.Process.Pid))
+	defer n.child.Store(0)
+	sc := bufio.NewScanner(out)
+	for sc.Scan() {
+		if g, err := parseNvidiaCSV(sc.Text()); err == nil {
+			n.mu.Lock()
+			n.latest[g.UUID], n.seen[g.UUID] = g, time.Now()
+			n.mu.Unlock()
+		}
+	}
+	_ = cmd.Wait()
 }
 
 // parseNvidiaCSV parses one line of nvidiaQuery output; "[N/A]",

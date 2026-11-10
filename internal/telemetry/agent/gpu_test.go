@@ -8,6 +8,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -66,6 +67,39 @@ func TestNvidiaSMI_RestartsOnExit(t *testing.T) {
 	gpus, ok := c.Latest()
 	if !ok || len(gpus) != 2 || gpus[0].UUID != "GPU-a" || gpus[1].Util != 60 {
 		t.Fatalf("latest: %+v %v", gpus, ok)
+	}
+}
+
+// The collector reports the pid of the nvidia-smi it runs, so the agent
+// can count it as infrastructure (it is PID 1's child in-process).
+func TestNvidiaSMI_ReportsItsChild(t *testing.T) {
+	dir := t.TempDir()
+	pidFile := filepath.Join(dir, "pid")
+	script := filepath.Join(dir, "nvidia-smi")
+	body := "#!/bin/sh\necho $$ > " + pidFile + ".tmp && mv " + pidFile + ".tmp " + pidFile + "\nexec sleep 30\n"
+	if err := os.WriteFile(script, []byte(body), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	c := newNvidiaSMI(ctx, script, time.Second).(*nvidiaSMI)
+	deadline := time.Now().Add(3 * time.Second)
+	var want int
+	for time.Now().Before(deadline) && (want == 0 || c.ChildPid() != want) {
+		if b, err := os.ReadFile(pidFile); err == nil {
+			want, _ = strconv.Atoi(strings.TrimSpace(string(b)))
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	if want == 0 || c.ChildPid() != want {
+		t.Fatalf("child pid %d, want %d", c.ChildPid(), want)
+	}
+	c.Close()
+	for deadline = time.Now().Add(3 * time.Second); time.Now().Before(deadline) && c.ChildPid() != 0; {
+		time.Sleep(20 * time.Millisecond)
+	}
+	if c.ChildPid() != 0 {
+		t.Fatalf("child pid %d after Close", c.ChildPid())
 	}
 }
 

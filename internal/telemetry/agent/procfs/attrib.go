@@ -36,9 +36,14 @@ func (a Attribution) attributed() bool {
 type Attributor struct {
 	SSHDPid    int
 	SessionExe string
-	// SelfPid is the telemetry agent; it and its children (nvidia-smi …)
-	// are infrastructure like PID 1 and the sshd.
+	// SelfPid is the telemetry agent's process when it runs on its own
+	// (hack/agent-profile); it and its children are infrastructure like
+	// PID 1 and the sshd. Inside the supervisor it is PID 1 itself.
 	SelfPid int
+	// Infra reports processes the agent started (nvidia-smi): in-process
+	// they are PID 1's children, like a user daemon re-parented there,
+	// so only their pid tells them apart.
+	Infra func(pid int) bool
 	// WorkloadPid is the DevPod's own command, started by the supervisor
 	// in its own process group: that tree is "workload", never a
 	// session's and never unattributed.
@@ -120,10 +125,12 @@ func (a *Attributor) resolve(at Attribution) Attribution {
 }
 
 func (a *Attributor) decide(p *Proc, procs map[PID]*Proc, conns map[PID]string) Attribution {
-	// PID 1 (the supervisor), the sshd and the telemetry agent's own
-	// subtree are infrastructure ("system"), never a session's; orphans
-	// re-parented to PID 1 or the sshd must not inherit from them.
-	if p.ID.Pid == 1 || p.ID.Pid == a.SSHDPid || (a.SelfPid > 1 && (p.ID.Pid == a.SelfPid || p.PPid == a.SelfPid)) {
+	// PID 1 (the supervisor, with the agent inside it), the sshd and the
+	// agent's own processes are infrastructure ("system"), never a
+	// session's; orphans re-parented to PID 1 or the sshd must not
+	// inherit from them.
+	if p.ID.Pid == 1 || p.ID.Pid == a.SSHDPid || (a.SelfPid > 1 && (p.ID.Pid == a.SelfPid || p.PPid == a.SelfPid)) ||
+		(a.Infra != nil && a.Infra(p.ID.Pid)) {
 		return Attribution{How: "system"}
 	}
 	if p.PPid != 1 && p.PPid != a.SSHDPid && a.known[p.Parent].How == "system" {

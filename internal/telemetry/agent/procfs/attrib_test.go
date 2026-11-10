@@ -207,6 +207,24 @@ func TestAttributor_InfrastructureIsSystem(t *testing.T) {
 	}
 }
 
+// In-process the agent is PID 1, so the nvidia-smi it starts is a child
+// of PID 1 like a user daemon re-parented there; Infra tells them apart.
+func TestAttributor_AgentChildrenOfPID1AreSystem(t *testing.T) {
+	root := base(t)
+	writeProc(t, root, fp{pid: 80, ppid: 1, sid: 1, start: 140, exe: "/usr/bin/nvidia-smi", cmd: "nvidia-smi -lms 1000"})
+	writeProc(t, root, fp{pid: 81, ppid: 1, sid: 81, start: 150, exe: "/usr/bin/sleep", cmd: "sleep 1000"})
+	a := NewAttributor(10, sessExe)
+	a.SelfPid = 1
+	a.Infra = func(pid int) bool { return pid == 80 }
+	attr, _ := update(t, root, a, conns)
+	if attr[PID{80, 140}].How != "system" {
+		t.Errorf("the agent's nvidia-smi must be system: %+v", attr[PID{80, 140}])
+	}
+	if attr[PID{81, 150}].How != "inferred" {
+		t.Errorf("a user daemon under PID 1 must not become system: %+v", attr[PID{81, 150}])
+	}
+}
+
 // Each scan reads only stat for an unchanged process: exe/cmdline/environ/
 // status once per process (again after an exec, seen as a new comm), io
 // only when its CPU time moved (spec §14 item 4: < 2 % of a core).

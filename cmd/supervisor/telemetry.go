@@ -8,12 +8,8 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"os/exec"
-	"os/signal"
-	"strconv"
-	"strings"
-	"sync"
-	"syscall"
+	"runtime"
+	"runtime/debug"
 	"time"
 
 	"github.com/mrhaoxx/devpod/internal/telemetry/agent"
@@ -21,155 +17,103 @@ import (
 )
 
 const (
-	telemetryMaxBackoff = 60 * time.Second
-	telemetryStableRun  = 10 * time.Minute
-	telemetryMemLimit   = "24MiB"
-	telemetryMaxProcs   = "2"
+	telemetryInitialBackoff = time.Second
+	telemetryMaxBackoff     = 60 * time.Second
+	telemetryStableRun      = 10 * time.Minute
+	// The agent runs inside PID 1 and shares its Go runtime. It is
+	// sequential: two Ps keep each GC cycle from fanning out over every
+	// core of a big node (spec §14 item 4). The soft memory limit is the
+	// agent's old 24 MiB budget (measured RSS 14-16 MB) plus PID 1's own
+	// few MiB; it only makes the GC work harder, it never kills anything.
+	telemetryMaxProcs = 2
+	telemetryMemLimit = 32 << 20
 )
 
-// telemetrySup keeps the `telemetry` child running. PID 1's reap loop
-// owns wait4(-1), so it hands every exit it does not track to exited().
-// A telemetry crash never influences the supervisor's own exit.
-type telemetrySup struct {
-	argv    []string
-	env     []string
-	initial time.Duration
-
-	mu       sync.Mutex
-	pid      int
-	exitCh   chan int
-	starting bool
-	early    map[int]int // exits reaped while a start was in flight
-	stopped  bool
-	stopCh   chan struct{}
+// applyTelemetryLimits sets PID 1's runtime limits for the agent; the
+// container's GOMAXPROCS / GOMEMLIMIT (meant for the user's programs)
+// are overridden here and still reach sshd and the user's command
+// untouched through the environment.
+func applyTelemetryLimits() {
+	runtime.GOMAXPROCS(telemetryMaxProcs)
+	debug.SetMemoryLimit(telemetryMemLimit)
 }
 
-// newTelemetrySup: workloadPid is the user command (0 when none).
-func newTelemetrySup(sshdPid, workloadPid int) *telemetrySup {
-	argv := []string{"/opt/devpod/devpod-supervisor", "telemetry"}
-	if self, err := os.Executable(); err == nil {
-		argv[0] = self
-	}
-	if override := os.Getenv("SUPERVISOR_TELEMETRY_CMD"); override != "" {
-		argv = []string{override}
-	}
-	initial := time.Second
-	if d, err := time.ParseDuration(os.Getenv("SUPERVISOR_TELEMETRY_BACKOFF")); err == nil && d > 0 {
-		initial = d
-	}
-	// The agent is sequential: without a cap Go uses one P per core, and
-	// on a 104-core node each GC cycle fanned out over all of them.
-	ours := []string{"GOMEMLIMIT=" + telemetryMemLimit, "GOMAXPROCS=" + telemetryMaxProcs, "SUPERVISOR_SSHD_PID=" + strconv.Itoa(sshdPid),
-		"SUPERVISOR_WORKLOAD_PID=" + strconv.Itoa(workloadPid)}
-	var env []string
-	for _, kv := range os.Environ() {
-		k, _, _ := strings.Cut(kv, "=")
-		if k != "GOMEMLIMIT" && k != "GOMAXPROCS" && k != "SUPERVISOR_SSHD_PID" && k != "SUPERVISOR_WORKLOAD_PID" {
-			env = append(env, kv)
+// telemetryEnv is the agent's view of the container, with PID 1's sshd
+// and workload pids handed over directly.
+func telemetryEnv(configPath string, sshdPid, workloadPid int) agent.Env {
+	env := agent.DefaultEnv()
+	env.ConfigPath = configPath
+	env.SSHDPid = func() int { return sshdPid }
+	env.WorkloadPid = func() int { return workloadPid }
+	return env
+}
+
+// agentRun loads the config afresh for every (re)start and runs the agent.
+func agentRun(configPath string, sshdPid, workloadPid int) func(context.Context) error {
+	return func(ctx context.Context) error {
+		cfg, err := config.LoadConfig(configPath)
+		if err != nil {
+			return err
 		}
-	}
-	env = append(env, ours...)
-	return &telemetrySup{argv: argv, env: env, initial: initial, early: map[int]int{}, stopCh: make(chan struct{})}
-}
-
-// exited is called by the reap loop for pids it does not track.
-func (t *telemetrySup) exited(pid, code int) {
-	if t == nil {
-		return
-	}
-	t.mu.Lock()
-	defer t.mu.Unlock()
-	if pid == t.pid && t.exitCh != nil {
-		t.exitCh <- code
-		t.pid, t.exitCh = 0, nil
-		return
-	}
-	if t.starting {
-		t.early[pid] = code
+		return agent.Run(ctx, cfg, telemetryEnv(configPath, sshdPid, workloadPid))
 	}
 }
 
-// stop terminates the child and ends the restart loop.
-func (t *telemetrySup) stop() {
-	if t == nil {
-		return
-	}
-	t.mu.Lock()
-	defer t.mu.Unlock()
-	if t.stopped {
-		return
-	}
-	t.stopped = true
-	close(t.stopCh)
-	if t.pid > 0 {
-		_ = syscall.Kill(-t.pid, syscall.SIGTERM)
+// telemetryRunner runs the telemetry agent inside PID 1 — no process of
+// its own — and restarts it after an error or a panic with backoff
+// (initial → 60 s, reset after a 10-minute run). The agent never
+// influences the supervisor's exit.
+type telemetryRunner struct {
+	run     func(context.Context) error
+	initial time.Duration
+	ctx     context.Context
+	cancel  context.CancelFunc
+	done    chan struct{}
+}
+
+func newTelemetryRunner(run func(context.Context) error, initial time.Duration) *telemetryRunner {
+	ctx, cancel := context.WithCancel(context.Background())
+	return &telemetryRunner{run: run, initial: initial, ctx: ctx, cancel: cancel, done: make(chan struct{})}
+}
+
+func (t *telemetryRunner) start() { go t.loop() }
+
+// stop cancels the agent and ends the restarts; it does not wait.
+func (t *telemetryRunner) stop() {
+	if t != nil {
+		t.cancel()
 	}
 }
 
-func (t *telemetrySup) loop() {
+// runRecovered runs the agent once; a panic that escaped the agent's own
+// guards (its main loop) comes back as an error instead of ending PID 1.
+func runRecovered(ctx context.Context, run func(context.Context) error) (err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			err = fmt.Errorf("telemetry panicked: %v\n%s", r, debug.Stack())
+		}
+	}()
+	return run(ctx)
+}
+
+func (t *telemetryRunner) loop() {
+	defer close(t.done)
 	delay := t.initial
 	for {
-		t.mu.Lock()
-		if t.stopped {
-			t.mu.Unlock()
+		started := time.Now()
+		err := runRecovered(t.ctx, t.run)
+		if t.ctx.Err() != nil {
 			return
 		}
-		t.starting = true
-		t.mu.Unlock()
-
-		cmd := exec.Command(t.argv[0], t.argv[1:]...)
-		cmd.Env = t.env
-		cmd.Stdout, cmd.Stderr = os.Stderr, os.Stderr
-		cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
-		started := time.Now()
-		err := cmd.Start()
-
-		ch := make(chan int, 1)
-		t.mu.Lock()
-		t.starting = false
-		if err == nil {
-			t.pid, t.exitCh = cmd.Process.Pid, ch
-			if code, ok := t.early[t.pid]; ok {
-				t.pid, t.exitCh = 0, nil
-				ch <- code
-			}
+		if time.Since(started) >= telemetryStableRun {
+			delay = t.initial
 		}
-		clear(t.early)
-		t.mu.Unlock()
-
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "supervisor: start telemetry: %v\n", err)
-		} else {
-			code := <-ch
-			fmt.Fprintf(os.Stderr, "supervisor: telemetry exited code=%d; restarting in %v\n", code, delay)
-			if time.Since(started) >= telemetryStableRun {
-				delay = t.initial
-			}
-		}
+		fmt.Fprintf(os.Stderr, "supervisor: telemetry stopped (%v); restarting in %v\n", err, delay)
 		select {
-		case <-t.stopCh:
+		case <-t.ctx.Done():
 			return
 		case <-time.After(delay):
 		}
 		delay = min(delay*2, telemetryMaxBackoff)
 	}
-}
-
-// runTelemetry is the `devpod-supervisor telemetry` entry point.
-func runTelemetry() int {
-	path := envOr("SUPERVISOR_TELEMETRY_CONFIG", config.ConfigPath)
-	cfg, err := config.LoadConfig(path)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "telemetry: %v\n", err)
-		return 1
-	}
-	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGTERM, syscall.SIGINT)
-	defer cancel()
-	env := agent.DefaultEnv()
-	env.ConfigPath = path
-	if err := agent.Run(ctx, cfg, env); err != nil {
-		fmt.Fprintf(os.Stderr, "telemetry: %v\n", err)
-		return 1
-	}
-	return 0
 }

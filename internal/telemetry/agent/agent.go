@@ -14,6 +14,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strconv"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -129,7 +130,7 @@ func newAgent(cfg config.Config, env Env) *agent {
 	a := &agent{
 		cfg: cfg, env: env, bootID: ulid.Make().String(), buf: NewBuffer(cfg.BufferBytes),
 		scanner:       &procfs.Scanner{Root: env.ProcRoot},
-		attr:          newAttributor(env.SSHDPid(), env.workloadPid()),
+		attr:          newAttributor(env.SSHDPid(), env.workloadPid(), env.GPU),
 		procs:         map[procfs.PID]*procfs.Proc{},
 		attrib:        map[procfs.PID]procfs.Attribution{},
 		cpuRates:      map[procfs.PID]float64{},
@@ -563,9 +564,23 @@ type noGPUCollector struct{}
 func (noGPUCollector) Latest() ([]wire.GPU, bool) { return nil, false }
 func (noGPUCollector) Close()                     {}
 
-// Run is the telemetry process (spec §5.5): it collects on the
-// configured intervals and uploads until ctx ends.
-func Run(ctx context.Context, cfg config.Config, env Env) error {
+// Run is the telemetry agent (spec §5.5): it collects on the configured
+// intervals and uploads until ctx ends.
+//
+// The agent runs inside the supervisor (PID 1): a panic on any goroutine
+// it starts cancels the others and comes back from Run as an error
+// (IsPanic) for the supervisor to restart it; a panic on Run's own loop
+// unwinds through the same cleanup to the supervisor's recover.
+func Run(ctx context.Context, cfg config.Config, env Env) (err error) {
+	ctx, cancel := context.WithCancelCause(ctx)
+	var wg sync.WaitGroup
+	defer func() {
+		cancel(nil)
+		waitAtMost(&wg, 5*time.Second)
+		if c := context.Cause(ctx); err == nil && IsPanic(c) {
+			err = c
+		}
+	}()
 	if env.GPU == nil {
 		env.GPU = noGPUCollector{}
 		if cfg.GPU {
@@ -584,10 +599,10 @@ func Run(ctx context.Context, cfg config.Config, env Env) error {
 	var url atomic.Value
 	url.Store(cfg.IngestURL)
 	up := &Uploader{URL: func() string { return url.Load().(string) }, TokenPath: env.TokenPath}
-	go up.Run(ctx, a.header, a.buf)
+	goGuarded(&wg, "uploader", cancel, func() { up.Run(ctx, a.header, a.buf) })
 	if cfg.Hooks {
 		hr := &HookReader{Dirs: env.HookDirs, BootID: a.bootID, ProcRoot: env.ProcRoot}
-		go hr.Run(ctx, a.alive, a.cmds, a.alerts)
+		goGuarded(&wg, "hook reader", cancel, func() { hr.Run(ctx, a.alive, a.cmds, a.alerts) })
 	}
 	scan := time.NewTicker(cfg.ProcScanInterval)
 	metrics := time.NewTicker(cfg.MetricsInterval)
@@ -635,9 +650,12 @@ func Run(ctx context.Context, cfg config.Config, env Env) error {
 	}
 }
 
-func newAttributor(sshdPid, workloadPid int) *procfs.Attributor {
+func newAttributor(sshdPid, workloadPid int, gpu GPUCollector) *procfs.Attributor {
 	a := procfs.NewAttributor(sshdPid, SessionExe)
 	a.WorkloadPid = workloadPid
 	a.SelfPid = os.Getpid()
+	if c, ok := gpu.(interface{ ChildPid() int }); ok {
+		a.Infra = func(pid int) bool { return pid > 0 && c.ChildPid() == pid }
+	}
 	return a
 }

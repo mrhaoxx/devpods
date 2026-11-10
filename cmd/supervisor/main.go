@@ -47,9 +47,6 @@ func main() {
 	if len(os.Args) >= 2 && os.Args[1] == "bootstrap" {
 		os.Exit(runBootstrap())
 	}
-	if len(os.Args) >= 2 && os.Args[1] == "telemetry" {
-		os.Exit(runTelemetry())
-	}
 
 	// Register signal handling before forking so a SIGTERM racing
 	// startup doesn't terminate PID 1 with the default action.
@@ -126,11 +123,14 @@ func main() {
 	exitOnUserCmd := os.Getenv("SUPERVISOR_EXIT_ON_USER_CMD") == "true"
 
 	// Telemetry runs only when the controller handed out a config
-	// (spec §5.5); it is restarted on crash and never decides our exit.
-	var tel *telemetrySup
-	if _, err := os.Stat(envOr("SUPERVISOR_TELEMETRY_CONFIG", config.ConfigPath)); err == nil {
-		tel = newTelemetrySup(sshdCmd.Process.Pid, workloadPid)
-		go tel.loop()
+	// (spec §5.5), inside this process rather than as a child of its own;
+	// a failure or panic restarts it and never decides our exit.
+	var tel *telemetryRunner
+	if path := envOr("SUPERVISOR_TELEMETRY_CONFIG", config.ConfigPath); fileExists(path) {
+		applyTelemetryLimits()
+		tel = newTelemetryRunner(agentRun(path, sshdCmd.Process.Pid, workloadPid), telemetryInitialBackoff)
+		fmt.Fprintln(os.Stderr, "supervisor: telemetry running in-process")
+		tel.start()
 	}
 
 	// shuttingDown is set the first time we forward a terminal signal.
@@ -151,7 +151,7 @@ func main() {
 		}
 	}()
 
-	code := waitForChildren(children, &shuttingDown, exitOnUserCmd, tel.exited)
+	code := waitForChildren(children, &shuttingDown, exitOnUserCmd)
 	tel.stop()
 	os.Exit(code)
 }
@@ -166,7 +166,7 @@ func main() {
 //     ssh in and investigate.
 //   - During shutdown (we forwarded a terminal signal), wait for all
 //     tracked children and prefer the user command's exit code.
-func waitForChildren(children []*child, shuttingDown *atomic.Bool, exitOnUserCmd bool, untracked func(pid, code int)) int {
+func waitForChildren(children []*child, shuttingDown *atomic.Bool, exitOnUserCmd bool) int {
 	var firstTrackedExit *int
 	for {
 		var ws syscall.WaitStatus
@@ -191,7 +191,10 @@ func waitForChildren(children []*child, shuttingDown *atomic.Bool, exitOnUserCmd
 			}
 		}
 		if hit == nil {
-			untracked(pid, waitStatusToExit(ws)) // telemetry child or an orphan
+			// an orphan re-parented to us, or the nvidia-smi the in-process
+			// telemetry agent runs: reaping it here makes the agent's
+			// cmd.Wait fail with ECHILD, which it ignores (its run ends
+			// at the end of stdout)
 			continue
 		}
 		code := waitStatusToExit(ws)
@@ -378,4 +381,9 @@ func splitSemis(s string) []string {
 		return nil
 	}
 	return strings.Split(s, ";")
+}
+
+func fileExists(path string) bool {
+	_, err := os.Stat(path)
+	return err == nil
 }
