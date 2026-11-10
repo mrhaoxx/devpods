@@ -6,6 +6,8 @@ import { render } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { MemoryRouter } from "react-router-dom";
 import type { Me } from "../api";
+import { LiveHub } from "../data/live/LiveHub";
+import { LiveHubProvider } from "../data/live/hooks";
 
 export const stubMe = (over: Partial<Me> = {}): Me => ({
   user: "alice",
@@ -19,7 +21,9 @@ export const stubMe = (over: Partial<Me> = {}): Me => ({
   ...over,
 });
 
-export type RenderOptions = { route?: string; me?: Me | null; client?: QueryClient };
+/** hub: a LiveHub (over a fake OpenSSE) for components with live data;
+ *  without one, live data is disabled. */
+export type RenderOptions = { route?: string; me?: Me | null; client?: QueryClient; hub?: LiveHub; liveEnabled?: boolean };
 
 export function renderWithProviders(ui: ReactElement, opts: RenderOptions = {}) {
   const client =
@@ -28,7 +32,11 @@ export function renderWithProviders(ui: ReactElement, opts: RenderOptions = {}) 
   if (opts.me !== null) client.setQueryData(["me"], opts.me ?? stubMe());
   const result = render(
     <QueryClientProvider client={client}>
-      <MemoryRouter initialEntries={[opts.route ?? "/"]} future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>{ui}</MemoryRouter>
+      <LiveHubProvider hub={opts.hub ?? new LiveHub({ open: () => () => {} })} enabled={opts.liveEnabled ?? !!opts.hub}>
+        <MemoryRouter initialEntries={[opts.route ?? "/"]} future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
+          {ui}
+        </MemoryRouter>
+      </LiveHubProvider>
     </QueryClientProvider>,
   );
   return { ...result, client };
