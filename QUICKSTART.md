@@ -213,9 +213,10 @@ What users and admins get:
   topology), 用户与配额 (quota bars, batch 设配额 / 设审计策略 / 重置密码 /
   休眠, CSV import `username,displayName[,password]`). Admins can grant
   admin to others from the user drawer.
-- Live numbers come from the telemetry agent (`telemetry.enabled`,
-  section 6d of the audit spec); a DevPod reports once its Pod is next
-  recreated, and shows "—" until then.
+- Live numbers come from the telemetry agent (`--set telemetry.enabled=true`;
+  needs audit's bundled or external ClickHouse, see the `telemetry`
+  values in `deploy/chart/values.yaml`); a DevPod reports once its Pod is
+  next recreated, and shows "—" until then.
 
 CPU-binding (Kore) is template-mediated: ordinary users can only pick
 admin-curated `DevPodTemplate` CRs — raw `kore.zjusct.io/*` annotations
