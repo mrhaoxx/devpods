@@ -466,18 +466,18 @@ func setLimit(limits corev1.ResourceList, res corev1.ResourceName, val string) *
 // fields of the edit drawer (UI spec §5.6). Absent fields stay as they
 // are; persistence is immutable after creation.
 type PatchRequest struct {
-	Running       *bool                           `json:"running,omitempty"`
-	Image         *string                         `json:"image,omitempty"`
-	CPU           *string                         `json:"cpu,omitempty"`
-	Memory        *string                         `json:"memory,omitempty"`
-	GPU           *string                         `json:"gpu,omitempty"`
-	Shell         *string                         `json:"shell,omitempty"`
-	Collaborators *[]string                       `json:"collaborators,omitempty"`
+	Running       *bool     `json:"running,omitempty"`
+	Image         *string   `json:"image,omitempty"`
+	CPU           *string   `json:"cpu,omitempty"`
+	Memory        *string   `json:"memory,omitempty"`
+	GPU           *string   `json:"gpu,omitempty"`
+	Shell         *string   `json:"shell,omitempty"`
+	Collaborators *[]string `json:"collaborators,omitempty"`
 	// Node migrates the DevPod (admin only): it pins the Pod to that
 	// node through a hostname node selector; "" leaves the choice to
 	// the scheduler again.
-	Node          *string                         `json:"node,omitempty"`
-	Persistence   *devpodv1alpha1.PersistenceSpec `json:"persistence,omitempty"`
+	Node        *string                         `json:"node,omitempty"`
+	Persistence *devpodv1alpha1.PersistenceSpec `json:"persistence,omitempty"`
 }
 
 // PatchResponse: Rebuild reports that a running DevPod's Pod is being
