@@ -136,7 +136,7 @@ export function DevPodTable({ scope }: { scope: "mine" | "all" }) {
         )}
         <span className="flex-1" />
         {scope === "mine" && (
-          <Link to="/devpods/new" className="inline-flex h-7 items-center rounded-md bg-accent px-2.5 text-xs font-medium text-white hover:bg-accent-hi">
+          <Link to="/?new=1" className="inline-flex h-7 items-center rounded-md bg-accent px-2.5 text-xs font-medium text-white hover:bg-accent-hi">
             + 新建 DevPod
           </Link>
         )}

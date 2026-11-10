@@ -96,7 +96,7 @@ export function Sidebar({ me, onNavigate }: { me: Me; onNavigate?: () => void })
       {admin && audit && <Group title="审计" items={auditItems} onNavigate={onNavigate} />}
       <div className="pt-3">
         <NavLink
-          to="/devpods/new"
+          to="/?new=1"
           onClick={onNavigate}
           className="flex h-7 items-center justify-center gap-1 rounded-md bg-accent px-2 text-[13px] font-medium text-white hover:bg-accent-hi"
         >
