@@ -25,7 +25,8 @@ const RANGE_MS: Record<string, number> = {
 };
 const RANGES = Object.keys(RANGE_MS);
 const schema = { range: { kind: "string", default: "1h" } } satisfies Schema;
-const palette = ["--color-accent", "--color-run", "--color-warm", "--color-fail", "--color-idle"];
+// series colors in fixed order (the validated chart palette)
+const palette = ["--chart-1", "--chart-2", "--chart-3", "--chart-4", "--chart-5", "--chart-6", "--chart-7", "--chart-8"];
 type GpuMetric = "util" | "mem" | "power" | "temp";
 const gpuMetric: Record<GpuMetric, [string, (v: number) => string]> = {
   util: ["利用率", (v) => `${Math.round(v)}%`],
@@ -41,12 +42,12 @@ function Charts({ c, live }: { c: ChartSet; live: boolean }) {
   const gpus = Object.entries(c.gpu);
   const rdmas = Object.entries(c.rdma);
   const net: ChartSeries[] = [
-    { label: "↓ 接收", values: c.net.rx, color: "--color-accent" },
-    { label: "↑ 发送", values: c.net.tx, color: "--color-run" },
+    { label: "↓ 接收", values: c.net.rx, color: "--chart-1" },
+    { label: "↑ 发送", values: c.net.tx, color: "--chart-2" },
     ...(splitTcp
       ? [
-          { label: "↓ TCP", values: c.net.tcpRx, color: "--color-warm", dash: true },
-          { label: "↑ TCP", values: c.net.tcpTx, color: "--color-idle", dash: true },
+          { label: "↓ TCP", values: c.net.tcpRx, color: "--chart-3" },
+          { label: "↑ TCP", values: c.net.tcpTx, color: "--chart-4" },
         ]
       : []),
   ];
@@ -57,8 +58,8 @@ function Charts({ c, live }: { c: ChartSet; live: boolean }) {
           <TimeSeriesChart
             ts={c.ts}
             series={[
-              { label: "使用", values: c.cpu.used, color: "--color-accent", fill: true },
-              { label: "throttled", values: c.cpu.throttled, color: "--color-warm" },
+              { label: "使用", values: c.cpu.used, color: "--chart-1", fill: true },
+              { label: "throttled", values: c.cpu.throttled, color: "--chart-2" },
             ]}
             limit={lastLimit(c.cpu.limit)}
             yFormat={fmtCores}
@@ -71,8 +72,8 @@ function Charts({ c, live }: { c: ChartSet; live: boolean }) {
             ts={c.ts}
             stacked
             series={[
-              { label: "anon", values: c.mem.anon, color: "--color-accent", fill: true },
-              { label: "file", values: c.mem.file, color: "--color-run", fill: true },
+              { label: "anon", values: c.mem.anon, color: "--chart-1", fill: true },
+              { label: "file", values: c.mem.file, color: "--chart-2", fill: true },
             ]}
             limit={lastLimit(c.mem.limit)}
             yFormat={fmtBytes}
@@ -155,8 +156,8 @@ function Charts({ c, live }: { c: ChartSet; live: boolean }) {
           <TimeSeriesChart
             ts={c.ts}
             series={[
-              { label: "读", values: c.io.r, color: "--color-accent" },
-              { label: "写", values: c.io.w, color: "--color-warm" },
+              { label: "读", values: c.io.r, color: "--chart-1" },
+              { label: "写", values: c.io.w, color: "--chart-2" },
             ]}
             yFormat={fmtRate}
           />

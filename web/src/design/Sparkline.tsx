@@ -24,7 +24,7 @@ export function Sparkline({
   max,
   width = 60,
   height = 16,
-  className = "text-accent",
+  className = "text-[var(--chart-1)]",
 }: {
   values: (number | null)[];
   max?: number;
@@ -34,9 +34,17 @@ export function Sparkline({
 }) {
   return (
     <svg width={width} height={height} className={className} aria-hidden="true">
-      {sparkPoints(values, width, height - 1, max).map((pts, i) => (
-        <polyline key={i} points={pts} fill="none" stroke="currentColor" strokeWidth={1.25} vectorEffect="non-scaling-stroke" />
-      ))}
+      {sparkPoints(values, width, height - 1, max).map((pts, i) => {
+        const first = pts.slice(0, pts.indexOf(","));
+        const last = pts.slice(pts.lastIndexOf(" ") + 1, pts.lastIndexOf(","));
+        return (
+          <g key={i}>
+            {/* a light wash under the line */}
+            <polygon points={`${first},${height} ${pts} ${last},${height}`} fill="currentColor" fillOpacity={0.14} />
+            <polyline points={pts} fill="none" stroke="currentColor" strokeWidth={1.5} strokeLinejoin="round" strokeLinecap="round" />
+          </g>
+        );
+      })}
     </svg>
   );
 }

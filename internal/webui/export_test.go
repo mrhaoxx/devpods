@@ -85,3 +85,5 @@ func SetLiveHistoryBytesForTest(n int64) func() {
 	liveHistoryBytes = n
 	return func() { liveHistoryBytes = old }
 }
+
+var SumRecentByNodeForTest = sumRecentByNode

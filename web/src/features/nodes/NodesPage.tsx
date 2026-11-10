@@ -6,7 +6,7 @@ import { Link } from "react-router-dom";
 import { useQueryClient } from "@tanstack/react-query";
 import type { ColumnDef, SortingState } from "@tanstack/react-table";
 import { patchDevPod, type KoreNode, type NodeLive, type NodeView } from "../../data/api";
-import { useNode, useNodes } from "../../data/queries";
+import { useNode, useNodes, useNodesRecent } from "../../data/queries";
 import { overviewStream } from "../../data/live/streams";
 import { useLiveRow } from "../../data/live/hooks";
 import { DataTable } from "../../design/DataTable";
@@ -14,6 +14,7 @@ import { Drawer } from "../../design/Drawer";
 import { Chip } from "../../design/Chip";
 import { Meter } from "../../design/Meter";
 import { Sparkline } from "../../design/Sparkline";
+import { sparkSeries } from "../../lib/spark";
 import { Panel } from "../../design/Panel";
 import { Button } from "../../design/Button";
 import { Badge } from "../../design/Badge";
@@ -38,10 +39,17 @@ const spec = overviewStream();
 
 function CpuUsed({ name }: { name: string }) {
   const { row } = useLiveRow<NodeLive>(spec, `node:${name}`);
+  const recent = useNodesRecent().data; // stored history: the curve is there on arrival
   if (!row) return <span className="text-faint">—</span>;
+  const hist = recent?.items[name] && { ts: recent.ts, v: recent.items[name].cpu };
   return (
     <span className="inline-flex items-center gap-1.5">
-      <Sparkline values={row.history.map((h) => h.value.cpuUsed)} max={row.value.cpuAllocatable || undefined} width={48} height={14} />
+      <Sparkline
+        values={sparkSeries(hist, row.history.map((h) => ({ ts: h.ts, v: h.value.cpuUsed })), Date.now())}
+        max={row.value.cpuAllocatable || undefined}
+        width={48}
+        height={14}
+      />
       <span className="mono">{fmtCores(row.value.cpuUsed)}</span>
     </span>
   );

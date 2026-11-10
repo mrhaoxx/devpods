@@ -328,3 +328,20 @@ func TestProcessesAPI_Redacted(t *testing.T) {
 		t.Fatalf("stranger: %d", rec.Code)
 	}
 }
+
+func TestSumRecentByNode(t *testing.T) {
+	f := func(v float64) *float64 { return &v }
+	rs := &store.RecentSeries{Step: 15, TS: []int64{0, 15, 30}, Items: map[string]store.RecentItem{
+		"u1": {CPU: []*float64{f(1), nil, f(3)}, Mem: []*float64{f(10), nil, f(30)}},
+		"u2": {CPU: []*float64{f(2), nil, nil}, Mem: []*float64{f(20), nil, nil}},
+		"u3": {CPU: []*float64{f(9), f(9), f(9)}, Mem: []*float64{nil, nil, nil}},
+		"gone": {CPU: []*float64{f(5), f(5), f(5)}, Mem: []*float64{nil, nil, nil}},
+	}}
+	got := webui.SumRecentByNodeForTest(rs, map[string]string{"u1": "n1", "u2": "n1", "u3": "n2"})
+	b, _ := json.Marshal(got)
+	// a bucket nobody reported stays a gap; an unknown DevPod is left out
+	want := `{"n1":{"cpu":[3,null,3],"mem":[30,null,30]},"n2":{"cpu":[9,9,9],"mem":[null,null,null]}}`
+	if string(b) != want {
+		t.Fatalf("got  %s\nwant %s", b, want)
+	}
+}

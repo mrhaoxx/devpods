@@ -31,6 +31,15 @@
   --color-idle-soft: #eaeef2;
   --color-fail: #cf222e;
   --color-fail-soft: #ffebe9;
+  /* chart series, in fixed order (colorblind-validated on the surface) */
+  --chart-1: #2a78d6;
+  --chart-2: #eb6834;
+  --chart-3: #1baf7a;
+  --chart-4: #eda100;
+  --chart-5: #e87ba4;
+  --chart-6: #008300;
+  --chart-7: #6250d6;
+  --chart-8: #e34948;
 
   --font-sans: system-ui, -apple-system, "Segoe UI", "PingFang SC", "Microsoft YaHei", Roboto, Helvetica, Arial,
     sans-serif;
@@ -63,6 +72,15 @@
     --color-idle-soft: #1c2128;
     --color-fail: #f85149;
     --color-fail-soft: #33161a;
+    /* chart series, in fixed order (colorblind-validated on the surface) */
+    --chart-1: #3987e5;
+    --chart-2: #d95926;
+    --chart-3: #199e70;
+    --chart-4: #c98500;
+    --chart-5: #d55181;
+    --chart-6: #008300;
+    --chart-7: #9085e9;
+    --chart-8: #e66767;
   }
   @media (prefers-color-scheme: dark) {
     :root:not([data-theme]) {
@@ -85,6 +103,15 @@
       --color-idle-soft: #1c2128;
       --color-fail: #f85149;
       --color-fail-soft: #33161a;
+      /* chart series, in fixed order (colorblind-validated on the surface) */
+      --chart-1: #3987e5;
+      --chart-2: #d95926;
+      --chart-3: #199e70;
+      --chart-4: #c98500;
+      --chart-5: #d55181;
+      --chart-6: #008300;
+      --chart-7: #9085e9;
+      --chart-8: #e66767;
     }
   }
 }

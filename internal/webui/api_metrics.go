@@ -215,3 +215,64 @@ func (s *Server) handleLiveRecent(w http.ResponseWriter, r *http.Request) {
 	}
 	s.writeJSON(w, http.StatusOK, map[string]any{"step": rs.Step, "ts": rs.TS, "items": items})
 }
+
+// sumRecentByNode adds up the DevPods' recent series per node; a bucket
+// no DevPod on the node reported stays a gap.
+func sumRecentByNode(rs *store.RecentSeries, nodeOf map[string]string) map[string]store.RecentItem {
+	out := map[string]store.RecentItem{}
+	n := len(rs.TS)
+	add := func(dst, src []*float64) {
+		for i := 0; i < n && i < len(src); i++ {
+			if src[i] == nil {
+				continue
+			}
+			if dst[i] == nil {
+				dst[i] = new(float64)
+			}
+			*dst[i] += *src[i]
+		}
+	}
+	for uid, it := range rs.Items {
+		node := nodeOf[uid]
+		if node == "" {
+			continue
+		}
+		sum, ok := out[node]
+		if !ok {
+			sum = store.RecentItem{CPU: make([]*float64, n), Mem: make([]*float64, n)}
+			out[node] = sum
+		}
+		add(sum.CPU, it.CPU)
+		add(sum.Mem, it.Mem)
+	}
+	return out
+}
+
+// handleNodesRecent serves GET /api/admin/nodes/recent: each node's CPU
+// and memory use over the sparkline window, summed from the stored
+// series of the DevPods now on it (the same sum the live view shows).
+func (s *Server) handleNodesRecent(w http.ResponseWriter, r *http.Request) {
+	if _, ok := s.requireAdmin(w, r); !ok {
+		return
+	}
+	ts, ok := s.telemetryStore(w)
+	if !ok {
+		return
+	}
+	_, _, in, _ := s.nodeViews(r.Context())
+	nodeOf := map[string]string{}
+	uids := make([]string, 0, len(in.DevPods))
+	for _, ref := range in.DevPods {
+		if ref.Node != "" && ref.UID != "" {
+			nodeOf[ref.UID] = ref.Node
+			uids = append(uids, ref.UID)
+		}
+	}
+	to := time.Now().UTC()
+	rs, err := ts.RecentContainer(r.Context(), uids, to.Add(-recentWindow), to, recentStep)
+	if err != nil {
+		s.writeErr(w, http.StatusServiceUnavailable, "AUDIT_UNAVAILABLE", err.Error(), nil)
+		return
+	}
+	s.writeJSON(w, http.StatusOK, map[string]any{"step": rs.Step, "ts": rs.TS, "items": sumRecentByNode(rs, nodeOf)})
+}

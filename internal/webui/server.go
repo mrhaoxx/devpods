@@ -82,6 +82,7 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("GET /api/devpods/{name}/info", s.handleDevPodInfo)
 	mux.HandleFunc("GET /api/devpods/{name}/processes", s.handleDevPodProcesses)
 	mux.HandleFunc("GET /api/admin/nodes", s.handleAdminNodes)
+	mux.HandleFunc("GET /api/admin/nodes/recent", s.handleNodesRecent)
 	mux.HandleFunc("GET /api/admin/nodes/{name}", s.handleAdminNode)
 	mux.HandleFunc("GET /api/admin/live/overview", s.handleLiveOverview)
 	mux.HandleFunc("GET /api/search", s.handleSearch)

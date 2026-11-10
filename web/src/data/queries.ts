@@ -9,6 +9,7 @@ import {
   getInfo,
   getMetrics,
   getNode,
+  getNodesRecent,
   getRecent,
   listAdminUsers,
   listAuditSessions,
@@ -93,6 +94,8 @@ export const useMetrics = (name: string, range: MetricRange | undefined) =>
 /** useRecent: sparkline history (15 min) from ClickHouse, refreshed each minute. */
 export const useRecent = (p: { scope?: "mine" | "all"; name?: string }, enabled = true) =>
   useQuery({ queryKey: ["recent", p.scope ?? "", p.name ?? ""], queryFn: () => getRecent(p), enabled, refetchInterval: 60_000, retry: false });
+/** useNodesRecent: the nodes' sparkline history, shared by every cell. */
+export const useNodesRecent = () => useQuery({ queryKey: ["recent", "nodes"], queryFn: getNodesRecent, refetchInterval: 60_000, retry: false });
 export const useInfo = (name: string, enabled = true) =>
   useQuery({ queryKey: qk.info(name), queryFn: () => getInfo(name), enabled, retry: false, staleTime: 30_000 });
 export const useAuditSessions = (params: Record<string, string | undefined>, opts: { enabled?: boolean; refetchInterval?: number } = {}) =>
