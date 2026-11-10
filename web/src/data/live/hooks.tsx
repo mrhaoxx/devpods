@@ -1,4 +1,4 @@
-import { createContext, useCallback, useContext, useEffect, useRef, useSyncExternalStore, type ReactNode } from "react";
+import { createContext, useCallback, useContext, useEffect, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
 import { LiveHub, type LiveRow, type LiveStatus, type StreamSpec } from "./LiveHub";
 
 type Ctx = { hub: LiveHub | null; enabled: boolean };
@@ -46,4 +46,36 @@ export function useLiveStatus(): { reconnecting: boolean } {
   const sub = useCallback((fn: () => void) => (hub && enabled ? hub.subscribeStatus(fn) : () => {}), [hub, enabled]);
   const reconnecting = useSyncExternalStore(sub, () => !!(hub && enabled && hub.anyReconnecting()));
   return { reconnecting };
+}
+
+/** useLiveValues samples many rows of a stream every `everyMs` (for
+ *  filters over live fields; cells use useLiveRow instead). */
+export function useLiveValues<T>(spec: StreamSpec | null, keys: string[], everyMs = 5000, on = true): Map<string, T> {
+  const { hub, enabled } = useContext(HubContext);
+  const active = !!(hub && enabled && spec && on);
+  const id = spec?.id ?? "";
+  const specRef = useRef(spec);
+  specRef.current = spec;
+  const keysRef = useRef(keys);
+  keysRef.current = keys;
+  const [vals, setVals] = useState<Map<string, T>>(() => new Map());
+  useEffect(() => {
+    if (!active || !specRef.current) return;
+    const release = hub!.acquire(specRef.current);
+    const read = () => {
+      const m = new Map<string, T>();
+      for (const k of keysRef.current) {
+        const r = hub!.row<T>(id, k);
+        if (r) m.set(k, r.value);
+      }
+      setVals(m);
+    };
+    read();
+    const t = setInterval(read, everyMs);
+    return () => {
+      clearInterval(t);
+      release();
+    };
+  }, [hub, active, id, everyMs]);
+  return active ? vals : new Map();
 }

@@ -6,11 +6,11 @@ import { LoginPage } from "./LoginPage";
 import { RequireAdmin, RequireAudit } from "./RequireAdmin";
 import { SettingsPage } from "../features/settings/SettingsPage";
 import { EmptyState } from "../design/EmptyState";
-import PodList from "../pages/PodList";
+import { MyDevPodsPage } from "../features/devpods/MyDevPodsPage";
+import { AdminDevPodsPage } from "../features/devpods/AdminDevPodsPage";
 import PodCreate from "../pages/PodCreate";
 import PodDetail from "../pages/PodDetail";
 import AdminUsers from "../pages/AdminUsers";
-import AdminDevPods from "../pages/AdminDevPods";
 import AdminTopology from "../pages/AdminTopology";
 import AuditSessions from "../pages/audit/Sessions";
 import AuditSessionDetail from "../pages/audit/SessionDetail";
@@ -31,7 +31,7 @@ export function AppRoutes() {
     <Routes>
       <Route path="/login" element={<LoginPage />} />
       <Route element={<Shell />}>
-        <Route index element={<PodList />} />
+        <Route index element={<MyDevPodsPage />} />
         <Route path="devpods/new" element={<PodCreate />} />
         <Route path="devpods/:name" element={<PodDetail />} />
         <Route path="settings" element={<SettingsPage />} />
@@ -52,7 +52,7 @@ export function AppRoutes() {
         </Route>
         <Route element={<RequireAdmin />}>
           <Route path="admin" element={<Soon title="集群总览" />} />
-          <Route path="admin/devpods" element={<AdminDevPods />} />
+          <Route path="admin/devpods" element={<AdminDevPodsPage />} />
           <Route path="admin/nodes" element={<AdminTopology />} />
           <Route path="admin/topology" element={<Navigate to="/admin/nodes" replace />} />
           <Route path="admin/users" element={<AdminUsers />} />

@@ -81,3 +81,14 @@ export function sumLimits(spec?: { containers?: ContainerLike[] }): { cpu: numbe
   out.cpu = Math.round(out.cpu * 1000) / 1000;
   return out;
 }
+
+// fmtRate: bytes per second → "1.5M/s" (or "0/s").
+export function fmtRate(bps: number): string {
+  return `${fmtBytes(bps)}/s`;
+}
+
+// fmtCores: 0.5 → "0.5", 12 → "12", 7.43 → "7.4".
+export function fmtCores(c: number): string {
+  if (!isFinite(c)) return "—";
+  return c >= 10 ? String(Math.round(c)) : String(+c.toFixed(1));
+}
