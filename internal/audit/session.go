@@ -45,6 +45,7 @@ type Session struct {
 	lastFlush time.Time
 	gapAlert  bool
 	closed    bool
+	watchers  []*watcher // live viewers (live.go)
 }
 
 var _ SessionHooks = (*Session)(nil)
@@ -142,6 +143,7 @@ func (s *Session) recordLocked(rec rawlog.Record) {
 	if err := s.seg.Write(rec); err != nil {
 		s.abandonSegmentLocked(err)
 	}
+	s.deliverLocked(rec)
 }
 
 // abandonSegmentLocked drops the current segment after a spool error:
@@ -315,6 +317,7 @@ func (s *Session) Close(reason string, bytesIn, bytesOut int64) {
 	s.buf.Sessions = append(s.buf.Sessions, s.row(2, &now, reason, bytesIn, bytesOut))
 	s.flushLocked(now)
 	s.closed = true
+	s.endWatchersLocked()
 	s.mu.Unlock()
 	s.r.remove(s)
 }
