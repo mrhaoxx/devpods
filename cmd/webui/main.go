@@ -226,6 +226,11 @@ func main() {
 		fatal(err)
 	}
 	srv.Audit = auditDeps
+	if auditDeps != nil {
+		if srv.LiveSessions, err = af.liveSessions(mgr.GetAPIReader()); err != nil {
+			fatal(err)
+		}
+	}
 	srv.GatewayConfigName = *gcName
 
 	waitTelemetry := func() {}

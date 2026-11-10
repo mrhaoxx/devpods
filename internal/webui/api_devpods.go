@@ -71,6 +71,9 @@ type Server struct {
 
 	// Live is the phase-2 live telemetry layer; nil hides it.
 	Live *LiveDeps
+	// LiveSessions relays live session views from the gateways (audit
+	// spec §16); nil disables live viewing.
+	LiveSessions *LiveSessions
 }
 
 type apiBody struct {

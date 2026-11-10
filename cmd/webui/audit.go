@@ -6,12 +6,16 @@ package main
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"log/slog"
 	"os"
+	"strings"
 	"sync"
 	"time"
+
+	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	"github.com/mrhaoxx/devpod/internal/audit/store"
 	"github.com/mrhaoxx/devpod/internal/webui"
@@ -22,10 +26,19 @@ type auditFlags struct {
 	chURL, chDatabase, chCredsDir              string
 	s3Endpoint, s3Bucket, s3Region, s3CredsDir string
 	s3PathStyle                                bool
+
+	// live session viewing (audit spec §16)
+	liveKeyFile, liveGatewayService, liveGatewayNS string
+	livePort, liveMaxViewers                       int
 }
 
 func addAuditFlags(fs *flag.FlagSet) *auditFlags {
 	f := &auditFlags{}
+	fs.StringVar(&f.liveKeyFile, "audit-live-key-file", "", "file with the key for the gateways' live session endpoint (empty disables live viewing)")
+	fs.StringVar(&f.liveGatewayService, "audit-live-gateway-service", "devpod-gateway", "Service whose EndpointSlices locate gateway Pods")
+	fs.StringVar(&f.liveGatewayNS, "audit-live-gateway-namespace", os.Getenv("POD_NAMESPACE"), "namespace of the gateway Service (default: this Pod's)")
+	fs.IntVar(&f.livePort, "audit-live-port", 8082, "port of the gateways' live session endpoint")
+	fs.IntVar(&f.liveMaxViewers, "audit-live-max-viewers", 16, "concurrent live session views per webui replica")
 	fs.StringVar(&f.chURL, "audit-clickhouse-url", "", "audit ClickHouse URL, e.g. clickhouse://host:9000 (empty disables the audit UI)")
 	fs.StringVar(&f.chDatabase, "audit-clickhouse-database", "devpod_audit", "audit ClickHouse database")
 	fs.StringVar(&f.chCredsDir, "audit-clickhouse-credentials-dir", "", "directory with files username and password")
@@ -372,3 +385,23 @@ var (
 	_ webui.TelemetryStore = (*lazyCH)(nil)
 	_ leader.JobStore      = (*lazyCH)(nil)
 )
+
+// liveSessions wires live session viewing when audit and the key are set.
+func (f *auditFlags) liveSessions(reader client.Reader) (*webui.LiveSessions, error) {
+	if f.liveKeyFile == "" {
+		return nil, nil
+	}
+	b, err := os.ReadFile(f.liveKeyFile)
+	if err != nil {
+		return nil, fmt.Errorf("audit live key: %w", err)
+	}
+	key := strings.TrimSpace(string(b))
+	if key == "" {
+		return nil, errors.New("audit live key file is empty")
+	}
+	ns := f.liveGatewayNS
+	if ns == "" {
+		ns = "devpod-system"
+	}
+	return webui.NewLiveSessions(webui.GatewayLiveResolver(reader, ns, f.liveGatewayService, f.livePort), key, f.liveMaxViewers), nil
+}

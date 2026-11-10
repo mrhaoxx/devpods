@@ -34,6 +34,7 @@ func (s *Server) registerAuditRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/audit/sessions", s.handleAuditSessions)
 	mux.HandleFunc("GET /api/audit/sessions/{id}", s.handleAuditSession)
 	mux.HandleFunc("GET /api/audit/sessions/{id}/channels/{ch}/cast", s.handleAuditCast)
+	mux.HandleFunc("GET /api/audit/sessions/{id}/channels/{ch}/live", s.handleAuditLive)
 	mux.HandleFunc("GET /api/audit/sessions/{id}/channels/{ch}/raw", s.handleAuditRaw)
 	mux.HandleFunc("GET /api/audit/files/{event}/content", s.handleAuditFileContent)
 	mux.HandleFunc("GET /api/audit/commands", s.handleAuditCommands)
