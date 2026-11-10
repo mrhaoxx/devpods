@@ -51,7 +51,10 @@ type HTTPProxy struct {
 
 // idsTTL bounds how stale the id index may be (a reset id stops working
 // within it).
-const idsTTL = 5 * time.Second
+const (
+	idsTTL         = 5 * time.Second
+	idsMissRefresh = time.Second
+)
 
 func NewHTTPProxy(c client.Reader, devpodNamespace, baseDomain, suffix string) *HTTPProxy {
 	return &HTTPProxy{c: c, dpNS: devpodNamespace, baseDomain: baseDomain, suffix: suffix, Now: time.Now}
@@ -63,7 +66,10 @@ func (p *HTTPProxy) lookup(r *http.Request, id string) (*devpodv1alpha1.DevPod, 
 		return nil, false
 	}
 	p.mu.Lock()
-	if p.ids == nil || p.Now().Sub(p.idsAt) > idsTTL {
+	name, ok := p.ids[id]
+	// an id drawn a moment ago is not in the index yet: a miss rebuilds
+	// it (at most once per idsMissRefresh, so unknown ids stay cheap)
+	if age := p.Now().Sub(p.idsAt); p.ids == nil || age > idsTTL || (!ok && age > idsMissRefresh) {
 		var list devpodv1alpha1.DevPodList
 		if err := p.c.List(r.Context(), &list, client.InNamespace(p.dpNS)); err == nil {
 			ids := make(map[string]string, len(list.Items))
@@ -74,8 +80,8 @@ func (p *HTTPProxy) lookup(r *http.Request, id string) (*devpodv1alpha1.DevPod, 
 			}
 			p.ids, p.idsAt = ids, p.Now()
 		}
+		name, ok = p.ids[id]
 	}
-	name, ok := p.ids[id]
 	p.mu.Unlock()
 	if !ok {
 		return nil, false

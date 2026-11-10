@@ -203,6 +203,20 @@ func TestHTTPProxy_PublicPortAndGuards(t *testing.T) {
 	if resp := do("GET", "/", map[string]string{"Host": idA + "-1-devpod.apps.test"}); resp.StatusCode != http.StatusForbidden {
 		t.Fatalf("sshd port: %d", resp.StatusCode)
 	}
+	// a DevPod that gets its id after the index was built is found once
+	// the index is a second old, not only after the full TTL
+	fresh := &devpodv1alpha1.DevPod{
+		ObjectMeta: metav1.ObjectMeta{Name: "bob-dev", Namespace: "devpods", Annotations: map[string]string{httpauth.IDAnnotation: "yyyyyyyy3333", httpauth.PublicPortsAnnotation: bport}},
+		Status:     devpodv1alpha1.DevPodStatus{Phase: devpodv1alpha1.DevPodRunning, Endpoint: "127.0.0.1:1"},
+	}
+	if err := p.c.(client.Client).Create(context.Background(), fresh); err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now()
+	p.Now = func() time.Time { return now.Add(2 * time.Second) }
+	if resp := do("GET", "/", map[string]string{"Host": "yyyyyyyy3333-" + bport + "-devpod.apps.test"}); resp.StatusCode != http.StatusOK {
+		t.Fatalf("fresh id: %d", resp.StatusCode)
+	}
 	// without a key only public ports work
 	p.Key = nil
 	if resp := do("GET", "/", map[string]string{"Host": idA + "-9-devpod.apps.test", "Accept": "text/html"}); resp.StatusCode != http.StatusUnauthorized {
