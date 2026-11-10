@@ -503,3 +503,35 @@ func TestSession_DecoderPanicFailClosedClosesChannel(t *testing.T) {
 		}
 	}
 }
+
+// The open session row must carry the backend address: container-side
+// telemetry (commands, processes) finds its session by it while the
+// session is still open.
+func TestSession_OpenRowCarriesBackendAddr(t *testing.T) {
+	openAddr := func(b store.Batch) string {
+		addr := "<no open row>"
+		for _, s := range b.Sessions {
+			if s.ClosedAt == nil {
+				addr = s.BackendLocalAddr
+			}
+		}
+		return addr
+	}
+	t.Run("set before the first flush", func(t *testing.T) {
+		g := newRig(t, 1<<20)
+		s := g.start(policy.Effective{})
+		s.SetBackendAddr("10.0.0.1:4242")
+		if got := openAddr(g.drain()); got != "10.0.0.1:4242" {
+			t.Fatalf("open row backend addr %q", got)
+		}
+	})
+	t.Run("set after the open row was flushed", func(t *testing.T) {
+		g := newRig(t, 1<<20)
+		s := g.start(policy.Effective{})
+		s.sealAndFlush()
+		s.SetBackendAddr("10.0.0.1:4242")
+		if got := openAddr(g.drain()); got != "10.0.0.1:4242" {
+			t.Fatalf("open row backend addr %q", got)
+		}
+	})
+}

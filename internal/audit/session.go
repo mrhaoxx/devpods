@@ -83,10 +83,26 @@ func (s *Session) row(version uint64, closedAt *time.Time, reason string, in, ou
 
 // SetBackendAddr records the gateway-side address of the backend TCP
 // connection (the key container-side data is correlated on).
+//
+// The open row was written before the backend was dialled, so it is
+// patched while still buffered, or written again (same version: the
+// later insert replaces the earlier). Without this the address would
+// only land with the close row, and telemetry could not find the
+// session while it is open.
 func (s *Session) SetBackendAddr(addr string) {
 	s.mu.Lock()
+	defer s.mu.Unlock()
 	s.backend = addr
-	s.mu.Unlock()
+	if s.closed {
+		return
+	}
+	for i := range s.buf.Sessions {
+		if r := &s.buf.Sessions[i]; r.SessionID == s.meta.ID && r.ClosedAt == nil {
+			r.BackendLocalAddr = addr
+			return
+		}
+	}
+	s.buf.Sessions = append(s.buf.Sessions, s.row(1, nil, "", 0, 0))
 }
 
 // Done is closed when a fail-closed session must be torn down.
