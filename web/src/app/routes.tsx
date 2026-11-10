@@ -8,7 +8,7 @@ import { SettingsPage } from "../features/settings/SettingsPage";
 import { EmptyState } from "../design/EmptyState";
 import { MyDevPodsPage } from "../features/devpods/MyDevPodsPage";
 import { AdminDevPodsPage } from "../features/devpods/AdminDevPodsPage";
-import PodDetail from "../pages/PodDetail";
+import { DetailPage } from "../features/devpods/detail/DetailPage";
 import AdminUsers from "../pages/AdminUsers";
 import AdminTopology from "../pages/AdminTopology";
 import AuditSessions from "../pages/audit/Sessions";
@@ -32,7 +32,7 @@ export function AppRoutes() {
       <Route element={<Shell />}>
         <Route index element={<MyDevPodsPage />} />
         <Route path="devpods/new" element={<Navigate to="/?new=1" replace />} />
-        <Route path="devpods/:name" element={<PodDetail />} />
+        <Route path="devpods/:name" element={<DetailPage />} />
         <Route path="settings" element={<SettingsPage />} />
         <Route path="settings/pubkeys" element={<Navigate to="/settings" replace />} />
         <Route path="settings/password" element={<Navigate to="/settings" replace />} />

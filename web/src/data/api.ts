@@ -216,7 +216,7 @@ export const listDevPods = (scope: "mine" | "all" = "mine") =>
   req<DevPodList>("GET", scope === "all" ? "/api/devpods?scope=all" : "/api/devpods");
 export const auditPresence = (all = false) =>
   req<{ items: Record<string, Presence> }>("GET", `/api/audit/presence${all ? "?scope=all" : ""}`);
-export const getDevPod = (n: string) => req<{ devpod: DevPod; binding?: BindingInfo }>("GET", `/api/devpods/${n}`);
+export const getDevPod = (n: string) => req<DevPodDetail>("GET", `/api/devpods/${n}`);
 export const createDevPod = (body: unknown) => req<DevPod>("POST", "/api/devpods", body);
 export const patchDevPod = (n: string, running: boolean) => req<PatchResult>("PATCH", `/api/devpods/${n}`, { running });
 export const deleteDevPod = (n: string) => req<void>("DELETE", `/api/devpods/${n}`);
