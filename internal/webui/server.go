@@ -71,6 +71,7 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("GET /api/devpods/{name}", s.handleGetDevPod)
 	mux.HandleFunc("PATCH /api/devpods/{name}", s.handlePatchDevPod)
 	mux.HandleFunc("DELETE /api/devpods/{name}", s.handleDeleteDevPod)
+	mux.HandleFunc("POST /api/devpods/{name}/redeploy", s.handleRedeployDevPod)
 	mux.HandleFunc("GET /api/devpods/{name}/events", s.handleDevPodEvents)
 	// Single SSE connection carrying both DevPod status and its events.
 	mux.HandleFunc("GET /api/devpods/{name}/stream", s.handleDevPodStream)

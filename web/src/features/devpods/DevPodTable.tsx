@@ -5,7 +5,7 @@ import { Link } from "react-router-dom";
 import { useQueryClient } from "@tanstack/react-query";
 import * as Menu from "@radix-ui/react-dropdown-menu";
 import type { SortingState } from "@tanstack/react-table";
-import { deleteDevPod, patchDevPod, sshCommand, type LiveItem } from "../../data/api";
+import { deleteDevPod, patchDevPod, patchDevPodSpec, redeployDevPod, sshCommand, type LiveItem } from "../../data/api";
 import { useDevPodMutations, useDevPods, useMe, useRecent } from "../../data/queries";
 import { devpodsStream } from "../../data/live/streams";
 import { useLiveEnabled, useLiveRow, useLiveValues } from "../../data/live/hooks";
@@ -19,6 +19,7 @@ import { copyText } from "../../design/Copy";
 import { matchesFilter, parseFilter } from "../../lib/filter";
 import { useUrlState, type Schema } from "../../lib/urlState";
 import { runBulk, type BulkResult } from "../../lib/bulk";
+import { BulkDialog, type BulkKind } from "./BulkDialog";
 import { useNow } from "../../lib/useNow";
 import { TableCtx, devpodColumns, toRow, type Row } from "./columns";
 
@@ -77,6 +78,7 @@ export function DevPodTable({ scope }: { scope: "mine" | "all" }) {
   const recent = useRecent({ scope }, useLiveEnabled());
   const [confirm, setConfirm] = useState<{ rows: Row[]; bulk: boolean } | null>(null);
   const [outcome, setOutcome] = useState<Outcome | null>(null);
+  const [dialog, setDialog] = useState<{ kind: BulkKind; rows: Row[]; clear: () => void } | null>(null);
   const { remove } = useDevPodMutations();
 
   const rows = useMemo(() => (list.data?.items ?? []).map((dp) => toRow(dp, list.data?.pods[dp.metadata.name])), [list.data]);
@@ -164,13 +166,17 @@ export function DevPodTable({ scope }: { scope: "mine" | "all" }) {
           getRowId={(r) => r.name}
           sorting={toSorting(url.sort)}
           onSortingChange={(s) => setUrl({ sort: fromSorting(s) })}
-          selectable={admin}
+          selectable
           dim={status === "reconnecting"}
           empty={<EmptyState title={list.isLoading ? "加载中…" : rows.length ? "没有符合条件的 DevPod" : "还没有 DevPod"} />}
           bulkBar={(sel, clear) => (
             <>
+              {admin && <Button onClick={() => setDialog({ kind: "migrate", rows: sel, clear })}>迁移…</Button>}
               <Button onClick={() => void bulk("休眠", sel, (r) => patchDevPod(r.name, false)).then(clear)}>休眠</Button>
               <Button onClick={() => void bulk("启动", sel, (r) => patchDevPod(r.name, true)).then(clear)}>启动</Button>
+              <Button onClick={() => setDialog({ kind: "collaborators", rows: sel, clear })}>协作者…</Button>
+              <Button onClick={() => setDialog({ kind: "image", rows: sel, clear })}>设置镜像…</Button>
+              <Button onClick={() => setDialog({ kind: "redeploy", rows: sel, clear })}>重新部署…</Button>
               <Button variant="danger" onClick={() => setConfirm({ rows: sel, bulk: true })}>
                 删除…
               </Button>
@@ -178,6 +184,19 @@ export function DevPodTable({ scope }: { scope: "mine" | "all" }) {
           )}
         />
       )}
+      <BulkDialog
+        key={dialog?.kind ?? "none"}
+        kind={dialog?.kind ?? null}
+        count={dialog?.rows.length ?? 0}
+        onClose={() => setDialog(null)}
+        onRun={(plan) => {
+          const d = dialog!;
+          setDialog(null);
+          void bulk(plan.action, d.rows, (r) =>
+            plan.redeploy ? redeployDevPod(r.name) : patchDevPodSpec(r.name, plan.patch!({ name: r.name, collaborators: r.dp.spec.collaborators ?? [] })),
+          ).then(d.clear);
+        }}
+      />
       <ConfirmDialog
         open={!!confirm}
         onOpenChange={(o) => !o && setConfirm(null)}

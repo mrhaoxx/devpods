@@ -20,6 +20,10 @@ rules:
 - apiGroups: [""]
   resources: ["pods", "events"]
   verbs: ["get", "list", "watch"]
+# Redeploy: delete a DevPod's Pod so the controller recreates it.
+- apiGroups: [""]
+  resources: ["pods"]
+  verbs: ["delete"]
 {{- if include "devpod.telemetry.on" $ }}
 # TelemetryAlert Events on DevPods.
 - apiGroups: [""]

@@ -473,6 +473,10 @@ type PatchRequest struct {
 	GPU           *string                         `json:"gpu,omitempty"`
 	Shell         *string                         `json:"shell,omitempty"`
 	Collaborators *[]string                       `json:"collaborators,omitempty"`
+	// Node migrates the DevPod (admin only): it pins the Pod to that
+	// node through a hostname node selector; "" leaves the choice to
+	// the scheduler again.
+	Node          *string                         `json:"node,omitempty"`
 	Persistence   *devpodv1alpha1.PersistenceSpec `json:"persistence,omitempty"`
 }
 
@@ -588,6 +592,11 @@ func (s *Server) patchDevPod(r *http.Request, sess Session, dp *devpodv1alpha1.D
 	if apiErr := applyEdits(dp, req); apiErr != nil {
 		return PatchResponse{}, apiErr
 	}
+	if req.Node != nil {
+		if apiErr := s.applyNode(r, sess, dp, *req.Node); apiErr != nil {
+			return PatchResponse{}, apiErr
+		}
+	}
 	if equality.Semantic.DeepEqual(before.Spec, dp.Spec) {
 		return PatchResponse{DevPod: dp}, nil // no-op
 	}
@@ -612,6 +621,61 @@ func (s *Server) patchDevPod(r *http.Request, sess Session, dp *devpodv1alpha1.D
 		return PatchResponse{}, &serverErr{http.StatusBadRequest, "BAD_REQUEST", "update rejected", err.Error()}
 	}
 	return PatchResponse{DevPod: dp, Rebuild: rebuild}, nil
+}
+
+const hostnameLabel = "kubernetes.io/hostname"
+
+// applyNode pins dp to node ("" unpins).
+func (s *Server) applyNode(r *http.Request, sess Session, dp *devpodv1alpha1.DevPod, node string) *serverErr {
+	if !sess.Admin {
+		return &serverErr{http.StatusForbidden, "FORBIDDEN", "only admins can migrate a DevPod", nil}
+	}
+	if dp.Spec.Pod == nil {
+		return &serverErr{http.StatusBadRequest, "BAD_REQUEST", "only pod workloads can be migrated", nil}
+	}
+	sel := dp.Spec.Pod.Spec.NodeSelector
+	if node == "" {
+		delete(sel, hostnameLabel)
+		if len(sel) == 0 {
+			dp.Spec.Pod.Spec.NodeSelector = nil
+		}
+		return nil
+	}
+	var n corev1.Node
+	if err := s.Client.Get(r.Context(), types.NamespacedName{Name: node}, &n); err != nil {
+		return &serverErr{http.StatusBadRequest, "BAD_REQUEST", fmt.Sprintf("node %q not found", node), nil}
+	}
+	if sel == nil {
+		sel = map[string]string{}
+		dp.Spec.Pod.Spec.NodeSelector = sel
+	}
+	sel[hostnameLabel] = node
+	return nil
+}
+
+// handleRedeployDevPod serves POST /api/devpods/{name}/redeploy: it
+// deletes the DevPod's Pod and the controller creates a fresh one (the
+// home volume stays; SSH sessions drop).
+func (s *Server) handleRedeployDevPod(w http.ResponseWriter, r *http.Request) {
+	sess, ok := s.sessionFrom(w, r)
+	if !ok {
+		return
+	}
+	dp, ok := s.getOwned(w, r, sess, r.PathValue("name"))
+	if !ok {
+		return
+	}
+	ref := dp.Status.WorkloadRef
+	if !dp.Spec.Running || ref == nil || ref.Kind != "Pod" {
+		s.writeErr(w, http.StatusConflict, "NOT_RUNNING", "the DevPod has no Pod to redeploy; start it instead", nil)
+		return
+	}
+	pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: ref.Name, Namespace: s.NS}}
+	if err := s.Client.Delete(r.Context(), pod); err != nil && !apierrors.IsNotFound(err) {
+		s.writeErr(w, http.StatusInternalServerError, "INTERNAL", err.Error(), nil)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
 }
 
 func (s *Server) handleDeleteDevPod(w http.ResponseWriter, r *http.Request) {

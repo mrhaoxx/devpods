@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { fireEvent, screen, waitFor, within } from "@testing-library/react";
 import { DevPodTable } from "./DevPodTable";
+import { collabPatch } from "./BulkDialog";
 import { renderWithProviders, stubFetch, stubMe } from "../../test/render";
 import type { DevPod } from "../../data/api";
 
@@ -71,7 +72,59 @@ describe("DevPodTable", () => {
     await screen.findByRole("link", { name: "alice-a" });
     expect(screen.queryByRole("button", { name: /空转/ })).toBeNull();
     expect(screen.queryByRole("button", { name: /GPU only/ })).toBeNull();
-    expect(screen.queryByLabelText("选择 alice-a")).toBeNull();
+  });
+
+  it("my DevPods can be selected for bulk actions, without 迁移", async () => {
+    stubFetch({ "/api/devpods": { items: [list.items[0]], pods: {} } });
+    renderWithProviders(<DevPodTable scope="mine" />);
+    await screen.findByRole("link", { name: "alice-a" });
+    fireEvent.click(screen.getByLabelText("选择 alice-a"));
+    const bar = within(screen.getByRole("toolbar", { name: "批量操作" }));
+    expect(bar.getAllByRole("button").map((b) => b.textContent)).toEqual(["休眠", "启动", "协作者…", "设置镜像…", "重新部署…", "删除…", "取消选择"]);
+  });
+
+  it("bulk 设置镜像 patches every selected DevPod; 迁移 sends the node", async () => {
+    const ok = { devpod: list.items[0], rebuild: true };
+    const calls = stubFetch({
+      "/api/devpods": list,
+      "/api/admin/nodes": { items: [{ name: "g206", ready: true }], live: false },
+      "PATCH /api/devpods/alice-a": ok,
+      "PATCH /api/devpods/bob-c": ok,
+    });
+    renderWithProviders(<DevPodTable scope="all" />, { me: stubMe({ admin: true }), route: "/admin/devpods" });
+    await screen.findByRole("link", { name: "alice-a" });
+    fireEvent.click(screen.getByLabelText("选择 alice-a"));
+    fireEvent.click(screen.getByLabelText("选择 bob-c"));
+    fireEvent.click(screen.getByRole("button", { name: "设置镜像…" }));
+    const apply = screen.getByRole("button", { name: "应用" }) as HTMLButtonElement;
+    expect(apply.disabled).toBe(true);
+    fireEvent.change(screen.getByLabelText("镜像"), { target: { value: "ubuntu:25.04" } });
+    fireEvent.click(apply);
+    await waitFor(() => expect(calls.filter((c) => c.method === "PATCH").map((c) => `${c.url.pathname} ${c.body}`).sort()).toEqual(['/api/devpods/alice-a {"image":"ubuntu:25.04"}', '/api/devpods/bob-c {"image":"ubuntu:25.04"}']));
+
+    fireEvent.click(await screen.findByLabelText("选择 alice-a"));
+    fireEvent.click(screen.getByRole("button", { name: "迁移…" }));
+    await screen.findByRole("option", { name: "g206" });
+    fireEvent.change(screen.getByLabelText("目标节点"), { target: { value: "g206" } });
+    fireEvent.click(screen.getByRole("button", { name: "应用" }));
+    await waitFor(() => expect(calls.some((c) => c.method === "PATCH" && c.body === '{"node":"g206"}')).toBe(true));
+  });
+
+  it("bulk 重新部署 asks first, then posts redeploy", async () => {
+    const calls = stubFetch({ "/api/devpods": list, "POST /api/devpods/alice-a/redeploy": new Response(null, { status: 204 }) });
+    renderWithProviders(<DevPodTable scope="mine" />);
+    await screen.findByRole("link", { name: "alice-a" });
+    fireEvent.click(screen.getByLabelText("选择 alice-a"));
+    fireEvent.click(screen.getByRole("button", { name: "重新部署…" }));
+    expect(calls.some((c) => c.method === "POST")).toBe(false);
+    fireEvent.click(screen.getByRole("button", { name: "确认重新部署" }));
+    await waitFor(() => expect(calls.some((c) => c.method === "POST" && c.url.pathname === "/api/devpods/alice-a/redeploy")).toBe(true));
+  });
+
+  it("collabPatch adds, removes and replaces", () => {
+    expect(collabPatch("add", ["b", "c"], ["a", "b"])).toEqual(["a", "b", "c"]);
+    expect(collabPatch("remove", ["b"], ["a", "b"])).toEqual(["a"]);
+    expect(collabPatch("set", [], ["a"])).toEqual([]);
   });
 
   it("draws the CPU sparkline from history on load", async () => {

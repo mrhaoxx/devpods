@@ -181,6 +181,8 @@ export type SpecPatch = {
   gpu?: string;
   shell?: string;
   collaborators?: string[];
+  /** migrate (admin): pin to this node; "" unpins */
+  node?: string;
 };
 export type PatchResult = { devpod: DevPod; rebuild: boolean };
 

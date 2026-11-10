@@ -366,6 +366,8 @@ import type {
 } from "./types";
 
 export const patchDevPodSpec = (n: string, body: SpecPatch) => req<PatchResult>("PATCH", `/api/devpods/${n}`, body);
+/** redeployDevPod recreates the Pod (sessions drop, the home volume stays). */
+export const redeployDevPod = (n: string) => req<void>("POST", `/api/devpods/${n}/redeploy`);
 export const getMetrics = (n: string, range: MetricRange) =>
   req<MetricSeries>("GET", `/api/devpods/${n}/metrics?range=${range}`);
 export const getRecent = (p: { scope?: "mine" | "all"; name?: string }) =>
