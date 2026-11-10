@@ -35,6 +35,43 @@ type UserQuota struct {
 	Storage *resource.Quantity `json:"storage,omitempty"`
 }
 
+// APIToken is a personal access token for the REST API. The token string
+// (dpt_<id>_<secret>) is shown once at creation; only the SHA-256 of the
+// secret is stored. Written only by the webui.
+type APIToken struct {
+	// ID is the public part of the token; it names the token in the UI.
+	//
+	// +kubebuilder:validation:MinLength=1
+	ID string `json:"id"`
+
+	// Name is the user's label for it.
+	//
+	// +optional
+	Name string `json:"name,omitempty"`
+
+	// Hash is the hex SHA-256 of the token's secret part.
+	Hash string `json:"hash"`
+
+	// Scopes lists what the token may do (e.g. "devpods:read",
+	// "devpods:power"); anything not listed is refused.
+	//
+	// +optional
+	Scopes []string `json:"scopes,omitempty"`
+
+	// DevPods restricts the token to these DevPods by name. Empty = every
+	// DevPod its owner can reach.
+	//
+	// +optional
+	DevPods []string `json:"devpods,omitempty"`
+
+	CreatedAt metav1.Time `json:"createdAt"`
+
+	// ExpiresAt ends the token's validity. nil = never.
+	//
+	// +optional
+	ExpiresAt *metav1.Time `json:"expiresAt,omitempty"`
+}
+
 // UserSpec defines the desired state of a DevPod user.
 type UserSpec struct {
 	// Pubkeys is the list of OpenSSH-format authorized public keys for
@@ -76,6 +113,12 @@ type UserSpec struct {
 	//
 	// +optional
 	Admin bool `json:"admin,omitempty"`
+
+	// APITokens are the user's personal access tokens for the REST API.
+	//
+	// +optional
+	// +kubebuilder:validation:MaxItems=50
+	APITokens []APIToken `json:"apiTokens,omitempty"`
 
 	// AuditPolicy overrides fields of the cluster default audit policy
 	// (GatewayConfig.spec.audit.policy) for sessions this user starts.

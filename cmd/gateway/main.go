@@ -86,6 +86,7 @@ func main() {
 		"key shared with the webui that signs HTTP proxy tickets and cookies; without it only public ports are served")
 	flag.StringVar(&httpLoginURL, "http-login-url", "",
 		"webui URL a browser is sent to for access to a private port, e.g. https://devpod.example.com/http-auth")
+	cf := addCLIFlags(flag.CommandLine)
 	flag.StringVar(&gcName, "gateway-config-name", "default", "name of the cluster-scoped GatewayConfig this gateway reads")
 	flag.DurationVar(&sessionGrace, "shutdown-session-grace", 60*time.Second,
 		"on SIGTERM, how long open sessions may continue before they are closed")
@@ -211,6 +212,14 @@ func main() {
 	}
 
 	recorder := gateway.NewEventRecorder(c, clientset, devpodNamespace)
+
+	if cli, err = cf.build(); err != nil {
+		slog.Error("cli", "err", err)
+		os.Exit(1)
+	}
+	if cli != nil {
+		slog.Info("cli_enabled", "user", cli.user, "api", cf.apiURL)
+	}
 
 	auditRec, err := buildRecorder(ctx, af)
 	if err != nil {
@@ -422,6 +431,9 @@ func handle(parent context.Context, id uint64, conn net.Conn, hostSigner ssh.Sig
 	cfg.PublicKeyCallback = func(meta ssh.ConnMetadata, key ssh.PublicKey) (*ssh.Permissions, error) {
 		ctx, cancel := context.WithTimeout(parent, 5*time.Second)
 		defer cancel()
+		if perms, err, isCLI := cliAuth(ctx, authn, id, meta, key); isCLI {
+			return perms, err
+		}
 		res, err := authn.Authenticate(ctx, meta.User(), key)
 		if err != nil {
 			// Classify error → short reason; figure out auth_path/alias
@@ -472,6 +484,9 @@ func handle(parent context.Context, id uint64, conn net.Conn, hostSigner ssh.Sig
 		return
 	}
 	defer srvConn.Close()
+	if serveCLI(parent, srvConn, srvChans, srvReqs) {
+		return
+	}
 
 	// Decode AuthPath carried via Permissions.Extensions.
 	var ap gateway.AuthPath

@@ -6,12 +6,12 @@ import { useState } from "react";
 import type { SpecPatch } from "../../data/types";
 import { useNodes } from "../../data/queries";
 import { Button } from "../../design/Button";
-import { Field, Input, Select } from "../../design/Form";
+import { Field, Input } from "../../design/Form";
 
 export type BulkKind = "migrate" | "collaborators" | "image" | "redeploy";
 export type BulkTarget = { name: string; collaborators: string[] };
 /** What a bulk action does to one DevPod: a spec patch, or a redeploy. */
-export type BulkPlan = { action: string; patch?: (t: BulkTarget) => SpecPatch; redeploy?: boolean };
+export type BulkPlan = { action: string; patch?: (t: BulkTarget, index: number) => SpecPatch; redeploy?: boolean };
 
 const TITLE: Record<BulkKind, string> = { migrate: "迁移", collaborators: "协作者", image: "设置镜像", redeploy: "重新部署" };
 const names = (s: string) => [...new Set(s.split(/[\s,，]+/).filter(Boolean))];
@@ -23,36 +23,84 @@ export function collabPatch(mode: "add" | "remove" | "set", list: string[], curr
   return [...current, ...list.filter((c) => !current.includes(c))];
 }
 
-function MigrateBody({ node, setNode }: { node: string; setNode: (n: string) => void }) {
+/** migrateTargets pairs DevPods with nodes: one node takes them all;
+ *  otherwise there must be exactly one node per DevPod, in the order
+ *  both were picked. null = the counts do not line up. */
+export function migrateTargets(devpods: string[], nodes: string[]): [string, string][] | null {
+  if (nodes.length === 1) return devpods.map((d) => [d, nodes[0]]);
+  if (nodes.length === devpods.length && nodes.length > 0) return devpods.map((d, i) => [d, nodes[i]]);
+  return null;
+}
+
+function MigrateBody({ devpods, picked, setPicked, unpin, setUnpin }: { devpods: string[]; picked: string[]; setPicked: (n: string[]) => void; unpin: boolean; setUnpin: (b: boolean) => void }) {
   const nodes = useNodes().data?.items ?? [];
+  const pairs = migrateTargets(devpods, picked);
   return (
-    <>
-      <Field label="目标节点" hint="DevPod 会固定到该节点；运行中的会在新节点上重建，SSH 会话会断开。home 卷不变。">
-        <Select aria-label="目标节点" value={node} onChange={(e) => setNode(e.target.value)}>
-          <option value="">不指定（由调度器选择）</option>
-          {nodes.map((n) => (
-            <option key={n.name} value={n.name} disabled={!n.ready}>
-              {n.name}
-              {n.ready ? "" : "（未就绪）"}
-            </option>
+    <div className="space-y-2 text-xs">
+      <p className="text-muted">
+        选 1 个节点：全部迁到它。选多个：数量要和 DevPod 相同，按勾选顺序一一对应。运行中的 DevPod 会在目标节点上重建，SSH 会话会断开；home 卷不变。
+      </p>
+      <fieldset disabled={unpin} className={unpin ? "opacity-40" : ""}>
+        <legend className="mb-1 font-medium">目标节点（按点击顺序）</legend>
+        <div className="flex flex-wrap gap-1.5">
+          {nodes.map((n) => {
+            const at = picked.indexOf(n.name);
+            return (
+              <button
+                key={n.name}
+                type="button"
+                disabled={!n.ready}
+                aria-pressed={at >= 0}
+                title={n.ready ? undefined : "节点未就绪"}
+                onClick={() => setPicked(at >= 0 ? picked.filter((x) => x !== n.name) : [...picked, n.name])}
+                className={`mono inline-flex items-center gap-1 rounded-md border px-2 py-0.5 disabled:opacity-40 ${at >= 0 ? "border-accent bg-accent-soft text-accent" : "border-line text-muted hover:text-ink"}`}
+              >
+                {at >= 0 && <span className="rounded bg-accent px-1 text-[10px] text-white">{at + 1}</span>}
+                {n.name}
+              </button>
+            );
+          })}
+          {nodes.length === 0 && <span className="text-faint">没有可选节点</span>}
+        </div>
+      </fieldset>
+      {!unpin && picked.length > 0 && !pairs && (
+        <p role="alert" className="text-fail">
+          已选 {picked.length} 个节点、{devpods.length} 个 DevPod：节点数要么是 1，要么等于 DevPod 数。
+        </p>
+      )}
+      {!unpin && pairs && (
+        <ol aria-label="迁移计划" className="mono max-h-40 space-y-0.5 overflow-y-auto rounded-md border border-line bg-sunk p-2">
+          {pairs.map(([d, n]) => (
+            <li key={d}>
+              {d} → {n}
+            </li>
           ))}
-        </Select>
-      </Field>
-    </>
+        </ol>
+      )}
+      <label className="flex items-center gap-1.5">
+        <input type="checkbox" checked={unpin} onChange={(e) => setUnpin(e.target.checked)} />
+        取消固定节点（交给调度器选择）
+      </label>
+    </div>
   );
 }
 
-export function BulkDialog({ kind, count, onClose, onRun }: { kind: BulkKind | null; count: number; onClose: () => void; onRun: (p: BulkPlan) => void }) {
-  const [node, setNode] = useState("");
+export function BulkDialog({ kind, targets, onClose, onRun }: { kind: BulkKind | null; targets: BulkTarget[]; onClose: () => void; onRun: (p: BulkPlan) => void }) {
+  const [nodes, setNodes] = useState<string[]>([]);
+  const [unpin, setUnpin] = useState(false);
+  const count = targets.length;
+  const pairs = migrateTargets(targets.map((t) => t.name), nodes);
   const [image, setImage] = useState("");
   const [users, setUsers] = useState("");
   const [mode, setMode] = useState<"add" | "remove" | "set">("add");
   if (!kind) return null;
   const list = names(users);
-  const ok = kind === "image" ? image.trim() !== "" : kind === "collaborators" ? list.length > 0 || mode === "set" : true;
+  const ok = kind === "image" ? image.trim() !== "" : kind === "collaborators" ? list.length > 0 || mode === "set" : kind === "migrate" ? unpin || !!pairs : true;
   const plan = (): BulkPlan =>
     kind === "migrate"
-      ? { action: node ? `迁移到 ${node}` : "取消固定节点", patch: () => ({ node }) }
+      ? unpin
+        ? { action: "取消固定节点", patch: () => ({ node: "" }) }
+        : { action: nodes.length === 1 ? `迁移到 ${nodes[0]}` : "迁移", patch: (_t, i) => ({ node: pairs![i][1] }) }
       : kind === "image"
         ? { action: "设置镜像", patch: () => ({ image: image.trim() }) }
         : kind === "collaborators"
@@ -66,7 +114,7 @@ export function BulkDialog({ kind, count, onClose, onRun }: { kind: BulkKind | n
           <Dialog.Title className="text-sm font-semibold">
             {TITLE[kind]}：{count} 个 DevPod
           </Dialog.Title>
-          {kind === "migrate" && <MigrateBody node={node} setNode={setNode} />}
+          {kind === "migrate" && <MigrateBody devpods={targets.map((t) => t.name)} picked={nodes} setPicked={setNodes} unpin={unpin} setUnpin={setUnpin} />}
           {kind === "image" && (
             <Field label="镜像" hint="运行中的 DevPod 会用新镜像重建，SSH 会话会断开。">
               <Input aria-label="镜像" className="mono" value={image} onChange={(e) => setImage(e.target.value)} placeholder="ubuntu:24.04" autoFocus />

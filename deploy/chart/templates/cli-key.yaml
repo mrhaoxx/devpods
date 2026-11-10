@@ -1,0 +1,21 @@
+{{- if include "devpod.cli.on" $ }}
+{{- /* Key the gateway presents to the web UI's API when it runs a CLI
+       command for a user it authenticated by SSH key (docs/cli.md);
+       kept across upgrades. */}}
+{{- $existing := lookup "v1" "Secret" .Values.namespaces.system "devpod-cli-key" }}
+apiVersion: v1
+kind: Secret
+metadata:
+  name: devpod-cli-key
+  namespace: {{ .Values.namespaces.system }}
+  labels: {{ include "devpod.labels" . | nindent 4 }}
+  annotations:
+    "helm.sh/resource-policy": keep
+type: Opaque
+data:
+  {{- if and $existing (index ($existing.data | default dict) "key") }}
+  key: {{ index $existing.data "key" }}
+  {{- else }}
+  key: {{ randAlphaNum 64 | b64enc }}
+  {{- end }}
+{{- end }}

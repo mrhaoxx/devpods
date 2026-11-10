@@ -23,6 +23,10 @@ type Session struct {
 	User   string `json:"u"`
 	Admin  bool   `json:"a"`
 	Expiry int64  `json:"e"` // unix seconds
+
+	// Token is set when the request came with a personal access token
+	// (never part of the cookie): its scopes and DevPod limits apply.
+	Token *TokenGrant `json:"-"`
 }
 
 // SessionManager mints and verifies HMAC-SHA256-signed session tokens.

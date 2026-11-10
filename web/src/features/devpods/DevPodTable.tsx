@@ -192,13 +192,14 @@ export function DevPodTable({ scope }: { scope: "mine" | "all" }) {
       <BulkDialog
         key={dialog?.kind ?? "none"}
         kind={dialog?.kind ?? null}
-        count={dialog?.rows.length ?? 0}
+        targets={(dialog?.rows ?? []).map((r) => ({ name: r.name, collaborators: r.dp.spec.collaborators ?? [] }))}
         onClose={() => setDialog(null)}
         onRun={(plan) => {
           const d = dialog!;
           setDialog(null);
+          const index = new Map(d.rows.map((r, i) => [r.name, i]));
           void bulk(plan.action, d.rows, (r) =>
-            plan.redeploy ? redeployDevPod(r.name) : patchDevPodSpec(r.name, plan.patch!({ name: r.name, collaborators: r.dp.spec.collaborators ?? [] })),
+            plan.redeploy ? redeployDevPod(r.name) : patchDevPodSpec(r.name, plan.patch!({ name: r.name, collaborators: r.dp.spec.collaborators ?? [] }, index.get(r.name)!)),
           ).then(d.clear);
         }}
       />

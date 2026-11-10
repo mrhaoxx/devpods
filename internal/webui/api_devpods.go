@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -38,6 +39,9 @@ type Server struct {
 	DefaultQuota devpodv1alpha1.UserQuota
 	KoreEnabled  bool
 	Origin       string // allowed Origin for mutating requests
+	// CLIKey lets the SSH gateway act for a user it authenticated (the
+	// CLI over SSH); empty = off.
+	CLIKey []byte
 	// HTTPProxy: DevPod ports published through the gateway; nil = off.
 	HTTPProxy *HTTPProxy
 
@@ -101,6 +105,9 @@ func (s *Server) writeErr(w http.ResponseWriter, status int, code, msg string, d
 // sessionFrom authenticates the request; on failure it has already
 // written the 401.
 func (s *Server) sessionFrom(w http.ResponseWriter, r *http.Request) (Session, bool) {
+	if bearer, ok := strings.CutPrefix(r.Header.Get("Authorization"), "Bearer "); ok {
+		return s.bearerSession(w, r, bearer)
+	}
 	c, err := r.Cookie(SessionCookie)
 	if err != nil {
 		s.writeErr(w, http.StatusUnauthorized, "UNAUTHORIZED", "not logged in", nil)
@@ -136,7 +143,7 @@ func (s *Server) ownedDevPods(r *http.Request, owner string) ([]devpodv1alpha1.D
 func (s *Server) getOwned(w http.ResponseWriter, r *http.Request, sess Session, name string) (*devpodv1alpha1.DevPod, bool) {
 	var dp devpodv1alpha1.DevPod
 	err := s.Client.Get(r.Context(), types.NamespacedName{Name: name, Namespace: s.NS}, &dp)
-	if apierrors.IsNotFound(err) || (err == nil && dp.Spec.Owner != sess.User && !sess.Admin) {
+	if apierrors.IsNotFound(err) || (err == nil && dp.Spec.Owner != sess.User && !sess.Admin) || !sess.AllowsDevPod(name) {
 		s.writeErr(w, http.StatusNotFound, "NOT_FOUND", "devpod not found", nil)
 		return nil, false
 	}
@@ -264,6 +271,9 @@ func (s *Server) handleListDevPods(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		s.writeErr(w, http.StatusInternalServerError, "INTERNAL", err.Error(), nil)
 		return
+	}
+	if sess.Token != nil && len(sess.Token.DevPods) > 0 { // a token limited to some DevPods sees only those
+		items = slices.DeleteFunc(items, func(dp devpodv1alpha1.DevPod) bool { return !sess.AllowsDevPod(dp.Name) })
 	}
 	if items == nil {
 		items = []devpodv1alpha1.DevPod{}
@@ -594,6 +604,12 @@ func (s *Server) patchDevPod(r *http.Request, sess Session, dp *devpodv1alpha1.D
 	dp = dp.DeepCopy()
 	if req.Running != nil {
 		dp.Spec.Running = *req.Running
+	}
+	if sess.Token != nil {
+		edits := req.editsSpec() || req.Shell != nil || req.Collaborators != nil || req.Node != nil
+		if (req.Running != nil && !sess.Token.has("devpods:power")) || (edits && !sess.Token.has("devpods:update")) {
+			return PatchResponse{}, &serverErr{http.StatusForbidden, "SCOPE", "this token lacks the scope for this change (devpods:power to start / stop, devpods:update to edit)", nil}
+		}
 	}
 	if apiErr := applyEdits(dp, req); apiErr != nil {
 		return PatchResponse{}, apiErr

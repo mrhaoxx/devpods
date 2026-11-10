@@ -86,6 +86,9 @@ spec:
         - --http-proxy-host={id}-{port}{{ .Values.gateway.http.suffix }}.{{ .Values.gateway.http.baseDomain }}
         - --http-proxy-key-file=/etc/devpod/http/key
         {{- end }}
+        {{- if include "devpod.cli.on" $ }}
+        - --cli-api-key-file=/etc/devpod/cli/key
+        {{- end }}
         {{- if include "devpod.telemetry.on" $ }}
         - --ingest-listen=:8081
         - --ingest-key-file=/etc/devpod/ingest/key
@@ -136,6 +139,9 @@ spec:
         {{- if include "devpod.http.on" $ }}
         - {name: http-key, mountPath: /etc/devpod/http, readOnly: true}
         {{- end }}
+        {{- if include "devpod.cli.on" $ }}
+        - {name: cli-key, mountPath: /etc/devpod/cli, readOnly: true}
+        {{- end }}
         {{- if include "devpod.telemetry.on" $ }}
         {{- include "devpod.telemetry.keyMount" . | nindent 8 }}
         {{- end }}
@@ -166,6 +172,11 @@ spec:
       - name: http-key
         secret:
           secretName: devpod-http-key
+      {{- end }}
+      {{- if include "devpod.cli.on" $ }}
+      - name: cli-key
+        secret:
+          secretName: devpod-cli-key
       {{- end }}
       {{- if include "devpod.telemetry.on" $ }}
       {{- include "devpod.telemetry.keyVolume" . | nindent 6 }}

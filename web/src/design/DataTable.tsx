@@ -99,7 +99,12 @@ export function DataTable<T>(p: DataTableProps<T>) {
     getCoreRowModel: getCoreRowModel(),
     getSortedRowModel: getSortedRowModel(),
   });
-  const selected = table.getSelectedRowModel().rows.map((r) => r.original);
+  // in the order the rows were ticked (bulk actions such as 迁移 pair
+  // the selection with a list, one to one)
+  const selected = useMemo(() => {
+    const byId = new Map(p.data.map((r) => [p.getRowId(r), r]));
+    return Object.keys(liveSelection).flatMap((id) => (byId.has(id) ? [byId.get(id)!] : []));
+  }, [liveSelection, p.data, p.getRowId]);
   const clear = () => setSelection({});
   const rows = table.getRowModel().rows;
   const colCount = visibleIds.length + (p.selectable ? 1 : 0);

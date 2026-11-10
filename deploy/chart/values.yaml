@@ -65,6 +65,14 @@ gateway:
       enabled: false
       gateway: {name: "", namespace: ""}
       httpsListener: ""
+  # CLI over SSH (docs/cli.md): `ssh <user>@gateway list|create|…` runs
+  # DevPod commands as the caller, who is known by SSH key. The gateway
+  # calls the web UI's REST API with a key they share (kept Secret
+  # devpod-cli-key), so webui.enabled is required. <user> stops being
+  # usable as a DevPod user name.
+  cli:
+    enabled: false
+    user: devpod
   # SSH front proxies allowed to log in on behalf of users, as
   # [{alias: openng, pubkey: "ssh-ed25519 AAAA… openng"}].
   trustedProxyKeys: []

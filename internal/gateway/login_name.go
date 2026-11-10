@@ -41,3 +41,6 @@ func ParseLoginName(s string) (owner, pod string, err error) {
 func DevPodResourceName(owner, pod string) string {
 	return owner + "-" + pod
 }
+
+// loginUserRE matches one login component (a user name).
+func loginUserRE() *regexp.Regexp { return regexp.MustCompile(`^[a-z0-9-]{1,32}$`) }

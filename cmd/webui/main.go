@@ -92,6 +92,7 @@ func main() {
 	af := addAuditFlags(flag.CommandLine)
 	tf := addTelemetryFlags(flag.CommandLine)
 	hf := addHTTPProxyFlags(flag.CommandLine)
+	cf := addCLIFlags(flag.CommandLine)
 	wf := addWebshellFlags(flag.CommandLine)
 	gcName := flag.String("gateway-config-name", "default", "GatewayConfig holding the cluster default audit policy")
 	flag.Parse()
@@ -234,6 +235,10 @@ func main() {
 		}
 	}
 	srv.GatewayConfigName = *gcName
+	if srv.CLIKey, err = cf.key(); err != nil {
+		slog.Error("cli key", "err", err)
+		os.Exit(1)
+	}
 	if srv.HTTPProxy, err = hf.build(); err != nil {
 		slog.Error("http proxy", "err", err)
 		os.Exit(1)

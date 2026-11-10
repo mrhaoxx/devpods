@@ -400,3 +400,11 @@ export const getHttp = (n: string) => req<HttpView>("GET", `/api/devpods/${n}/ht
 export const putHttp = (n: string, body: { publicPorts?: number[]; reset?: boolean }) => req<HttpView>("PUT", `/api/devpods/${n}/http`, body);
 /** httpTicket: the URL that signs this browser in on a private port's hostname. */
 export const httpTicket = (host: string, rd: string) => req<{ url: string }>("POST", "/api/http/ticket", { host, rd });
+
+/* tokens.go: personal access tokens */
+export type TokenScope = { id: string; group: string; label: string; admin?: boolean };
+export type TokenView = { id: string; name: string; scopes: string[]; devpods: string[]; createdAt: string; expiresAt: string | null; expired: boolean };
+export const listTokens = () => req<{ items: TokenView[]; scopes: TokenScope[] }>("GET", "/api/me/tokens");
+export const createToken = (body: { name: string; scopes: string[]; devpods: string[]; expiresInDays: number }) =>
+  req<{ token: string; info: TokenView }>("POST", "/api/me/tokens", body);
+export const deleteToken = (id: string) => req<void>("DELETE", `/api/me/tokens/${id}`);

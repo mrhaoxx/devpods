@@ -12,3 +12,14 @@ helm.sh/chart: devpod-{{ .Chart.Version }}
 true
 {{- end -}}
 {{- end -}}
+
+{{- /* devpod.cli.on: non-empty when the gateway serves the CLI over SSH
+       (it calls the web UI's API with the shared key devpod-cli-key). */ -}}
+{{- define "devpod.cli.on" -}}
+{{- if dig "cli" "enabled" false .Values.gateway -}}
+{{- if not .Values.webui.enabled -}}
+{{- fail "gateway.cli.enabled needs webui.enabled: the CLI runs against the web UI's API" -}}
+{{- end -}}
+true
+{{- end -}}
+{{- end -}}

@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { fireEvent, screen, waitFor, within } from "@testing-library/react";
 import { DevPodTable } from "./DevPodTable";
-import { collabPatch } from "./BulkDialog";
+import { collabPatch, migrateTargets } from "./BulkDialog";
 import { renderWithProviders, stubFetch, stubMe } from "../../test/render";
 import type { DevPod } from "../../data/api";
 
@@ -87,7 +87,7 @@ describe("DevPodTable", () => {
     const ok = { devpod: list.items[0], rebuild: true };
     const calls = stubFetch({
       "/api/devpods": list,
-      "/api/admin/nodes": { items: [{ name: "g206", ready: true }], live: false },
+      "/api/admin/nodes": { items: [{ name: "g206", ready: true }, { name: "g207", ready: true }, { name: "g208", ready: true }], live: false },
       "PATCH /api/devpods/alice-a": ok,
       "PATCH /api/devpods/bob-c": ok,
     });
@@ -102,12 +102,30 @@ describe("DevPodTable", () => {
     fireEvent.click(apply);
     await waitFor(() => expect(calls.filter((c) => c.method === "PATCH").map((c) => `${c.url.pathname} ${c.body}`).sort()).toEqual(['/api/devpods/alice-a {"image":"ubuntu:25.04"}', '/api/devpods/bob-c {"image":"ubuntu:25.04"}']));
 
-    fireEvent.click(await screen.findByLabelText("选择 alice-a"));
+    // 迁移: one node takes every DevPod; several nodes pair up in the order picked
+    fireEvent.click(await screen.findByLabelText("选择 bob-c"));
+    fireEvent.click(screen.getByLabelText("选择 alice-a"));
     fireEvent.click(screen.getByRole("button", { name: "迁移…" }));
-    await screen.findByRole("option", { name: "g206" });
-    fireEvent.change(screen.getByLabelText("目标节点"), { target: { value: "g206" } });
-    fireEvent.click(screen.getByRole("button", { name: "应用" }));
-    await waitFor(() => expect(calls.some((c) => c.method === "PATCH" && c.body === '{"node":"g206"}')).toBe(true));
+    const apply2 = () => screen.getByRole("button", { name: "应用" }) as HTMLButtonElement;
+    expect(apply2().disabled).toBe(true);
+    fireEvent.click(await screen.findByRole("button", { name: "g207" }));
+    fireEvent.click(screen.getByRole("button", { name: "g206" }));
+    fireEvent.click(screen.getByRole("button", { name: "g208" }));
+    expect(screen.getByRole("alert").textContent).toMatch(/3 个节点、2 个 DevPod/);
+    expect(apply2().disabled).toBe(true);
+    fireEvent.click(screen.getByRole("button", { name: /g208/ }));
+    expect(screen.getByRole("list", { name: "迁移计划" }).textContent).toBe("bob-c → g207alice-a → g206");
+    fireEvent.click(apply2());
+    await waitFor(() =>
+      expect(calls.filter((c) => c.method === "PATCH" && c.body?.includes("node")).map((c) => `${c.url.pathname} ${c.body}`).sort()).toEqual(['/api/devpods/alice-a {"node":"g206"}', '/api/devpods/bob-c {"node":"g207"}']),
+    );
+  });
+
+  it("migrateTargets: one node for all, or one per DevPod in order", () => {
+    expect(migrateTargets(["a", "b"], ["n1"])).toEqual([["a", "n1"], ["b", "n1"]]);
+    expect(migrateTargets(["a", "b"], ["n2", "n1"])).toEqual([["a", "n2"], ["b", "n1"]]);
+    expect(migrateTargets(["a", "b"], ["n1", "n2", "n3"])).toBeNull();
+    expect(migrateTargets(["a", "b"], [])).toBeNull();
   });
 
   it("bulk 重新部署 asks first, then posts redeploy", async () => {

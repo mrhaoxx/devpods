@@ -7,6 +7,7 @@ import { Button } from "../../design/Button";
 import { CopyBlock } from "../../design/Copy";
 import { Field, Input, Notice, Textarea } from "../../design/Form";
 import { Panel } from "../../design/Panel";
+import { Tokens } from "./Tokens";
 
 function Keys({ editable }: { editable: boolean }) {
   const [text, setText] = useState("");
@@ -100,6 +101,9 @@ export function SettingsPage() {
           </div>
           <CopyBlock value={sshConfig(me, me.user, "pod")} />
         </div>
+      </Panel>
+      <Panel title="访问令牌">
+        <Tokens />
       </Panel>
       <Panel title="密码">
         {!me.features.passwordAuth ? (

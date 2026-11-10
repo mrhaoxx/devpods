@@ -20,7 +20,8 @@ func (s *Server) originGuard(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.Method {
 		case http.MethodPost, http.MethodPut, http.MethodPatch, http.MethodDelete:
-			if o := r.Header.Get("Origin"); o != "" && s.Origin != "" && o != s.Origin {
+			// a bearer request carries no ambient credential to abuse
+			if o := r.Header.Get("Origin"); o != "" && s.Origin != "" && o != s.Origin && !strings.HasPrefix(r.Header.Get("Authorization"), "Bearer ") {
 				s.writeErr(w, http.StatusForbidden, "FORBIDDEN", "cross-origin request rejected", nil)
 				return
 			}
@@ -62,6 +63,13 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("GET /api/templates", s.handleListTemplates)
 	mux.HandleFunc("GET /api/devpods", func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Query().Get("watch") == "true" {
+			// the watch stream is not filtered per DevPod
+			if sess, ok := s.sessionFrom(w, r); !ok {
+				return
+			} else if sess.Token != nil && len(sess.Token.DevPods) > 0 {
+				s.writeErr(w, http.StatusForbidden, "SCOPE", "this token is limited to specific DevPods; list without watch", nil)
+				return
+			}
 			s.handleWatchDevPods(w, r)
 			return
 		}
@@ -75,6 +83,10 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("GET /api/devpods/{name}/http", s.handleGetHTTP)
 	mux.HandleFunc("PUT /api/devpods/{name}/http", s.handlePutHTTP)
 	mux.HandleFunc("POST /api/http/ticket", s.handleHTTPTicket)
+	mux.HandleFunc("GET /api/me/tokens", s.handleListTokens)
+	mux.HandleFunc("POST /api/me/tokens", s.handleCreateToken)
+	mux.HandleFunc("DELETE /api/me/tokens/{id}", s.handleDeleteToken)
+	mux.HandleFunc("GET /api/openapi.json", s.handleOpenAPI)
 	mux.HandleFunc("GET /api/devpods/{name}/shell", s.handleDevPodShell)
 	mux.HandleFunc("GET /api/devpods/{name}/events", s.handleDevPodEvents)
 	// Single SSE connection carrying both DevPod status and its events.

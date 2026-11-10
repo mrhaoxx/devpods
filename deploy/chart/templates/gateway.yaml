@@ -50,6 +50,11 @@ spec:
         - --http-auth-key-file=/etc/devpod/http/key
         - --http-login-url={{ required "webui.baseURL is required with gateway.http" .Values.webui.baseURL }}/http-auth
         {{- end }}
+        {{- if include "devpod.cli.on" $ }}
+        - --cli-user={{ .Values.gateway.cli.user | default "devpod" }}
+        - --cli-api-url=http://devpod-webui.{{ .Values.namespaces.system }}.svc:{{ .Values.webui.service.port }}
+        - --cli-api-key-file=/etc/devpod/cli/key
+        {{- end }}
         env:
         - name: POD_NAME
           valueFrom: {fieldRef: {fieldPath: metadata.name}}
@@ -89,6 +94,9 @@ spec:
         {{- if include "devpod.http.on" $ }}
         - {name: http-key, mountPath: /etc/devpod/http, readOnly: true}
         {{- end }}
+        {{- if include "devpod.cli.on" $ }}
+        - {name: cli-key, mountPath: /etc/devpod/cli, readOnly: true}
+        {{- end }}
         {{- if .Values.gateway.ldap.enabled }}
         - name: ldap-secrets
           mountPath: /etc/devpod/gateway/ldap
@@ -120,6 +128,11 @@ spec:
       - name: http-key
         secret:
           secretName: devpod-http-key
+      {{- end }}
+      {{- if include "devpod.cli.on" $ }}
+      - name: cli-key
+        secret:
+          secretName: devpod-cli-key
       {{- end }}
       {{- if .Values.gateway.ldap.enabled }}
       - name: ldap-secrets
