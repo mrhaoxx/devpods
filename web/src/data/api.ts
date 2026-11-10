@@ -322,6 +322,7 @@ export const castURL = (id: string, ch: number) => `/api/audit/sessions/${id}/ch
 export const rawURL = (id: string, ch: number, stream: "in" | "out" | "err") =>
   `/api/audit/sessions/${id}/channels/${ch}/raw?stream=${stream}`;
 export const fileContentURL = (eventId: string) => `/api/audit/files/${eventId}/content`;
+export const getAuditPolicyDefault = () => req<AuditPolicy>("GET", "/api/admin/audit/policy-default");
 
 export type PolicyAction = "Allow" | "Deny";
 export type AuditPolicy = {

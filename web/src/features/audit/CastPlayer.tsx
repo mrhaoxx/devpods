@@ -1,7 +1,7 @@
 import { useEffect, useRef } from "react";
 import * as AsciinemaPlayer from "asciinema-player";
 import "asciinema-player/dist/bundle/asciinema-player.css";
-import { castPlayerOptions } from "../lib/audit";
+import { castPlayerOptions } from "../../lib/audit";
 
 // CastPlayer wraps asciinema-player; changing seekTo jumps the replay.
 export function CastPlayer({ src, seekTo }: { src: string; seekTo?: number }) {
@@ -22,5 +22,5 @@ export function CastPlayer({ src, seekTo }: { src: string; seekTo?: number }) {
     if (seekTo !== undefined && player.current) void player.current.seek(seekTo);
   }, [seekTo]);
 
-  return <div ref={el} className="overflow-hidden rounded-lg border border-line bg-black" />;
+  return <div ref={el} className="overflow-hidden rounded-md border border-line bg-black" />;
 }
