@@ -270,6 +270,14 @@ func (l *lazyCH) MetricsRange(ctx context.Context, uid string, from, to time.Tim
 	return c.MetricsRange(ctx, uid, from, to, step)
 }
 
+func (l *lazyCH) RecentContainer(ctx context.Context, uids []string, from, to time.Time, step time.Duration) (*store.RecentSeries, error) {
+	c, err := l.get(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return c.RecentContainer(ctx, uids, from, to, step)
+}
+
 func (l *lazyCH) LatestInfo(ctx context.Context, uid string, since time.Time) (*store.ContainerInfoRow, *store.SnapshotRow, error) {
 	c, err := l.get(ctx)
 	if err != nil {
