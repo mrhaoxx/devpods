@@ -4,58 +4,88 @@
    A precision control panel for cluster dev environments. Status is the
    color system; monospace is the content voice; discrete "cells" (cores)
    are the signature. */
+/* Colors are CSS variables with a light and a dark set (UI spec §3).
+   data-theme on <html> is set by app/theme.ts before the first render;
+   without it (no JS yet) the system preference decides. Status colors:
+   run = green, warm = yellow (starting / attention), fail = red,
+   idle = gray (hibernated), accent = blue (selection / links). */
 @theme {
-  --color-paper: #fbfaf8;
+  --color-paper: #f6f8fa;
   --color-surface: #ffffff;
-  --color-sunk: #f3f1ec;
-  --color-ink: #16181d;
-  --color-muted: #6a7180;
-  --color-faint: #9aa1ae;
-  --color-line: #e7e3db;
-  --color-line-strong: #d8d3c9;
+  --color-sunk: #eef1f4;
+  --color-ink: #1f2328;
+  --color-muted: #59636e;
+  --color-faint: #818b98;
+  --color-line: #d8dee4;
+  --color-line-strong: #c4ccd5;
 
-  --color-accent: #4338ca;
-  --color-accent-hi: #4f46e5;
-  --color-accent-soft: #eeecfb;
+  --color-accent: #0969da;
+  --color-accent-hi: #0550ae;
+  --color-accent-soft: #ddf4ff;
 
-  --color-run: #17976a;
-  --color-run-soft: #e2f2ea;
-  --color-warm: #b6791f;
-  --color-warm-soft: #f6ecd8;
-  --color-idle: #8b93a2;
-  --color-idle-soft: #eeeff2;
-  --color-fail: #c8443b;
-  --color-fail-soft: #f8e6e4;
+  --color-run: #1a7f37;
+  --color-run-soft: #dafbe1;
+  --color-warm: #9a6700;
+  --color-warm-soft: #fff8c5;
+  --color-idle: #6e7781;
+  --color-idle-soft: #eaeef2;
+  --color-fail: #cf222e;
+  --color-fail-soft: #ffebe9;
 
-  --font-sans: system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial,
+  --font-sans: system-ui, -apple-system, "Segoe UI", "PingFang SC", "Microsoft YaHei", Roboto, Helvetica, Arial,
     sans-serif;
   --font-mono: ui-monospace, "JetBrains Mono", "SF Mono", "Cascadia Code",
     "Roboto Mono", Menlo, Consolas, monospace;
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --color-paper: #0d0f14;
-    --color-surface: #14171d;
-    --color-sunk: #1a1e26;
-    --color-ink: #e9eaee;
-    --color-muted: #949bab;
-    --color-faint: #646b7a;
-    --color-line: #262a33;
-    --color-line-strong: #333844;
+@custom-variant dark (&:where([data-theme=dark], [data-theme=dark] *));
 
-    --color-accent: #8079ff;
-    --color-accent-hi: #948dff;
-    --color-accent-soft: #201f38;
+@layer base {
+  :root[data-theme="dark"] {
+    --color-paper: #0d1117;
+    --color-surface: #161b22;
+    --color-sunk: #1c2128;
+    --color-ink: #d1d7e0;
+    --color-muted: #9198a1;
+    --color-faint: #6e7681;
+    --color-line: #262c36;
+    --color-line-strong: #30363d;
 
-    --color-run: #34c691;
-    --color-run-soft: #10261e;
-    --color-warm: #d69b3f;
-    --color-warm-soft: #2a2113;
-    --color-idle: #7c8493;
-    --color-idle-soft: #1c2029;
-    --color-fail: #e46a60;
-    --color-fail-soft: #2a1614;
+    --color-accent: #58a6ff;
+    --color-accent-hi: #79c0ff;
+    --color-accent-soft: #10243e;
+
+    --color-run: #3fb950;
+    --color-run-soft: #0f2a18;
+    --color-warm: #d29922;
+    --color-warm-soft: #2e2410;
+    --color-idle: #6e7681;
+    --color-idle-soft: #1c2128;
+    --color-fail: #f85149;
+    --color-fail-soft: #33161a;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme]) {
+      --color-paper: #0d1117;
+      --color-surface: #161b22;
+      --color-sunk: #1c2128;
+      --color-ink: #d1d7e0;
+      --color-muted: #9198a1;
+      --color-faint: #6e7681;
+      --color-line: #262c36;
+      --color-line-strong: #30363d;
+      --color-accent: #58a6ff;
+      --color-accent-hi: #79c0ff;
+      --color-accent-soft: #10243e;
+      --color-run: #3fb950;
+      --color-run-soft: #0f2a18;
+      --color-warm: #d29922;
+      --color-warm-soft: #2e2410;
+      --color-idle: #6e7681;
+      --color-idle-soft: #1c2128;
+      --color-fail: #f85149;
+      --color-fail-soft: #33161a;
+    }
   }
 }
 
