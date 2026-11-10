@@ -9,6 +9,7 @@ import { EmptyState } from "../design/EmptyState";
 import { MyDevPodsPage } from "../features/devpods/MyDevPodsPage";
 import { AdminDevPodsPage } from "../features/devpods/AdminDevPodsPage";
 import { DetailPage } from "../features/devpods/detail/DetailPage";
+import { OverviewPage } from "../features/overview/OverviewPage";
 import AdminUsers from "../pages/AdminUsers";
 import AdminTopology from "../pages/AdminTopology";
 import AuditSessions from "../pages/audit/Sessions";
@@ -50,7 +51,7 @@ export function AppRoutes() {
           </Route>
         </Route>
         <Route element={<RequireAdmin />}>
-          <Route path="admin" element={<Soon title="集群总览" />} />
+          <Route path="admin" element={<OverviewPage />} />
           <Route path="admin/devpods" element={<AdminDevPodsPage />} />
           <Route path="admin/nodes" element={<AdminTopology />} />
           <Route path="admin/topology" element={<Navigate to="/admin/nodes" replace />} />
