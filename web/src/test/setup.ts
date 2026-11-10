@@ -32,6 +32,7 @@ if (typeof window !== "undefined") {
     (window as unknown as { EventSource: unknown }).EventSource = ES;
     (globalThis as unknown as { EventSource: unknown }).EventSource = ES;
   }
+  if (!Element.prototype.scrollIntoView) Element.prototype.scrollIntoView = () => {};
   if (!("ResizeObserver" in window)) {
     class RO {
       observe() {}

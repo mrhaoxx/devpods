@@ -8,6 +8,7 @@ import { Sidebar } from "./Sidebar";
 import { Topbar } from "./Topbar";
 import { ReconnectBar } from "./ReconnectBar";
 import { EmptyState } from "../design/EmptyState";
+import { CommandPalette } from "../features/search/CommandPalette";
 
 export function Shell() {
   const me = useMe();
@@ -35,6 +36,7 @@ export function Shell() {
           <main className="min-h-0 flex-1 overflow-y-auto overflow-x-hidden">
             <Outlet />
           </main>
+          <CommandPalette />
         </div>
       </div>
     </LiveEnabled>
