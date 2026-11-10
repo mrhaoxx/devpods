@@ -72,6 +72,8 @@ spec:
         {{- end }}
         {{- if include "devpod.audit.on" $ }}
         {{- include "devpod.audit.args" . | nindent 8 }}
+        - --audit-live-key-file=/etc/devpod/live/key
+        - --audit-live-gateway-namespace={{ .Values.namespaces.system }}
         {{- end }}
         {{- if include "devpod.telemetry.on" $ }}
         - --ingest-listen=:8081
@@ -115,6 +117,7 @@ spec:
         - {name: quota, mountPath: /etc/devpod/webui/default-quota.yaml, subPath: default-quota.yaml, readOnly: true}
         {{- if include "devpod.audit.on" $ }}
         {{- include "devpod.audit.mounts" . | nindent 8 }}
+        - {name: live-key, mountPath: /etc/devpod/live, readOnly: true}
         {{- end }}
         {{- if include "devpod.telemetry.on" $ }}
         {{- include "devpod.telemetry.keyMount" . | nindent 8 }}
@@ -133,6 +136,9 @@ spec:
           name: devpod-webui-quota
       {{- if include "devpod.audit.on" $ }}
       {{- include "devpod.audit.volumes" (dict "root" $ "component" "webui") | nindent 6 }}
+      - name: live-key
+        secret:
+          secretName: devpod-live-key
       {{- end }}
       {{- if include "devpod.telemetry.on" $ }}
       {{- include "devpod.telemetry.keyVolume" . | nindent 6 }}

@@ -98,3 +98,28 @@ subjects:
 - {kind: ServiceAccount, name: devpod-webui, namespace: {{ .Values.namespaces.system }}}
 {{- end }}
 {{- end }}
+{{- if and .Values.webui.enabled (include "devpod.audit.on" $) }}
+---
+# Live session viewing (audit spec §16): the webui finds the gateway Pod
+# that holds a session through the gateway Service's EndpointSlices.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: devpod-webui-live
+  namespace: {{ .Values.namespaces.system }}
+  labels: {{ include "devpod.labels" . | nindent 4 }}
+rules:
+- apiGroups: ["discovery.k8s.io"]
+  resources: ["endpointslices"]
+  verbs: ["get", "list"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: devpod-webui-live
+  namespace: {{ .Values.namespaces.system }}
+  labels: {{ include "devpod.labels" . | nindent 4 }}
+roleRef: {apiGroup: rbac.authorization.k8s.io, kind: Role, name: devpod-webui-live}
+subjects:
+- {kind: ServiceAccount, name: devpod-webui, namespace: {{ .Values.namespaces.system }}}
+{{- end }}
