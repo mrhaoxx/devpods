@@ -48,17 +48,15 @@ func fakeGateway(t *testing.T, lines []string, hold chan struct{}) (*httptest.Se
 	return srv, &seen
 }
 
-func sseEvents(t *testing.T, body *bufio.Scanner, n int) []string {
+// streamLines reads n NDJSON lines (or fewer if the stream ends).
+func streamLines(t *testing.T, body *bufio.Scanner, n int) []string {
 	t.Helper()
 	var out []string
 	deadline := time.After(5 * time.Second)
 	got := make(chan string)
 	go func() {
 		for body.Scan() {
-			l := body.Text()
-			if strings.HasPrefix(l, "data: ") || strings.HasPrefix(l, "event: ") {
-				got <- l
-			}
+			got <- body.Text()
 		}
 		close(got)
 	}()
@@ -79,10 +77,12 @@ func sseEvents(t *testing.T, body *bufio.Scanner, n int) []string {
 func TestLiveSessionAPI(t *testing.T) {
 	setupSuite(t)
 	t0 := time.Unix(1794210460, 0).UTC()
+	ms := func(d time.Duration) int64 { return t0.Add(d).UnixMilli() }
+	open1 := rawlog.Record{TS: t0, Channel: 1, Kind: rawlog.KindChannelOpen, Payload: rawlog.Encode(rawlog.ChannelOpen{Type: "session"})}
 	liveRig := func(t *testing.T, gwLines []string, hold chan struct{}, closed bool) (*webui.Server, *webui.SessionManager, *fakeAuditStore, *[]string, *[]string) {
 		s, sm := newServer(t)
 		seg1 := segment(t,
-			rawlog.Record{TS: t0, Channel: 1, Kind: rawlog.KindChannelOpen, Payload: rawlog.Encode(rawlog.ChannelOpen{Type: "session"})},
+			open1,
 			rawlog.Record{TS: t0, Channel: 1, Kind: rawlog.KindRequest, Payload: ptyReq(100, 30)},
 			rawlog.Record{TS: t0.Add(time.Second), Channel: 1, Kind: rawlog.KindDataOut, Payload: []byte("old-1 ")},
 			rawlog.Record{TS: t0.Add(time.Second), Channel: 2, Kind: rawlog.KindDataOut, Payload: []byte("not this channel ")},
@@ -92,7 +92,11 @@ func TestLiveSessionAPI(t *testing.T) {
 			end := t0.Add(time.Hour)
 			row.ClosedAt = &end
 		}
-		st := &fakeAuditStore{sessions: map[string]*store.SessionDetail{"S1": {Session: row}}, presence: map[string][]string{}}
+		st := &fakeAuditStore{sessions: map[string]*store.SessionDetail{"S1": {
+			Session:  row,
+			Channels: []store.ChannelRow{{SessionID: "S1", ChannelID: 1, Type: "session", Pty: true, OpenedAt: t0}},
+			Segments: []store.RawSegmentRow{{SessionID: "S1", Seq: 1, S3Key: store.RawKey(t0, "S1", 1), FirstTS: t0, LastTS: t0.Add(time.Second), Bytes: 100}},
+		}}, presence: map[string][]string{}}
 		s.Audit = &webui.AuditDeps{Store: st, Objects: fakeObjects{store.RawKey(t0, "S1", 1): seg1}}
 		gw, seen := fakeGateway(t, gwLines, hold)
 		var resolved []string
@@ -116,37 +120,34 @@ func TestLiveSessionAPI(t *testing.T) {
 		return resp
 	}
 
-	t.Run("catch-up then live", func(t *testing.T) {
+	t.Run("history then live on one clock", func(t *testing.T) {
 		s, sm, st, seen, resolved := liveRig(t, []string{
-			`{"from":2,"cur":2}`, `{"t":1,"o":"YmFja2xvZyA="}`, `{"live":true}`,
-			`{"t":2,"o":"bGl2ZSE="}`, `{"t":3,"c":120,"r":40}`, `{"closed":true}`,
+			`{"from":2,"cur":2}`, fmt.Sprintf(`{"t":%d,"o":"YmFja2xvZyA="}`, ms(2*time.Second)), `{"live":true}`,
+			fmt.Sprintf(`{"t":%d,"o":"bGl2ZSE="}`, ms(3*time.Second)), fmt.Sprintf(`{"t":%d,"c":120,"r":40}`, ms(4*time.Second)), `{"closed":true}`,
 		}, nil, false)
 		resp := open(t, s, forge(sm, "gl-bob", false))
-		if resp.StatusCode != http.StatusOK || resp.Header.Get("Content-Type") != "text/event-stream" {
+		if resp.StatusCode != http.StatusOK || resp.Header.Get("Content-Type") != "application/x-ndjson" {
 			t.Fatalf("status %d %s", resp.StatusCode, resp.Header.Get("Content-Type"))
 		}
-		ev := sseEvents(t, bufio.NewScanner(resp.Body), 4)
-		var reset struct {
-			Cols, Rows int
-			Init       string
+		lines := streamLines(t, bufio.NewScanner(resp.Body), 9)
+		var head struct {
+			Version       int
+			Width, Height uint32
+			Timestamp     int64
+			Start         float64
+			Now           int64
 		}
-		if err := json.Unmarshal([]byte(strings.TrimPrefix(ev[0], "data: ")), &reset); err != nil {
-			t.Fatalf("reset %q: %v", ev[0], err)
+		if err := json.Unmarshal([]byte(lines[0]), &head); err != nil || head.Version != 2 || head.Timestamp != t0.Unix() || head.Start != 0 || head.Now == 0 {
+			t.Fatalf("header %q %+v %v", lines[0], head, err)
 		}
-		if reset.Cols != 100 || reset.Rows != 30 || reset.Init != "old-1 backlog " {
-			t.Fatalf("reset %+v", reset)
+		// times are seconds since the channel opened, for the stored
+		// history, the gateway's backlog and live records alike
+		want := []string{
+			`[0,"r","100x30"]`, `[1,"o","old-1 "]`, `[2,"o","backlog "]`, `{"live":true}`,
+			`[3,"o","live!"]`, `[4,"r","120x40"]`, `{"done":true}`,
 		}
-		var o, rz []any
-		_ = json.Unmarshal([]byte(strings.TrimPrefix(ev[1], "data: ")), &o)
-		_ = json.Unmarshal([]byte(strings.TrimPrefix(ev[2], "data: ")), &rz)
-		// the eventsource driver hands resize data to the terminal as is:
-		// it must be {cols, rows}, not the asciicast "120x40" string
-		size, _ := rz[2].(map[string]any)
-		if len(o) != 3 || o[1] != "o" || o[2] != "live!" || len(rz) != 3 || rz[1] != "r" || size["cols"] != 120.0 || size["rows"] != 40.0 {
-			t.Fatalf("events %v %v", o, rz)
-		}
-		if ev[3] != "event: done" {
-			t.Fatalf("end %q", ev[3])
+		if got := lines[1:]; strings.Join(got, "\n") != strings.Join(want, "\n") {
+			t.Fatalf("stream\n%s\nwant\n%s", strings.Join(got, "\n"), strings.Join(want, "\n"))
 		}
 		if len(*resolved) != 1 || (*resolved)[0] != "gw-1" {
 			t.Fatalf("resolved %v", *resolved)
@@ -156,6 +157,23 @@ func TestLiveSessionAPI(t *testing.T) {
 		}
 		if acts := st.actions(); len(acts) != 1 || acts[0] != "watch_live" {
 			t.Fatalf("access log %v", acts)
+		}
+	})
+	t.Run("history past the budget starts later", func(t *testing.T) {
+		s, sm, st, _, _ := liveRig(t, []string{`{"from":3,"cur":3}`, `{"live":true}`, `{"closed":true}`}, nil, false)
+		seg2 := segment(t, rawlog.Record{TS: t0.Add(10 * time.Second), Channel: 1, Kind: rawlog.KindDataOut, Payload: []byte("newer")})
+		s.Audit.Objects.(fakeObjects)[store.RawKey(t0, "S1", 2)] = seg2
+		d := st.sessions["S1"]
+		d.Segments = append(d.Segments, store.RawSegmentRow{SessionID: "S1", Seq: 2, S3Key: store.RawKey(t0, "S1", 2), FirstTS: t0.Add(10 * time.Second), Bytes: 100})
+		defer webui.SetLiveHistoryBytesForTest(150)()
+		lines := streamLines(t, bufio.NewScanner(open(t, s, forge(sm, "gl-bob", false)).Body), 5)
+		var head struct{ Start float64 }
+		_ = json.Unmarshal([]byte(lines[0]), &head)
+		// segment 1 is past the budget: the stream starts at segment 2,
+		// with the size segment 1 set
+		want := []string{`[10,"r","100x30"]`, `[10,"o","newer"]`, `{"live":true}`, `{"done":true}`}
+		if head.Start != 10 || strings.Join(lines[1:], "\n") != strings.Join(want, "\n") {
+			t.Fatalf("header %s stream\n%s", lines[0], strings.Join(lines[1:], "\n"))
 		}
 	})
 	t.Run("ended session is 409", func(t *testing.T) {
@@ -182,7 +200,7 @@ func TestLiveSessionAPI(t *testing.T) {
 		defer close(hold)
 		s, sm, _, _, _ := liveRig(t, []string{`{"from":1,"cur":1}`, `{"live":true}`}, hold, false)
 		first := open(t, s, forge(sm, "gl-bob", false))
-		sseEvents(t, bufio.NewScanner(first.Body), 1) // the first viewer is streaming
+		streamLines(t, bufio.NewScanner(first.Body), 2) // the first viewer is streaming
 		if resp := open(t, s, forge(sm, "gl-bob", false)); resp.StatusCode != http.StatusTooManyRequests {
 			t.Fatalf("status %d", resp.StatusCode)
 		}

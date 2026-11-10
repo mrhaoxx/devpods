@@ -77,3 +77,11 @@ var ParseImportCSVForTest = parseImportCSV
 func (s *Server) HandleSearchForTest() http.HandlerFunc { return s.handleSearch }
 
 func (s *Server) HandleLiveRecentForTest() http.HandlerFunc { return s.handleLiveRecent }
+
+// SetLiveHistoryBytesForTest sets the live view's history budget and
+// returns a func restoring it.
+func SetLiveHistoryBytesForTest(n int64) func() {
+	old := liveHistoryBytes
+	liveHistoryBytes = n
+	return func() { liveHistoryBytes = old }
+}

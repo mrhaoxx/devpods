@@ -13,6 +13,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"sort"
 	"time"
 	"unicode/utf8"
 
@@ -21,16 +22,18 @@ import (
 	"github.com/mrhaoxx/devpod/internal/audit/store"
 )
 
-// Live session viewing (audit spec §16): the screen is rebuilt from the
-// last liveTailBytes of the channel's output — older segments from object
-// storage, newer ones from the gateway's disk — and then the gateway's
-// live records are relayed as asciinema-player eventsource messages.
-const (
-	liveTailBytes = 512 << 10
-	// segments read forward from the start for the terminal size when
-	// the tail has none
-	liveSizeScanSegments = 2
-)
+// Live session viewing (audit spec §16): one NDJSON stream per channel,
+// shaped like asciicast v2 so the browser's player reads it like a
+// recording — a header, the channel's history (object storage, then the
+// gateway's local backlog), {"live":true} at the hand-over, the live
+// records, {"done":true} when the channel ends. Every time is seconds
+// since the channel opened, so the history, the live edge and the
+// session timeline share one clock. Nothing is held beyond one record.
+var liveHistoryBytes int64 = 64 << 20 // newest raw segments streamed, by uncompressed size
+
+// segments read from the start for the terminal size when the budget cut
+// off the history that set it
+const liveSizeScanSegments = 2
 
 // LiveSessions wires the relay; nil on Server disables live viewing.
 type LiveSessions struct {
@@ -47,97 +50,126 @@ func NewLiveSessions(resolve func(context.Context, string) (string, error), key 
 	return &LiveSessions{resolve: resolve, key: key, client: &http.Client{}, sem: make(chan struct{}, maxViewers)}
 }
 
-// liveTail is the bounded screen state: the last max bytes of output and
-// the latest terminal size.
-type liveTail struct {
-	max        int
-	buf        []byte
-	cols, rows uint32
+// castStream writes the NDJSON stream; output is cut at whole characters
+// (a split one waits for the next record).
+type castStream struct {
+	w     *bufio.Writer
+	fl    http.Flusher
+	zero  int64 // channel open, unix ms
+	carry []byte
+	err   error
 }
 
-func (t *liveTail) out(p []byte) {
-	t.buf = append(t.buf, p...)
-	if len(t.buf) > 2*t.max {
-		t.buf = append([]byte(nil), t.buf[len(t.buf)-t.max:]...)
+func (c *castStream) line(v any) bool {
+	if c.err != nil {
+		return false
 	}
+	b, err := json.Marshal(v)
+	if err == nil {
+		_, err = c.w.Write(append(b, '\n'))
+	}
+	c.err = err
+	return err == nil
 }
 
-func (t *liveTail) bytes() []byte {
-	b := t.buf
-	if len(b) > t.max {
-		b = b[len(b)-t.max:]
+func (c *castStream) flush() bool {
+	if c.err == nil {
+		c.err = c.w.Flush()
+		if c.err == nil && c.fl != nil {
+			c.fl.Flush()
+		}
 	}
-	for len(b) > 0 && !utf8.RuneStart(b[0]) { // a cut through a character
-		b = b[1:]
-	}
-	return b
+	return c.err == nil
 }
 
-// segmentChannel reads one stored segment: the last keep bytes of ch's
-// output and the last terminal size it set.
-func segmentChannel(ctx context.Context, objs store.ObjectStore, key string, ch uint32, keep int) ([]byte, uint32, uint32, error) {
+func (c *castStream) at(ms int64) float64 {
+	if ms < c.zero {
+		return 0
+	}
+	return float64(ms-c.zero) / 1000
+}
+
+func (c *castStream) size(ms int64, cols, rows uint32) bool {
+	return c.line([]any{c.at(ms), "r", fmt.Sprintf("%dx%d", cols, rows)})
+}
+
+// add writes one gateway-shaped line (output or size); others are ignored.
+func (c *castStream) add(l audit.LiveLine) bool {
+	switch {
+	case len(l.Out) > 0:
+		text, rest := utf8Prefix(append(c.carry, l.Out...))
+		c.carry = append(c.carry[:0], rest...)
+		if len(text) > 0 {
+			return c.line([]any{c.at(l.T), "o", string(text)})
+		}
+	case l.Cols > 0:
+		return c.size(l.T, l.Cols, l.Rows)
+	}
+	return c.err == nil
+}
+
+// eachChannelLine reads one stored segment and hands fn ch's records.
+func eachChannelLine(ctx context.Context, objs store.ObjectStore, key string, ch uint32, fn func(audit.LiveLine) bool) error {
 	rc, err := objs.Get(ctx, key)
 	if err != nil {
-		return nil, 0, 0, err
+		return err
 	}
 	defer rc.Close()
 	rd, err := rawlog.OpenSegment(rc)
 	if err != nil {
-		return nil, 0, 0, err
+		return err
 	}
-	t := liveTail{max: keep}
 	for {
 		rec, err := rd.Next()
 		if err != nil {
 			if errors.Is(err, io.EOF) {
-				break
+				return nil
 			}
-			return nil, 0, 0, err
+			return err
 		}
 		if rec.Channel != ch {
 			continue
 		}
-		if l, ok := audit.LiveRecordLine(rec); ok {
-			if len(l.Out) > 0 {
-				t.out(l.Out)
-			} else if l.Cols > 0 {
-				t.cols, t.rows = l.Cols, l.Rows
-			}
+		if l, ok := audit.LiveRecordLine(rec); ok && !fn(l) {
+			return nil
 		}
 	}
-	b := t.buf
-	if len(b) > keep {
-		b = b[len(b)-keep:]
-	}
-	return b, t.cols, t.rows, nil
 }
 
-// tailFromStore fills t from the segments before from, newest first,
-// until the tail is full; the size comes from the newest segment that
-// set one, else from the first segments.
-func (s *Server) tailFromStore(ctx context.Context, d *store.SessionDetail, ch, from uint32, t *liveTail) {
-	key := func(seq int) string { return store.RawKey(d.Session.OpenedAt, d.Session.SessionID, uint32(seq)) }
-	var chunks [][]byte
-	need := t.max
-	for seq := int(from) - 1; seq >= 1 && need > 0; seq-- {
-		b, c, r, err := segmentChannel(ctx, s.Audit.Objects, key(seq), ch, need)
-		if err != nil {
-			continue // missing or unreadable: the screen just starts later
-		}
-		if c > 0 && t.cols == 0 {
-			t.cols, t.rows = c, r
-		}
-		chunks = append(chunks, b)
-		need -= len(b)
-	}
-	for i := len(chunks) - 1; i >= 0; i-- {
-		t.out(chunks[i])
-	}
-	for seq := 1; t.cols == 0 && seq < int(from) && seq <= liveSizeScanSegments; seq++ {
-		if _, c, r, err := segmentChannel(ctx, s.Audit.Objects, key(seq), ch, 1); err == nil && c > 0 {
-			t.cols, t.rows = c, r
+// liveHistory plans the stored history before the gateway's first local
+// segment: the newest segments within liveHistoryBytes, their object
+// keys, and where on the channel's clock they start (zero when nothing
+// was cut).
+func liveHistory(d *store.SessionDetail, from uint32) (first uint32, key func(uint32) string, start time.Time) {
+	rows := map[uint32]store.RawSegmentRow{}
+	var seqs []uint32
+	for _, r := range d.Segments {
+		if r.Seq >= 1 && r.Seq < from {
+			rows[r.Seq] = r
+			seqs = append(seqs, r.Seq)
 		}
 	}
+	sort.Slice(seqs, func(i, j int) bool { return seqs[i] > seqs[j] })
+	first = 1
+	var sum int64
+	for _, q := range seqs {
+		if sum += rows[q].Bytes; sum > liveHistoryBytes {
+			first = q + 1
+			break
+		}
+	}
+	if first > 1 {
+		if r, ok := rows[first]; ok {
+			start = r.FirstTS
+		}
+	}
+	key = func(seq uint32) string {
+		if r, ok := rows[seq]; ok && r.S3Key != "" {
+			return r.S3Key
+		}
+		return store.RawKey(d.Session.OpenedAt, d.Session.SessionID, seq)
+	}
+	return first, key, start
 }
 
 // utf8Prefix splits p into its longest prefix of whole characters and
@@ -225,92 +257,101 @@ func (s *Server) handleAuditLive(w http.ResponseWriter, r *http.Request) {
 		s.writeErr(w, http.StatusBadGateway, "LIVE_UNAVAILABLE", "bad gateway stream", nil)
 		return
 	}
-	tail := &liveTail{max: liveTailBytes}
-	s.tailFromStore(r.Context(), d, ch, head.From, tail)
+	zero := d.Session.OpenedAt
+	for _, c := range d.Channels {
+		if c.ChannelID == ch {
+			zero = c.OpenedAt
+		}
+	}
+	first, key, start := liveHistory(d, head.From)
+
+	w.Header().Set("Content-Type", "application/x-ndjson")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("X-Accel-Buffering", "no")
+	w.WriteHeader(http.StatusOK)
+	fl, _ := w.(http.Flusher)
+	cs := &castStream{w: bufio.NewWriterSize(w, 32<<10), fl: fl, zero: zero.UnixMilli()}
+	startAt := 0.0
+	if !start.IsZero() {
+		startAt = cs.at(start.UnixMilli())
+	}
+	if !cs.line(struct {
+		Version   int     `json:"version"`
+		Width     uint32  `json:"width"`
+		Height    uint32  `json:"height"`
+		Timestamp int64   `json:"timestamp"`
+		Start     float64 `json:"start"`
+		Now       int64   `json:"now"`
+	}{2, 80, 24, zero.Unix(), startAt, time.Now().UnixMilli()}) {
+		return
+	}
+	offline := func(why string) {
+		if r.Context().Err() == nil {
+			cs.line(map[string]string{"offline": why})
+			cs.flush()
+		}
+	}
+	if first > 1 { // the cut-off history set the terminal size
+		var cols, rows uint32
+		for seq := uint32(1); seq < first && seq <= liveSizeScanSegments; seq++ {
+			_ = eachChannelLine(r.Context(), s.Audit.Objects, key(seq), ch, func(l audit.LiveLine) bool {
+				if l.Cols > 0 {
+					cols, rows = l.Cols, l.Rows
+				}
+				return true
+			})
+		}
+		if cols > 0 && !cs.size(start.UnixMilli(), cols, rows) {
+			return
+		}
+	}
+	for seq := first; seq < head.From; seq++ {
+		// a missing or unreadable segment is a gap in the replay, not an end
+		_ = eachChannelLine(r.Context(), s.Audit.Objects, key(seq), ch, cs.add)
+		if cs.err != nil {
+			return
+		}
+	}
 	closed := false
 	for { // the gateway's local backlog, up to the hand-over
 		var l audit.LiveLine
 		if err := dec.Decode(&l); err != nil {
-			s.writeErr(w, http.StatusBadGateway, "LIVE_UNAVAILABLE", "the gateway stream ended early", nil)
+			offline("the gateway stream ended early")
 			return
 		}
 		if l.Live {
 			break
 		}
-		switch {
-		case len(l.Out) > 0:
-			tail.out(l.Out)
-		case l.Cols > 0:
-			tail.cols, tail.rows = l.Cols, l.Rows
-		case l.Closed:
+		if l.Closed {
 			closed = true
+		} else if !cs.add(l) {
+			return
 		}
 	}
-
-	fl, _ := w.(http.Flusher)
-	w.Header().Set("Content-Type", "text/event-stream")
-	w.Header().Set("Cache-Control", "no-cache")
-	w.Header().Set("X-Accel-Buffering", "no")
-	w.WriteHeader(http.StatusOK)
-	emit := func(raw string) bool {
-		if _, err := io.WriteString(w, raw); err != nil {
-			return false
-		}
-		if fl != nil {
-			fl.Flush()
-		}
-		return true
-	}
-	data := func(v any) bool {
-		b, err := json.Marshal(v)
-		return err == nil && emit("data: "+string(b)+"\n\n")
-	}
-	cols, rows := tail.cols, tail.rows
-	if cols == 0 {
-		cols, rows = 80, 24
-	}
-	if !data(map[string]any{"cols": cols, "rows": rows, "time": 0, "init": string(tail.bytes())}) {
+	if !cs.line(map[string]bool{"live": true}) || !cs.flush() {
 		return
 	}
-	tail.buf = nil // the relay keeps no history
-	if closed {
-		emit("event: done\ndata: {}\n\n")
-		return
-	}
-	start := time.Now()
-	var carry []byte
-	for {
+	for !closed {
 		var l audit.LiveLine
 		if err := dec.Decode(&l); err != nil {
-			if r.Context().Err() == nil {
-				data(map[string]string{"state": "offline"})
-			}
+			offline("the gateway went away")
 			return
 		}
-		t := time.Since(start).Seconds()
 		switch {
-		case len(l.Out) > 0:
-			text, rest := utf8Prefix(append(carry, l.Out...))
-			carry = append(carry[:0], rest...)
-			if len(text) > 0 && !data([]any{t, "o", string(text)}) {
-				return
-			}
-		case l.Cols > 0:
-			// the eventsource driver passes resize data to the terminal
-			// untouched, so it must already be {cols, rows}
-			if !data([]any{t, "r", map[string]uint32{"cols": l.Cols, "rows": l.Rows}}) {
-				return
-			}
-		case l.HB:
-			if !emit(": hb\n\n") {
-				return
-			}
 		case l.Closed:
-			emit("event: done\ndata: {}\n\n")
-			return
+			closed = true
 		case l.Error != "":
-			data(map[string]string{"state": "offline"})
+			offline(l.Error)
+			return
+		case l.HB:
+			cs.line(map[string]bool{"hb": true})
+		default:
+			cs.add(l)
+		}
+		if !cs.flush() {
 			return
 		}
 	}
+	cs.line(map[string]bool{"done": true})
+	cs.flush()
 }
