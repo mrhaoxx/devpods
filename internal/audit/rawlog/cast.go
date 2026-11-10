@@ -207,3 +207,30 @@ func incompleteTail(b []byte) int {
 	}
 	return len(b)
 }
+
+// TermSize reports the terminal size a pty-req or window-change request
+// record sets.
+func TermSize(r Record) (cols, rows uint32, ok bool) {
+	if r.Kind != KindRequest {
+		return 0, 0, false
+	}
+	var req Request
+	if err := Decode(r.Payload, &req); err != nil {
+		return 0, 0, false
+	}
+	switch req.Type {
+	case "pty-req":
+		p, err := sshmsg.ParsePtyReq(req.Payload)
+		if err != nil {
+			return 0, 0, false
+		}
+		return p.Cols, p.Rows, true
+	case "window-change":
+		c, r, err := sshmsg.ParseWindowChange(req.Payload)
+		if err != nil {
+			return 0, 0, false
+		}
+		return c, r, true
+	}
+	return 0, 0, false
+}

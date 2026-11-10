@@ -111,6 +111,17 @@ func (w *SegmentWriter) Tick() error {
 	return nil
 }
 
+// Flush writes everything buffered in the open segment's compressor to
+// the destination, so the bytes written so far decode to every record
+// written so far (the live view's hand-over point). Without an open
+// segment it does nothing.
+func (w *SegmentWriter) Flush() error {
+	if w.enc == nil {
+		return nil
+	}
+	return w.enc.Flush()
+}
+
 // Close seals the current segment, if any.
 func (w *SegmentWriter) Close() error {
 	if w.enc == nil {
