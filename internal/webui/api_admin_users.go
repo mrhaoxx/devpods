@@ -15,7 +15,6 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	devpodv1alpha1 "github.com/mrhaoxx/devpod/api/v1alpha1"
@@ -248,46 +247,54 @@ func (s *Server) handlePatchUser(w http.ResponseWriter, r *http.Request) {
 		s.writeErr(w, http.StatusBadRequest, "BAD_REQUEST", "malformed request body: "+err.Error(), nil)
 		return
 	}
-	var u devpodv1alpha1.User
-	if err := s.Client.Get(r.Context(), types.NamespacedName{Name: name}, &u); err != nil {
-		if apierrors.IsNotFound(err) {
-			s.writeErr(w, http.StatusNotFound, "NOT_FOUND", "user not found", nil)
-			return
-		}
-		s.writeErr(w, http.StatusInternalServerError, "INTERNAL", err.Error(), nil)
-		return
-	}
+	// validate and prepare first; then apply on a fresh read (the cache
+	// can trail a user created a moment ago) with conflict retries
+	var hash string
 	if req.Password != nil {
 		if !s.PasswordAuth {
 			s.writeErr(w, http.StatusForbidden, "FORBIDDEN", "password login is disabled", nil)
 			return
 		}
-		hash, err := HashPassword(*req.Password, s.PasswordMinLength)
+		h, err := HashPassword(*req.Password, s.PasswordMinLength)
 		if err != nil {
 			s.writeErr(w, http.StatusBadRequest, "BAD_REQUEST", err.Error(), nil)
 			return
 		}
-		u.Spec.PasswordHash = hash
+		hash = h
 	}
-	if req.DisplayName != nil {
-		u.Spec.DisplayName = *req.DisplayName
+	if req.Admin != nil && !*req.Admin && name == sess.User {
+		s.writeErr(w, http.StatusBadRequest, "BAD_REQUEST", "you cannot remove your own admin flag", nil)
+		return
 	}
-	if req.Admin != nil {
-		if !*req.Admin && name == sess.User {
-			s.writeErr(w, http.StatusBadRequest, "BAD_REQUEST", "you cannot remove your own admin flag", nil)
-			return
-		}
-		u.Spec.Admin = *req.Admin
-	}
+	var quota *devpodv1alpha1.UserQuota
 	if req.Quota != nil {
 		q, err := req.Quota.build()
 		if err != nil {
 			s.writeErr(w, http.StatusBadRequest, "BAD_REQUEST", err.Error(), nil)
 			return
 		}
-		u.Spec.Quota = q // nil = clear → global defaults apply
+		quota = q
 	}
-	if err := s.Client.Update(r.Context(), &u); err != nil {
+	err := s.updateUser(r.Context(), name, func(u *devpodv1alpha1.User) error {
+		if req.Password != nil {
+			u.Spec.PasswordHash = hash
+		}
+		if req.DisplayName != nil {
+			u.Spec.DisplayName = *req.DisplayName
+		}
+		if req.Admin != nil {
+			u.Spec.Admin = *req.Admin
+		}
+		if req.Quota != nil {
+			u.Spec.Quota = quota.DeepCopy() // nil = clear → global defaults apply
+		}
+		return nil
+	})
+	if apierrors.IsNotFound(err) {
+		s.writeErr(w, http.StatusNotFound, "NOT_FOUND", "user not found", nil)
+		return
+	}
+	if err != nil {
 		s.writeErr(w, http.StatusInternalServerError, "INTERNAL", err.Error(), nil)
 		return
 	}
