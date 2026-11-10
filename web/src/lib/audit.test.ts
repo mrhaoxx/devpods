@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { castOffset, castPlayerOptions, mergeTimeline } from "./audit";
+import { castOffset, mergeTimeline, playerOptions } from "./audit";
 import { SessionDetail } from "../data/api";
 
 const base = {
@@ -41,10 +41,9 @@ describe("castOffset", () => {
   });
 });
 
-describe("castPlayerOptions", () => {
-  it("keeps real time so timeline seeks (wall-clock castOffset) land on the event", () => {
-    // asciinema-player's idleTimeLimit shifts every later event earlier,
-    // and seek() uses that compressed clock.
-    expect(castPlayerOptions).not.toHaveProperty("idleTimeLimit");
+describe("playerOptions", () => {
+  it("leaves controls and timing to the session player", () => {
+    expect(playerOptions).toMatchObject({ controls: false });
+    expect(playerOptions).not.toHaveProperty("idleTimeLimit");
   });
 });

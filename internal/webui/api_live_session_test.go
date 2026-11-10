@@ -135,9 +135,9 @@ func TestLiveSessionAPI(t *testing.T) {
 			Width, Height uint32
 			Timestamp     int64
 			Start         float64
-			Now           int64
+			Now           float64 // seconds since the channel opened
 		}
-		if err := json.Unmarshal([]byte(lines[0]), &head); err != nil || head.Version != 2 || head.Timestamp != t0.Unix() || head.Start != 0 || head.Now == 0 {
+		if err := json.Unmarshal([]byte(lines[0]), &head); err != nil || head.Version != 2 || head.Timestamp != t0.Unix() || head.Start != 0 || head.Now < 4 {
 			t.Fatalf("header %q %+v %v", lines[0], head, err)
 		}
 		// times are seconds since the channel opened, for the stored

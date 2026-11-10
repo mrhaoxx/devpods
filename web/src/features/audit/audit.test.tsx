@@ -7,11 +7,10 @@ import { SessionPage } from "./SessionPage";
 import { SessionsPage } from "./SessionsPage";
 import type { ChannelRow, SessionDetail } from "../../data/api";
 
-vi.mock("./CastPlayer", () => ({
-  CastPlayer: ({ src, seekTo, live }: { src: string; seekTo?: number; live?: boolean }) => (
-    <div data-testid="player">
-      {src}|{seekTo ?? ""}
-      {live ? "|live" : ""}
+vi.mock("./SessionPlayer", () => ({
+  SessionPlayer: ({ sessionId, channel, open, seek, markers }: { sessionId: string; channel: number; open: boolean; seek?: { t: number }; markers?: { t: number; label: string }[] }) => (
+    <div data-testid="player" data-markers={(markers ?? []).map((m) => `${m.t}:${m.label}`).join(",")}>
+      {sessionId}/{channel}|{open ? "open" : "ended"}|{seek?.t ?? ""}
     </div>
   ),
 }));
@@ -117,10 +116,12 @@ describe("audit pages", () => {
       commands: [{ event_id: "c1", ts: "2026-11-10T10:00:30Z", session_id: "s1", user: "alice", source: "hook", channel_id: 0, cwd: "/", cmdline: "make test", exit_code: 0, duration_ms: 1, attribution: "tree" }],
     });
     renderSession(d);
-    expect((await screen.findByTestId("player")).textContent).toBe("/api/audit/sessions/s1/channels/0/cast|");
+    expect((await screen.findByTestId("player")).textContent).toBe("s1/0|ended|");
+    // the command is a tick on the player's scrubber, 30 s in
+    expect(screen.getByTestId("player").dataset.markers).toMatch(/^30000:.*make test/);
     const row = screen.getByText(/make test/).closest("li")!;
     fireEvent.click(within(row).getByRole("button", { name: /跳到/ }));
-    expect(screen.getByTestId("player").textContent).toBe("/api/audit/sessions/s1/channels/0/cast|30");
+    expect(screen.getByTestId("player").textContent).toBe("s1/0|ended|30000");
   });
 
   it("non-admin sessions page has no user filter", async () => {
@@ -137,21 +138,21 @@ describe("audit pages", () => {
     expect(await screen.findByText("审计数据暂不可用")).toBeTruthy();
   });
 
-  it("an open session plays live by default and 回放 switches to the recording", async () => {
-    const d = session([ch({ pty: true })]);
+  it("an open session uses the same player, live, and a timeline click seeks it", async () => {
+    const d = session([ch({ pty: true })], {
+      commands: [{ event_id: "c1", ts: "2026-11-10T10:00:30Z", session_id: "s1", user: "alice", source: "hook", channel_id: 0, cwd: "/", cmdline: "make test", exit_code: 0, duration_ms: 1, attribution: "tree" }],
+    });
     d.session.closed_at = null;
     renderSession(d);
-    expect((await screen.findByTestId("player")).textContent).toBe("/api/audit/sessions/s1/channels/0/live||live");
-    fireEvent.click(screen.getByRole("radio", { name: "回放" }));
-    expect(screen.getByTestId("player").textContent).toBe("/api/audit/sessions/s1/channels/0/cast|");
-    fireEvent.click(screen.getByRole("radio", { name: "直播" }));
-    expect(screen.getByTestId("player").textContent).toContain("/live");
+    expect((await screen.findByTestId("player")).textContent).toBe("s1/0|open|");
+    expect(screen.queryByRole("radio")).toBeNull(); // no separate live / replay modes
+    fireEvent.click(within(screen.getByText(/make test/).closest("li")!).getByRole("button", { name: /跳到/ }));
+    expect(screen.getByTestId("player").textContent).toBe("s1/0|open|30000");
   });
 
-  it("an ended session only replays", async () => {
+  it("an ended session plays its recording", async () => {
     renderSession(session([ch({ pty: true })]));
-    expect((await screen.findByTestId("player")).textContent).toBe("/api/audit/sessions/s1/channels/0/cast|");
-    expect(screen.queryByRole("radio", { name: "直播" })).toBeNull();
+    expect((await screen.findByTestId("player")).textContent).toBe("s1/0|ended|");
   });
 
   it("open sessions in the list link 直播", async () => {

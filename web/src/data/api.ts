@@ -319,7 +319,7 @@ export const searchFiles = (q: Record<string, string | undefined>) => req<Page<F
 export const listAlerts = (q: Record<string, string | undefined>) => req<Page<AlertRow>>("GET", `/api/audit/alerts?${qs(q)}`);
 export const listAccessLog = (q: Record<string, string | undefined>) => req<Page<AccessLogRow>>("GET", `/api/audit/access-log?${qs(q)}`);
 export const castURL = (id: string, ch: number) => `/api/audit/sessions/${id}/channels/${ch}/cast`;
-/** liveURL: the live view of an open session (audit spec §16), asciinema eventsource. */
+/** liveURL: an open session's channel from its start, then live (audit spec §16). */
 export const liveURL = (id: string, ch: number) => `/api/audit/sessions/${id}/channels/${ch}/live`;
 export const rawURL = (id: string, ch: number, stream: "in" | "out" | "err") =>
   `/api/audit/sessions/${id}/channels/${ch}/raw?stream=${stream}`;

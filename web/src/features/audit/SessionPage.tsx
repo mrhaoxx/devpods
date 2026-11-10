@@ -1,9 +1,10 @@
 // 会话详情 (UI spec §5.8): timeline (channels, commands, files, 拦截,
-// 告警) beside the replay; only pty / shell channels replay.
-import { useMemo, useState } from "react";
+// 告警) beside one player that is live for an open session and can be
+// scrubbed back (audit spec §16); only pty / shell channels play.
+import { useCallback, useMemo, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
-import { castURL, fileContentURL, getAuditSession, liveURL, rawURL, type ChannelRow, type FileEventRow } from "../../data/api";
+import { fileContentURL, getAuditSession, rawURL, type ChannelRow, type FileEventRow } from "../../data/api";
 import { useMe } from "../../data/queries";
 import { castOffset, mergeTimeline, type TimelineItem } from "../../lib/audit";
 import { fmtBytes, fmtDuration } from "../../lib/format";
@@ -11,7 +12,7 @@ import { useNow } from "../../lib/useNow";
 import { Badge } from "../../design/Badge";
 import { EmptyState } from "../../design/EmptyState";
 import { Panel } from "../../design/Panel";
-import { CastPlayer } from "./CastPlayer";
+import { SessionPlayer, type Marker } from "./SessionPlayer";
 import { AuditError, confirmDownload, fmtTS } from "./common";
 import { channelLabel, replayable } from "./replay";
 
@@ -50,15 +51,44 @@ function FileLink({ f }: { f: FileEventRow }) {
 export function SessionPage() {
   const { id = "" } = useParams();
   const me = useMe().data;
-  const q = useQuery({ queryKey: ["audit", "session", id], queryFn: () => getAuditSession(id), retry: false });
+  const q = useQuery({
+    queryKey: ["audit", "session", id],
+    queryFn: () => getAuditSession(id),
+    retry: false,
+    // an open session's timeline keeps growing
+    refetchInterval: (query) => (query.state.data && !query.state.data.session.closed_at ? 5000 : false),
+  });
   const now = useNow(5000);
   const channels: ChannelRow[] = q.data?.channels ?? [];
   const defaultCh = (channels.find(replayable) ?? channels[0])?.channel_id;
   const [picked, setPicked] = useState<number | undefined>();
   const ch = picked ?? defaultCh;
   const [seek, setSeek] = useState<{ t: number; n: number }>();
-  const [replay, setReplay] = useState(false); // an open session plays live unless the user picks 回放
+  const [playhead, setPlayhead] = useState(-1); // the timeline item at the player's position
   const timeline = useMemo(() => (q.data ? mergeTimeline(q.data) : []), [q.data]);
+  const chOpened = channels.find((c) => c.channel_id === ch)?.opened_at;
+  const markers = useMemo<Marker[]>(
+    () =>
+      chOpened
+        ? timeline
+            .filter((it) => it.kind !== "channel" && (it.channelId ?? ch) === ch)
+            .map((it) => ({ t: castOffset(chOpened, it.ts) * 1000, label: it.text, kind: it.kind }))
+        : [],
+    [timeline, chOpened, ch],
+  );
+  const onPosition = useCallback(
+    (ms: number) => {
+      if (!chOpened) return;
+      const at = new Date(chOpened).getTime() + ms;
+      let idx = -1;
+      for (let i = 0; i < timeline.length; i++) {
+        if (new Date(timeline[i].ts).getTime() <= at) idx = i;
+        else break;
+      }
+      setPlayhead(idx);
+    },
+    [timeline, chOpened],
+  );
 
   if (q.isError) return <AuditError error={q.error} />;
   if (!q.data) return <EmptyState title="加载中…" />;
@@ -77,14 +107,10 @@ export function SessionPage() {
     const target = channels.find((c) => c.channel_id === (item.channelId ?? ch));
     if (!target) return;
     setPicked(target.channel_id);
-    if (replayable(target)) {
-      setReplay(true); // jumping to a moment needs the recording
-      setSeek({ t: castOffset(target.opened_at, item.ts), n: Date.now() });
-    }
+    if (replayable(target)) setSeek({ t: castOffset(target.opened_at, item.ts) * 1000, n: Date.now() });
   };
   const channelFiles = (q.data.files ?? []).filter((f) => f.channel_id === ch);
-  const canLive = !s.closed_at && !!current && replayable(current) && !current.closed_at;
-  const live = canLive && !replay;
+  const open = !s.closed_at && !!current && !current.closed_at;
 
   return (
     <div className="space-y-3 p-3">
@@ -118,7 +144,7 @@ export function SessionPage() {
         <Panel title="时间线">
           <ol className="mono max-h-[70vh] overflow-y-auto p-1 text-xs">
             {timeline.map((item, i) => (
-              <li key={i} className="flex gap-2 rounded px-1.5 py-1 hover:bg-sunk">
+              <li key={i} aria-current={i === playhead ? "true" : undefined} className={`flex gap-2 rounded px-1.5 py-1 hover:bg-sunk ${i === playhead ? "bg-accent-soft" : ""}`}>
                 <button
                   type="button"
                   onClick={() => jump(item)}
@@ -149,34 +175,20 @@ export function SessionPage() {
               </button>
             ))}
           </div>
-          {canLive && (
-            <div role="radiogroup" aria-label="观看方式" className="inline-flex rounded-md border border-line bg-sunk p-0.5 text-xs">
-              {(
-                [
-                  [true, "直播"],
-                  [false, "回放"],
-                ] as const
-              ).map(([isLive, label]) => (
-                <button
-                  key={label}
-                  type="button"
-                  role="radio"
-                  aria-checked={live === isLive}
-                  onClick={() => setReplay(!isLive)}
-                  className={`rounded px-2.5 py-0.5 ${live === isLive ? "bg-surface font-medium shadow-sm" : "text-muted hover:text-ink"}`}
-                >
-                  {label}
-                </button>
-              ))}
-            </div>
-          )}
           {!current ? (
             <EmptyState title="没有通道" />
           ) : replayable(current) ? (
-            live ? (
-              <CastPlayer key={`live-${ch}`} src={liveURL(id, current.channel_id)} live />
-            ) : current.raw_recorded ? (
-              <CastPlayer key={ch} src={castURL(id, current.channel_id)} seekTo={seek?.t} />
+            open || current.raw_recorded ? (
+              <SessionPlayer
+                key={current.channel_id}
+                sessionId={id}
+                channel={current.channel_id}
+                open={open}
+                openedAt={current.opened_at}
+                markers={markers}
+                seek={seek}
+                onPosition={onPosition}
+              />
             ) : (
               <EmptyState title="该通道只记录了元数据" />
             )

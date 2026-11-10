@@ -280,9 +280,9 @@ func (s *Server) handleAuditLive(w http.ResponseWriter, r *http.Request) {
 		Width     uint32  `json:"width"`
 		Height    uint32  `json:"height"`
 		Timestamp int64   `json:"timestamp"`
-		Start     float64 `json:"start"`
-		Now       int64   `json:"now"`
-	}{2, 80, 24, zero.Unix(), startAt, time.Now().UnixMilli()}) {
+		Start     float64 `json:"start"` // earliest moment the stream holds
+		Now       float64 `json:"now"`   // the server's now, on the channel clock
+	}{2, 80, 24, zero.Unix(), startAt, cs.at(time.Now().UnixMilli())}) {
 		return
 	}
 	offline := func(why string) {
