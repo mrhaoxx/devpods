@@ -296,7 +296,9 @@ func (s *Server) handleAuditLive(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 		case l.Cols > 0:
-			if !data([]any{t, "r", fmt.Sprintf("%dx%d", l.Cols, l.Rows)}) {
+			// the eventsource driver passes resize data to the terminal
+			// untouched, so it must already be {cols, rows}
+			if !data([]any{t, "r", map[string]uint32{"cols": l.Cols, "rows": l.Rows}}) {
 				return
 			}
 		case l.HB:

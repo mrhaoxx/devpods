@@ -139,7 +139,10 @@ func TestLiveSessionAPI(t *testing.T) {
 		var o, rz []any
 		_ = json.Unmarshal([]byte(strings.TrimPrefix(ev[1], "data: ")), &o)
 		_ = json.Unmarshal([]byte(strings.TrimPrefix(ev[2], "data: ")), &rz)
-		if len(o) != 3 || o[1] != "o" || o[2] != "live!" || len(rz) != 3 || rz[1] != "r" || rz[2] != "120x40" {
+		// the eventsource driver hands resize data to the terminal as is:
+		// it must be {cols, rows}, not the asciicast "120x40" string
+		size, _ := rz[2].(map[string]any)
+		if len(o) != 3 || o[1] != "o" || o[2] != "live!" || len(rz) != 3 || rz[1] != "r" || size["cols"] != 120.0 || size["rows"] != 40.0 {
 			t.Fatalf("events %v %v", o, rz)
 		}
 		if ev[3] != "event: done" {
