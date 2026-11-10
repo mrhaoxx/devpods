@@ -11,7 +11,7 @@ import { AdminDevPodsPage } from "../features/devpods/AdminDevPodsPage";
 import { DetailPage } from "../features/devpods/detail/DetailPage";
 import { OverviewPage } from "../features/overview/OverviewPage";
 import AdminUsers from "../pages/AdminUsers";
-import AdminTopology from "../pages/AdminTopology";
+import { NodesPage } from "../features/nodes/NodesPage";
 import AuditSessions from "../pages/audit/Sessions";
 import AuditSessionDetail from "../pages/audit/SessionDetail";
 import AuditCommands from "../pages/audit/Commands";
@@ -53,7 +53,7 @@ export function AppRoutes() {
         <Route element={<RequireAdmin />}>
           <Route path="admin" element={<OverviewPage />} />
           <Route path="admin/devpods" element={<AdminDevPodsPage />} />
-          <Route path="admin/nodes" element={<AdminTopology />} />
+          <Route path="admin/nodes" element={<NodesPage />} />
           <Route path="admin/topology" element={<Navigate to="/admin/nodes" replace />} />
           <Route path="admin/users" element={<AdminUsers />} />
         </Route>

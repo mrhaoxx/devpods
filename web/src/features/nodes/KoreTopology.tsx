@@ -1,6 +1,7 @@
 import { Link } from "react-router-dom";
-import { KoreNode, KoreZone, parseCpuList } from "./api";
-import { cx } from "./ui";
+import { KoreNode, KoreZone, parseCpuList } from "../../data/api";
+
+const cx = (...parts: (string | false | null | undefined)[]) => parts.filter(Boolean).join(" ");
 
 type Kind = "exclusive" | "pool" | "reserved" | "shared" | "free";
 type CoreInfo = { kind: Kind; label: string; pod?: string };

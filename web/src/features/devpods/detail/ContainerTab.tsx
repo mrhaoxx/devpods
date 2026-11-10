@@ -8,7 +8,7 @@ import { Panel } from "../../../design/Panel";
 import { EmptyState } from "../../../design/EmptyState";
 import { Badge } from "../../../design/Badge";
 import { fmtBytes, fmtCores } from "../../../lib/format";
-import { NodeZones, TopologyLegend } from "../../../kore";
+import { NodeZones, TopologyLegend } from "../../nodes/KoreTopology";
 
 function KV({ rows }: { rows: [string, ReactNode][] }) {
   const shown = rows.filter(([, v]) => v !== undefined && v !== null && v !== "");
