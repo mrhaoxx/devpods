@@ -9,7 +9,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net"
+	"net/http"
 	"os"
 	"strconv"
 	"strings"
@@ -38,6 +40,38 @@ type auditFlags struct {
 	chURL, chDatabase, chCredsDir              string
 	spoolDir, spoolMax                         string
 	drainTimeout                               time.Duration
+	liveListen, liveKeyFile                    string
+}
+
+// maxLiveViewers bounds concurrent live views per gateway (audit spec §16).
+const maxLiveViewers = 32
+
+// startLive serves the internal live-view endpoint for webui replicas.
+func startLive(ctx context.Context, rec *audit.Recorder, addr, keyFile string) error {
+	b, err := os.ReadFile(keyFile)
+	if err != nil {
+		return fmt.Errorf("live key: %w", err)
+	}
+	key := strings.TrimSpace(string(b))
+	if key == "" {
+		return errors.New("live key file is empty")
+	}
+	mux := http.NewServeMux()
+	mux.Handle(audit.LivePath, audit.LiveHandler(rec, key, maxLiveViewers))
+	srv := &http.Server{Addr: addr, Handler: mux, ReadHeaderTimeout: 10 * time.Second}
+	go func() {
+		slog.Info("audit_live_listening", "addr", addr)
+		if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			slog.Error("audit_live", "err", err)
+		}
+	}()
+	go func() {
+		<-ctx.Done()
+		sctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_ = srv.Shutdown(sctx)
+	}()
+	return nil
 }
 
 func auditEnabled(gc *devpodv1alpha1.GatewayConfig) bool {

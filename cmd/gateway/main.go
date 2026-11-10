@@ -93,6 +93,8 @@ func main() {
 	flag.StringVar(&af.spoolDir, "audit-spool-dir", "/var/spool/devpod-audit", "local spool directory for audit data")
 	flag.StringVar(&af.spoolMax, "audit-spool-max-bytes", "21474836480", "spool size limit: bytes or a quantity such as 20Gi")
 	flag.DurationVar(&af.drainTimeout, "audit-drain-timeout", 220*time.Second, "on shutdown, how long to keep uploading spooled audit data")
+	flag.StringVar(&af.liveListen, "audit-live-listen", "", "address of the internal live session view endpoint for webui (empty disables it)")
+	flag.StringVar(&af.liveKeyFile, "audit-live-key-file", "", "file with the key webui presents to the live endpoint")
 	flag.Parse()
 
 	logger := slog.New(slog.NewJSONHandler(os.Stderr, &slog.HandlerOptions{
@@ -202,6 +204,12 @@ func main() {
 	if auditRec != nil {
 		go auditRec.Run(ctx)
 		slog.Info("audit_recorder_ready", "spool", af.spoolDir)
+		if af.liveListen != "" {
+			if err := startLive(ctx, auditRec, af.liveListen, af.liveKeyFile); err != nil {
+				slog.Error("audit_live", "err", err)
+				os.Exit(1)
+			}
+		}
 	}
 	ad := &auditDeps{cache: c, gcName: gcName, ns: devpodNamespace, rec: auditRec, tmpl: bannerTmpl, sessionGrace: sessionGrace}
 
