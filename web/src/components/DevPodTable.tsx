@@ -1,8 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import { DevPod, Me, PodInfo, Presence, sshCommand } from "../api";
-import { ALL_COLUMNS, ColumnKey, visibleColumns } from "../columns";
-import { failureRetryIn, fmtAge, fmtBytes, fmtDuration, sumLimits } from "../format";
+import { ALL_COLUMNS, ColumnKey, visibleColumns } from "../lib/columns";
+import { failureRetryIn, fmtAge, fmtBytes, fmtDuration, sumLimits } from "../lib/format";
 import { Button, copyText, cx, phaseTone, StatusCell } from "../ui";
 
 // useNow re-renders every intervalMs (the Up column ticks).

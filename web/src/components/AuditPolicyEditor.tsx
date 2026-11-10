@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { getUserAuditPolicy, putUserAuditPolicy } from "../api";
-import { formFromPolicy, policyFromForm, PolicyForm, Tri } from "../policy";
+import { formFromPolicy, policyFromForm, PolicyForm, Tri } from "../lib/policy";
 import { Button, Notice, cx } from "../ui";
 
 const ROWS: [keyof PolicyForm, string][] = [

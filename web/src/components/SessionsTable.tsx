@@ -1,6 +1,6 @@
 import { Link } from "react-router-dom";
 import { SessionSummary } from "../api";
-import { fmtBytes, fmtDuration } from "../format";
+import { fmtBytes, fmtDuration } from "../lib/format";
 import { cx } from "../ui";
 
 function fmtStart(iso: string): string {

@@ -2,7 +2,7 @@ import { useState } from "react";
 import { Link } from "react-router-dom";
 import { useInfiniteQuery, useQuery } from "@tanstack/react-query";
 import { fileContentURL, me, searchFiles } from "../../api";
-import { fmtBytes } from "../../format";
+import { fmtBytes } from "../../lib/format";
 import { Shell, cx } from "../../ui";
 import { AuditHeader, FilterInput, LoadMore, RangeChips, Table, fmtTS, td, useRange } from "./common";
 

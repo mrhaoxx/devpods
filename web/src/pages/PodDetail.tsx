@@ -18,8 +18,8 @@ import { BackLink, Button, Card, CopyBlock, CopyRow, PhaseLabel, Shell, cx, copy
 import { NodeZones, TopologyLegend } from "../kore";
 import { useNow } from "../components/DevPodTable";
 import { SessionsTable } from "../components/SessionsTable";
-import { fmtDuration } from "../format";
-import { tabFromHash } from "../tabs";
+import { fmtDuration } from "../lib/format";
+import { tabFromHash } from "../lib/tabs";
 
 function fmtTime(ts?: string): string {
   if (!ts) return "";

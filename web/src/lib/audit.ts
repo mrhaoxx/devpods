@@ -1,4 +1,4 @@
-import { SessionDetail } from "./api";
+import { SessionDetail } from "../api";
 
 export type TimelineItem = {
   ts: string;

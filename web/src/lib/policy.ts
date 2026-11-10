@@ -1,4 +1,4 @@
-import { AuditPolicy, PolicyAction } from "./api";
+import { AuditPolicy, PolicyAction } from "../api";
 
 // Editing model of a per-user audit policy: every field can inherit the
 // cluster default.

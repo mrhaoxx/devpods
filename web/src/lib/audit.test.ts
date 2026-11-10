@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { castOffset, castPlayerOptions, mergeTimeline } from "./audit";
-import { SessionDetail } from "./api";
+import { SessionDetail } from "../api";
 
 const base = {
   session: {} as SessionDetail["session"],

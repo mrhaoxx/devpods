@@ -2,10 +2,10 @@ import { useMemo, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import { castURL, fileContentURL, getAuditSession, me, rawURL, ChannelRow, FileEventRow } from "../../api";
-import { castOffset, mergeTimeline, TimelineItem } from "../../audit";
+import { castOffset, mergeTimeline, TimelineItem } from "../../lib/audit";
 import { CastPlayer } from "../../components/CastPlayer";
 import { useNow } from "../../components/DevPodTable";
-import { fmtBytes, fmtDuration } from "../../format";
+import { fmtBytes, fmtDuration } from "../../lib/format";
 import { BackLink, Shell, cx } from "../../ui";
 import { fmtTS } from "./common";
 
