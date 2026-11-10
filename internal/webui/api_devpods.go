@@ -208,12 +208,50 @@ type CreateRequest struct {
 	Collaborators []string                        `json:"collaborators,omitempty"`
 }
 
+// listScope reads ?scope=mine|all; all is for admins (the console's
+// 全部 DevPod table, UI spec §5.1).
+func (s *Server) listScope(w http.ResponseWriter, r *http.Request, sess Session) (all bool, ok bool) {
+	switch r.URL.Query().Get("scope") {
+	case "", "mine":
+		return false, true
+	case "all":
+		if !sess.Admin {
+			s.writeErr(w, http.StatusForbidden, "FORBIDDEN", "admin only", nil)
+			return false, false
+		}
+		return true, true
+	default:
+		s.writeErr(w, http.StatusBadRequest, "BAD_REQUEST", "scope must be mine or all", nil)
+		return false, false
+	}
+}
+
+// allDevPods lists every DevPod in the namespace, by name.
+func (s *Server) allDevPods(r *http.Request) ([]devpodv1alpha1.DevPod, error) {
+	var list devpodv1alpha1.DevPodList
+	if err := s.Client.List(r.Context(), &list, client.InNamespace(s.NS)); err != nil {
+		return nil, err
+	}
+	sort.Slice(list.Items, func(i, j int) bool { return list.Items[i].Name < list.Items[j].Name })
+	return list.Items, nil
+}
+
 func (s *Server) handleListDevPods(w http.ResponseWriter, r *http.Request) {
 	sess, ok := s.sessionFrom(w, r)
 	if !ok {
 		return
 	}
-	items, err := s.ownedDevPods(r, sess.User)
+	all, ok := s.listScope(w, r, sess)
+	if !ok {
+		return
+	}
+	var items []devpodv1alpha1.DevPod
+	var err error
+	if all {
+		items, err = s.allDevPods(r)
+	} else {
+		items, err = s.ownedDevPods(r, sess.User)
+	}
 	if err != nil {
 		s.writeErr(w, http.StatusInternalServerError, "INTERNAL", err.Error(), nil)
 		return

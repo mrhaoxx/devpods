@@ -32,6 +32,11 @@ func (s *Server) handleWatchDevPods(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	all, ok := s.listScope(w, r, sess)
+	if !ok {
+		return
+	}
+	visible := func(dp *devpodv1alpha1.DevPod) bool { return all || dp.Spec.Owner == sess.User }
 	flusher, ok := w.(http.Flusher)
 	if !ok {
 		s.writeErr(w, http.StatusInternalServerError, "INTERNAL", "streaming unsupported", nil)
@@ -59,7 +64,7 @@ func (s *Server) handleWatchDevPods(w http.ResponseWriter, r *http.Request) {
 	}
 	push := func(typ string, obj any) {
 		dp, ok := unwrap(obj).(*devpodv1alpha1.DevPod)
-		if !ok || dp.Namespace != s.NS || dp.Spec.Owner != sess.User {
+		if !ok || dp.Namespace != s.NS || !visible(dp) {
 			return
 		}
 		ev := watchEvent{Type: typ, DevPod: dp}
@@ -80,7 +85,7 @@ func (s *Server) handleWatchDevPods(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		var dp devpodv1alpha1.DevPod
-		if err := s.Client.Get(r.Context(), types.NamespacedName{Namespace: s.NS, Name: name}, &dp); err != nil || dp.Spec.Owner != sess.User {
+		if err := s.Client.Get(r.Context(), types.NamespacedName{Namespace: s.NS, Name: name}, &dp); err != nil || !visible(&dp) {
 			return
 		}
 		ev := watchEvent{Type: "MODIFIED", DevPod: &dp}
