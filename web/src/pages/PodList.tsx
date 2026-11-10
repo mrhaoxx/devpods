@@ -10,7 +10,7 @@ type ListData = { items: DevPod[]; pods: Record<string, PodInfo> };
 export default function PodList() {
   const qc = useQueryClient();
   const meQ = useQuery({ queryKey: ["me"], queryFn: me });
-  const podsQ = useQuery({ queryKey: ["devpods"], queryFn: listDevPods });
+  const podsQ = useQuery({ queryKey: ["devpods"], queryFn: () => listDevPods() });
   const presenceQ = useQuery({
     queryKey: ["presence"],
     queryFn: () => auditPresence(false),
