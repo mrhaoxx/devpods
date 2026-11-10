@@ -8,9 +8,10 @@ import { SessionsPage } from "./SessionsPage";
 import type { ChannelRow, SessionDetail } from "../../data/api";
 
 vi.mock("./CastPlayer", () => ({
-  CastPlayer: ({ src, seekTo }: { src: string; seekTo?: number }) => (
+  CastPlayer: ({ src, seekTo, live }: { src: string; seekTo?: number; live?: boolean }) => (
     <div data-testid="player">
       {src}|{seekTo ?? ""}
+      {live ? "|live" : ""}
     </div>
   ),
 }));
@@ -134,5 +135,30 @@ describe("audit pages", () => {
     stubFetch({ "/api/audit/sessions": new Response(JSON.stringify({ code: "AUDIT_UNAVAILABLE", message: "clickhouse down" }), { status: 503 }) });
     renderWithProviders(<SessionsPage />, { route: "/sessions", me: stubMe({ admin: true }) });
     expect(await screen.findByText("审计数据暂不可用")).toBeTruthy();
+  });
+
+  it("an open session plays live by default and 回放 switches to the recording", async () => {
+    const d = session([ch({ pty: true })]);
+    d.session.closed_at = null;
+    renderSession(d);
+    expect((await screen.findByTestId("player")).textContent).toBe("/api/audit/sessions/s1/channels/0/live||live");
+    fireEvent.click(screen.getByRole("radio", { name: "回放" }));
+    expect(screen.getByTestId("player").textContent).toBe("/api/audit/sessions/s1/channels/0/cast|");
+    fireEvent.click(screen.getByRole("radio", { name: "直播" }));
+    expect(screen.getByTestId("player").textContent).toContain("/live");
+  });
+
+  it("an ended session only replays", async () => {
+    renderSession(session([ch({ pty: true })]));
+    expect((await screen.findByTestId("player")).textContent).toBe("/api/audit/sessions/s1/channels/0/cast|");
+    expect(screen.queryByRole("radio", { name: "直播" })).toBeNull();
+  });
+
+  it("open sessions in the list link 直播", async () => {
+    const row = { ...session([]).session, commands: 0, files: 0, policy_hits: 0, alerts: 0 };
+    stubFetch({ "/api/audit/sessions": { items: [{ ...row, session_id: "on", closed_at: null }, { ...row, session_id: "off" }], next: "" } });
+    renderWithProviders(<SessionsPage />, { route: "/sessions" });
+    expect((await screen.findByRole("link", { name: "直播" })).getAttribute("href")).toBe("/sessions/on");
+    expect(screen.getByRole("link", { name: "回放" }).getAttribute("href")).toBe("/sessions/off");
   });
 });

@@ -86,7 +86,7 @@ export function SessionsPage({ mine }: { mine?: boolean }) {
       meta: { priority: 1, width: 50 },
       cell: ({ row }) => (
         <Link to={`/sessions/${row.original.session_id}`} className="text-accent hover:underline">
-          回放
+          {row.original.closed_at ? "回放" : "直播"}
         </Link>
       ),
     },

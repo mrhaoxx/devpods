@@ -3,7 +3,7 @@
 import { useMemo, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
-import { castURL, fileContentURL, getAuditSession, rawURL, type ChannelRow, type FileEventRow } from "../../data/api";
+import { castURL, fileContentURL, getAuditSession, liveURL, rawURL, type ChannelRow, type FileEventRow } from "../../data/api";
 import { useMe } from "../../data/queries";
 import { castOffset, mergeTimeline, type TimelineItem } from "../../lib/audit";
 import { fmtBytes, fmtDuration } from "../../lib/format";
@@ -57,6 +57,7 @@ export function SessionPage() {
   const [picked, setPicked] = useState<number | undefined>();
   const ch = picked ?? defaultCh;
   const [seek, setSeek] = useState<{ t: number; n: number }>();
+  const [replay, setReplay] = useState(false); // an open session plays live unless the user picks 回放
   const timeline = useMemo(() => (q.data ? mergeTimeline(q.data) : []), [q.data]);
 
   if (q.isError) return <AuditError error={q.error} />;
@@ -76,9 +77,14 @@ export function SessionPage() {
     const target = channels.find((c) => c.channel_id === (item.channelId ?? ch));
     if (!target) return;
     setPicked(target.channel_id);
-    if (replayable(target)) setSeek({ t: castOffset(target.opened_at, item.ts), n: Date.now() });
+    if (replayable(target)) {
+      setReplay(true); // jumping to a moment needs the recording
+      setSeek({ t: castOffset(target.opened_at, item.ts), n: Date.now() });
+    }
   };
   const channelFiles = (q.data.files ?? []).filter((f) => f.channel_id === ch);
+  const canLive = !s.closed_at && !!current && replayable(current) && !current.closed_at;
+  const live = canLive && !replay;
 
   return (
     <div className="space-y-3 p-3">
@@ -143,10 +149,33 @@ export function SessionPage() {
               </button>
             ))}
           </div>
+          {canLive && (
+            <div role="radiogroup" aria-label="观看方式" className="inline-flex rounded-md border border-line bg-sunk p-0.5 text-xs">
+              {(
+                [
+                  [true, "直播"],
+                  [false, "回放"],
+                ] as const
+              ).map(([isLive, label]) => (
+                <button
+                  key={label}
+                  type="button"
+                  role="radio"
+                  aria-checked={live === isLive}
+                  onClick={() => setReplay(!isLive)}
+                  className={`rounded px-2.5 py-0.5 ${live === isLive ? "bg-surface font-medium shadow-sm" : "text-muted hover:text-ink"}`}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
+          )}
           {!current ? (
             <EmptyState title="没有通道" />
           ) : replayable(current) ? (
-            current.raw_recorded ? (
+            live ? (
+              <CastPlayer key={`live-${ch}`} src={liveURL(id, current.channel_id)} live />
+            ) : current.raw_recorded ? (
               <CastPlayer key={ch} src={castURL(id, current.channel_id)} seekTo={seek?.t} />
             ) : (
               <EmptyState title="该通道只记录了元数据" />

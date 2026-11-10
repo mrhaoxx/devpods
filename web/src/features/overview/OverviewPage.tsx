@@ -159,7 +159,7 @@ function RecentAudit() {
           {s.alerts > 0 && <Badge tone="fail">告警 {s.alerts}</Badge>}
           {!s.closed_at && <Badge tone="run">在线</Badge>}
           <Link to={`/sessions/${s.session_id}`} className="text-accent hover:underline">
-            回放
+            {s.closed_at ? "回放" : "直播"}
           </Link>
         </li>
       ))}

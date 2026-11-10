@@ -7,5 +7,5 @@ declare module "asciinema-player" {
     getCurrentTime(): number;
     dispose(): void;
   }
-  export function create(src: string | { url: string }, element: HTMLElement, opts?: Record<string, unknown>): Player;
+  export function create(src: string | { url: string } | { driver: "eventsource" | "websocket"; url: string }, element: HTMLElement, opts?: Record<string, unknown>): Player;
 }

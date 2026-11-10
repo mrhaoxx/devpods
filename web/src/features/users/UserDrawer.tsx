@@ -150,7 +150,7 @@ export function UserDrawer({ u, def, onClose }: { u?: AdminUserRow; def: UserQuo
                       <span className="mono">{s.devpod}</span>
                       <span className="text-muted">{new Date(s.opened_at).toLocaleString()}</span>
                       <Link to={`/sessions/${s.session_id}`} className="ml-auto text-accent hover:underline">
-                        回放
+                        {s.closed_at ? "回放" : "直播"}
                       </Link>
                     </li>
                   ))}

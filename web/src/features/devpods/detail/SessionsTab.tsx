@@ -25,7 +25,7 @@ export function SessionList({ items, error, now, onlyOpen }: { items?: SessionSu
             {s.policy_hits > 0 && <Badge tone="warm">拦截 {s.policy_hits}</Badge>}
             {s.alerts > 0 && <Badge tone="fail">告警 {s.alerts}</Badge>}
             <Link to={`/sessions/${s.session_id}`} className="ml-auto text-accent hover:underline">
-              回放
+              {s.closed_at ? "回放" : "直播"}
             </Link>
           </li>
         );
