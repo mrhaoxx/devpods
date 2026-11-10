@@ -298,3 +298,43 @@ func TestMetricsRange_ThrottledIsARate(t *testing.T) {
 	}
 	check("1 m rollup", s)
 }
+
+func TestRecentContainer(t *testing.T) {
+	c := freshDB(t)
+	ctx := context.Background()
+	now := time.Now().UTC().Truncate(time.Second)
+	var b TelemetryBatch
+	for i := 0; i < 30; i++ {
+		b.Containers = append(b.Containers, ContainerMetricRow{TS: now.Add(-10*time.Minute + time.Duration(i)*time.Second), DevPodUID: "u1", BootID: "b", CPU: 2, MemWS: 1 << 30})
+	}
+	b.Containers = append(b.Containers,
+		ContainerMetricRow{TS: now.Add(-5 * time.Minute), DevPodUID: "u2", BootID: "b", CPU: 4, MemWS: 2 << 30},
+		ContainerMetricRow{TS: now.Add(-30 * time.Minute), DevPodUID: "u3", BootID: "b", CPU: 8},    // outside the window
+		ContainerMetricRow{TS: now.Add(-1 * time.Minute), DevPodUID: "other", BootID: "b", CPU: 16}, // not asked for
+	)
+	if err := c.InsertTelemetry(ctx, b, "r"); err != nil {
+		t.Fatal(err)
+	}
+	r, err := c.RecentContainer(ctx, []string{"u1", "u2", "u3"}, now.Add(-15*time.Minute), now, 15*time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r.Step != 15 || len(r.TS) < 60 || len(r.TS) > 62 {
+		t.Fatalf("step %d, %d buckets", r.Step, len(r.TS))
+	}
+	if _, ok := r.Items["u3"]; ok {
+		t.Fatalf("u3 has no rows in the window: %+v", r.Items["u3"])
+	}
+	if _, ok := r.Items["other"]; ok {
+		t.Fatal("uids not asked for must not appear")
+	}
+	if !hasValue(r.Items["u1"].CPU, 2) || !hasValue(r.Items["u1"].Mem, 1<<30) || !hasValue(r.Items["u2"].CPU, 4) {
+		t.Fatalf("items: %+v", r.Items)
+	}
+	if len(r.Items["u1"].CPU) != len(r.TS) || r.Items["u1"].CPU[len(r.TS)-1] != nil {
+		t.Fatal("series align with ts; buckets without samples are null")
+	}
+	if r, err := c.RecentContainer(ctx, nil, now.Add(-15*time.Minute), now, 15*time.Second); err != nil || len(r.Items) != 0 {
+		t.Fatalf("no uids: %v %+v", err, r)
+	}
+}

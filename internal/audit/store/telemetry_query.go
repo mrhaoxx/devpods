@@ -449,3 +449,62 @@ func (c *CH) UnattributedCounts(ctx context.Context, from, to time.Time) (map[st
 	}
 	return out, rows.Err()
 }
+
+// RecentSeries is a short CPU / memory history for many DevPods at once
+// (the console's sparklines, UI feedback round 1): buckets of Step
+// seconds, series aligned with TS, nil where a bucket had no sample.
+type RecentSeries struct {
+	Step  int64                 `json:"step"`
+	TS    []int64               `json:"ts"`
+	Items map[string]RecentItem `json:"items"` // by DevPod UID
+}
+
+// RecentItem is one DevPod's series: CPU in cores, Mem the working set.
+type RecentItem struct {
+	CPU []*float64 `json:"cpu"`
+	Mem []*float64 `json:"mem"`
+}
+
+// RecentContainer reads the 1 s container table for uids over
+// [from, to); uids without a sample in the window are left out.
+func (c *CH) RecentContainer(ctx context.Context, uids []string, from, to time.Time, step time.Duration) (*RecentSeries, error) {
+	secs := int64(step / time.Second)
+	if secs <= 0 {
+		secs = 15
+	}
+	start := from.Unix() / secs * secs
+	n := int((to.Unix()-start)/secs) + 1
+	out := &RecentSeries{Step: secs, TS: make([]int64, n), Items: map[string]RecentItem{}}
+	for i := range out.TS {
+		out.TS[i] = start + int64(i)*secs
+	}
+	if len(uids) == 0 {
+		return out, nil
+	}
+	q := fmt.Sprintf(`SELECT devpod_uid, toUnixTimestamp(toStartOfInterval(ts, INTERVAL %d SECOND)) AS b, avg(cpu), avg(mem_ws)
+		FROM %s.metrics_container_1s WHERE devpod_uid IN ? AND ts >= ? AND ts < ? GROUP BY devpod_uid, b ORDER BY devpod_uid, b`, secs, c.db)
+	rows, err := c.conn.Query(c.readCtx(ctx), q, uids, time.Unix(start, 0).UTC(), to)
+	if err != nil {
+		return nil, fmt.Errorf("recent container series: %w", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var uid string
+		var b uint32
+		var cpu, mem float64
+		if err := rows.Scan(&uid, &b, &cpu, &mem); err != nil {
+			return nil, err
+		}
+		i := int((int64(b) - start) / secs)
+		if i < 0 || i >= n {
+			continue
+		}
+		it, ok := out.Items[uid]
+		if !ok {
+			it = RecentItem{CPU: make([]*float64, n), Mem: make([]*float64, n)}
+		}
+		it.CPU[i], it.Mem[i] = &cpu, &mem
+		out.Items[uid] = it
+	}
+	return out, rows.Err()
+}

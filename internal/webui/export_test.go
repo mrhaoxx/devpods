@@ -75,3 +75,5 @@ func (s *Server) HandleImportUsersForTest() http.HandlerFunc { return s.handleIm
 var ParseImportCSVForTest = parseImportCSV
 
 func (s *Server) HandleSearchForTest() http.HandlerFunc { return s.handleSearch }
+
+func (s *Server) HandleLiveRecentForTest() http.HandlerFunc { return s.handleLiveRecent }

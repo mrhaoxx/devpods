@@ -28,15 +28,26 @@ import (
 // fakeTelemetryStore adds the phase-2 queries to the audit fake.
 type fakeTelemetryStore struct {
 	fakeAuditStore
-	info      *store.ContainerInfoRow
-	lastRange [2]time.Time
-	lastSess  map[string]time.Time
+	info       *store.ContainerInfoRow
+	lastRange  [2]time.Time
+	lastSess   map[string]time.Time
+	recentUIDs []string
 }
 
 func (f *fakeTelemetryStore) MetricsRange(_ context.Context, uid string, from, to time.Time, step time.Duration) (*store.MetricSeries, error) {
 	f.lastRange = [2]time.Time{from, to}
 	v := 2.0
 	return &store.MetricSeries{Step: 60, TS: []int64{from.Unix()}, Series: map[string][]*float64{"cpu": {&v}}}, nil
+}
+
+func (f *fakeTelemetryStore) RecentContainer(_ context.Context, uids []string, from, to time.Time, step time.Duration) (*store.RecentSeries, error) {
+	f.recentUIDs = append([]string(nil), uids...)
+	v := 1.5
+	out := &store.RecentSeries{Step: int64(step / time.Second), TS: []int64{from.Unix()}, Items: map[string]store.RecentItem{}}
+	for _, u := range uids {
+		out.Items[u] = store.RecentItem{CPU: []*float64{&v}, Mem: []*float64{nil}}
+	}
+	return out, nil
 }
 
 func (f *fakeTelemetryStore) LatestInfo(_ context.Context, uid string, _ time.Time) (*store.ContainerInfoRow, *store.SnapshotRow, error) {
@@ -72,6 +83,58 @@ func TestMetricsAPI_OwnerOnly(t *testing.T) {
 	if d := st.lastRange[1].Sub(st.lastRange[0]); d != 24*time.Hour {
 		t.Fatalf("range %v", d)
 	}
+	// Grafana-like presets (feedback round 1)
+	for rg, d := range map[string]time.Duration{"3h": 3 * time.Hour, "6h": 6 * time.Hour, "12h": 12 * time.Hour} {
+		if rec := doJSON(t, s.HandleDevPodMetricsForTest(), "GET", "/api/devpods/gl-alice-dev1/metrics?range="+rg, path, alice, ""); rec.Code != http.StatusOK {
+			t.Fatalf("%s: %d %s", rg, rec.Code, rec.Body)
+		}
+		if got := st.lastRange[1].Sub(st.lastRange[0]); got != d {
+			t.Fatalf("%s: range %v", rg, got)
+		}
+	}
+	if rec := doJSON(t, s.HandleDevPodMetricsForTest(), "GET", "/api/devpods/gl-alice-dev1/metrics?range=2h", path, alice, ""); rec.Code != http.StatusBadRequest {
+		t.Fatalf("2h is not a preset: %d", rec.Code)
+	}
+}
+
+func TestLiveRecentAPI(t *testing.T) {
+	setupSuite(t)
+	s, sm := newServer(t)
+	alice := forge(sm, "rc-alice", false)
+	createFor(t, s, alice, "rc-alice-dev1")
+	createFor(t, s, forge(sm, "rc-bob", false), "rc-bob-dev1")
+	t.Cleanup(func() { cleanupDevPods(t) })
+	get := func(c *http.Cookie, target string, want int) map[string]any {
+		t.Helper()
+		rec := doJSON(t, s.HandleLiveRecentForTest(), "GET", target, nil, c, "")
+		if rec.Code != want {
+			t.Fatalf("GET %s: %d (want %d) %s", target, rec.Code, want, rec.Body)
+		}
+		var out map[string]any
+		_ = json.Unmarshal(rec.Body.Bytes(), &out)
+		return out
+	}
+	get(alice, "/api/live/devpods/recent", http.StatusServiceUnavailable) // no telemetry store
+	st := &fakeTelemetryStore{}
+	s.Audit = &webui.AuditDeps{Store: st}
+	out := get(alice, "/api/live/devpods/recent", http.StatusOK)
+	items := out["items"].(map[string]any)
+	if _, ok := items["rc-alice-dev1"]; !ok || len(items) != 1 || out["step"].(float64) != 15 {
+		t.Fatalf("mine: %+v", out)
+	}
+	if len(st.recentUIDs) != 1 {
+		t.Fatalf("asked the store for %v", st.recentUIDs)
+	}
+	get(alice, "/api/live/devpods/recent?scope=all", http.StatusForbidden)
+	out = get(forge(sm, "rc-root", true), "/api/live/devpods/recent?scope=all", http.StatusOK)
+	if items := out["items"].(map[string]any); items["rc-alice-dev1"] == nil || items["rc-bob-dev1"] == nil {
+		t.Fatalf("all: %+v", out)
+	}
+	out = get(alice, "/api/live/devpods/recent?name=rc-alice-dev1", http.StatusOK)
+	if items := out["items"].(map[string]any); len(items) != 1 {
+		t.Fatalf("one: %+v", out)
+	}
+	get(alice, "/api/live/devpods/recent?name=rc-bob-dev1", http.StatusNotFound)
 }
 
 func TestInfoAPI_NoTelemetry(t *testing.T) {
