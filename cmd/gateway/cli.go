@@ -62,11 +62,7 @@ const cliExtension = "devpod.io/cli"
 
 // cliAuth handles the public-key step of a CLI login; ok is false when
 // the login is an ordinary DevPod login.
-//
-// A refusal the user can fix (the key alone does not say who they are)
-// is explained once per connection in a banner: the SSH client otherwise
-// shows only "Permission denied". hinted remembers that it was said.
-func cliAuth(ctx context.Context, authn *gateway.Authenticator, id uint64, meta ssh.ConnMetadata, key ssh.PublicKey, hinted *bool) (*ssh.Permissions, error, bool) {
+func cliAuth(ctx context.Context, authn *gateway.Authenticator, id uint64, meta ssh.ConnMetadata, key ssh.PublicKey) (*ssh.Permissions, error, bool) {
 	if cli == nil {
 		return nil, nil, false
 	}
@@ -80,28 +76,12 @@ func cliAuth(ctx context.Context, authn *gateway.Authenticator, id uint64, meta 
 		slog.Warn("cli_auth_rejected", "id", id, "login", meta.User(), "reason", err)
 		gateway.AuthFailure(slog.Default(), reason, ap.Kind, ap.Alias, ssh.FingerprintSHA256(key), named, "", ap.LastSourceErr)
 		gateway.AuthFailuresTotal.WithLabelValues(reason, ap.Kind).Inc()
-		if msg := cliAuthHint(cli.user, named, err); msg != "" && hinted != nil && !*hinted {
-			*hinted = true
-			return nil, &ssh.BannerError{Err: err, Message: msg}, true
-		}
 		return nil, err, true
 	}
 	slog.Info("cli_auth_ok", "id", id, "user", user, "auth_path", ap.Kind, "proxy_alias", ap.Alias)
 	return &ssh.Permissions{Extensions: map[string]string{
 		cliExtension: "1", "devpod.io/user": user, "devpod.io/cli-auth": ap.Kind, "devpod.io/cli-alias": ap.Alias,
 	}}, nil, true
-}
-
-// cliAuthHint is what to tell a user whose CLI login was refused for a
-// reason they can fix; "" when there is nothing useful to say.
-func cliAuthHint(cliUser, named string, err error) string {
-	switch {
-	case errors.Is(err, gateway.ErrCLINeedsUser):
-		return fmt.Sprintf("命令行登录要写明用户名，和登录 DevPod 的格式一样：ssh <用户名>+%s@…\n", cliUser)
-	case named != "":
-		return fmt.Sprintf("用户 %s 不存在，或者这把公钥不属于该用户。\n", named)
-	}
-	return ""
 }
 
 // serveCLI runs an authenticated CLI connection; it reports whether the

@@ -21,22 +21,14 @@ import (
 //	                check as a DevPod login; a trusted proxy says whom it
 //	                acts for the same way
 //
-// The key is never used to find out who the caller is: that only works
-// for keys kept in User objects (not LDAP) and breaks when one key is
-// registered for several users. The bare reserved name is recognised as
-// a CLI login only to be refused with an explanation.
-var ErrCLINeedsUser = errors.New("the CLI login must name the user: <user>+<cli-user>")
+// The key is never used to find out who the caller is.
 
-// ParseCLILogin reports whether login addresses the CLI: <user>+cliUser,
-// or the bare cliUser (user "" — to be refused with ErrCLINeedsUser). An
-// empty cliUser disables the CLI. A DevPod whose short name equals
-// cliUser cannot be reached by SSH while the CLI is on.
+// ParseCLILogin reports whether login addresses the CLI, <user>+cliUser,
+// and for which user. An empty cliUser disables the CLI. A DevPod whose
+// short name equals cliUser cannot be reached by SSH while the CLI is on.
 func ParseCLILogin(cliUser, login string) (user string, ok bool) {
 	if cliUser == "" {
 		return "", false
-	}
-	if login == cliUser {
-		return "", true
 	}
 	if u, found := strings.CutSuffix(login, "+"+cliUser); found && userRE.MatchString(u) {
 		return u, true
@@ -47,15 +39,12 @@ func ParseCLILogin(cliUser, login string) (user string, ok bool) {
 var userRE = loginUserRE()
 
 // AuthenticateCLI checks a CLI login: the key must belong to user (or be
-// a trusted proxy's, acting for a user that exists). user "" (the bare
-// reserved name) is refused. Errors wrap the same sentinels as Authenticate.
+// a trusted proxy's, acting for a user that exists). Errors wrap the same
+// sentinels as Authenticate.
 func (a *Authenticator) AuthenticateCLI(ctx context.Context, user string, key ssh.PublicKey) (string, AuthPath, error) {
 	ap := AuthPath{User: user}
 	if alias, ok := a.proxyKeys[ssh.FingerprintSHA256(key)]; ok {
 		ap.Kind, ap.Alias = "trusted_proxy", alias
-		if user == "" {
-			return "", ap, &AuthError{Err: ErrCLINeedsUser, AuthPath: ap}
-		}
 		// the proxy vouches for the user, but the user must exist
 		known := false
 		for _, src := range a.sources {
@@ -75,10 +64,6 @@ func (a *Authenticator) AuthenticateCLI(ctx context.Context, user string, key ss
 	}
 
 	ap.Kind = "direct"
-	if user == "" {
-		return "", ap, &AuthError{Err: ErrCLINeedsUser, AuthPath: ap}
-	}
-
 	anyKnown := false
 	for _, src := range a.sources {
 		res, err := src.Resolve(ctx, user)

@@ -15,8 +15,6 @@ With a terminal and no command (`ssh alice+devpod@gateway`) you get a prompt (`d
 
 The login is `<user>+devpod` — the same shape as a DevPod login (`<user>+<devpod>`), with the reserved name `devpod` where the DevPod's name would be. The key you offer must belong to that user; identity sources are checked in the usual order (User, then LDAP), exactly as for a DevPod login.
 
-The gateway never works out who you are from the key alone: a bare `ssh devpod@gateway` is refused with a line saying to add your user name.
-
 A trusted SSH front proxy uses the same form: the name is how it says whom it acts for, and the user must exist.
 
 The login name `devpod` is configurable (`--cli-user`, chart value `gateway.cli.user`). Whatever it is, a DevPod with that short name cannot be reached by SSH while the CLI is on.
