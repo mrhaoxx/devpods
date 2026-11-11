@@ -42,11 +42,11 @@ func TestCLIFlags_Build(t *testing.T) {
 }
 
 func TestCLIAuthHint(t *testing.T) {
-	if got := cliAuthHint("devpod", "", gateway.ErrCLIAmbiguousKey); !strings.Contains(got, "devpod+<用户名>@") || !strings.Contains(got, "多个用户") {
-		t.Fatalf("ambiguous key: %q", got)
+	if got := cliAuthHint("devpod", "", gateway.ErrCLINeedsUser); !strings.Contains(got, "<用户名>+devpod@") {
+		t.Fatalf("bare login: %q", got)
 	}
-	if got := cliAuthHint("dp", "", gateway.ErrCLINeedsUser); !strings.Contains(got, "dp+<用户名>@") {
-		t.Fatalf("unknown key: %q", got)
+	if got := cliAuthHint("dp", "", gateway.ErrCLINeedsUser); !strings.Contains(got, "<用户名>+dp@") {
+		t.Fatalf("bare login, other name: %q", got)
 	}
 	if got := cliAuthHint("devpod", "alice", errors.New("key mismatch")); !strings.Contains(got, "alice") {
 		t.Fatalf("named user: %q", got)

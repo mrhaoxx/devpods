@@ -147,7 +147,7 @@ func Help(w io.Writer, name string) bool {
 		}
 		return true
 	}
-	fmt.Fprintln(w, "DevPod CLI — usage: ssh devpod@<gateway> <command> [arguments]")
+	fmt.Fprintln(w, "DevPod CLI — usage: ssh <user>+devpod@<gateway> <command> [arguments]")
 	fmt.Fprintln(w)
 	tw := tabwriter.NewWriter(w, 0, 2, 2, ' ', 0)
 	for _, c := range commands {

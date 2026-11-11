@@ -1,26 +1,25 @@
 # CLI over SSH
 
-`ssh devpod@<gateway> <command>` manages DevPods from a terminal, a script or an agent. There is nothing to install and no token to keep: the gateway knows who you are from your SSH key and runs each command against the console's REST API as you, so the CLI, the console and API tokens follow the same rules (ownership, quota, admin-only operations).
+`ssh <user>+devpod@<gateway> <command>` manages DevPods from a terminal, a script or an agent. There is nothing to install and no token to keep: the gateway knows who you are from your SSH key and runs each command against the console's REST API as you, so the CLI, the console and API tokens follow the same rules (ownership, quota, admin-only operations).
 
 ```console
-$ ssh devpod@gateway.example.com list
+$ ssh alice+devpod@gateway.example.com list
 NAME      OWNER  PHASE    NODE  IMAGE         CPU  MEMORY  GPU  AGE
 alice-a   alice  Running  g206  ubuntu:24.04  4    8Gi     -    3d
 alice-b   alice  Stopped  -     pytorch:2     8    32Gi    1    12d
 ```
 
-With a terminal and no command (`ssh devpod@gateway`) you get a prompt (`devpod>`) that takes the same commands; `exit` leaves.
+With a terminal and no command (`ssh alice+devpod@gateway`) you get a prompt (`devpod>`) that takes the same commands; `exit` leaves.
 
 ## Who you are
 
-| Login | Meaning |
-|---|---|
-| `devpod` | The user whose public keys (the ones registered in the console) contain the key you offered. |
-| `devpod+<user>` | That user. The key must be theirs; identity sources are checked in the usual order (User, then LDAP). Use this form when your key comes from LDAP, when a key is registered for more than one user, or through an SSH front proxy. |
+The login is `<user>+devpod` — the same shape as a DevPod login (`<user>+<devpod>`), with the reserved name `devpod` where the DevPod's name would be. The key you offer must belong to that user; identity sources are checked in the usual order (User, then LDAP), exactly as for a DevPod login.
 
-A trusted SSH front proxy must use `devpod+<user>`: the name is how it says whom it acts for, and the user must exist.
+The gateway never works out who you are from the key alone: a bare `ssh devpod@gateway` is refused with a line saying to add your user name.
 
-The login name `devpod` is configurable (`--cli-user`, chart value `gateway.cli.user`). Whatever it is, it cannot be used as a DevPod user name any more.
+A trusted SSH front proxy uses the same form: the name is how it says whom it acts for, and the user must exist.
+
+The login name `devpod` is configurable (`--cli-user`, chart value `gateway.cli.user`). Whatever it is, a DevPod with that short name cannot be reached by SSH while the CLI is on.
 
 ## Commands
 
@@ -63,7 +62,7 @@ The command line is split like a shell splits plain words and quotes (`'…'`, `
 `snapshot <devpod>` commits the DevPod's container to an image, pushes it, and shows what is happening until it ends:
 
 ```
-$ ssh -t devpod@gateway snapshot alice-train1
+$ ssh -t alice+devpod@gateway snapshot alice-train1
 快照 snap-7f3k → harbor.example.com/devpod-users/alice/train1:20261111-1530
 committing container 3f9c…
 layer sha256:1c2d… pushed
@@ -94,17 +93,17 @@ layer sha256:1c2d… pushed
 A saved login for an image registry does two things: it lets the DevPods you start **pull private images** from that registry, and it is what `snapshot --image` **pushes** with when the address is on that registry — no credentials to type each time.
 
 ```console
-$ ssh -t devpod@gateway registry add harbor.example.com
+$ ssh -t alice+devpod@gateway registry add harbor.example.com
 仓库用户名: bob
 仓库密码（不回显）:
 saved the login for harbor.example.com (user bob)
 
-$ ssh devpod@gateway registry list
+$ ssh alice+devpod@gateway registry list
 HOST                USERNAME  STATUS
 harbor.example.com  bob       ready
 
 # without a terminal (scripts, agents): the password is the first line of standard input
-$ printf '%s\n' "$REGISTRY_PASSWORD" | ssh devpod@gateway registry add harbor.example.com --username bob --json
+$ printf '%s\n' "$REGISTRY_PASSWORD" | ssh alice+devpod@gateway registry add harbor.example.com --username bob --json
 {"host":"harbor.example.com","saved":true,"username":"bob"}
 ```
 
@@ -119,32 +118,32 @@ $ printf '%s\n' "$REGISTRY_PASSWORD" | ssh devpod@gateway registry add harbor.ex
 
 ```sh
 # everything about my DevPods, as JSON
-ssh devpod@gateway list --json | jq -r '.items[] | "\(.metadata.name) \(.status.phase)"'
+ssh alice+devpod@gateway list --json | jq -r '.items[] | "\(.metadata.name) \(.status.phase)"'
 
 # create, wait until it runs, then log in
-ssh devpod@gateway create train1 --image pytorch/pytorch:2.4.0-cuda12.4-cudnn9-runtime --cpu 8 --memory 32Gi --gpu 1
-until [ "$(ssh devpod@gateway show alice-train1 --json | jq -r .devpod.status.phase)" = Running ]; do sleep 2; done
-$(ssh devpod@gateway ssh alice-train1)
+ssh alice+devpod@gateway create train1 --image pytorch/pytorch:2.4.0-cuda12.4-cudnn9-runtime --cpu 8 --memory 32Gi --gpu 1
+until [ "$(ssh alice+devpod@gateway show alice-train1 --json | jq -r .devpod.status.phase)" = Running ]; do sleep 2; done
+$(ssh alice+devpod@gateway ssh alice-train1)
 
 # publish a port and get its address
-ssh devpod@gateway ports alice-train1 public 8888
-ssh devpod@gateway ports alice-train1 url 8888
+ssh alice+devpod@gateway ports alice-train1 public 8888
+ssh alice+devpod@gateway ports alice-train1 url 8888
 
 # save an environment as an image and wait for the result (cancelled if this connection dies)
-ssh devpod@gateway snapshot alice-train1 --name train-env --json | tail -n 1 | jq -r 'select(.stage == "done") | "\(.image)@\(.digest)"'
+ssh alice+devpod@gateway snapshot alice-train1 --name train-env --json | tail -n 1 | jq -r 'select(.stage == "done") | "\(.image)@\(.digest)"'
 
 # or start it and poll
-id=$(ssh devpod@gateway snapshot alice-train1 --detach --json | jq -r .id)
-until ssh devpod@gateway snapshot show "$id" --json | jq -e '.phase == "Succeeded" or .phase == "Failed"' >/dev/null; do sleep 5; done
+id=$(ssh alice+devpod@gateway snapshot alice-train1 --detach --json | jq -r .id)
+until ssh alice+devpod@gateway snapshot show "$id" --json | jq -e '.phase == "Succeeded" or .phase == "Failed"' >/dev/null; do sleep 5; done
 
 # push to a registry of your own; the password comes from standard input
-printf '%s\n' "$REGISTRY_PASSWORD" | ssh devpod@gateway snapshot alice-train1 --image registry.example.com/me/env:v1 --username me --password-stdin
+printf '%s\n' "$REGISTRY_PASSWORD" | ssh alice+devpod@gateway snapshot alice-train1 --image registry.example.com/me/env:v1 --username me --password-stdin
 
 # stop everything of mine
-ssh devpod@gateway stop $(ssh devpod@gateway list --json | jq -r '.items[].metadata.name')
+ssh alice+devpod@gateway stop $(ssh alice+devpod@gateway list --json | jq -r '.items[].metadata.name')
 ```
 
-An agent needs only an SSH key registered for its user: give it `ssh devpod@gateway help` and `--json`. For finer-grained rights than "everything this user may do", use an API token with the REST API instead.
+An agent needs only an SSH key registered for its user: give it `ssh alice+devpod@gateway help` and `--json`. For finer-grained rights than "everything this user may do", use an API token with the REST API instead.
 
 ## What a CLI connection is not
 

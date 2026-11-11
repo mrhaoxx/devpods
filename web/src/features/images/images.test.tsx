@@ -38,7 +38,10 @@ const ev = (o: Partial<SnapshotProgress>): SnapshotProgress => ({ phase: "Runnin
 const features = (o: Record<string, boolean> = {}) => stubMe({ features: { pubkeySelfService: true, kore: false, passwordAuth: true, snapshots: true, snapshotDefaultRegistry: true, ...o } });
 
 describe("snapshots", () => {
-  afterEach(() => vi.unstubAllGlobals());
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    window.localStorage.clear(); // remembered image addresses
+  });
 
   it("pure helpers: steps, elapsed, default name, image reference", () => {
     expect(stepStates("pending")).toEqual(["todo", "todo", "todo"]);
@@ -122,6 +125,31 @@ describe("snapshots", () => {
     stream.send(ev({ stage: "error", message: "已取消" }));
     stream.end();
     expect(await screen.findByText("已取消")).toBeTruthy();
+  });
+
+  it("remembers the last custom address in this browser, never the credentials", async () => {
+    const stream = progressStream();
+    stubFetch({
+      "POST /api/devpods/alice-a/snapshots": new Response(JSON.stringify(view({ phase: "Pending", image: "other.test/team/a:v1", customRegistry: true })), { status: 201 }),
+      "/api/snapshots/alice-a-abc123/progress": () => stream.response,
+      "/api/snapshots": { items: [] },
+    });
+    const first = renderWithProviders(<SnapshotDialog devpod="alice-a" owner="alice" onClose={() => {}} />, { me: features() });
+    fireEvent.click(await screen.findByRole("radio", { name: "自定义地址" }));
+    fireEvent.change(screen.getByLabelText("镜像地址"), { target: { value: "other.test/team/a:v1" } });
+    fireEvent.change(screen.getByLabelText("用户名"), { target: { value: "robot" } });
+    fireEvent.change(screen.getByLabelText("密码"), { target: { value: "s3cret" } });
+    fireEvent.click(screen.getByRole("button", { name: "开始保存" }));
+    await screen.findByRole("list", { name: "进度" });
+    expect(JSON.stringify({ ...window.localStorage })).not.toContain("s3cret");
+    expect(JSON.stringify({ ...window.localStorage })).not.toContain("robot");
+    first.unmount();
+
+    // the same DevPod opens on the custom address, prefilled
+    renderWithProviders(<SnapshotDialog devpod="alice-a" owner="alice" onClose={() => {}} />, { me: features() });
+    await waitFor(() => expect((screen.getByLabelText("镜像地址") as HTMLInputElement).value).toBe("other.test/team/a:v1"));
+    expect(screen.getByRole("radio", { name: "自定义地址" }).getAttribute("aria-checked")).toBe("true");
+    expect((screen.getByLabelText("密码") as HTMLInputElement).value).toBe("");
   });
 
   it("an address on a saved registry pushes with the saved credential; 改用其他凭证 brings the fields back", async () => {

@@ -96,10 +96,8 @@ func cliAuth(ctx context.Context, authn *gateway.Authenticator, id uint64, meta 
 // reason they can fix; "" when there is nothing useful to say.
 func cliAuthHint(cliUser, named string, err error) string {
 	switch {
-	case errors.Is(err, gateway.ErrCLIAmbiguousKey):
-		return fmt.Sprintf("这把公钥登记在多个用户名下，无法判断你是谁。请写明用户名：ssh %s+<用户名>@…\n", cliUser)
 	case errors.Is(err, gateway.ErrCLINeedsUser):
-		return fmt.Sprintf("没有用户登记了这把公钥。请写明用户名：ssh %s+<用户名>@…（公钥需已登记在该用户名下）\n", cliUser)
+		return fmt.Sprintf("命令行登录要写明用户名，和登录 DevPod 的格式一样：ssh <用户名>+%s@…\n", cliUser)
 	case named != "":
 		return fmt.Sprintf("用户 %s 不存在，或者这把公钥不属于该用户。\n", named)
 	}

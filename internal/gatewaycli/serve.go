@@ -186,7 +186,7 @@ func (s *Server) session(ctx context.Context, ch ssh.Channel, reqs <-chan *ssh.R
 				exit(ch, s.run(ctx, m, p.Command, out, errw, in, running, last))
 				return
 			}
-			if !pty { // `ssh devpod@gateway` without a terminal
+			if !pty { // `ssh <user>+devpod@gateway` without a terminal
 				Help(out, "")
 				exit(ch, ExitOK)
 				return
@@ -240,7 +240,7 @@ func (s *Server) run(ctx context.Context, m Meta, line string, out, errw io.Writ
 	return code
 }
 
-// interactive is the prompt a terminal gets from a bare `ssh devpod@gateway`.
+// interactive is the prompt a terminal gets from a bare `ssh <user>+devpod@gateway`.
 func (s *Server) interactive(ctx context.Context, ch ssh.Channel, in *input, m Meta, running *atomic.Int32, last *atomic.Int64) int {
 	t := term.NewTerminal(struct {
 		io.Reader

@@ -6,6 +6,7 @@ import { useEffect, useRef, useState } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { Link } from "react-router-dom";
 import { ApiFailure, createSnapshot, deleteSnapshot, streamSnapshotProgress, type SnapshotProgress, type SnapshotRequest, type SnapshotView } from "../../data/api";
+import { lastImage, rememberImage } from "./lastImage";
 import { useMe } from "../../data/queries";
 import { Button } from "../../design/Button";
 import { ConfirmDialog } from "../../design/ConfirmDialog";
@@ -142,10 +143,30 @@ export function SnapshotProgressView({ snapshot, onClose }: { snapshot: Pick<Sna
 function CreateForm({ devpod, owner, onCreated }: { devpod: string; owner: string; onCreated: (s: SnapshotView) => void }) {
   const me = useMe().data;
   const hasDefault = !!me?.features.snapshotDefaultRegistry;
-  const [target, setTarget] = useState<"default" | "custom">(hasDefault ? "default" : "custom");
+  // the address used last time (this DevPod's, else the user's last one)
+  // comes back prefilled; a tag that was already saved must be changed,
+  // and the server says so
+  const user = me?.user ?? "";
+  const touched = useRef(false); // the user picked a target or typed an address
+  const [target, setTargetState] = useState<"default" | "custom">(hasDefault ? "default" : "custom");
   const [name, setName] = useState(defaultSnapshotName(devpod, owner));
   const [tag, setTag] = useState("");
-  const [image, setImage] = useState("");
+  const [image, setImageState] = useState("");
+  const setTarget = (t: "default" | "custom") => {
+    touched.current = true;
+    setTargetState(t);
+  };
+  const setImage = (v: string) => {
+    touched.current = true;
+    setImageState(v);
+  };
+  useEffect(() => {
+    const last = lastImage(user, devpod);
+    if (last && !touched.current) {
+      setImageState(last);
+      setTargetState("custom");
+    }
+  }, [user, devpod]);
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [pause, setPause] = useState(true);
@@ -158,6 +179,7 @@ function CreateForm({ devpod, owner, onCreated }: { devpod: string; owner: strin
     mutationFn: (body: SnapshotRequest) => createSnapshot(devpod, body),
     onSuccess: (s) => {
       setPassword(""); // used once; not kept in the page
+      if (target === "custom") rememberImage(user, devpod, image);
       onCreated(s);
     },
   });

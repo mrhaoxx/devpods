@@ -122,7 +122,7 @@ Times are RFC 3339 and must fall on the granularity from
 
 ## Without a token: the CLI over SSH
 
-`ssh devpod@<gateway> <command>` runs the same operations authenticated by
+`ssh <user>+devpod@<gateway> <command>` runs the same operations authenticated by
 your SSH key — see [cli.md](cli.md).
 
 ## Registry credentials

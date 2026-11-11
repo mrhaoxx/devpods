@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // Package gatewaycli is the DevPod command line served over SSH
-// (ssh devpod@gateway <command>): the gateway authenticates the caller
+// (ssh <user>+devpod@gateway <command>): the gateway authenticates the caller
 // by SSH key and runs each command as a call to the console's REST API
 // on that user's behalf, so the CLI, the console and API tokens obey the
 // same rules.
