@@ -7,7 +7,9 @@ import { ApiFailure, getDevPodYaml, putDevPodYaml } from "../../../data/api";
 import { qk } from "../../../data/queries";
 import { Button } from "../../../design/Button";
 import { EmptyState } from "../../../design/EmptyState";
-import { Notice, Textarea } from "../../../design/Form";
+import { Notice } from "../../../design/Form";
+import { YamlEditor } from "../../../design/yaml/YamlEditor";
+import { yamlProblems } from "../../../design/yaml/lint";
 import { Panel } from "../../../design/Panel";
 
 export function YamlTab({ name }: { name: string }) {
@@ -46,7 +48,8 @@ export function YamlTab({ name }: { name: string }) {
   }
   if (base === null) return <EmptyState title="加载中…" />;
 
-  const lines = Math.min(40, Math.max(16, text.split("\n").length + 1));
+  // text that is not YAML is not sent: the editor says what is wrong with it
+  const broken = dirty && yamlProblems(text).some((p) => p.severity === "error");
   return (
     <Panel
       title="YAML"
@@ -63,7 +66,8 @@ export function YamlTab({ name }: { name: string }) {
           </Button>
           <Button
             variant="primary"
-            disabled={!dirty || save.isPending}
+            disabled={!dirty || broken || save.isPending}
+            title={broken ? "先改正 YAML 的语法错误" : undefined}
             onClick={() => {
               setSaved(null);
               save.mutate();
@@ -75,17 +79,15 @@ export function YamlTab({ name }: { name: string }) {
       }
     >
       <div className="space-y-2 p-3">
-        <Textarea
-          aria-label="DevPod YAML"
-          rows={lines}
+        <YamlEditor
+          ariaLabel="DevPod YAML"
           value={text}
-          onChange={(e) => {
-            setText(e.target.value);
+          onChange={(t) => {
+            setText(t);
             setSaved(null);
           }}
-          className="mono w-full text-xs leading-5"
-          spellCheck={false}
-          wrap="off"
+          minLines={16}
+          maxLines={40}
         />
         {save.isError && <Notice>保存失败：{save.error instanceof ApiFailure ? save.error.body.message : String(save.error)}</Notice>}
         {saved && !dirty && (

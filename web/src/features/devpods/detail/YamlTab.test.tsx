@@ -40,6 +40,18 @@ describe("YamlTab", () => {
     expect(button("保存").disabled).toBe(true);
   });
 
+  it("text that is not YAML cannot be saved, and the editor says where it breaks", async () => {
+    stubFetch({ "/api/devpods/alice-x/yaml": { yaml: text, running: false } });
+    renderWithProviders(<YamlTab name="alice-x" />);
+    await waitFor(() => expect(editor().value).toBe(text));
+    fireEvent.change(editor(), { target: { value: text + "  pod: [unclosed\n" } });
+    expect(button("保存").disabled).toBe(true);
+    const note = await screen.findByRole("alert", { name: "YAML 语法" });
+    expect(note.textContent).toMatch(/第 8 行/);
+    fireEvent.change(editor(), { target: { value: text + "  pod: []\n" } });
+    expect(button("保存").disabled).toBe(false);
+  });
+
   it("a refusal keeps the text and shows the server's reason", async () => {
     stubFetch({
       "PUT /api/devpods/alice-x/yaml": new Response(JSON.stringify({ code: "BAD_REQUEST", message: "update rejected: spec.pod.spec.containers must contain at least one container" }), { status: 400 }),
@@ -50,7 +62,7 @@ describe("YamlTab", () => {
     const broken = text + "  pod: {spec: {containers: []}}\n";
     fireEvent.change(editor(), { target: { value: broken } });
     fireEvent.click(button("保存"));
-    expect((await screen.findByRole("alert")).textContent).toContain("must contain at least one container");
+    expect((await screen.findByText(/保存失败/)).textContent).toContain("must contain at least one container");
     expect(editor().value).toBe(broken);
     expect(button("保存").disabled).toBe(false);
     // stopped: no rebuild warning

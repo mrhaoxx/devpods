@@ -9,7 +9,8 @@ import { createDevPod, patchDevPodSpec, ApiFailure, type DevPod, type SpecPatch 
 import { useMe, useTemplates } from "../../data/queries";
 import { Drawer } from "../../design/Drawer";
 import { Button } from "../../design/Button";
-import { Field, Input, Notice, Select, Textarea } from "../../design/Form";
+import { Field, Group, Input, Notice, Select } from "../../design/Form";
+import { YamlEditor } from "../../design/yaml/YamlEditor";
 import { parseQuantity } from "../../lib/format";
 import { quotaErrors, serverQuotaErrors, type QuotaField } from "./quota";
 import { MY_IMAGES_LIST, MyImagesList } from "../images/MyImages";
@@ -159,9 +160,9 @@ export function DevPodDrawer(p: Props) {
                 保存为配置
               </Button>
             </div>
-            <Field label="DevPod YAML" hint="配置里的变量（${NAME} 等）要先替换成实际值；要填变量并批量创建，请到「配置」页">
-              <Textarea aria-label="DevPod YAML" rows={14} value={yaml} onChange={(e) => setYaml(e.target.value)} className="mono text-xs" spellCheck={false} />
-            </Field>
+            <Group label="DevPod YAML" hint="配置里的变量（${NAME} 等）要先替换成实际值；要填变量并批量创建，请到「配置」页">
+              <YamlEditor ariaLabel="DevPod YAML" value={yaml} onChange={setYaml} minLines={14} maxLines={30} />
+            </Group>
           </>
         ) : (
           <>

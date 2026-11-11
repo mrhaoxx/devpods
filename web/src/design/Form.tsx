@@ -37,6 +37,26 @@ export function Field({ label, hint, error, children }: { label: string; hint?: 
   );
 }
 
+/** Group: a Field for something that is not one control (an editor): the
+ *  same heading, but not a <label> — a label forwards every click inside
+ *  it to its first control. */
+export function Group({ label, hint, error, children }: { label: string; hint?: ReactNode; error?: string; children: ReactNode }) {
+  return (
+    <div>
+      <div className="mb-1 flex items-baseline justify-between gap-2">
+        <span className="text-xs font-medium text-ink">{label}</span>
+        {hint && <span className="text-[11px] text-faint">{hint}</span>}
+      </div>
+      {children}
+      {error && (
+        <span role="alert" className="mt-1 block text-[11px] text-fail">
+          {error}
+        </span>
+      )}
+    </div>
+  );
+}
+
 type Tone = "fail" | "warm" | "run" | "idle";
 const tones: Record<Tone, string> = {
   fail: "bg-fail-soft text-fail",

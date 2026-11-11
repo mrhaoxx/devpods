@@ -8,7 +8,8 @@ import { ApiFailure } from "../../data/api";
 import { useMe } from "../../data/queries";
 import { Button } from "../../design/Button";
 import { EmptyState } from "../../design/EmptyState";
-import { Field, Input, Notice, Textarea } from "../../design/Form";
+import { Field, Group, Input, Notice } from "../../design/Form";
+import { YamlEditor } from "../../design/yaml/YamlEditor";
 import { createConfig, getConfig, patchConfig, type Config, type ConfigPatch, type ConfigVar } from "./api";
 import { LaunchDialog } from "./LaunchDialog";
 import { INDEX, NAME, NODE, OWNER, parseVars } from "./vars";
@@ -187,9 +188,9 @@ export function ConfigEditor() {
           <Field label="说明">
             <Input aria-label="说明" value={description} onChange={(e) => setDescription(e.target.value)} maxLength={500} readOnly={!mine} />
           </Field>
-          <Field label="YAML" hint="完整的 DevPod YAML，可以含变量" error={tooBig ? "内容超过 64 KiB" : undefined}>
-            <Textarea aria-label="YAML" rows={24} value={content} onChange={(e) => setContent(e.target.value)} readOnly={!mine} className="mono text-xs" spellCheck={false} />
-          </Field>
+          <Group label="YAML" hint="完整的 DevPod YAML，可以含变量" error={tooBig ? "内容超过 64 KiB" : undefined}>
+            <YamlEditor ariaLabel="YAML" value={content} onChange={setContent} readOnly={!mine} minLines={24} maxLines={44} />
+          </Group>
         </div>
         <div className="space-y-3">
           <Variables vars={vars} />
