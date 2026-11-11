@@ -6,6 +6,7 @@ import { useState } from "react";
 import type { SpecPatch } from "../../data/types";
 import { useNodeChoices } from "../../data/queries";
 import { fmtTime } from "../../lib/reservations";
+import { MY_IMAGES_LIST, MyImagesList } from "../images/MyImages";
 import { Button } from "../../design/Button";
 import { Field, Input } from "../../design/Form";
 
@@ -120,7 +121,8 @@ export function BulkDialog({ kind, targets, onClose, onRun }: { kind: BulkKind |
           {kind === "migrate" && <MigrateBody devpods={targets.map((t) => t.name)} picked={nodes} setPicked={setNodes} unpin={unpin} setUnpin={setUnpin} />}
           {kind === "image" && (
             <Field label="镜像" hint="运行中的 DevPod 会用新镜像重建，SSH 会话会断开。">
-              <Input aria-label="镜像" className="mono" value={image} onChange={(e) => setImage(e.target.value)} placeholder="ubuntu:24.04" autoFocus />
+              <Input aria-label="镜像" className="mono" value={image} onChange={(e) => setImage(e.target.value)} placeholder="ubuntu:24.04" list={MY_IMAGES_LIST} autoFocus />
+              <MyImagesList />
             </Field>
           )}
           {kind === "collaborators" && (

@@ -68,6 +68,13 @@ spec:
                 minLength: 1
                 pattern: ^[a-zA-Z0-9][a-zA-Z0-9._/:@-]*$
                 type: string
+              pause:
+                default: true
+                description: |-
+                  Pause freezes the container while it is committed, so the image is
+                  consistent (the DevPod's sessions stall meanwhile). Defaults to
+                  true.
+                type: boolean
               push:
                 default: true
                 description: |-
@@ -111,6 +118,11 @@ spec:
           status:
             description: DevPodSnapshotStatus reports observed state.
             properties:
+              completedAt:
+                description: CompletedAt is when the snapshot reached Succeeded or
+                  Failed.
+                format: date-time
+                type: string
               conditions:
                 items:
                   description: Condition contains details for one aspect of the current
@@ -193,6 +205,16 @@ spec:
                 - Running
                 - Succeeded
                 - Failed
+                type: string
+              sizeBytes:
+                description: |-
+                  SizeBytes is the size of the committed image as the node's runtime
+                  reports it.
+                format: int64
+                type: integer
+              startedAt:
+                description: StartedAt is when the snapshot Job was created.
+                format: date-time
                 type: string
             type: object
         type: object

@@ -80,6 +80,9 @@ func (s *Server) handleMe(w http.ResponseWriter, r *http.Request) {
 			"telemetry":         s.Live != nil && s.Live.Hub != nil,
 			"webshell":          s.Webshell != nil,
 			"httpProxy":         s.HTTPProxy != nil,
+			"snapshots":         s.Snapshots != nil,
+			// a platform registry to save into without bringing credentials
+			"snapshotDefaultRegistry": s.Snapshots != nil && s.Snapshots.ImageTemplate != "",
 			// node reservations arrive with the reservation backend
 			"reservations": s.Reservations != nil,
 		},

@@ -10,9 +10,9 @@ image:
   supervisor:
     repository: ghcr.io/mrhaoxx/devpod-supervisor
     tag: dev
-  snapshot:
-    repository: docker
-    tag: cli
+  snapshot:                     # snapshot Jobs: devpod-snapshot (images/snapshot); must be
+    repository: ghcr.io/mrhaoxx/devpod-snapshot   # pullable from namespaces.devpods without a secret
+    tag: dev
   webui:
     repository: ghcr.io/mrhaoxx/devpod-webui
     tag: dev
@@ -242,3 +242,19 @@ audit:
       image: {repository: clickhouse/clickhouse-server, tag: "26.8.36.3"}
       storage: 50Gi
       storageClass: ""
+
+# Saving a running DevPod as an image (snapshot spec v2). The console and
+# the CLI offer it when enabled. With imageTemplate set, images go to the
+# platform registry by default (pushed with pushSecret); users may also
+# name another address and bring its credentials. Without imageTemplate
+# every snapshot names its address and credentials.
+snapshot:
+  enabled: false
+  imageTemplate: ""              # e.g. harbor.example.com/devpod-users/{user}/{name}:{tag}
+  pushSecret: ""                 # dockerconfigjson Secret in namespaces.devpods (a registry robot account)
+  maxPerUser: 10                 # succeeded snapshots a user may keep; 0 = unlimited
+  # The Job that commits a container runs on its node with the node's
+  # runtime socket mounted; devpod-snapshot (image.snapshot) talks to the
+  # runtime's API through it (containerd or Docker).
+  containerdSocket: /run/containerd/containerd.sock   # on the nodes
+  dockerImage: ""                # Job image for Docker nodes; "" = image.snapshot

@@ -29,6 +29,14 @@ spec:
         - --leader-elect=true
         - --zap-devel=false
         - --snapshot-image={{ .Values.image.snapshot.repository }}:{{ .Values.image.snapshot.tag }}
+        {{- with (.Values.snapshot | default dict) }}
+        {{- with .containerdSocket }}
+        - --snapshot-containerd-socket={{ . }}
+        {{- end }}
+        {{- with .dockerImage }}
+        - --snapshot-docker-image={{ . }}
+        {{- end }}
+        {{- end }}
         - --internal-pubkey-file=/etc/devpod/internal/ssh_host_ed25519_key.pub
         {{- with .Values.controller.homeHostPath }}
         - --home-host-path={{ . }}

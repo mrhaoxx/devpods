@@ -16,6 +16,7 @@ import {
   listDevPods,
   listNodeChoices,
   listNodes,
+  listSnapshots,
   listTemplates,
   me,
   patchDevPod,
@@ -99,6 +100,15 @@ export const useRecent = (p: { scope?: "mine" | "all"; name?: string }, enabled 
 export const useNodesRecent = () => useQuery({ queryKey: ["recent", "nodes"], queryFn: getNodesRecent, refetchInterval: 60_000, retry: false });
 /** useNodeChoices: the nodes a DevPod can be pinned to, with reservation state. */
 export const useNodeChoices = (enabled = true) => useQuery({ queryKey: ["node-choices"], queryFn: listNodeChoices, enabled, refetchInterval: 30_000 });
+/** useSnapshots: saved images; refreshed while any is still being saved. */
+export const useSnapshots = (p: { all?: boolean; devpod?: string } = {}, enabled = true) =>
+  useQuery({
+    queryKey: ["snapshots", p.all ? "all" : "mine", p.devpod ?? ""],
+    queryFn: () => listSnapshots(p),
+    enabled,
+    retry: false,
+    refetchInterval: (q) => (q.state.data?.items.some((s) => s.phase === "Pending" || s.phase === "Running") ? 3000 : 30_000),
+  });
 export const useInfo = (name: string, enabled = true) =>
   useQuery({ queryKey: qk.info(name), queryFn: () => getInfo(name), enabled, retry: false, staleTime: 30_000 });
 export const useAuditSessions = (params: Record<string, string | undefined>, opts: { enabled?: boolean; refetchInterval?: number } = {}) =>

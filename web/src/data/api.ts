@@ -50,7 +50,7 @@ export interface Me {
   nameBudget: number;
   quota: { maxDevPods?: number; compute?: Record<string, string>; storage?: string };
   usage: { devpods: number; running: number; compute: Record<string, string>; storage: string };
-  features: { pubkeySelfService: boolean; kore: boolean; passwordAuth: boolean; audit?: boolean; telemetry?: boolean; reservations?: boolean; webshell?: boolean; httpProxy?: boolean };
+  features: { pubkeySelfService: boolean; kore: boolean; passwordAuth: boolean; audit?: boolean; telemetry?: boolean; reservations?: boolean; webshell?: boolean; httpProxy?: boolean; snapshots?: boolean; snapshotDefaultRegistry?: boolean };
   hasPassword: boolean;
   ssh: { host: string; port: number; loginSuffix?: string };
 }
@@ -449,3 +449,75 @@ export const createReservation = (p: Period) => req<Reservation>("POST", "/api/r
 export const patchReservation = (id: string, body: { start?: string; end?: string }) => req<Reservation>("PATCH", `/api/reservations/${id}`, body);
 export const deleteReservation = (id: string) => req<void>("DELETE", `/api/reservations/${id}`);
 export const setReservable = (node: string, reservable: boolean) => req<{ reservable: boolean; pending: number }>("PUT", `/api/admin/nodes/${node}/reservable`, { reservable });
+
+/* api_snapshots.go: saving a DevPod as an image (snapshot spec v2) */
+export type SnapshotView = {
+  id: string;
+  devpod: string;
+  owner: string;
+  image: string;
+  phase: "Pending" | "Running" | "Succeeded" | "Failed";
+  digest: string;
+  sizeBytes: number;
+  message: string;
+  customRegistry: boolean;
+  createdAt: string;
+  startedAt: string | null;
+  completedAt: string | null;
+};
+export type SnapshotProgress = {
+  phase: SnapshotView["phase"];
+  stage: "pending" | "commit" | "push" | "done" | "error";
+  elapsedSeconds: number;
+  sizeBytes?: number;
+  /** upload progress over the layers the registry lacks */
+  pushedBytes?: number;
+  totalBytes?: number;
+  digest?: string;
+  message?: string;
+  lines: string[];
+};
+/** Either the default registry ({name, tag?}) or an address of the user's
+ *  own ({image, pushAuth}); the server decides which credentials apply. */
+export type SnapshotRequest = { name?: string; tag?: string; pause?: boolean; image?: string; pushAuth?: { username: string; password: string } };
+export const createSnapshot = (devpod: string, body: SnapshotRequest) => req<SnapshotView>("POST", `/api/devpods/${devpod}/snapshots`, body);
+export const listSnapshots = (p: { all?: boolean; devpod?: string } = {}) =>
+  req<{ items: SnapshotView[] }>("GET", `/api/snapshots?${new URLSearchParams({ ...(p.all ? { scope: "all" } : {}), ...(p.devpod ? { devpod: p.devpod } : {}) })}`);
+export const deleteSnapshot = (id: string) => req<void>("DELETE", `/api/snapshots/${id}`);
+
+/** streamSnapshotProgress reads the progress stream until the server ends
+ *  it (after the final event). It does not reconnect: a finished stream is
+ *  finished, and a broken one is reported through onEnd(false). */
+export function streamSnapshotProgress(id: string, onEvent: (p: SnapshotProgress) => void, onEnd: (clean: boolean) => void, fetchFn: typeof fetch = fetch): () => void {
+  const ctl = new AbortController();
+  void (async () => {
+    try {
+      const resp = await fetchFn(`/api/snapshots/${id}/progress`, { signal: ctl.signal, credentials: "same-origin" });
+      if (!resp.ok || !resp.body) return onEnd(false);
+      const reader = resp.body.getReader();
+      const dec = new TextDecoder();
+      let buf = "";
+      for (;;) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        buf += dec.decode(value, { stream: true });
+        let nl: number;
+        while ((nl = buf.indexOf("\n")) >= 0) {
+          const line = buf.slice(0, nl);
+          buf = buf.slice(nl + 1);
+          if (line.startsWith("data: ")) {
+            try {
+              onEvent(JSON.parse(line.slice(6)) as SnapshotProgress);
+            } catch {
+              /* a torn line: the next event replaces it */
+            }
+          }
+        }
+      }
+      onEnd(true);
+    } catch {
+      if (!ctl.signal.aborted) onEnd(false);
+    }
+  })();
+  return () => ctl.abort();
+}

@@ -39,6 +39,22 @@ type Env struct {
 	Out  io.Writer
 	Err  io.Writer
 	Now  func() time.Time
+
+	// Session outlives the command's own time limit (Ctx): long follows
+	// run on it. Nil = Ctx.
+	Session context.Context
+	// Interrupt fires when the user interrupts the command: Ctrl-C on a
+	// terminal, an SSH signal, or the channel / connection closing.
+	Interrupt <-chan struct{}
+	// TTY: the client has a terminal (status lines may be redrawn).
+	TTY bool
+	// ReadLine prompts on the terminal and reads a line, echoing it or
+	// not; nil without a terminal.
+	ReadLine func(prompt string, echo bool) (string, error)
+	// StdinLine reads the next line of standard input; nil when there is none.
+	StdinLine func() (string, error)
+	// FollowIdle / FollowBudget override the follow limits (tests).
+	FollowIdle, FollowBudget time.Duration
 }
 
 type parsed struct {
@@ -90,6 +106,7 @@ func init() {
 		{name: "users", short: "list users", admin: true, run: runUsers},
 		{name: "migrate", args: "<name> <node|->", short: "pin a DevPod to a node (- lets the scheduler choose)", admin: true, run: runMigrate},
 	}
+	commands = append(commands, snapshotCommands()...)
 }
 
 func find(name string) *command {

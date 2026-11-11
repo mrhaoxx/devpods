@@ -61,6 +61,8 @@ var Scopes = []Scope{
 	{ID: "http:read", Group: "访问", Label: "查看端口链接"},
 	{ID: "http:write", Group: "访问", Label: "公开 / 取消公开端口、重置链接"},
 	{ID: "http:connect", Group: "访问", Label: "换取私有端口的访问票据"},
+	{ID: "snapshots:read", Group: "镜像", Label: "查看保存的镜像和保存进度"},
+	{ID: "snapshots:write", Group: "镜像", Label: "把 DevPod 保存为镜像、取消、删除记录"},
 	{ID: "reservations:read", Group: "预约", Label: "查看节点预约时间轴"},
 	{ID: "reservations:write", Group: "预约", Label: "预约、修改、延长、取消节点"},
 	{ID: "audit:read", Group: "审计", Label: "查看会话、命令、文件记录和回放"},
@@ -103,6 +105,12 @@ var apiRoutes = []apiRoute{
 	{"DELETE /api/devpods/{name}", "devpods:delete", "Delete a DevPod"},
 
 	{"GET /api/nodes", "devpods:read", "Nodes a DevPod can be pinned to, with capacity and reservation state"},
+	{"POST /api/devpods/{name}/snapshots", "snapshots:write", "Save a running DevPod as an image: {name, tag?, pause?} or {image, pushAuth: {username, password}}"},
+	{"GET /api/snapshots", "snapshots:read", "My saved images (?scope=all: everyone's, admins; ?devpod=)"},
+	{"GET /api/snapshots/{id}", "snapshots:read", "One snapshot"},
+	{"GET /api/snapshots/{id}/progress", "snapshots:read", "Server-sent events: {phase, stage, elapsedSeconds, sizeBytes, digest, message, lines} until it ends"},
+	{"DELETE /api/snapshots/{id}", "snapshots:write", "Cancel a running snapshot, or forget a finished one (the image stays in the registry)"},
+
 	{"GET /api/reservations", "reservations:read", "Node reservation timeline (?from=&to=&node=)"},
 	{"GET /api/reservations/rules", scopeAny, "Reservation rules: granularity, limits, timezone"},
 	{"POST /api/reservations", "reservations:write", "Reserve a node: {node, start, end}; ?dryRun=true answers {willHibernate}"},
@@ -269,6 +277,9 @@ func (s *Server) bearerSession(w http.ResponseWriter, r *http.Request, bearer st
 		name := r.PathValue("name")
 		onDevPod := strings.HasPrefix(r.Pattern, "GET /api/devpods/{name}") || strings.Contains(r.Pattern, " /api/devpods/{name}")
 		open := r.Pattern == "GET /api/me" || r.Pattern == "GET /api/devpods" || r.Pattern == "GET /api/templates" || r.Pattern == "GET /api/openapi.json"
+		// snapshots name their DevPod in the object, not the path: the
+		// handlers filter the list and check each one (AllowsDevPod)
+		open = open || r.Pattern == "GET /api/snapshots" || strings.Contains(r.Pattern, " /api/snapshots/{id}")
 		if !open && !(onDevPod && slices.Contains(g.DevPods, name)) {
 			s.writeErr(w, http.StatusForbidden, "SCOPE", "this token is limited to specific DevPods", nil)
 			return Session{}, false

@@ -7,9 +7,11 @@ package gatewaycli
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
+	"regexp"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -27,9 +29,13 @@ type Server struct {
 	MaxConns int
 	// IdleTimeout closes a connection with no command running (default 5 min).
 	IdleTimeout time.Duration
-	// CommandTimeout bounds one command (default 60 s).
+	// CommandTimeout bounds one command (default 60 s). Following a
+	// snapshot runs on its own clock (FollowBudget, FollowIdle).
 	CommandTimeout time.Duration
-	Log            *slog.Logger
+	// FollowBudget / FollowIdle: how long a snapshot is followed at most
+	// (default 60 min) and how long without any event (default 60 s).
+	FollowBudget, FollowIdle time.Duration
+	Log                      *slog.Logger
 
 	once sync.Once
 	sem  chan struct{}
@@ -153,7 +159,18 @@ func (s *Server) session(ctx context.Context, ch ssh.Channel, reqs <-chan *ssh.R
 			_ = req.Reply(true, nil) // accepted and ignored
 		case "exec", "shell":
 			_ = req.Reply(true, nil)
-			go ssh.DiscardRequests(reqs)
+			in := newInput(ch, pty)
+			go func() { // later requests: a signal interrupts; the channel closing hangs up
+				for r := range reqs {
+					if r.Type == "signal" {
+						in.fire()
+					}
+					if r.WantReply {
+						_ = r.Reply(false, nil)
+					}
+				}
+				in.hangup()
+			}()
 			if busy {
 				fmt.Fprint(ch.Stderr(), "error: too many DevPod CLI sessions on this gateway; try again in a moment\r\n")
 				exit(ch, ExitAPI)
@@ -166,7 +183,7 @@ func (s *Server) session(ctx context.Context, ch ssh.Channel, reqs <-chan *ssh.R
 			if req.Type == "exec" {
 				var p struct{ Command string }
 				_ = ssh.Unmarshal(req.Payload, &p)
-				exit(ch, s.run(ctx, m, p.Command, out, errw, running, last))
+				exit(ch, s.run(ctx, m, p.Command, out, errw, in, running, last))
 				return
 			}
 			if !pty { // `ssh devpod@gateway` without a terminal
@@ -174,7 +191,7 @@ func (s *Server) session(ctx context.Context, ch ssh.Channel, reqs <-chan *ssh.R
 				exit(ch, ExitOK)
 				return
 			}
-			exit(ch, s.interactive(ctx, ch, m, running, last))
+			exit(ch, s.interactive(ctx, ch, in, m, running, last))
 			return
 		default: // subsystem (sftp), x11-req, auth-agent-req@openssh.com, …
 			_ = req.Reply(false, nil)
@@ -183,7 +200,7 @@ func (s *Server) session(ctx context.Context, ch ssh.Channel, reqs <-chan *ssh.R
 }
 
 // run executes one command line and logs it.
-func (s *Server) run(ctx context.Context, m Meta, line string, out, errw io.Writer, running *atomic.Int32, last *atomic.Int64) int {
+func (s *Server) run(ctx context.Context, m Meta, line string, out, errw io.Writer, in *input, running *atomic.Int32, last *atomic.Int64) int {
 	running.Add(1)
 	start := time.Now()
 	defer func() {
@@ -196,21 +213,39 @@ func (s *Server) run(ctx context.Context, m Meta, line string, out, errw io.Writ
 		fmt.Fprintf(errw, "error: %s\n", err)
 	} else {
 		cctx, cancel := context.WithTimeout(ctx, s.CommandTimeout)
-		code = Run(&Env{Ctx: cctx, User: m.User, API: s.API, Out: out, Err: errw}, argv)
+		env := &Env{Ctx: cctx, User: m.User, API: s.API, Out: out, Err: errw, Session: ctx, Interrupt: in.begin(), TTY: in.tty,
+			StdinLine: func() (string, error) { return in.line(nil) }, FollowBudget: s.FollowBudget, FollowIdle: s.FollowIdle}
+		if in.tty {
+			env.ReadLine = func(prompt string, echo bool) (string, error) {
+				_, _ = io.WriteString(out, prompt)
+				var echoTo io.Writer
+				if echo {
+					echoTo = out
+				}
+				l, err := in.line(echoTo)
+				_, _ = io.WriteString(out, "\n")
+				return l, err
+			}
+		}
+		code = Run(env, argv)
+		in.end()
 		cancel()
 	}
 	name := ""
 	if len(argv) > 0 {
 		name = argv[0]
 	}
-	s.Log.Info("cli_command", "user", m.User, "command", name, "args", strings.Join(argv, " "), "exit", code,
+	s.Log.Info("cli_command", "user", m.User, "command", name, "args", strings.Join(redactArgs(argv), " "), "exit", code,
 		"duration_ms", time.Since(start).Milliseconds(), "remote", m.Remote, "auth_path", m.AuthKind, "proxy_alias", m.Alias)
 	return code
 }
 
 // interactive is the prompt a terminal gets from a bare `ssh devpod@gateway`.
-func (s *Server) interactive(ctx context.Context, ch ssh.Channel, m Meta, running *atomic.Int32, last *atomic.Int64) int {
-	t := term.NewTerminal(ch, "devpod> ")
+func (s *Server) interactive(ctx context.Context, ch ssh.Channel, in *input, m Meta, running *atomic.Int32, last *atomic.Int64) int {
+	t := term.NewTerminal(struct {
+		io.Reader
+		io.Writer
+	}{in, ch}, "devpod> ")
 	fmt.Fprintf(t, "DevPod CLI — signed in as %s. Type help for commands, exit to leave.\n", m.User)
 	code := ExitOK
 	for {
@@ -225,6 +260,192 @@ func (s *Server) interactive(ctx context.Context, ch ssh.Channel, m Meta, runnin
 		case "exit", "quit", "logout":
 			return code
 		}
-		code = s.run(ctx, m, line, t, t, running, last)
+		code = s.run(ctx, m, line, t, t, in, running, last)
+	}
+}
+
+// secretFlag matches flags whose value must not reach the command log.
+// No command takes a password as an argument, but people try.
+var secretFlag = regexp.MustCompile(`(?i)^-+[a-z-]*(pass|secret|token|credential)[a-z-]*`)
+
+// redactArgs hides the value of any password-like flag (--password x,
+// --password=x) before a command line is logged.
+func redactArgs(argv []string) []string {
+	out := make([]string, len(argv))
+	hide := false
+	for i, w := range argv {
+		switch {
+		case hide:
+			out[i], hide = "<redacted>", false
+		case secretFlag.MatchString(w):
+			if name, _, inline := strings.Cut(w, "="); inline {
+				out[i] = name + "=<redacted>"
+			} else {
+				out[i], hide = w, !strings.HasSuffix(strings.ToLower(w), "-stdin")
+			}
+		default:
+			out[i] = w
+		}
+	}
+	return out
+}
+
+var errInterrupted = errors.New("interrupted")
+
+const maxInput = 64 << 10 // unread input kept per session
+
+// input is a session's standard input and its interrupts. One goroutine
+// reads the channel for the whole session, so Ctrl-C is seen while a
+// command runs: on a terminal, a ^C byte arriving during a command
+// interrupts it instead of being queued. An SSH "signal" request
+// interrupts too, and the channel closing (hangup) interrupts every
+// command from then on. End of input alone is not an interrupt
+// (`ssh -n`, an agent without stdin).
+type input struct {
+	tty bool
+
+	mu      sync.Mutex
+	cond    *sync.Cond
+	buf     []byte
+	err     error         // input ended
+	running bool          // a command is running
+	intr    chan struct{} // the running command's interrupt
+	fired   bool
+	gone    bool
+}
+
+func newInput(src io.Reader, tty bool) *input {
+	in := &input{tty: tty}
+	in.cond = sync.NewCond(&in.mu)
+	go func() {
+		tmp := make([]byte, 4096)
+		for {
+			n, err := src.Read(tmp)
+			in.mu.Lock()
+			for _, b := range tmp[:n] {
+				if in.tty && in.running && b == 3 {
+					in.fireLocked()
+					continue
+				}
+				if len(in.buf) < maxInput {
+					in.buf = append(in.buf, b)
+				}
+			}
+			if err != nil {
+				in.err = err
+			}
+			in.cond.Broadcast()
+			in.mu.Unlock()
+			if err != nil {
+				return
+			}
+		}
+	}()
+	return in
+}
+
+func (in *input) fireLocked() {
+	if in.running && !in.fired {
+		in.fired = true
+		close(in.intr)
+		in.cond.Broadcast()
+	}
+}
+
+// fire interrupts the running command, if any.
+func (in *input) fire() {
+	in.mu.Lock()
+	defer in.mu.Unlock()
+	in.fireLocked()
+}
+
+// hangup: the channel is gone; this and every later command is interrupted.
+func (in *input) hangup() {
+	in.mu.Lock()
+	defer in.mu.Unlock()
+	in.gone = true
+	in.fireLocked()
+}
+
+// begin marks a command as running and returns its interrupt channel.
+func (in *input) begin() <-chan struct{} {
+	in.mu.Lock()
+	defer in.mu.Unlock()
+	in.running, in.fired, in.intr = true, false, make(chan struct{})
+	if in.gone {
+		in.fireLocked()
+	}
+	return in.intr
+}
+
+func (in *input) end() {
+	in.mu.Lock()
+	defer in.mu.Unlock()
+	in.running = false
+}
+
+// Read hands queued input to the prompt's line editor.
+func (in *input) Read(p []byte) (int, error) {
+	in.mu.Lock()
+	defer in.mu.Unlock()
+	for len(in.buf) == 0 {
+		if in.err != nil {
+			return 0, in.err
+		}
+		in.cond.Wait()
+	}
+	n := copy(p, in.buf)
+	in.buf = in.buf[n:]
+	return n, nil
+}
+
+// line reads one line for a running command (a prompt's answer, or the
+// first line of standard input), echoing what is typed to echo when it
+// is not nil. An interrupt aborts it.
+func (in *input) line(echo io.Writer) (string, error) {
+	var out []byte
+	in.mu.Lock()
+	defer in.mu.Unlock()
+	for {
+		for len(in.buf) == 0 {
+			if in.fired {
+				return "", errInterrupted
+			}
+			if in.err != nil {
+				if len(out) > 0 {
+					return string(out), nil
+				}
+				return "", in.err
+			}
+			in.cond.Wait()
+		}
+		b := in.buf[0]
+		in.buf = in.buf[1:]
+		switch b {
+		case '\r', '\n':
+			if b == '\r' && len(in.buf) > 0 && in.buf[0] == '\n' {
+				in.buf = in.buf[1:]
+			}
+			return string(out), nil
+		case 0x7f, 0x08: // backspace
+			if len(out) > 0 {
+				out = out[:len(out)-1]
+				if echo != nil {
+					_, _ = io.WriteString(echo, "\b \b")
+				}
+			}
+		case 4: // ^D on an empty line: no answer
+			if len(out) == 0 {
+				return "", io.EOF
+			}
+		default:
+			if b < 0x20 {
+				continue
+			}
+			out = append(out, b)
+			if echo != nil {
+				_, _ = echo.Write([]byte{b})
+			}
+		}
 	}
 }

@@ -6,6 +6,7 @@ package webui
 
 import (
 	"net/http"
+	"time"
 
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 
@@ -100,3 +101,12 @@ func (s *Server) HandleDeleteReservationForTest() http.HandlerFunc { return s.ha
 func (s *Server) HandleListReservationsForTest() http.HandlerFunc  { return s.handleListReservations }
 func (s *Server) HandleNodesForTest() http.HandlerFunc             { return s.handleNodes }
 func (s *Server) HandleSetReservableForTest() http.HandlerFunc     { return s.handleSetReservable }
+
+// FoldSnapshotLogForTest folds Job output lines into a progress event for sn.
+func FoldSnapshotLogForTest(sn *devpodv1alpha1.DevPodSnapshot, lines []string, now time.Time) SnapshotProgress {
+	f := &logFold{}
+	for _, l := range lines {
+		f.add(l)
+	}
+	return progressOf(sn, f, now)
+}

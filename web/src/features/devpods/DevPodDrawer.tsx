@@ -12,8 +12,9 @@ import { Button } from "../../design/Button";
 import { Field, Input, Notice, Select, Textarea } from "../../design/Form";
 import { parseQuantity } from "../../lib/format";
 import { quotaErrors, serverQuotaErrors, type QuotaField } from "./quota";
+import { MY_IMAGES_LIST, MyImagesList } from "../images/MyImages";
 
-type Props = { mode: "create"; devpod?: undefined; open: boolean; onClose(): void } | { mode: "edit"; devpod: DevPod; open: boolean; onClose(): void };
+type Props = { mode: "create"; devpod?: undefined; initialImage?: string; open: boolean; onClose(): void } | { mode: "edit"; devpod: DevPod; open: boolean; onClose(): void };
 
 const target = (dp?: DevPod) => dp?.spec.pod?.spec?.containers?.[0];
 
@@ -30,7 +31,7 @@ export function DevPodDrawer(p: Props) {
   const [overlay, setOverlay] = useState("");
   const [yaml, setYaml] = useState<string | null>(null);
   const [name, setName] = useState("");
-  const [image, setImage] = useState(c?.image ?? "ubuntu:24.04");
+  const [image, setImage] = useState(c?.image ?? (p.mode === "create" ? p.initialImage : undefined) ?? "ubuntu:24.04");
   const [cpu, setCpu] = useState(lim.cpu ?? "2");
   const [memory, setMemory] = useState(lim.memory ?? "4Gi");
   const [gpu, setGpu] = useState(lim["nvidia.com/gpu"] ?? "");
@@ -169,7 +170,8 @@ export function DevPodDrawer(p: Props) {
             {!preset && (
               <>
                 <Field label="镜像">
-                  <Input aria-label="镜像" value={image} onChange={(e) => setImage(e.target.value)} className="mono" required />
+                  <Input aria-label="镜像" value={image} onChange={(e) => setImage(e.target.value)} className="mono" list={MY_IMAGES_LIST} required />
+                  <MyImagesList />
                 </Field>
                 <div className="grid grid-cols-3 gap-2">
                   <Field label="CPU" error={errs.cpu}>

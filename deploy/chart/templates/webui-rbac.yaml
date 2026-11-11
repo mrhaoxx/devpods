@@ -20,6 +20,10 @@ rules:
 - apiGroups: [""]
   resources: ["pods", "events"]
   verbs: ["get", "list", "watch"]
+# Snapshot progress: follow the snapshot Job's output.
+- apiGroups: [""]
+  resources: ["pods/log"]
+  verbs: ["get"]
 # Redeploy: delete a DevPod's Pod so the controller recreates it.
 - apiGroups: [""]
   resources: ["pods"]

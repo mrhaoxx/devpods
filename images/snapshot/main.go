@@ -1,0 +1,194 @@
+// Copyright 2026 The DevPod Authors.
+//
+// SPDX-License-Identifier: Apache-2.0
+
+// devpod-snapshot is the payload of a DevPod snapshot Job: it commits a
+// running container to an image on its node and, unless told not to,
+// pushes it — talking to the node's container runtime through its API
+// (containerd: the containerd client plus nerdctl's commit package;
+// Docker: the Engine API), not through a CLI. Progress goes to stdout in
+// the snapshot v2 protocol (docs/superpowers/specs/2026-11-11-devpod-snapshot-v2.md §2.1).
+package main
+
+import (
+	"context"
+	"errors"
+	"flag"
+	"fmt"
+	"io"
+	"os"
+	"os/signal"
+	"syscall"
+	"time"
+)
+
+// backend is one container runtime.
+type backend interface {
+	// Commit creates the target image from the container. It first notes
+	// whether the target name already exists on the node, for Rollback.
+	Commit(ctx context.Context) error
+	// Size of the committed image in bytes (0 if unknown).
+	Size(ctx context.Context) (int64, error)
+	// Push uploads the image and returns its digest; progress receives
+	// (pushedBytes, totalBytes) as often as the runtime reports.
+	Push(ctx context.Context, progress func(pushed, total int64)) (string, error)
+	// Rollback undoes Commit after a failure or a cancel: an image name
+	// this run created is removed; one that existed before is pointed
+	// back at what it was. It never removes an image the run did not create.
+	Rollback(ctx context.Context) error
+	// Release runs after a successful push: the registry has the image,
+	// so a name this run created is removed from the node (a name that
+	// existed before keeps pointing at the new image).
+	Release(ctx context.Context) error
+	Close()
+}
+
+type options struct {
+	runtime, socket, namespace string
+	container, image           string
+	pause, push                bool
+	dockerConfig               string
+	termPath                   string
+}
+
+func envOr(key, def string) string {
+	if v := os.Getenv(key); v != "" {
+		return v
+	}
+	return def
+}
+
+func envBool(key string, def bool) bool {
+	switch os.Getenv(key) {
+	case "true", "1":
+		return true
+	case "false", "0":
+		return false
+	}
+	return def
+}
+
+func parseFlags(args []string) (options, error) {
+	var o options
+	fs := flag.NewFlagSet("devpod-snapshot", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	fs.StringVar(&o.runtime, "runtime", envOr("RUNTIME", ""), "container runtime: containerd or docker")
+	fs.StringVar(&o.socket, "socket", envOr("RUNTIME_SOCKET", ""), "runtime socket path (default: the runtime's usual one)")
+	fs.StringVar(&o.namespace, "namespace", envOr("CONTAINERD_NAMESPACE", "k8s.io"), "containerd namespace")
+	fs.StringVar(&o.container, "container", envOr("CONTAINER_ID", ""), "ID of the container to commit")
+	fs.StringVar(&o.image, "image", envOr("TARGET_IMAGE", ""), "image reference to create")
+	fs.BoolVar(&o.pause, "pause", envBool("PAUSE", true), "pause the container while committing")
+	fs.BoolVar(&o.push, "push", envBool("PUSH", true), "push the image after committing")
+	fs.StringVar(&o.dockerConfig, "docker-config", envOr("DOCKER_CONFIG", ""), "directory holding config.json with the push credentials")
+	fs.StringVar(&o.termPath, "termination-log", envOr("TERMINATION_LOG", "/dev/termination-log"), "where the result line is written")
+	if err := fs.Parse(args); err != nil {
+		return o, err
+	}
+	if o.container == "" || o.image == "" {
+		return o, errors.New("the container ID and the target image are required")
+	}
+	switch o.runtime {
+	case "containerd":
+		if o.socket == "" {
+			o.socket = "/run/containerd/containerd.sock"
+		}
+	case "docker":
+		if o.socket == "" {
+			o.socket = "/var/run/docker.sock"
+		}
+	default:
+		return o, fmt.Errorf("unknown runtime %q (containerd or docker)", o.runtime)
+	}
+	return o, nil
+}
+
+// rollbackTimeout bounds the cleanup after a failure or cancel; it has to
+// fit in the Job pod's termination grace period.
+const rollbackTimeout = 20 * time.Second
+
+// run drives one snapshot; it returns the process exit code.
+func run(ctx context.Context, o options, b backend, e *emitter) int {
+	fail := func(what string, err error) int {
+		msg, code := fmt.Sprintf("%s: %v", what, err), 1
+		if ctx.Err() != nil { // SIGTERM: the snapshot was cancelled
+			msg, code = "cancelled", 143
+		}
+		e.PushEnd()
+		rctx, cancel := context.WithTimeout(context.Background(), rollbackTimeout)
+		defer cancel()
+		if rerr := b.Rollback(rctx); rerr != nil {
+			e.Log(fmt.Sprintf("cleanup: %v", rerr))
+		}
+		e.Error(msg)
+		e.Result("", 0, msg)
+		return code
+	}
+
+	e.Stage("commit")
+	if err := b.Commit(ctx); err != nil {
+		return fail("commit failed", err)
+	}
+	if ctx.Err() != nil {
+		return fail("commit", ctx.Err())
+	}
+	size, err := b.Size(ctx)
+	if err != nil {
+		e.Log(fmt.Sprintf("image size unknown: %v", err))
+	} else if size > 0 {
+		e.Size(size)
+	}
+	if !o.push {
+		e.Result("", size, "")
+		e.Done()
+		return 0
+	}
+
+	e.Stage("push")
+	digest, err := b.Push(ctx, e.Push)
+	if err != nil {
+		return fail("push failed", err)
+	}
+	e.PushEnd()
+	if digest != "" {
+		e.Digest(digest)
+	}
+	rctx, cancel := context.WithTimeout(context.Background(), rollbackTimeout)
+	defer cancel()
+	if err := b.Release(rctx); err != nil {
+		e.Log(fmt.Sprintf("cleanup: %v", err))
+	}
+	e.Result(digest, size, "")
+	e.Done()
+	return 0
+}
+
+func main() {
+	os.Exit(realMain(os.Args[1:], os.Stdout))
+}
+
+func realMain(args []string, stdout io.Writer) int {
+	o, err := parseFlags(args)
+	e := newEmitter(stdout, o.termPath)
+	if err != nil {
+		e.Error(err.Error())
+		e.Result("", 0, err.Error())
+		return 2
+	}
+	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGTERM, syscall.SIGINT)
+	defer stop()
+	b, err := newBackend(ctx, o, e)
+	if err != nil {
+		e.Error(err.Error())
+		e.Result("", 0, err.Error())
+		return 1
+	}
+	defer b.Close()
+	return run(ctx, o, b, e)
+}
+
+func newBackend(ctx context.Context, o options, e *emitter) (backend, error) {
+	if o.runtime == "docker" {
+		return newDockerBackend(o)
+	}
+	return newContainerdBackend(ctx, o, e)
+}

@@ -44,6 +44,10 @@ The login name `devpod` is configurable (`--cli-user`, chart value `gateway.cli.
 | `templates` | List DevPod templates. |
 | `nodes`, `users` | List nodes / users (admin). |
 | `migrate <name> <node\|->` | Pin a DevPod to a node; `-` lets the scheduler choose again (admin). |
+| `snapshot <devpod> [--name N] [--tag T] [--no-pause] [--detach]` | Save the DevPod's container as an image and follow the progress. **Ctrl-C or disconnecting cancels it**; `--detach` starts it and returns. See [Snapshots](#snapshots). |
+| `snapshot <devpod> --image REF [--username U] [--password-stdin]` | The same, to an image address of your choice with that registry's credentials. |
+| `snapshots` (`images`) `[--all] [--devpod D]` | List snapshots; `--all` lists everyone's (admin). |
+| `snapshot show <id>` / `follow <id>` / `cancel <id>` / `rm <id>` | One snapshot in detail / re-attach to its progress / stop one in progress / remove a finished one's record. |
 
 `<name>` is the DevPod's full name as `list` shows it (`alice-a`), except in `create`, where it is the part after your user name.
 
@@ -51,12 +55,35 @@ Commands that take several names (`start`, `stop`, `redeploy`, `delete`) try eve
 
 The command line is split like a shell splits plain words and quotes (`'…'`, `"…"`, `\`), and nothing is expanded: no variables, globs, pipes or substitutions run on the gateway.
 
+## Snapshots
+
+`snapshot <devpod>` commits the DevPod's container to an image, pushes it, and shows what is happening until it ends:
+
+```
+$ ssh -t devpod@gateway snapshot alice-train1
+快照 snap-7f3k → harbor.example.com/devpod-users/alice/train1:20261111-1530
+committing container 3f9c…
+layer sha256:1c2d… pushed
+[推送镜像] 48s 1.2 GiB            ← redrawn in place on a terminal
+完成：harbor.example.com/devpod-users/alice/train1:20261111-1530@sha256:ab12…（1.2 GiB，50s）
+```
+
+- **Stages**: 等待开始 → 提交容器 → 推送镜像, then 完成 or 失败. On a terminal (`ssh -t`) one status line with the stage, the elapsed time and the image size is redrawn in place, with the tools' log lines above it. Without a terminal each stage is printed once and log lines are appended; there are no control characters.
+- **Cancelling**: while the command follows a snapshot it started, **Ctrl-C cancels the snapshot**, and so does an SSH signal or the connection going away (closing your laptop cancels it). The command prints `已取消` and exits 130. Closing standard input alone (`ssh -n`, an agent without stdin) is not a disconnect. To start a snapshot that survives you leaving, use `--detach`.
+- **Re-attaching**: `snapshot follow <id>` shows a running snapshot again. There Ctrl-C only stops following; `snapshot cancel <id>` stops the snapshot.
+- **cancel vs rm**: `cancel` only acts on a snapshot in progress and `rm` only on a finished one (it removes the record; the image stays in the registry), so neither can do the other's job by accident.
+- **What is in the image**: the container's own filesystem. Volumes — the home directory — are not. The container is paused while it is committed (seconds to tens of seconds); `--no-pause` skips that at the risk of an inconsistent image.
+- **Names**: `--name` defaults to the DevPod's name without your user-name prefix, `--tag` to a timestamp. The words `create`, `show`, `follow`, `cancel` and `rm` after `snapshot` are sub-commands; a DevPod that has one of those names is reached with `snapshot create <devpod>`.
+- **Your own image address**: `--image registry/path:tag` pushes somewhere other than your default address. That needs the registry's credentials: give `--username`; the password is asked for without echo on a terminal, or read from the first line of standard input (`--password-stdin` forces that). There is no `--password` flag: the password never goes on a command line, is not logged and never appears in the output. If you leave the credentials out and the address needs them, a terminal is asked for them; without a terminal the command fails with `PUSH_AUTH_REQUIRED`.
+- **Giving up following**: if no progress arrives for 60 s, or after 60 minutes, the command stops following (exit 1) and says how to re-attach. The snapshot itself goes on.
+
 ## Output and exit status
 
 - Default output is text: aligned tables and `key: value` lines on stdout.
 - `--json` (or `-o json`) on any command prints the REST API's JSON answer on stdout, unchanged. Commands that take several names print `[{"name": …, "ok": true}, {"name": …, "ok": false, "code": …, "error": …}]`. `ports … url` prints `{"url", "port", "public"}`; `ssh` prints `{"command", "login", "host"}`.
 - Errors go to stderr as `error: <message> (<CODE>)`, where `<CODE>` is the API's error code (`NOT_FOUND`, `FORBIDDEN`, `QUOTA_EXCEEDED`, …).
-- Exit status: `0` success, `1` the API refused or failed (for several names: at least one failed), `2` the command line is wrong (nothing was sent).
+- Exit status: `0` success, `1` the API refused or failed (for several names: at least one failed; for a snapshot: it failed or could no longer be followed), `2` the command line is wrong (nothing was sent), `130` you interrupted a snapshot follow.
+- Following a snapshot with `--json` prints one JSON object per line: the API's progress object (`phase`, `stage` = `pending` / `commit` / `push` / `done` / `error`, `elapsedSeconds`, `sizeBytes`, `digest`, `message`, `lines`) plus `id` and `image`. The last line has `stage` `done` (with `digest`) or `error` (with `message`). `snapshot … --detach --json` prints the snapshot itself.
 
 ## For scripts and agents
 
@@ -73,6 +100,16 @@ $(ssh devpod@gateway ssh alice-train1)
 ssh devpod@gateway ports alice-train1 public 8888
 ssh devpod@gateway ports alice-train1 url 8888
 
+# save an environment as an image and wait for the result (cancelled if this connection dies)
+ssh devpod@gateway snapshot alice-train1 --name train-env --json | tail -n 1 | jq -r 'select(.stage == "done") | "\(.image)@\(.digest)"'
+
+# or start it and poll
+id=$(ssh devpod@gateway snapshot alice-train1 --detach --json | jq -r .id)
+until ssh devpod@gateway snapshot show "$id" --json | jq -e '.phase == "Succeeded" or .phase == "Failed"' >/dev/null; do sleep 5; done
+
+# push to a registry of your own; the password comes from standard input
+printf '%s\n' "$REGISTRY_PASSWORD" | ssh devpod@gateway snapshot alice-train1 --image registry.example.com/me/env:v1 --username me --password-stdin
+
 # stop everything of mine
 ssh devpod@gateway stop $(ssh devpod@gateway list --json | jq -r '.items[].metadata.name')
 ```
@@ -87,7 +124,7 @@ It only runs commands. Port forwarding, SFTP / scp, agent forwarding and X11 are
 
 - 64 CLI connections at once per gateway replica (`--cli-max-conns`); beyond that a command fails with `too many DevPod CLI sessions`.
 - 8 sessions at once on one connection (SSH multiplexing).
-- One command may take 60 s; one API request 10 s; an API answer 8 MiB.
+- One command may take 60 s; one API request 10 s; an API answer 8 MiB. Following a snapshot is the exception: up to 60 minutes, and it gives up after 60 s without any progress event.
 - A connection with no command running is closed after 5 minutes.
 
 ## Operations

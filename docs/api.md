@@ -39,6 +39,7 @@ Revoking a token in the console takes effect at once.
 | `http:read` / `http:write` / `http:connect` | See port links / make ports public, reset the address / get a ticket for a private port |
 | `reservations:read` / `reservations:write` | See the node reservation timeline / reserve, move, extend, cancel |
 | `audit:read` | Sessions, commands, file records, replays (your own) |
+| `snapshots:read` / `snapshots:write` | See saved images and follow a save / save a DevPod as an image, cancel, forget |
 | `keys:read` / `keys:write` | SSH public keys |
 | `admin:read` | Act as admin for reads (everyone's DevPods, nodes, users, audit). Admins only |
 | `admin:write` | Act as admin for changes (other users' DevPods, users, policies, disconnect). Admins only |
@@ -47,6 +48,29 @@ An admin's token **without** admin scopes behaves like an ordinary user's
 token. `PATCH /api/devpods/{name}` needs `devpods:power` for `{"running": …}`
 and `devpods:update` for anything else. Tokens can never change the password
 or manage tokens.
+
+## Saving a DevPod as an image
+
+Scopes: `snapshots:read` (list, read, follow progress) and `snapshots:write`
+(save, cancel, forget).
+
+| Call | What it does |
+|---|---|
+| `POST /api/devpods/{name}/snapshots` | Save a running DevPod. `{name, tag?, pause?}` goes to the platform registry (the server builds the address); `{image, pushAuth: {username, password}, pause?}` goes to an address you name — credentials are required unless the address is your own place in the platform registry. `400 PUSH_AUTH_REQUIRED`, `409 NOT_RUNNING` / `IMAGE_EXISTS` / `SNAPSHOT_QUOTA` |
+| `GET /api/snapshots[?devpod=][&scope=all]` | Your snapshots (`scope=all`: everyone's, admins) |
+| `GET /api/snapshots/{id}` | One snapshot: `{id, devpod, owner, image, phase, digest, sizeBytes, message, customRegistry, createdAt, startedAt, completedAt}` |
+| `GET /api/snapshots/{id}/progress` | Server-sent events until it ends; each `data:` is `{phase, stage, elapsedSeconds, sizeBytes?, digest?, message?, lines}` with `stage` one of `pending`, `commit`, `push`, `done`, `error`, and `lines` the last lines of the job's output |
+| `DELETE /api/snapshots/{id}` | Cancel a running snapshot, or forget a finished one (the image stays in the registry) |
+
+The image holds the container's own filesystem, not its persistent volume
+(usually the home directory). Credentials sent in `pushAuth` are used for that
+one push and are never returned by the API.
+
+```sh
+ID=$(curl -s -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
+  -d '{"name":"env","tag":"v1"}' $DEVPOD/api/devpods/alice-train/snapshots | jq -r .id)
+curl -N -H "Authorization: Bearer $TOKEN" $DEVPOD/api/snapshots/$ID/progress
+```
 
 ## Common calls
 

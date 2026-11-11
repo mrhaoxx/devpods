@@ -11,8 +11,8 @@ metadata:
   name: {{ .Values.namespaces.devpods }}
   labels:
     kubernetes.io/metadata.name: {{ .Values.namespaces.devpods }}
-    # Privileged is required because snapshot Jobs mount the Docker
-    # socket via hostPath. Ordinary DevPod containers don't need
+    # Privileged is required because snapshot Jobs mount the node's
+    # container runtime socket (containerd or Docker) via hostPath. Ordinary DevPod containers don't need
     # privilege escalation — the PodSecurity posture here is the
     # ceiling, not the floor; per-pod restrictions are enforced via
     # RBAC (users can only create DevPod CRs, not raw Pods).

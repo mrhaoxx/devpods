@@ -89,6 +89,18 @@ spec:
         {{- if include "devpod.cli.on" $ }}
         - --cli-api-key-file=/etc/devpod/cli/key
         {{- end }}
+        {{- with (.Values.snapshot | default dict) }}
+        {{- if or .enabled .imageTemplate }}
+        - --snapshots=true
+        {{- with .imageTemplate }}
+        - --snapshot-image-template={{ . }}
+        {{- end }}
+        {{- with .pushSecret }}
+        - --snapshot-push-secret={{ . }}
+        {{- end }}
+        - --snapshot-max-per-user={{ .maxPerUser | default 10 }}
+        {{- end }}
+        {{- end }}
         {{- if dig "enabled" false (.Values.reservation | default dict) }}
         - --reservations=true
         - --reservation-granularity={{ .Values.reservation.granularity }}

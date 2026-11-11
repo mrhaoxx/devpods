@@ -53,6 +53,14 @@ type DevPodSnapshotSpec struct {
 	// +kubebuilder:default=true
 	Push bool `json:"push"`
 
+	// Pause freezes the container while it is committed, so the image is
+	// consistent (the DevPod's sessions stall meanwhile). Defaults to
+	// true.
+	//
+	// +optional
+	// +kubebuilder:default=true
+	Pause *bool `json:"pause,omitempty"`
+
 	// PushAuth carries inline registry credentials. The controller
 	// converts them to a dockerconfigjson Secret, sets pushSecretRef,
 	// and clears this field. Mutually exclusive with pushSecretRef
@@ -83,9 +91,22 @@ type DevPodSnapshotStatus struct {
 	// +optional
 	Digest string `json:"digest,omitempty"`
 
+	// SizeBytes is the size of the committed image as the node's runtime
+	// reports it.
+	// +optional
+	SizeBytes int64 `json:"sizeBytes,omitempty"`
+
 	// Message is a human-readable explanation (set on failure).
 	// +optional
 	Message string `json:"message,omitempty"`
+
+	// StartedAt is when the snapshot Job was created.
+	// +optional
+	StartedAt *metav1.Time `json:"startedAt,omitempty"`
+
+	// CompletedAt is when the snapshot reached Succeeded or Failed.
+	// +optional
+	CompletedAt *metav1.Time `json:"completedAt,omitempty"`
 
 	// JobRef references the snapshot Job.
 	// +optional

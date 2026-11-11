@@ -30,8 +30,13 @@ import (
 // DevPodSnapshotReconciler reconciles DevPodSnapshot objects.
 type DevPodSnapshotReconciler struct {
 	client.Client
-	Scheme        *runtime.Scheme
+	Scheme *runtime.Scheme
+	// SnapshotImage is the Job image (images/snapshot); DockerImage, if
+	// set, replaces it on Docker nodes.
 	SnapshotImage string
+	DockerImage   string
+	// ContainerdSocket on the nodes; "" = the default path.
+	ContainerdSocket string
 }
 
 // +kubebuilder:rbac:groups=devpod.io,resources=devpodsnapshots,verbs=get;list;watch;update;patch
@@ -97,9 +102,13 @@ func (r *DevPodSnapshotReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 		return ctrl.Result{}, r.setFailed(ctx, &snap, "Pod %q is not running (phase: %s)", pod.Name, pod.Status.Phase)
 	}
 
-	containerID, err := extractContainerID(pod.Status.ContainerStatuses, pod.Spec.Containers[0].Name)
+	rawID, err := extractContainerID(pod.Status.ContainerStatuses, pod.Spec.Containers[0].Name)
 	if err != nil {
 		return ctrl.Result{}, r.setFailed(ctx, &snap, "container ID: %v", err)
+	}
+	containerRuntime, containerID, err := render.SplitContainerID(rawID)
+	if err != nil {
+		return ctrl.Result{}, r.setFailed(ctx, &snap, "%v", err)
 	}
 
 	nodeName := pod.Spec.NodeName
@@ -111,7 +120,14 @@ func (r *DevPodSnapshotReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 	if snap.Spec.PushSecretRef != nil {
 		pushSecret = &snap.Spec.PushSecretRef.Name
 	}
-	job := render.SnapshotJob(&snap, containerID, nodeName, pushSecret, r.SnapshotImage, snap.Spec.Push)
+	image := r.SnapshotImage
+	if containerRuntime == render.RuntimeDocker && r.DockerImage != "" {
+		image = r.DockerImage
+	}
+	job := render.SnapshotJob(&snap, render.SnapshotTarget{
+		Runtime: containerRuntime, ContainerID: containerID, NodeName: nodeName,
+		PushSecret: pushSecret, Image: image, ContainerdSocket: r.ContainerdSocket,
+	})
 
 	if err := controllerutil.SetControllerReference(&snap, job, r.Scheme); err != nil {
 		return ctrl.Result{}, fmt.Errorf("set ownerref on job: %w", err)
@@ -138,10 +154,13 @@ func (r *DevPodSnapshotReconciler) reconcileExistingJob(ctx context.Context, sna
 
 	for _, c := range job.Status.Conditions {
 		if c.Type == batchv1.JobComplete && c.Status == corev1.ConditionTrue {
-			digest := r.extractDigest(ctx, &job)
-			return ctrl.Result{}, r.setSucceeded(ctx, snap, digest)
+			return ctrl.Result{}, r.setSucceeded(ctx, snap, r.jobResult(ctx, &job))
 		}
 		if c.Type == batchv1.JobFailed && c.Status == corev1.ConditionTrue {
+			// the script's own reason beats the Job's generic one
+			if res := r.jobResult(ctx, &job); res.Error != "" {
+				return ctrl.Result{}, r.setFailed(ctx, snap, "%s", res.Error)
+			}
 			return ctrl.Result{}, r.setFailed(ctx, snap, "snapshot Job failed: %s", c.Message)
 		}
 	}
@@ -149,33 +168,35 @@ func (r *DevPodSnapshotReconciler) reconcileExistingJob(ctx context.Context, sna
 	return ctrl.Result{}, nil
 }
 
-func (r *DevPodSnapshotReconciler) extractDigest(ctx context.Context, job *batchv1.Job) string {
+// jobResult reads what the Job's script reported in its termination
+// message (render.ParseSnapshotResult).
+func (r *DevPodSnapshotReconciler) jobResult(ctx context.Context, job *batchv1.Job) render.SnapshotResult {
 	var pods corev1.PodList
 	if err := r.List(ctx, &pods,
 		client.InNamespace(job.Namespace),
 		client.MatchingLabels{"job-name": job.Name},
-	); err != nil || len(pods.Items) == 0 {
-		return ""
+	); err != nil {
+		return render.SnapshotResult{}
 	}
-	for _, cs := range pods.Items[0].Status.ContainerStatuses {
-		if cs.Name == "snapshot" && cs.State.Terminated != nil {
-			return strings.TrimSpace(cs.State.Terminated.Message)
+	for _, pod := range pods.Items {
+		for _, cs := range pod.Status.ContainerStatuses {
+			if cs.Name == render.SnapshotContainer && cs.State.Terminated != nil {
+				return render.ParseSnapshotResult(cs.State.Terminated.Message)
+			}
 		}
 	}
-	return ""
+	return render.SnapshotResult{}
 }
 
+// extractContainerID returns the named container's ID as the kubelet
+// reports it, runtime prefix included ("containerd://…").
 func extractContainerID(statuses []corev1.ContainerStatus, name string) (string, error) {
 	for _, cs := range statuses {
 		if cs.Name == name {
-			id := cs.ContainerID
-			if id == "" {
+			if cs.ContainerID == "" {
 				return "", fmt.Errorf("container %q has no containerID", name)
 			}
-			if idx := strings.Index(id, "://"); idx >= 0 {
-				id = id[idx+3:]
-			}
-			return id, nil
+			return cs.ContainerID, nil
 		}
 	}
 	return "", fmt.Errorf("container %q not found in pod status", name)
@@ -185,6 +206,8 @@ func (r *DevPodSnapshotReconciler) setFailed(ctx context.Context, snap *devpodv1
 	patch := client.MergeFrom(snap.DeepCopy())
 	snap.Status.Phase = devpodv1alpha1.SnapshotFailed
 	snap.Status.Message = fmt.Sprintf(format, args...)
+	now := metav1.Now()
+	snap.Status.CompletedAt = &now
 	apimeta.SetStatusCondition(&snap.Status.Conditions, metav1.Condition{
 		Type:               "Complete",
 		Status:             metav1.ConditionFalse,
@@ -199,13 +222,18 @@ func (r *DevPodSnapshotReconciler) setRunning(ctx context.Context, snap *devpodv
 	patch := client.MergeFrom(snap.DeepCopy())
 	snap.Status.Phase = devpodv1alpha1.SnapshotRunning
 	snap.Status.JobRef = &devpodv1alpha1.JobRef{Name: jobName}
+	now := metav1.Now()
+	snap.Status.StartedAt = &now
 	return r.Status().Patch(ctx, snap, patch)
 }
 
-func (r *DevPodSnapshotReconciler) setSucceeded(ctx context.Context, snap *devpodv1alpha1.DevPodSnapshot, digest string) error {
+func (r *DevPodSnapshotReconciler) setSucceeded(ctx context.Context, snap *devpodv1alpha1.DevPodSnapshot, res render.SnapshotResult) error {
 	patch := client.MergeFrom(snap.DeepCopy())
 	snap.Status.Phase = devpodv1alpha1.SnapshotSucceeded
-	snap.Status.Digest = digest
+	snap.Status.Digest = res.Digest
+	snap.Status.SizeBytes = res.SizeBytes
+	now := metav1.Now()
+	snap.Status.CompletedAt = &now
 	apimeta.SetStatusCondition(&snap.Status.Conditions, metav1.Condition{
 		Type:               "Complete",
 		Status:             metav1.ConditionTrue,

@@ -46,20 +46,21 @@ func init() {
 
 func main() {
 	var (
-		metricsAddr          string
-		probeAddr            string
-		leaderElectionID     string
-		enableLeaderElection bool
-		devPodNamespace      string
-		gatewayNamespace     string
-		supervisorImage      string
-		internalPubFile      string
-		homeDirHostPath      string
-		homeDirMountPrefix   string
-		snapshotImage        string
-		ingestURL            string
-		ingestKeyFile        string
-		tel                  = config.DefaultConfig()
+		metricsAddr                                   string
+		probeAddr                                     string
+		leaderElectionID                              string
+		enableLeaderElection                          bool
+		devPodNamespace                               string
+		gatewayNamespace                              string
+		supervisorImage                               string
+		internalPubFile                               string
+		homeDirHostPath                               string
+		homeDirMountPrefix                            string
+		snapshotImage                                 string
+		snapshotDockerImage, snapshotContainerdSocket string
+		ingestURL                                     string
+		ingestKeyFile                                 string
+		tel                                           = config.DefaultConfig()
 
 		reservations     bool
 		rsvClearNotice   time.Duration
@@ -80,8 +81,12 @@ func main() {
 		"hostPath prefix for per-owner home directories (e.g. /mnt/afs/home); empty disables injection")
 	flag.StringVar(&homeDirMountPrefix, "home-mount-prefix", "/home",
 		"container mount prefix for home directories (e.g. /home → /home/{owner})")
-	flag.StringVar(&snapshotImage, "snapshot-image", "docker:cli",
-		"container image for snapshot Jobs (must contain docker CLI)")
+	flag.StringVar(&snapshotImage, "snapshot-image", "ghcr.io/mrhaoxx/devpod-snapshot:dev",
+		"image for snapshot Jobs (images/snapshot: devpod-snapshot, which commits and pushes through the node's containerd or Docker API)")
+	flag.StringVar(&snapshotDockerImage, "snapshot-docker-image", "",
+		"snapshot Job image for Docker nodes; empty = --snapshot-image")
+	flag.StringVar(&snapshotContainerdSocket, "snapshot-containerd-socket", "/run/containerd/containerd.sock",
+		"containerd socket on the nodes, mounted into snapshot Jobs")
 
 	opts := zap.Options{Development: true, Level: zapcore.InfoLevel}
 	opts.BindFlags(flag.CommandLine)
@@ -119,11 +124,11 @@ func main() {
 	// (combined with the ClusterRole) and a real memory inflator on
 	// large clusters.
 	mgr, err := ctrl.NewManager(ctrl.GetConfigOrDie(), ctrl.Options{
-		Scheme:                 scheme,
-		Metrics:                server.Options{BindAddress: metricsAddr},
-		HealthProbeBindAddress: probeAddr,
-		LeaderElection:         enableLeaderElection,
-		LeaderElectionID:       leaderElectionID,
+		Scheme:                  scheme,
+		Metrics:                 server.Options{BindAddress: metricsAddr},
+		HealthProbeBindAddress:  probeAddr,
+		LeaderElection:          enableLeaderElection,
+		LeaderElectionID:        leaderElectionID,
 		LeaderElectionNamespace: gatewayNamespace,
 		Cache: cache.Options{
 			DefaultNamespaces: map[string]cache.Config{
@@ -186,7 +191,7 @@ func main() {
 	if err := (&controllers.DevPodSnapshotReconciler{
 		Client:        mgr.GetClient(),
 		Scheme:        mgr.GetScheme(),
-		SnapshotImage: snapshotImage,
+		SnapshotImage: snapshotImage, DockerImage: snapshotDockerImage, ContainerdSocket: snapshotContainerdSocket,
 	}).SetupWithManager(mgr); err != nil {
 		die(err, "set up DevPodSnapshotReconciler")
 	}

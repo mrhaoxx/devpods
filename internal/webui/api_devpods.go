@@ -44,6 +44,8 @@ type Server struct {
 	CLIKey []byte
 	// Reservations: node reservation rules; nil = off.
 	Reservations *ReservationRules
+	// Snapshots: saving a DevPod as an image; nil = off.
+	Snapshots *Snapshots
 	// HTTPProxy: DevPod ports published through the gateway; nil = off.
 	HTTPProxy *HTTPProxy
 

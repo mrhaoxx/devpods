@@ -5,9 +5,11 @@
 package gatewaycli
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -102,4 +104,121 @@ func (a *API) Do(ctx context.Context, user, method, path string, body any) ([]by
 		return nil, e
 	}
 	return b, nil
+}
+
+// ErrStreamIdle: a stream sent nothing for the idle period.
+var ErrStreamIdle = errors.New("the stream went quiet")
+
+// errStreamStop is how a Stream callback ends the stream without an error.
+var errStreamStop = errors.New("stop")
+
+const maxEventLine = 1 << 20
+
+// Stream follows a server-sent-events endpoint as user and hands each
+// event's data to fn. It returns nil when the server ends the stream or
+// fn returns errStreamStop, ErrStreamIdle when nothing (not even a
+// comment line) arrived for idle, ctx's error when ctx ends, and a
+// non-2xx answer as *APIError. Unlike Do it has no total time limit.
+func (a *API) Stream(ctx context.Context, user, path string, idle time.Duration, fn func(data []byte) error) error {
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, a.BaseURL+path, nil)
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Authorization", "Bearer "+KeyPrefix+a.Key)
+	req.Header.Set(UserHeader, user)
+	req.Header.Set("Accept", "text/event-stream")
+	hc := &http.Client{} // a.HTTP's total timeout would cut the stream
+	if a.HTTP != nil {
+		hc.Transport = a.HTTP.Transport
+	}
+	resp, err := hc.Do(req)
+	if err != nil {
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		return &APIError{Code: "UNAVAILABLE", Message: "the DevPod API cannot be reached: " + err.Error()}
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode > 299 {
+		b, _ := io.ReadAll(io.LimitReader(resp.Body, 64<<10))
+		e := &APIError{Status: resp.StatusCode}
+		if json.Unmarshal(b, e) != nil || e.Message == "" {
+			e.Code, e.Message = "HTTP_"+fmt.Sprint(resp.StatusCode), strings.TrimSpace(string(b))
+			if e.Message == "" {
+				e.Message = resp.Status
+			}
+		}
+		return e
+	}
+	type lineOrErr struct {
+		line []byte
+		err  error
+	}
+	lines := make(chan lineOrErr)
+	go func() { // the reader; it ends when the body is closed
+		br := bufio.NewReaderSize(resp.Body, 64<<10)
+		for {
+			line, err := br.ReadBytes('\n')
+			if len(line) > maxEventLine {
+				err = errors.New("an event line is too long")
+			}
+			select {
+			case lines <- lineOrErr{line, err}:
+			case <-ctx.Done():
+				return
+			}
+			if err != nil {
+				return
+			}
+		}
+	}()
+	timer := time.NewTimer(idle)
+	defer timer.Stop()
+	var data []byte
+	for {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-timer.C:
+			return ErrStreamIdle
+		case l := <-lines:
+			if l.err != nil {
+				if errors.Is(l.err, io.EOF) {
+					return nil
+				}
+				if ctx.Err() != nil {
+					return ctx.Err()
+				}
+				return &APIError{Code: "UNAVAILABLE", Message: "reading the stream: " + l.err.Error()}
+			}
+			if !timer.Stop() {
+				select {
+				case <-timer.C:
+				default:
+				}
+			}
+			timer.Reset(idle)
+			line := bytes.TrimRight(l.line, "\r\n")
+			switch {
+			case len(line) == 0: // the event is complete
+				if len(data) > 0 {
+					err := fn(data)
+					data = nil
+					if errors.Is(err, errStreamStop) {
+						return nil
+					}
+					if err != nil {
+						return err
+					}
+				}
+			case bytes.HasPrefix(line, []byte("data:")):
+				if len(data) > 0 {
+					data = append(data, '\n')
+				}
+				data = append(data, bytes.TrimPrefix(bytes.TrimPrefix(line, []byte("data:")), []byte(" "))...)
+			}
+		}
+	}
 }

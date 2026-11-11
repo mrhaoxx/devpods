@@ -11,12 +11,14 @@ export function MyDevPodsPage() {
       {open && (
         <DevPodDrawer
           mode="create"
+          initialImage={params.get("image") ?? undefined}
           open
           onClose={() =>
             setParams(
               (cur) => {
                 const next = new URLSearchParams(cur);
                 next.delete("new");
+                next.delete("image");
                 return next;
               },
               { replace: true },

@@ -37,6 +37,7 @@ import { EventList } from "./EventsTab";
 import { MonitorTab } from "./MonitorTab";
 import { ContainerTab } from "./ContainerTab";
 import { PortsPanel } from "./PortsPanel";
+import { SnapshotControl } from "../../images/SnapshotControl";
 
 const schema = {
   tab: { kind: "string", default: "monitor" },
@@ -172,6 +173,7 @@ export function DetailPage() {
             终端
           </Button>
         )}
+        {me?.features.snapshots && <SnapshotControl devpod={name} owner={owner} running={runningPhase} />}
         {me && (
           <Button onClick={() => void copyText(ssh)} title={ssh}>
             复制 SSH
