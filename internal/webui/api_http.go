@@ -7,6 +7,7 @@ package webui
 import (
 	"encoding/json"
 	"fmt"
+	"net"
 	"net/http"
 	"net/url"
 	"regexp"
@@ -31,6 +32,10 @@ type HTTPProxy struct {
 	HostTemplate string
 	Scheme       string // "https" unless testing
 	Key          []byte // shared with the gateway
+	// Port is the port of the public entry when it is not the scheme's
+	// own (https://…:4430): the links the console gives carry it. A
+	// host is recognised whatever port comes with it.
+	Port int
 
 	host *regexp.Regexp
 }
@@ -58,12 +63,33 @@ func NewHTTPProxy(hostTemplate, scheme string, key []byte) (*HTTPProxy, error) {
 
 // parseHost returns the id and port of a proxy hostname.
 func (h *HTTPProxy) parseHost(host string) (string, int, bool) {
-	m := h.host.FindStringSubmatch(strings.ToLower(host))
+	m := h.host.FindStringSubmatch(bareHost(host))
 	if m == nil || !httpauth.ValidID(m[1]) {
 		return "", 0, false
 	}
 	port, err := strconv.Atoi(m[2])
 	return m[1], port, err == nil && port >= 1 && port <= 65535
+}
+
+// bareHost is host in lower case without its port, when what follows the
+// colon is a port: anything else is left on, and then matches nothing.
+func bareHost(host string) string {
+	host = strings.ToLower(host)
+	if h, port, err := net.SplitHostPort(host); err == nil {
+		if n, err := strconv.Atoi(port); err == nil && n >= 1 && n <= 65535 && strconv.Itoa(n) == port {
+			return h
+		}
+	}
+	return host
+}
+
+// authority is host as the public entry serves it: with the entry's port
+// when it has one of its own.
+func (h *HTTPProxy) authority(host string) string {
+	if h.Port == 0 {
+		return host
+	}
+	return host + ":" + strconv.Itoa(h.Port)
 }
 
 // httpView is what the ports panel shows.
@@ -86,7 +112,7 @@ func (h *HTTPProxy) view(dp *devpodv1alpha1.DevPod) httpView {
 	if users == nil {
 		users = []int{}
 	}
-	return httpView{ID: id, URLTemplate: h.Scheme + "://" + strings.Replace(h.HostTemplate, "{id}", id, 1), PublicPorts: ports, UserPorts: users}
+	return httpView{ID: id, URLTemplate: h.Scheme + "://" + h.authority(strings.Replace(h.HostTemplate, "{id}", id, 1)), PublicPorts: ports, UserPorts: users}
 }
 
 func (s *Server) httpProxy(w http.ResponseWriter) (*HTTPProxy, bool) {
@@ -265,6 +291,6 @@ func (s *Server) handleHTTPTicket(w http.ResponseWriter, r *http.Request) {
 		rd = "/"
 	}
 	t := httpauth.Sign(h.Key, httpauth.Claims{Kind: httpauth.KindTicket, ID: id, User: sess.User, Admin: sess.Admin, Exp: time.Now().Add(httpauth.TicketTTL).Unix()})
-	u := url.URL{Scheme: h.Scheme, Host: strings.ToLower(req.Host), Path: httpauth.AuthPath, RawQuery: url.Values{"t": {t}, "rd": {rd}}.Encode()}
+	u := url.URL{Scheme: h.Scheme, Host: h.authority(bareHost(req.Host)), Path: httpauth.AuthPath, RawQuery: url.Values{"t": {t}, "rd": {rd}}.Encode()}
 	s.writeJSON(w, http.StatusOK, map[string]string{"url": u.String()})
 }

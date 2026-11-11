@@ -118,4 +118,23 @@ func TestHTTPProxyAPI(t *testing.T) {
 		t.Fatalf("reset %+v", re)
 	}
 	call(ticket, "POST", "/api/http/ticket", alice, body(host, "/"), http.StatusForbidden)
+
+	// a public entry on a port of its own (https://…:4430): links carry
+	// the port, and a host is recognised with it, without it, or with
+	// whatever port the browser's request named
+	hp.Port = 4430
+	withPort := call(get, "GET", "/api/devpods/hp-alice-dev1/http", alice, "", http.StatusOK)
+	if withPort.URLTemplate != "https://"+re.ID+"-{port}-devpod.apps.test:4430" {
+		t.Fatalf("url template with a port: %s", withPort.URLTemplate)
+	}
+	bare := re.ID + "-8080-devpod.apps.test"
+	for _, h := range []string{bare, bare + ":4430", bare + ":443"} {
+		tk := call(ticket, "POST", "/api/http/ticket", alice, body(h, "/x"), http.StatusOK)
+		u, _ := url.Parse(tk.URL)
+		if u.Host != bare+":4430" || u.Scheme != "https" || u.Path != httpauth.AuthPath {
+			t.Fatalf("ticket for %q goes to %s", h, tk.URL)
+		}
+	}
+	call(ticket, "POST", "/api/http/ticket", alice, body(bare+":4430.evil.test", "/"), http.StatusBadRequest)
+	call(ticket, "POST", "/api/http/ticket", alice, body("evil.test:4430", "/"), http.StatusBadRequest)
 }

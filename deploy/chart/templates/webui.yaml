@@ -89,6 +89,9 @@ spec:
         {{- if include "devpod.http.on" $ }}
         - --http-proxy-host={id}-{port}{{ .Values.gateway.http.suffix }}.{{ .Values.gateway.http.baseDomain }}
         - --http-proxy-key-file=/etc/devpod/http/key
+        {{- with .Values.gateway.http.externalPort }}
+        - --http-proxy-port={{ . }}
+        {{- end }}
         {{- end }}
         {{- if include "devpod.cli.on" $ }}
         - --cli-api-key-file=/etc/devpod/cli/key

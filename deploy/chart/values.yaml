@@ -60,6 +60,9 @@ gateway:
     enabled: false
     baseDomain: ""               # e.g. apps.example.com; needs wildcard DNS + TLS for *.baseDomain
     suffix: ""                   # fixed part after the port, e.g. "-devpod"
+    # Port of the public entry for these hostnames when it is not 443
+    # (https://…:4430): the links the console shows carry it. 0 = none.
+    externalPort: 0
     # Gateway API route for *.baseDomain → the gateway's HTTP port.
     route:
       enabled: false
