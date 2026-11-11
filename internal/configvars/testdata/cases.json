@@ -50,6 +50,12 @@
   {"name": "tab in a value", "content": "${X}",
    "vars": [{"name": "X", "builtin": false, "required": true}],
    "values": {"X": "a\tb"}, "error": "value:X"},
+  {"name": "an empty value takes the default, as :- does in a shell", "content": "image: ${IMAGE:-ubuntu:24.04}",
+   "vars": [{"name": "IMAGE", "builtin": false, "required": false, "default": "ubuntu:24.04"}],
+   "values": {"IMAGE": ""}, "rendered": "image: ubuntu:24.04"},
+  {"name": "an empty value without a default stays empty", "content": "a: '${X}'",
+   "vars": [{"name": "X", "builtin": false, "required": true}],
+   "values": {"X": ""}, "rendered": "a: ''"},
   {"name": "unicode value", "content": "t: ${X}",
    "vars": [{"name": "X", "builtin": false, "required": true}],
    "values": {"X": "八卡 整机"}, "rendered": "t: 八卡 整机"}

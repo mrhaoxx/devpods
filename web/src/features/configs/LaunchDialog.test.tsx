@@ -100,6 +100,10 @@ describe("launch dialog", () => {
     expect((await screen.findByText(/name: alice-w/)).tagName).toBe("PRE");
     expect(screen.getByRole("status").textContent).toMatch(/检查通过/);
     expect(button("创建").disabled).toBe(false); // still to be created
+    // what was checked is no longer what the form says: the result goes
+    type("GPU", "4");
+    expect(screen.queryByRole("status")).toBeNull();
+    expect(screen.queryByText(/name: alice-w/)).toBeNull();
   });
 
   it("a rejected launch marks the DevPods that cannot be created: nothing was", async () => {

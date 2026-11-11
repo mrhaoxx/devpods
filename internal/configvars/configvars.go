@@ -6,7 +6,8 @@
 // config (config center spec §3):
 //
 //	${VAR}            a variable that must be given
-//	${VAR:-default}   one with a default, which ends at the first }
+//	${VAR:-default}   one with a default, which ends at the first };
+//	                  an empty value takes the default too
 //	$${               a literal ${
 //
 // A name is [A-Z][A-Z0-9_]*; any other ${...} — a shell's ${home} — is
@@ -217,7 +218,8 @@ func Render(content string, values map[string]string) (string, error) {
 	}
 	var b strings.Builder
 	scan(content, func(s string) { b.WriteString(s) }, func(r ref) {
-		if v, given := values[r.name]; given {
+		// as in a shell, :- gives the default for an empty value too
+		if v, given := values[r.name]; given && (v != "" || !byName[r.name].hasDefault) {
 			b.WriteString(v)
 			return
 		}

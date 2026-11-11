@@ -101,6 +101,25 @@ describe("a DevPod saved as a config", () => {
     expect(text).toContain("            - |\n              echo $${HOME} $$${X}\n              exit 0\n");
   });
 
+  it("leaves out the CPU-binding annotations a template stamped: only a template may set them", () => {
+    const d = dp();
+    (d.spec.pod as unknown as { metadata: unknown }).metadata = { annotations: { "kore.zjusct.io/pin": "true", "kore.zjusct.io/pool": "a", note: "kept" }, labels: { team: "x" } };
+    const text = devpodToConfig(d);
+    expect(text).not.toContain("kore.zjusct.io");
+    expect(text).toContain("        note: kept\n");
+    expect(text).toContain("        team: x\n");
+    // nothing but those annotations: the empty map goes too
+    (d.spec.pod as unknown as { metadata: unknown }).metadata = { annotations: { "kore.zjusct.io/pin": "true" } };
+    expect(devpodToConfig(d)).not.toMatch(/annotations|metadata: \{\}|kore/);
+  });
+
+  it("quotes the short words YAML 1.1 reads as booleans, and binary numbers", () => {
+    const d = dp();
+    (d.spec.pod!.spec!.containers![0] as unknown as { args: unknown[] }).args = ["y", "N", "0b101", "yes-sir"];
+    const text = devpodToConfig(d);
+    for (const q of ['- "y"', '- "N"', '- "0b101"', "- yes-sir"]) expect(text).toContain(q);
+  });
+
   it("quotes what YAML would read as something else", () => {
     const d = dp();
     (d.spec.pod!.spec!.containers![0] as unknown as { args: unknown[] }).args = ["true", "1.5", "", "a: b", "# x", "- y", "null", " pad", "plain-text_1.0"];

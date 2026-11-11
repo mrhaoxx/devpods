@@ -21,7 +21,8 @@ const escapeVars = (v: Json): Json => {
 // with a letter, digit or one of / . _ $, holds nothing YAML gives a
 // meaning to, and is not a number, a boolean or null.
 const plainRE = /^[A-Za-z0-9_./$][A-Za-z0-9_./${}:@+=, -]*$/;
-const reservedRE = /^(true|false|yes|no|on|off|null|~|[-+]?(\d[\d_]*\.?\d*|\.\d+)([eE][-+]?\d+)?|0x[0-9a-fA-F]+|0o[0-7]+|[-+]?\.(inf|nan))$/i;
+// (y and n are booleans to a YAML 1.1 reader, which the server's is)
+const reservedRE = /^(true|false|yes|no|on|off|y|n|null|~|[-+]?(\d[\d_]*\.?\d*|\.\d+)([eE][-+]?\d+)?|0x[0-9a-fA-F]+|0o[0-7]+|0b[01_]+|[-+]?\.(inf|nan))$/i;
 function plain(s: string): boolean {
   return plainRE.test(s) && !reservedRE.test(s) && !s.includes(": ") && !s.includes(" #") && !s.endsWith(":") && !s.endsWith(" ") && !s.includes(", ");
 }
@@ -66,10 +67,23 @@ function entry(head: string, pad: string, v: Json, out: string[]) {
   out.push(head + b[0], ...b.slice(1).map((l) => (l === "" ? "" : pad + l)));
 }
 
+// The CPU-binding annotations are stamped by a template and refused
+// when a user writes them: a config carrying them could not be launched.
+const STAMPED = "kore.zjusct.io/";
+type PodPart = { metadata?: { annotations?: Record<string, Json> } & Record<string, Json> };
+function dropStamped(pod: PodPart | undefined) {
+  const meta = pod?.metadata;
+  if (!pod || !meta?.annotations) return;
+  for (const k of Object.keys(meta.annotations)) if (k.startsWith(STAMPED)) delete meta.annotations[k];
+  if (Object.keys(meta.annotations).length === 0) delete meta.annotations;
+  if (Object.keys(meta).length === 0) delete pod.metadata;
+}
+
 export function devpodToConfig(dp: DevPod): string {
   const src = dp as unknown as { apiVersion?: string; kind?: string; spec: Record<string, Json> };
   const { owner: _owner, ...rest } = escapeVars(src.spec as Json) as Record<string, Json>;
   void _owner;
+  dropStamped(rest.pod as PodPart | undefined);
   const sel = ((rest.pod as { spec?: { nodeSelector?: Record<string, Json> } } | undefined)?.spec ?? {}).nodeSelector;
   if (sel && HOSTNAME in sel) sel[HOSTNAME] = "${NODE}";
   const doc: Json = {

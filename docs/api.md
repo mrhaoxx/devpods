@@ -132,7 +132,7 @@ one or take it off the public list (`PATCH {"public": false}`), nothing else.
 | Variable | Meaning |
 |---|---|
 | `${VAR}` | must be given |
-| `${VAR:-default}` | optional; the default ends at the first `}` |
+| `${VAR:-default}` | optional; the default ends at the first `}` and is also used for an empty value |
 | `$${` | a literal `${` |
 | `${OWNER}` | whoever launches (filled by the server) |
 | `${NAME}` | the DevPod's full name: you give the short name, your prefix is added |

@@ -3,7 +3,7 @@
 // one DevPod per picked node, in click order; any other takes a count.
 // The server checks the launch as a whole before writing anything.
 import * as Dialog from "@radix-ui/react-dialog";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { useQueryClient } from "@tanstack/react-query";
 import { ApiFailure } from "../../data/api";
@@ -85,6 +85,12 @@ export function LaunchDialog({ config, onClose }: { config: Pick<ConfigSummary, 
   const missing = others.filter((v) => v.required && values[v.name] === "").map((v) => v.name);
   const ready = !gone && !busy && countOK && (!usesName || short !== "") && missing.length === 0;
   const names = usesName && short && countOK ? launchNames(me?.user ?? "", short, n, usesIndex) : [];
+
+  // a check or a refusal is about what the form said then: once the
+  // form changes it is taken down
+  useEffect(() => {
+    setOutcome((o) => (o && o.kind !== "created" ? null : o));
+  }, [short, nodes, count, values]);
 
   const body = (dryRun: boolean): LaunchBody => ({
     vars: { ...(usesName ? { [NAME]: short } : {}), ...values },
