@@ -101,4 +101,15 @@ describe("console shell and routes", () => {
     expect(ta.readOnly).toBe(true);
     expect(screen.queryByRole("button", { name: "保存公钥" })).toBeNull();
   });
+
+  it("配置 sits in the sidebar for everyone, after 我的镜像", async () => {
+    stubFetch({ "/api/devpods": empty });
+    const me = stubMe();
+    me.features.snapshots = true;
+    renderWithProviders(app(), { route: "/settings", me });
+    const link = await screen.findByRole("link", { name: "配置" });
+    expect(link.getAttribute("href")).toBe("/configs");
+    const labels = screen.getAllByRole("link").map((a) => a.getAttribute("href"));
+    expect(labels.indexOf("/configs")).toBe(labels.indexOf("/images") + 1);
+  });
 });

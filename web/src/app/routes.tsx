@@ -19,6 +19,8 @@ import { HttpAuthPage } from "../features/devpods/HttpAuthPage";
 import { ReservationsPage } from "../features/reservations/ReservationsPage";
 import { ImagesPage } from "../features/images/ImagesPage";
 import { ShellPage } from "../features/shell/ShellPage";
+import { ConfigsPage } from "../features/configs/ConfigsPage";
+import { ConfigEditor } from "../features/configs/ConfigEditor";
 
 function SessionRedirect() {
   const { id } = useParams();
@@ -38,6 +40,9 @@ export function AppRoutes() {
         <Route path="http-auth" element={<HttpAuthPage />} />
         <Route path="reservations" element={<ReservationsPage />} />
         <Route path="images" element={<ImagesPage />} />
+        <Route path="configs" element={<ConfigsPage />} />
+        <Route path="configs/new" element={<ConfigEditor key="new" />} />
+        <Route path="configs/:name" element={<ConfigEditor />} />
         <Route path="settings" element={<SettingsPage />} />
         <Route path="settings/pubkeys" element={<Navigate to="/settings" replace />} />
         <Route path="settings/password" element={<Navigate to="/settings" replace />} />

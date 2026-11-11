@@ -34,39 +34,47 @@ export function migrateTargets(devpods: string[], nodes: string[]): [string, str
   return null;
 }
 
-function MigrateBody({ devpods, picked, setPicked, unpin, setUnpin }: { devpods: string[]; picked: string[]; setPicked: (n: string[]) => void; unpin: boolean; setUnpin: (b: boolean) => void }) {
+/** OrderedNodes: pick nodes one after another; the order of the clicks is
+ *  kept and shown. A node someone else holds now cannot be picked. */
+export function OrderedNodes({ picked, setPicked, disabled, legend = "目标节点（按点击顺序）" }: { picked: string[]; setPicked: (n: string[]) => void; disabled?: boolean; legend?: string }) {
   const nodes = useNodeChoices().data?.items ?? [];
+  return (
+    <fieldset disabled={disabled} className={disabled ? "opacity-40" : ""}>
+      <legend className="mb-1 font-medium">{legend}</legend>
+      <div className="flex flex-wrap gap-1.5">
+        {nodes.map((n) => {
+          const at = picked.indexOf(n.name);
+          return (
+            <button
+              key={n.name}
+              type="button"
+              disabled={!n.selectable}
+              aria-pressed={at >= 0}
+              title={!n.selectable && n.held ? `${n.held.user} 预约至 ${fmtTime(n.held.until)}` : n.next ? `将于 ${fmtTime(n.next.start)} 被 ${n.next.user} 预约，届时自动休眠` : n.ready ? undefined : "节点未就绪"}
+              onClick={() => setPicked(at >= 0 ? picked.filter((x) => x !== n.name) : [...picked, n.name])}
+              className={`mono inline-flex items-center gap-1 rounded-md border px-2 py-0.5 disabled:opacity-40 ${at >= 0 ? "border-accent bg-accent-soft text-accent" : "border-line text-muted hover:text-ink"}`}
+            >
+              {at >= 0 && <span className="rounded bg-accent px-1 text-[10px] text-white">{at + 1}</span>}
+              {n.name}
+              {!n.selectable && <span className="font-sans text-[10px]">已被预约</span>}
+              {n.selectable && !n.ready && <span className="font-sans text-[10px]">未就绪</span>}
+            </button>
+          );
+        })}
+        {nodes.length === 0 && <span className="text-faint">没有可选节点</span>}
+      </div>
+    </fieldset>
+  );
+}
+
+function MigrateBody({ devpods, picked, setPicked, unpin, setUnpin }: { devpods: string[]; picked: string[]; setPicked: (n: string[]) => void; unpin: boolean; setUnpin: (b: boolean) => void }) {
   const pairs = migrateTargets(devpods, picked);
   return (
     <div className="space-y-2 text-xs">
       <p className="text-muted">
         选 1 个节点：全部迁到它。选多个：数量要和 DevPod 相同，按勾选顺序一一对应。运行中的 DevPod 会在目标节点上重建，SSH 会话会断开；home 卷不变。
       </p>
-      <fieldset disabled={unpin} className={unpin ? "opacity-40" : ""}>
-        <legend className="mb-1 font-medium">目标节点（按点击顺序）</legend>
-        <div className="flex flex-wrap gap-1.5">
-          {nodes.map((n) => {
-            const at = picked.indexOf(n.name);
-            return (
-              <button
-                key={n.name}
-                type="button"
-                disabled={!n.selectable}
-                aria-pressed={at >= 0}
-                title={!n.selectable && n.held ? `${n.held.user} 预约至 ${fmtTime(n.held.until)}` : n.next ? `将于 ${fmtTime(n.next.start)} 被 ${n.next.user} 预约，届时自动休眠` : n.ready ? undefined : "节点未就绪"}
-                onClick={() => setPicked(at >= 0 ? picked.filter((x) => x !== n.name) : [...picked, n.name])}
-                className={`mono inline-flex items-center gap-1 rounded-md border px-2 py-0.5 disabled:opacity-40 ${at >= 0 ? "border-accent bg-accent-soft text-accent" : "border-line text-muted hover:text-ink"}`}
-              >
-                {at >= 0 && <span className="rounded bg-accent px-1 text-[10px] text-white">{at + 1}</span>}
-                {n.name}
-                {!n.selectable && <span className="font-sans text-[10px]">已被预约</span>}
-                {n.selectable && !n.ready && <span className="font-sans text-[10px]">未就绪</span>}
-              </button>
-            );
-          })}
-          {nodes.length === 0 && <span className="text-faint">没有可选节点</span>}
-        </div>
-      </fieldset>
+      <OrderedNodes picked={picked} setPicked={setPicked} disabled={unpin} />
       {!unpin && picked.length > 0 && !pairs && (
         <p role="alert" className="text-fail">
           已选 {picked.length} 个节点、{devpods.length} 个 DevPod：节点数要么是 1，要么等于 DevPod 数。

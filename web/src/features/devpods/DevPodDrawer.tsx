@@ -4,7 +4,7 @@ import { NodePicker } from "./NodePicker";
 import { fmtTime } from "../../lib/reservations";
 import { useMemo, useState, type FormEvent } from "react";
 import { useNavigate } from "react-router-dom";
-import { useQueryClient } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { createDevPod, patchDevPodSpec, ApiFailure, type DevPod, type SpecPatch } from "../../data/api";
 import { useMe, useTemplates } from "../../data/queries";
 import { Drawer } from "../../design/Drawer";
@@ -13,6 +13,7 @@ import { Field, Input, Notice, Select, Textarea } from "../../design/Form";
 import { parseQuantity } from "../../lib/format";
 import { quotaErrors, serverQuotaErrors, type QuotaField } from "./quota";
 import { MY_IMAGES_LIST, MyImagesList } from "../images/MyImages";
+import { getConfig, listConfigs } from "../configs/api";
 
 type Props = { mode: "create"; devpod?: undefined; initialImage?: string; open: boolean; onClose(): void } | { mode: "edit"; devpod: DevPod; open: boolean; onClose(): void };
 
@@ -42,6 +43,13 @@ export function DevPodDrawer(p: Props) {
   const [node, setNode] = useState(pinned);
   const [serverErr, setServerErr] = useState<{ fields: Partial<Record<QuotaField, string>>; text?: string } | null>(null);
   const [busy, setBusy] = useState(false);
+
+  // saved configs to load into the YAML editor (asked for only there)
+  const configs = useQuery({ queryKey: ["configs", "all"], queryFn: () => listConfigs(), enabled: !editing && yaml !== null, retry: false });
+  const loadConfig = (name: string) =>
+    getConfig(name)
+      .then((c) => setYaml(c.content))
+      .catch((e) => fail(e));
 
   const templates = tpl.data?.items ?? [];
   const presets = templates.filter((t) => t.spec.podPreset);
@@ -135,9 +143,26 @@ export function DevPodDrawer(p: Props) {
           </div>
         )}
         {yaml !== null ? (
-          <Field label="DevPod YAML">
-            <Textarea aria-label="DevPod YAML" rows={14} value={yaml} onChange={(e) => setYaml(e.target.value)} className="mono text-xs" spellCheck={false} />
-          </Field>
+          <>
+            <div className="flex flex-wrap items-center gap-2">
+              {(configs.data?.items.length ?? 0) > 0 && (
+                <Select aria-label="从配置载入" value="" onChange={(e) => e.target.value && void loadConfig(e.target.value)} className="!w-auto min-w-0 flex-1 text-xs">
+                  <option value="">从配置载入…</option>
+                  {configs.data!.items.map((c) => (
+                    <option key={c.name} value={c.name}>
+                      {c.title}（{c.name}）
+                    </option>
+                  ))}
+                </Select>
+              )}
+              <Button disabled={!yaml.trim()} onClick={() => nav("/configs/new", { state: { content: yaml } })} title="把编辑器里的内容存成可复用、可分享的配置">
+                保存为配置
+              </Button>
+            </div>
+            <Field label="DevPod YAML" hint="配置里的变量（${NAME} 等）要先替换成实际值；要填变量并批量创建，请到「配置」页">
+              <Textarea aria-label="DevPod YAML" rows={14} value={yaml} onChange={(e) => setYaml(e.target.value)} className="mono text-xs" spellCheck={false} />
+            </Field>
+          </>
         ) : (
           <>
             {!editing && presets.length > 0 && (

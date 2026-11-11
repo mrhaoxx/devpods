@@ -66,6 +66,7 @@ export function Sidebar({ me, onNavigate }: { me: Me; onNavigate?: () => void })
   const userItems: Item[] = [
     { to: "/", label: "我的 DevPod", icon: "▦", count: mine.data ? String(mine.data.items.length) : undefined, end: true },
     ...(me.features.snapshots ? [{ to: "/images", label: "我的镜像", icon: "◫" }] : []),
+    { to: "/configs", label: "配置", icon: "▧" },
     ...(me.features.reservations ? [{ to: "/reservations", label: "节点预约", icon: "▥" }] : []),
     ...(audit ? [{ to: "/sessions", label: "我的会话", icon: "◷" }] : []),
   ];

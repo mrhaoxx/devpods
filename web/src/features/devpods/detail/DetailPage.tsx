@@ -38,6 +38,7 @@ import { MonitorTab } from "./MonitorTab";
 import { ContainerTab } from "./ContainerTab";
 import { PortsPanel } from "./PortsPanel";
 import { SnapshotControl } from "../../images/SnapshotControl";
+import { devpodToConfig } from "../../configs/exportConfig";
 
 const schema = {
   tab: { kind: "string", default: "monitor" },
@@ -182,6 +183,9 @@ export function DetailPage() {
             复制 SSH
           </Button>
         )}
+        <Button onClick={() => nav("/configs/new", { state: { content: devpodToConfig(dp), title: dp.metadata.name } })} title="把这个 DevPod 的定义存成可复用、可分享的配置">
+          存为配置
+        </Button>
         <Button onClick={() => setUrl({ edit: true })}>编辑</Button>
         <Button onClick={() => setRunning.mutate({ name, running: !dp.spec.running })}>{dp.spec.running ? "休眠" : "启动"}</Button>
         <Button variant="danger" onClick={() => setConfirmDelete(true)}>

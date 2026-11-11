@@ -128,4 +128,10 @@ describe("DevPod detail", () => {
     await screen.findByRole("heading", { name: "alice-x" });
     await waitFor(() => expect(screen.getByTestId("card-cpu").querySelector("polyline")).toBeTruthy());
   });
+
+  it("存为配置 leaves for the config editor", async () => {
+    setup();
+    fireEvent.click(await screen.findByRole("button", { name: "存为配置" }));
+    await waitFor(() => expect(screen.queryByTestId("where")).toBeNull()); // the detail route is left
+  });
 });

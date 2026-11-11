@@ -57,4 +57,25 @@ describe("DevPodDrawer", () => {
     const alert = await screen.findByText(/已用 6，上限 8/);
     expect(alert.closest("label")?.textContent).toContain("CPU");
   });
+
+  it("the YAML editor loads a saved config and hands its text over to be saved as one", async () => {
+    stubFetch({
+      "/api/templates": { items: [] },
+      "GET /api/configs": { items: [{ name: "bob-sg", owner: "bob", title: "SGLang", description: "", sharedWith: [], public: true, variables: [], mine: false, updatedAt: "2026-11-11T00:00:00Z" }] },
+      "GET /api/configs/bob-sg": { name: "bob-sg", title: "SGLang", content: "kind: DevPod\nmetadata:\n  name: ${NAME}\n" },
+    });
+    renderWithProviders(
+      <>
+        <DevPodDrawer mode="create" open onClose={() => {}} />
+        <Where />
+      </>,
+    );
+    expect(screen.queryByRole("button", { name: "保存为配置" })).toBeNull(); // only with the YAML editor
+    fireEvent.click(screen.getByLabelText("使用 YAML"));
+    expect((screen.getByRole("button", { name: "保存为配置" }) as HTMLButtonElement).disabled).toBe(true); // nothing to save yet
+    fireEvent.change(await screen.findByLabelText("从配置载入"), { target: { value: "bob-sg" } });
+    await waitFor(() => expect((screen.getByLabelText("DevPod YAML") as HTMLTextAreaElement).value).toContain("name: ${NAME}"));
+    fireEvent.click(screen.getByRole("button", { name: "保存为配置" }));
+    await waitFor(() => expect(screen.getByTestId("where").textContent).toBe("/configs/new"));
+  });
 });
