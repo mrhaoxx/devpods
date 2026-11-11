@@ -34,7 +34,7 @@ export function Drawer({
               ✕
             </Dialog.Close>
           </header>
-          <div className="min-h-0 flex-1 overflow-y-auto p-4">{children}</div>
+          <div className="relative min-h-0 flex-1 overflow-y-auto p-4">{children}</div>
         </Dialog.Content>
       </Dialog.Portal>
     </Dialog.Root>

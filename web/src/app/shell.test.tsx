@@ -112,4 +112,16 @@ describe("console shell and routes", () => {
     const labels = screen.getAllByRole("link").map((a) => a.getAttribute("href"));
     expect(labels.indexOf("/configs")).toBe(labels.indexOf("/images") + 1);
   });
+
+  // Visually hidden labels in a long table are absolutely positioned: with
+  // no positioned ancestor they sit in the page, far below the window, and
+  // give the page a scrollbar and an empty tail of its own. The scrolling
+  // region is their containing block.
+  it("the page's scrolling region contains what is positioned inside it", async () => {
+    stubFetch({ "/api/devpods": empty });
+    renderWithProviders(app(), { route: "/" });
+    const main = await screen.findByRole("main");
+    expect(main.className).toMatch(/(^| )relative( |$)/);
+    expect(main.className).toMatch(/overflow-y-auto/);
+  });
 });
