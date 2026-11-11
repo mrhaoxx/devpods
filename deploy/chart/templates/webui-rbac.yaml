@@ -15,7 +15,7 @@ metadata:
   labels: {{ include "devpod.labels" . | nindent 4 }}
 rules:
 - apiGroups: ["devpod.io"]
-  resources: ["devpods", "devpodsnapshots"]
+  resources: ["devpods", "devpodsnapshots", "devpodconfigs"]
   verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
 - apiGroups: [""]
   resources: ["pods", "events"]
