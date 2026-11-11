@@ -32,6 +32,7 @@ func TestHTTPProxyAPI(t *testing.T) {
 		ID          string `json:"id"`
 		URLTemplate string `json:"urlTemplate"`
 		PublicPorts []int  `json:"publicPorts"`
+		UserPorts   []int  `json:"userPorts"`
 		URL         string `json:"url"`
 	}
 	call := func(h http.HandlerFunc, method, target string, c *http.Cookie, body string, want int) view {
@@ -92,7 +93,8 @@ func TestHTTPProxyAPI(t *testing.T) {
 	if tk := call(ticket, "POST", "/api/http/ticket", root, body(host, "/"), http.StatusOK); !strings.Contains(tk.URL, host) {
 		t.Fatalf("admin ticket %s", tk.URL)
 	}
-	call(ticket, "POST", "/api/http/ticket", bob, body(host, "/"), http.StatusForbidden)
+	// (8080 is public by now, so the stranger is tried on a private port)
+	call(ticket, "POST", "/api/http/ticket", bob, body(v.ID+"-7000-devpod.apps.test", "/"), http.StatusForbidden)
 	call(ticket, "POST", "/api/http/ticket", alice, body("zzzzzzzz2222-8080-devpod.apps.test", "/"), http.StatusForbidden)
 	// a ticket is only ever sent to a proxy hostname
 	call(ticket, "POST", "/api/http/ticket", alice, body("evil.test", "/"), http.StatusBadRequest)
@@ -100,6 +102,15 @@ func TestHTTPProxyAPI(t *testing.T) {
 	if tk := call(ticket, "POST", "/api/http/ticket", alice, body(host, "//evil.test"), http.StatusOK); !strings.Contains(tk.URL, "rd=%2F&") && !strings.HasSuffix(tk.URL, "rd=%2F") {
 		t.Fatalf("rd not neutralised: %s", tk.URL)
 	}
+
+	// a port opened to signed-in users: a stranger gets a ticket for that
+	// port only
+	users := call(put, "PUT", "/api/devpods/hp-alice-dev1/http", alice, `{"userPorts":[9000]}`, http.StatusOK)
+	if len(users.UserPorts) != 1 || users.UserPorts[0] != 9000 || len(users.PublicPorts) != 2 {
+		t.Fatalf("user ports %+v", users)
+	}
+	call(ticket, "POST", "/api/http/ticket", bob, body(v.ID+"-9000-devpod.apps.test", "/"), http.StatusOK)
+	call(ticket, "POST", "/api/http/ticket", bob, body(v.ID+"-9001-devpod.apps.test", "/"), http.StatusForbidden)
 
 	// a reset draws a new id: the old address is gone
 	re := call(put, "PUT", "/api/devpods/hp-alice-dev1/http", alice, `{"reset":true}`, http.StatusOK)

@@ -96,6 +96,9 @@ func Tick(ctx context.Context, h *Hub, every time.Duration, build func() Snapsho
 		case <-ctx.Done():
 			return
 		case <-t.C:
+			// asserted every tick, not once: nothing else may leave a
+			// leader looking disconnected while it publishes
+			h.SetConnected(true)
 			if h.Subscribers() > 0 {
 				h.Publish(build())
 			}

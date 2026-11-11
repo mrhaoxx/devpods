@@ -72,6 +72,8 @@ type httpView struct {
 	// URLTemplate has the id filled in and {port} left for the caller.
 	URLTemplate string `json:"urlTemplate"`
 	PublicPorts []int  `json:"publicPorts"`
+	// UserPorts are open to anyone signed in to the console.
+	UserPorts []int `json:"userPorts"`
 }
 
 func (h *HTTPProxy) view(dp *devpodv1alpha1.DevPod) httpView {
@@ -80,7 +82,11 @@ func (h *HTTPProxy) view(dp *devpodv1alpha1.DevPod) httpView {
 	if ports == nil {
 		ports = []int{}
 	}
-	return httpView{ID: id, URLTemplate: h.Scheme + "://" + strings.Replace(h.HostTemplate, "{id}", id, 1), PublicPorts: ports}
+	users := httpauth.UserPorts(dp)
+	if users == nil {
+		users = []int{}
+	}
+	return httpView{ID: id, URLTemplate: h.Scheme + "://" + strings.Replace(h.HostTemplate, "{id}", id, 1), PublicPorts: ports, UserPorts: users}
 }
 
 func (s *Server) httpProxy(w http.ResponseWriter) (*HTTPProxy, bool) {
@@ -143,7 +149,8 @@ func (s *Server) handleGetHTTP(w http.ResponseWriter, r *http.Request) {
 	s.writeJSON(w, http.StatusOK, h.view(dp))
 }
 
-// handlePutHTTP serves PUT /api/devpods/{name}/http: {"publicPorts":[…]}
+// handlePutHTTP serves PUT /api/devpods/{name}/http: {"publicPorts":[…]} and
+// {"userPorts":[…]} (ports open to every signed-in user)
 // replaces the public ports; {"reset":true} draws a new id, which kills
 // every link handed out so far.
 func (s *Server) handlePutHTTP(w http.ResponseWriter, r *http.Request) {
@@ -161,6 +168,7 @@ func (s *Server) handlePutHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	var req struct {
 		PublicPorts *[]int `json:"publicPorts"`
+		UserPorts   *[]int `json:"userPorts"`
 		Reset       bool   `json:"reset"`
 	}
 	dec := json.NewDecoder(r.Body)
@@ -169,12 +177,15 @@ func (s *Server) handlePutHTTP(w http.ResponseWriter, r *http.Request) {
 		s.writeErr(w, http.StatusBadRequest, "BAD_REQUEST", "malformed request body: "+err.Error(), nil)
 		return
 	}
-	if req.PublicPorts != nil {
-		if len(*req.PublicPorts) > 32 {
-			s.writeErr(w, http.StatusBadRequest, "BAD_REQUEST", "at most 32 public ports", nil)
+	for _, list := range []*[]int{req.PublicPorts, req.UserPorts} {
+		if list == nil {
+			continue
+		}
+		if len(*list) > 32 {
+			s.writeErr(w, http.StatusBadRequest, "BAD_REQUEST", "at most 32 ports per access level", nil)
 			return
 		}
-		for _, p := range *req.PublicPorts {
+		for _, p := range *list {
 			if p < 1 || p > 65535 {
 				s.writeErr(w, http.StatusBadRequest, "BAD_REQUEST", fmt.Sprintf("invalid port %d", p), nil)
 				return
@@ -185,12 +196,18 @@ func (s *Server) handlePutHTTP(w http.ResponseWriter, r *http.Request) {
 		if req.Reset || a[httpauth.IDAnnotation] == "" {
 			a[httpauth.IDAnnotation] = httpauth.NewID()
 		}
-		if req.PublicPorts != nil {
-			if v := httpauth.FormatPorts(*req.PublicPorts); v != "" {
-				a[httpauth.PublicPortsAnnotation] = v
+		set := func(key string, ports []int) {
+			if v := httpauth.FormatPorts(ports); v != "" {
+				a[key] = v
 			} else {
-				delete(a, httpauth.PublicPortsAnnotation)
+				delete(a, key)
 			}
+		}
+		if req.PublicPorts != nil {
+			set(httpauth.PublicPortsAnnotation, *req.PublicPorts)
+		}
+		if req.UserPorts != nil {
+			set(httpauth.UserPortsAnnotation, *req.UserPorts)
 		}
 	})
 	if err != nil {
@@ -222,7 +239,7 @@ func (s *Server) handleHTTPTicket(w http.ResponseWriter, r *http.Request) {
 		s.writeErr(w, http.StatusBadRequest, "BAD_REQUEST", "malformed request body", nil)
 		return
 	}
-	id, _, ok := h.parseHost(req.Host)
+	id, port, ok := h.parseHost(req.Host)
 	if !ok {
 		s.writeErr(w, http.StatusBadRequest, "BAD_REQUEST", "not a DevPod port address", nil)
 		return
@@ -239,7 +256,7 @@ func (s *Server) handleHTTPTicket(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	// one answer for "no such address" and "not yours": ids stay unguessable
-	if dp == nil || !httpauth.Allowed(dp, sess.User, sess.Admin) {
+	if dp == nil || !httpauth.MayOpen(dp, port, sess.User, sess.Admin) {
 		s.writeErr(w, http.StatusForbidden, "FORBIDDEN", "this address does not exist or you have no access to it", nil)
 		return
 	}

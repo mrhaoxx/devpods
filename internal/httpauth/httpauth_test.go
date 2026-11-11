@@ -57,3 +57,31 @@ func TestIDsPortsAccess(t *testing.T) {
 		t.Fatal("admin")
 	}
 }
+
+func TestPortAccess(t *testing.T) {
+	dp := &devpodv1alpha1.DevPod{ObjectMeta: metav1.ObjectMeta{Annotations: map[string]string{PublicPortsAnnotation: "8080,9000", UserPortsAnnotation: "8888,9000"}},
+		Spec: devpodv1alpha1.DevPodSpec{Owner: "alice", Collaborators: []string{"bob"}}}
+	for port, want := range map[int]string{8080: AccessPublic, 8888: AccessUsers, 9000: AccessPublic, 7000: AccessPrivate} {
+		if got := Access(dp, port); got != want {
+			t.Fatalf("Access(%d) = %s, want %s", port, got, want)
+		}
+	}
+	for _, tc := range []struct {
+		port  int
+		user  string
+		admin bool
+		want  bool
+	}{
+		{8080, "", false, true},       // public: no sign-in
+		{8888, "", false, false},      // signed-in users only
+		{8888, "carol", false, true},  // any signed-in user
+		{7000, "carol", false, false}, // private: not a collaborator
+		{7000, "bob", false, true},
+		{7000, "alice", false, true},
+		{7000, "root", true, true},
+	} {
+		if got := MayOpen(dp, tc.port, tc.user, tc.admin); got != tc.want {
+			t.Fatalf("MayOpen(%d, %q, admin=%v) = %v", tc.port, tc.user, tc.admin, got)
+		}
+	}
+}

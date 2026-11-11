@@ -30,6 +30,9 @@ const (
 	IDAnnotation = "devpod.io/http-id"
 	// PublicPortsAnnotation lists the ports open without a login, "8080,8888".
 	PublicPortsAnnotation = "devpod.io/http-public-ports"
+	// UserPortsAnnotation lists the ports open to anyone signed in to the
+	// console (not only the owner and collaborators).
+	UserPortsAnnotation = "devpod.io/http-user-ports"
 
 	// AuthPath on a proxy hostname takes the webui's ticket and sets the cookie.
 	AuthPath = "/__devpod/auth"
@@ -71,10 +74,44 @@ func ValidID(s string) bool {
 	return true
 }
 
+// Access levels of a port, from the most open.
+const (
+	AccessPublic  = "public"  // anyone with the link
+	AccessUsers   = "users"   // anyone signed in to the console
+	AccessPrivate = "private" // the owner, collaborators and admins
+)
+
 // PublicPorts parses the DevPod's public-port annotation.
-func PublicPorts(dp *devpodv1alpha1.DevPod) []int {
+func PublicPorts(dp *devpodv1alpha1.DevPod) []int { return portsOf(dp, PublicPortsAnnotation) }
+
+// UserPorts parses the ports open to every signed-in user.
+func UserPorts(dp *devpodv1alpha1.DevPod) []int { return portsOf(dp, UserPortsAnnotation) }
+
+// Access is the port's level; public wins when a port is listed twice.
+func Access(dp *devpodv1alpha1.DevPod, port int) string {
+	switch {
+	case slices.Contains(PublicPorts(dp), port):
+		return AccessPublic
+	case slices.Contains(UserPorts(dp), port):
+		return AccessUsers
+	}
+	return AccessPrivate
+}
+
+// MayOpen: whether user ("" = not signed in) may reach the port.
+func MayOpen(dp *devpodv1alpha1.DevPod, port int, user string, admin bool) bool {
+	switch Access(dp, port) {
+	case AccessPublic:
+		return true
+	case AccessUsers:
+		return user != ""
+	}
+	return Allowed(dp, user, admin)
+}
+
+func portsOf(dp *devpodv1alpha1.DevPod, annotation string) []int {
 	var out []int
-	for _, f := range strings.Split(dp.Annotations[PublicPortsAnnotation], ",") {
+	for _, f := range strings.Split(dp.Annotations[annotation], ",") {
 		if n, err := strconv.Atoi(strings.TrimSpace(f)); err == nil && n >= 1 && n <= 65535 && !slices.Contains(out, n) {
 			out = append(out, n)
 		}

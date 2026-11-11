@@ -179,6 +179,48 @@ func TestHTTPProxy_PrivateByDefault(t *testing.T) {
 	}
 }
 
+// A port opened to signed-in users: anyone the console signed in gets
+// through, nobody without a cookie does.
+func TestHTTPProxy_SignedInUsersPort(t *testing.T) {
+	p, do, seen, bport := proxyRig(t)
+	var dp devpodv1alpha1.DevPod
+	_ = p.c.Get(context.Background(), client.ObjectKey{Name: "alice-dev", Namespace: "devpods"}, &dp)
+	dp.Annotations[httpauth.UserPortsAnnotation] = bport
+	if err := p.c.(client.Client).Update(context.Background(), &dp); err != nil {
+		t.Fatal(err)
+	}
+	if resp := do("GET", "/", map[string]string{"Accept": "text/html"}); resp.StatusCode != http.StatusFound {
+		t.Fatalf("no cookie: %d (want the sign-in redirect)", resp.StatusCode)
+	}
+	if resp := do("GET", "/api", nil); resp.StatusCode != http.StatusUnauthorized || len(*seen) != 0 {
+		t.Fatalf("no cookie, not a browser: %d %v", resp.StatusCode, *seen)
+	}
+	// carol is neither owner nor collaborator
+	tk := httpauth.Sign(p.Key, httpauth.Claims{Kind: httpauth.KindTicket, ID: idA, User: "carol", Exp: time.Now().Add(time.Minute).Unix()})
+	resp := do("GET", httpauth.AuthPath+"?rd=%2F&t="+tk, nil)
+	if resp.StatusCode != http.StatusFound || len(resp.Cookies()) != 1 {
+		t.Fatalf("ticket for a signed-in stranger: %d", resp.StatusCode)
+	}
+	ck := resp.Cookies()[0]
+	if resp := do("GET", "/app", map[string]string{"Cookie": ck.Name + "=" + ck.Value}); resp.StatusCode != http.StatusOK || len(*seen) != 1 {
+		t.Fatalf("signed-in user: %d %v", resp.StatusCode, *seen)
+	}
+	// the same cookie does not open a private port of the same DevPod
+	if resp := do("GET", "/", map[string]string{"Host": idA + "-9-devpod.apps.test", "Cookie": ck.Name + "=" + ck.Value}); resp.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("private port with a stranger's cookie: %d", resp.StatusCode)
+	}
+	// closing the port again shuts the stranger out at once
+	delete(dp.Annotations, httpauth.UserPortsAnnotation)
+	_ = p.c.Get(context.Background(), client.ObjectKey{Name: "alice-dev", Namespace: "devpods"}, &dp)
+	delete(dp.Annotations, httpauth.UserPortsAnnotation)
+	if err := p.c.(client.Client).Update(context.Background(), &dp); err != nil {
+		t.Fatal(err)
+	}
+	if resp := do("GET", "/app", map[string]string{"Cookie": ck.Name + "=" + ck.Value}); resp.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("after closing: %d", resp.StatusCode)
+	}
+}
+
 func TestHTTPProxy_PublicPortAndGuards(t *testing.T) {
 	p, do, seen, bport := proxyRig(t)
 	if resp := do("GET", "/", map[string]string{"Host": "zzzzzzzz2222-" + bport + "-devpod.apps.test"}); resp.StatusCode != http.StatusNotFound {

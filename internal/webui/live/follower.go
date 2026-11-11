@@ -88,6 +88,11 @@ func Follow(ctx context.Context, addr func() (string, error), token string, h *H
 	backoff := time.Second
 	for ctx.Err() == nil {
 		got := followOnce(ctx, addr, token, h)
+		if ctx.Err() != nil {
+			// told to stop — this replica is taking over as leader, whose
+			// own state is already "connected": leave the flag alone
+			return
+		}
 		h.SetConnected(false)
 		if got {
 			backoff = time.Second

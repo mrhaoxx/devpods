@@ -119,3 +119,51 @@ func TestRemoteSource_DevPodFrame(t *testing.T) {
 		t.Fatal("wrong token accepted")
 	}
 }
+
+// A follower that becomes the leader stops following while its own Tick
+// has already started: the follower loop winding down must not leave the
+// new leader looking disconnected (the "实时数据重连中…" bar while data
+// flows).
+func TestFollowerToLeader_StaysConnected(t *testing.T) {
+	const token = "tok"
+	old := NewHub()
+	oldLeader := httptest.NewServer(LiveHandler(old, token, func() bool { return true }))
+	defer oldLeader.Close()
+	tctx, stopOld := context.WithCancel(context.Background())
+	defer stopOld()
+	go Tick(tctx, old, 20*time.Millisecond, func() Snapshot { return Snapshot{TS: time.Unix(1, 0).UTC()} })
+
+	h := NewHub()
+	h.SetConnected(false)
+	ch, unsub := h.Subscribe()
+	defer unsub()
+	fctx, stopFollowing := context.WithCancel(context.Background())
+	followed := make(chan struct{})
+	go func() {
+		Follow(fctx, func() (string, error) { return strings.TrimPrefix(oldLeader.URL, "http://"), nil }, token, h)
+		close(followed)
+	}()
+	select {
+	case <-ch: // following works
+	case <-time.After(5 * time.Second):
+		t.Fatal("the follower never got a snapshot")
+	}
+
+	// leadership arrives: the leader's Tick starts, then the follower loop is told to stop
+	lctx, stopLeading := context.WithCancel(context.Background())
+	defer stopLeading()
+	go Tick(lctx, h, 20*time.Millisecond, func() Snapshot { return Snapshot{TS: time.Unix(2, 0).UTC()} })
+	time.Sleep(50 * time.Millisecond)
+	stopFollowing()
+	<-followed
+	time.Sleep(100 * time.Millisecond)
+	if !h.Connected() {
+		t.Fatal("the new leader reports disconnected after it stopped following")
+	}
+	// and a hub marked disconnected by anything recovers while it leads
+	h.SetConnected(false)
+	time.Sleep(100 * time.Millisecond)
+	if !h.Connected() {
+		t.Fatal("a leading hub stayed disconnected")
+	}
+}

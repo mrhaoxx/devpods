@@ -11,7 +11,6 @@ import (
 	"net/http"
 	"net/http/httputil"
 	"net/url"
-	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -28,10 +27,11 @@ import (
 //	k3x7qmpw2abc-8888-devpod.clusters.zjusct.io → that DevPod, port 8888
 //
 // The hostname names neither the DevPod nor its owner. A port is private
-// unless the owner made it public: a private port needs the gateway's
-// cookie for that hostname, which the webui hands out (as a one-minute
-// ticket, see AuthPath) to the owner, collaborators and admins. Every
-// request re-checks that the cookie's user may still reach the DevPod.
+// (owner, collaborators, admins) unless the owner opened it to every
+// signed-in user or to anyone with the link. Anything short of public
+// needs the gateway's cookie for that hostname, which the webui hands
+// out as a one-minute ticket (see AuthPath). Every request re-checks
+// that the cookie's user may still reach the port.
 type HTTPProxy struct {
 	c          client.Reader
 	dpNS       string
@@ -111,14 +111,14 @@ func (p *HTTPProxy) parseHost(host string) (string, int, error) {
 func (p *HTTPProxy) secure() bool { return strings.HasPrefix(p.LoginURL, "https://") }
 
 // user returns who the request's cookie says it is, if that user may
-// (still) reach dp.
-func (p *HTTPProxy) user(r *http.Request, id string, dp *devpodv1alpha1.DevPod) (string, bool) {
+// (still) reach this port of dp.
+func (p *HTTPProxy) user(r *http.Request, id string, port int, dp *devpodv1alpha1.DevPod) (string, bool) {
 	ck, err := r.Cookie(httpauth.CookieName)
 	if err != nil {
 		return "", false
 	}
 	c, err := httpauth.Verify(p.Key, ck.Value, httpauth.KindCookie, p.Now())
-	if err != nil || c.ID != id || !httpauth.Allowed(dp, c.User, c.Admin) {
+	if err != nil || c.ID != id || c.User == "" || !httpauth.MayOpen(dp, port, c.User, c.Admin) {
 		return "", false
 	}
 	return c.User, true
@@ -133,9 +133,9 @@ func safeReturn(rd string) string {
 }
 
 // handleAuth turns the webui's ticket into this hostname's cookie.
-func (p *HTTPProxy) handleAuth(w http.ResponseWriter, r *http.Request, id string, dp *devpodv1alpha1.DevPod) {
+func (p *HTTPProxy) handleAuth(w http.ResponseWriter, r *http.Request, id string, port int, dp *devpodv1alpha1.DevPod) {
 	c, err := httpauth.Verify(p.Key, r.URL.Query().Get("t"), httpauth.KindTicket, p.Now())
-	if err != nil || c.ID != id || !httpauth.Allowed(dp, c.User, c.Admin) {
+	if err != nil || c.ID != id || c.User == "" || !httpauth.MayOpen(dp, port, c.User, c.Admin) {
 		http.Error(w, "this link has expired; open the port again from the DevPod console", http.StatusForbidden)
 		return
 	}
@@ -171,15 +171,15 @@ func (p *HTTPProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if r.URL.Path == httpauth.AuthPath {
-		p.handleAuth(w, r, id, dp)
+		p.handleAuth(w, r, id, port, dp)
 		return
 	}
 	user, authed := "", false
-	if !slices.Contains(httpauth.PublicPorts(dp), port) {
-		if user, authed = p.user(r, id, dp); !authed {
+	if httpauth.Access(dp, port) != httpauth.AccessPublic {
+		if user, authed = p.user(r, id, port, dp); !authed {
 			browser := (r.Method == http.MethodGet || r.Method == http.MethodHead) && strings.Contains(r.Header.Get("Accept"), "text/html")
 			if !browser || p.LoginURL == "" || len(p.Key) == 0 {
-				http.Error(w, "this port is private: sign in to the DevPod console and open it from there", http.StatusUnauthorized)
+				http.Error(w, "this port needs a sign-in: open it from the DevPod console", http.StatusUnauthorized)
 				return
 			}
 			q := url.Values{"host": {r.Host}, "rd": {r.URL.RequestURI()}}
