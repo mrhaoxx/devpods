@@ -123,6 +123,14 @@ func (s *Server) handlePasswordLogin(w http.ResponseWriter, r *http.Request) {
 		fail()
 		return
 	}
+	// A first sign-in from the directory leaves a User object (no keys, no
+	// password): the person is listed among the users and has somewhere to
+	// keep settings. Not having one is no reason to refuse the sign-in.
+	if userPtr == nil {
+		if err := s.ensureUser(r.Context(), req.Username); err != nil {
+			slog.Warn("user object after ldap login", "user", req.Username, "err", err)
+		}
+	}
 	s.setSession(w, req.Username, s.adminFor(req.Username, userPtr))
 	s.writeJSON(w, http.StatusOK, map[string]any{"user": req.Username})
 }

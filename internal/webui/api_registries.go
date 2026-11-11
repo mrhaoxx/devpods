@@ -5,8 +5,11 @@
 package webui
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"net/http"
 	"regexp"
 	"slices"
@@ -74,7 +77,7 @@ func (s *Server) handleListRegistries(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var u devpodv1alpha1.User
-	if err := s.Reader.Get(r.Context(), types.NamespacedName{Name: sess.User}, &u); err != nil {
+	if err := s.ownUser(r.Context(), sess.User, false, &u); err != nil {
 		s.writeErr(w, http.StatusInternalServerError, "INTERNAL", err.Error(), nil)
 		return
 	}
@@ -113,7 +116,7 @@ func (s *Server) handlePutRegistry(w http.ResponseWriter, r *http.Request) {
 	var out []registryView
 	err := retry.RetryOnConflict(retry.DefaultRetry, func() error {
 		var u devpodv1alpha1.User
-		if err := s.Reader.Get(r.Context(), types.NamespacedName{Name: sess.User}, &u); err != nil {
+		if err := s.ownUser(r.Context(), sess.User, true, &u); err != nil {
 			return err
 		}
 		i := slices.IndexFunc(u.Spec.Registries, func(reg devpodv1alpha1.UserRegistry) bool { return reg.Host == host })
@@ -151,7 +154,7 @@ func (s *Server) handleDeleteRegistry(w http.ResponseWriter, r *http.Request) {
 	found := false
 	err := retry.RetryOnConflict(retry.DefaultRetry, func() error {
 		var u devpodv1alpha1.User
-		if err := s.Reader.Get(r.Context(), types.NamespacedName{Name: sess.User}, &u); err != nil {
+		if err := s.ownUser(r.Context(), sess.User, false, &u); err != nil {
 			return err
 		}
 		n := len(u.Spec.Registries)
@@ -170,4 +173,33 @@ func (s *Server) handleDeleteRegistry(w http.ResponseWriter, r *http.Request) {
 	default:
 		w.WriteHeader(http.StatusNoContent)
 	}
+}
+
+// ownUser reads the caller's own User object into u. Someone whose
+// identity is the LDAP directory's may have none: u is then left empty —
+// nothing saved yet — unless create is set, for the first thing they
+// save; the object made has no keys and no password (their SSH keys stay
+// the directory's).
+func (s *Server) ownUser(ctx context.Context, name string, create bool, u *devpodv1alpha1.User) error {
+	err := s.Reader.Get(ctx, types.NamespacedName{Name: name}, u)
+	if !apierrors.IsNotFound(err) {
+		return err
+	}
+	*u = devpodv1alpha1.User{}
+	if !create {
+		return nil
+	}
+	if err := s.ensureUser(ctx, name); err != nil {
+		return err
+	}
+	return s.Reader.Get(ctx, types.NamespacedName{Name: name}, u)
+}
+
+// ensureUser makes the key-less User object of name if there is none.
+func (s *Server) ensureUser(ctx context.Context, name string) error {
+	err := s.Client.Create(ctx, &devpodv1alpha1.User{ObjectMeta: metav1.ObjectMeta{Name: name}})
+	if apierrors.IsAlreadyExists(err) {
+		return nil
+	}
+	return err
 }

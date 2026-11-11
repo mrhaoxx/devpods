@@ -347,7 +347,7 @@ func (s *Server) handleListTokens(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var u devpodv1alpha1.User
-	if err := s.Reader.Get(r.Context(), types.NamespacedName{Name: sess.User}, &u); err != nil {
+	if err := s.ownUser(r.Context(), sess.User, false, &u); err != nil {
 		s.writeErr(w, http.StatusInternalServerError, "INTERNAL", err.Error(), nil)
 		return
 	}
@@ -422,7 +422,7 @@ func (s *Server) handleCreateToken(w http.ResponseWriter, r *http.Request) {
 	full := false
 	err := retry.RetryOnConflict(retry.DefaultRetry, func() error {
 		var u devpodv1alpha1.User
-		if err := s.Reader.Get(r.Context(), types.NamespacedName{Name: sess.User}, &u); err != nil {
+		if err := s.ownUser(r.Context(), sess.User, true, &u); err != nil {
 			return err
 		}
 		if full = len(u.Spec.APITokens) >= maxTokens; full {
@@ -451,7 +451,7 @@ func (s *Server) handleDeleteToken(w http.ResponseWriter, r *http.Request) {
 	id, found := r.PathValue("id"), false
 	err := retry.RetryOnConflict(retry.DefaultRetry, func() error {
 		var u devpodv1alpha1.User
-		if err := s.Reader.Get(r.Context(), types.NamespacedName{Name: sess.User}, &u); err != nil {
+		if err := s.ownUser(r.Context(), sess.User, false, &u); err != nil {
 			return err
 		}
 		n := len(u.Spec.APITokens)

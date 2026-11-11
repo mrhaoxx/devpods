@@ -257,6 +257,16 @@ func TestLDAPLogin(t *testing.T) {
 	if sess := session(login("ld-alice", "alice-pw")); sess.User != "ld-alice" || sess.Admin {
 		t.Fatalf("session %+v", sess)
 	}
+	// the first sign-in leaves a User object without keys: the person shows
+	// up among the users and has somewhere to keep settings; their SSH keys
+	// stay the directory's
+	t.Cleanup(func() { dropUser("ld-alice"); dropUser("ld-root") })
+	if u, there := userObject(t, "ld-alice"); !there || len(u.Spec.Pubkeys) != 0 || u.Spec.PasswordHash != "" || u.Spec.Admin {
+		t.Fatalf("after the first sign-in: %v %+v", there, u)
+	}
+	if _, there := userObject(t, "ld-nobody"); there {
+		t.Fatal("a failed sign-in made a User object")
+	}
 	if sess := session(login("ld-root", "root-pw")); !sess.Admin {
 		t.Fatalf("an admin by --admins: %+v", sess)
 	}
