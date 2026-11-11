@@ -357,3 +357,24 @@ spec:
 		}
 	})
 }
+
+// A batch is checked as a whole: the DevPods already accepted in it
+// count toward the quota of the next one.
+func TestPrepareDevPod_PendingCountsTowardQuota(t *testing.T) {
+	setupSuite(t)
+	s, _ := newServer(t)
+	r := httptest.NewRequest("POST", "/api/devpods", nil)
+	big := func(name string) webui.CreateRequest {
+		return webui.CreateRequest{Name: name, Image: "ubuntu:24.04", CPU: "6", Memory: "8Gi"}
+	}
+	first, code := s.PrepareDevPodForTest(r, "pq-alice", big("a"), nil)
+	if code != "" || first == nil || first.Name != "pq-alice-a" {
+		t.Fatalf("first: %q %+v", code, first)
+	}
+	if _, code := s.PrepareDevPodForTest(r, "pq-alice", big("b"), nil); code != "" {
+		t.Fatalf("alone, the second fits: %q", code)
+	}
+	if _, code := s.PrepareDevPodForTest(r, "pq-alice", big("b"), []*devpodv1alpha1.DevPod{first}); code != "QUOTA_EXCEEDED" {
+		t.Fatalf("with the first pending: %q, want QUOTA_EXCEEDED", code)
+	}
+}

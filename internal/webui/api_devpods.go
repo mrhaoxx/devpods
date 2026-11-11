@@ -158,19 +158,27 @@ func (s *Server) getOwned(w http.ResponseWriter, r *http.Request, sess Session, 
 	return &dp, true
 }
 
-// rejectKore enforces the stamping invariant for non-admins: no
+// koreErr enforces the stamping invariant for non-admins: no
 // kore.zjusct.io/* annotations anywhere in the submitted object.
-func (s *Server) rejectKore(w http.ResponseWriter, sess Session, dp *devpodv1alpha1.DevPod) bool {
+func koreErr(sess Session, dp *devpodv1alpha1.DevPod) *serverErr {
 	if sess.Admin {
-		return true
+		return nil
 	}
 	offending := KoreAnnotationKeys(dp.Annotations)
 	if dp.Spec.Pod != nil {
 		offending = append(offending, KoreAnnotationKeys(dp.Spec.Pod.Metadata.Annotations)...)
 	}
 	if len(offending) > 0 {
-		s.writeErr(w, http.StatusForbidden, "KORE_ANNOTATIONS_FORBIDDEN",
-			"CPU-binding annotations can only come from a template (pick one via templateRef)", offending)
+		return &serverErr{http.StatusForbidden, "KORE_ANNOTATIONS_FORBIDDEN",
+			"CPU-binding annotations can only come from a template (pick one via templateRef)", offending}
+	}
+	return nil
+}
+
+// rejectKore is koreErr, written to the response.
+func (s *Server) rejectKore(w http.ResponseWriter, sess Session, dp *devpodv1alpha1.DevPod) bool {
+	if apiErr := koreErr(sess, dp); apiErr != nil {
+		s.writeErr(w, apiErr.status, apiErr.Code, apiErr.Message, apiErr.Detail)
 		return false
 	}
 	return true
@@ -186,8 +194,9 @@ func (s *Server) checkQuotaFor(w http.ResponseWriter, r *http.Request, sess Sess
 	return true
 }
 
-// quotaErrFor is checkQuotaFor without writing the response.
-func (s *Server) quotaErrFor(r *http.Request, sess Session, proposed *devpodv1alpha1.DevPod, exclude string) *serverErr {
+// quotaErrFor is checkQuotaFor without writing the response. pending
+// are DevPods about to be created with proposed: counted as existing.
+func (s *Server) quotaErrFor(r *http.Request, sess Session, proposed *devpodv1alpha1.DevPod, exclude string, pending ...*devpodv1alpha1.DevPod) *serverErr {
 	if sess.Admin {
 		return nil
 	}
@@ -205,6 +214,9 @@ func (s *Server) quotaErrFor(r *http.Request, sess Session, proposed *devpodv1al
 		if dp.Name != exclude {
 			existing = append(existing, dp)
 		}
+	}
+	for _, dp := range pending {
+		existing = append(existing, *dp)
 	}
 	if qErr := CheckQuota(EffectiveQuota(userPtr, s.DefaultQuota), existing, proposed); qErr != nil {
 		return &serverErr{http.StatusConflict, "QUOTA_EXCEEDED", qErr.Error(), qErr.Violations}
@@ -351,61 +363,71 @@ func (s *Server) handleCreateDevPod(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	dp, apiErr := s.buildDevPod(sess, req)
+	dp, apiErr := s.prepareDevPod(r, sess, req, nil)
 	if apiErr != nil {
 		s.writeErr(w, apiErr.status, apiErr.Code, apiErr.Message, apiErr.Detail)
 		return
 	}
-	if !s.rejectKore(w, sess, dp) {
+	if err := s.Client.Create(r.Context(), dp); err != nil {
+		// k8s Status errors (CEL rejections etc.) pass through verbatim.
+		s.writeErr(w, http.StatusBadRequest, "BAD_REQUEST", "create rejected", err.Error())
 		return
+	}
+	s.writeJSON(w, http.StatusCreated, dp)
+}
+
+// prepareDevPod is everything between a create request and the write:
+// the DevPod it describes, with every rule applied — who may own it,
+// the stamping and Secret guards, the template, limits, the node choice
+// and the quota. pending are DevPods accepted earlier in the same batch
+// and not yet created: they count toward the quota.
+func (s *Server) prepareDevPod(r *http.Request, sess Session, req CreateRequest, pending []*devpodv1alpha1.DevPod) (*devpodv1alpha1.DevPod, *serverErr) {
+	dp, apiErr := s.buildDevPod(sess, req)
+	if apiErr != nil {
+		return nil, apiErr
+	}
+	if apiErr := koreErr(sess, dp); apiErr != nil {
+		return nil, apiErr
 	}
 	// What the user wrote themselves (the YAML path) may not reach
 	// Secrets or a service account token. Checked before a template is
 	// applied: an admin's preset is not the user's writing.
 	if !sess.Admin && dp.Spec.Pod != nil {
 		if apiErr := guardUserPodSpec(&dp.Spec.Pod.Spec, sess.User); apiErr != nil {
-			s.writeErr(w, apiErr.status, apiErr.Code, apiErr.Message, apiErr.Detail)
-			return
+			return nil, apiErr
 		}
 	}
 
 	if req.TemplateRef != "" {
 		var tpl devpodv1alpha1.DevPodTemplate
 		if err := s.Client.Get(r.Context(), types.NamespacedName{Name: req.TemplateRef}, &tpl); err != nil {
-			s.writeErr(w, http.StatusBadRequest, "BAD_REQUEST", fmt.Sprintf("template %q not found", req.TemplateRef), nil)
-			return
+			return nil, &serverErr{http.StatusBadRequest, "BAD_REQUEST", fmt.Sprintf("template %q not found", req.TemplateRef), nil}
 		}
 		if !s.KoreEnabled && tpl.Spec.Binding != nil {
-			s.writeErr(w, http.StatusBadRequest, "BAD_REQUEST", "binding templates are unavailable: Kore is not installed", nil)
-			return
+			return nil, &serverErr{http.StatusBadRequest, "BAD_REQUEST", "binding templates are unavailable: Kore is not installed", nil}
 		}
 		if err := ApplyTemplate(dp, &tpl); err != nil {
-			s.writeErr(w, http.StatusBadRequest, "BAD_REQUEST", err.Error(), nil)
-			return
+			return nil, &serverErr{http.StatusBadRequest, "BAD_REQUEST", err.Error(), nil}
 		}
 	}
 
 	if !sess.Admin {
 		if dp.Spec.VM != nil {
-			s.writeErr(w, http.StatusBadRequest, "BAD_REQUEST", "vm workloads cannot be metered for quota; admins only", nil)
-			return
+			return nil, &serverErr{http.StatusBadRequest, "BAD_REQUEST", "vm workloads cannot be metered for quota; admins only", nil}
 		}
 		if dp.Spec.Pod == nil {
-			s.writeErr(w, http.StatusBadRequest, "BAD_REQUEST", "spec.pod is required (or pick a preset template)", nil)
-			return
+			return nil, &serverErr{http.StatusBadRequest, "BAD_REQUEST", "spec.pod is required (or pick a preset template)", nil}
 		}
 		if err := RequireLimits(&dp.Spec.Pod.Spec); err != nil {
-			s.writeErr(w, http.StatusBadRequest, "BAD_REQUEST", err.Error(), nil)
-			return
+			return nil, &serverErr{http.StatusBadRequest, "BAD_REQUEST", err.Error(), nil}
 		}
 	}
-	if !s.checkQuotaFor(w, r, sess, dp, "") {
-		return
+	if apiErr := s.quotaErrFor(r, sess, dp, "", pending...); apiErr != nil {
+		return nil, apiErr
 	}
 	if req.Node != "" {
 		if dp.Spec.Pod == nil {
-			s.writeErr(w, http.StatusBadRequest, "BAD_REQUEST", "only pod workloads can be pinned to a node", nil)
-			return
+			return nil, &serverErr{http.StatusBadRequest, "BAD_REQUEST", "only pod workloads can be pinned to a node", nil}
 		}
 		if dp.Spec.Pod.Spec.NodeSelector == nil {
 			dp.Spec.Pod.Spec.NodeSelector = map[string]string{}
@@ -417,8 +439,7 @@ func (s *Server) handleCreateDevPod(w http.ResponseWriter, r *http.Request) {
 	if dp.Spec.Pod != nil && dp.Spec.Pod.Spec.NodeName != "" {
 		name := dp.Spec.Pod.Spec.NodeName
 		if sel := dp.Spec.Pod.Spec.NodeSelector[hostnameLabel]; sel != "" && sel != name {
-			s.writeErr(w, http.StatusBadRequest, "BAD_REQUEST", fmt.Sprintf("nodeName %q and the %s node selector %q name different nodes", name, hostnameLabel, sel), nil)
-			return
+			return nil, &serverErr{http.StatusBadRequest, "BAD_REQUEST", fmt.Sprintf("nodeName %q and the %s node selector %q name different nodes", name, hostnameLabel, sel), nil}
 		}
 		if dp.Spec.Pod.Spec.NodeSelector == nil {
 			dp.Spec.Pod.Spec.NodeSelector = map[string]string{}
@@ -429,21 +450,13 @@ func (s *Server) handleCreateDevPod(w http.ResponseWriter, r *http.Request) {
 	if node := pinnedNode(dp); node != "" {
 		var n corev1.Node
 		if err := s.Client.Get(r.Context(), types.NamespacedName{Name: node}, &n); err != nil {
-			s.writeErr(w, http.StatusBadRequest, "BAD_REQUEST", fmt.Sprintf("node %q not found", node), nil)
-			return
+			return nil, &serverErr{http.StatusBadRequest, "BAD_REQUEST", fmt.Sprintf("node %q not found", node), nil}
 		}
 		if apiErr := s.pinErr(r.Context(), dp.Spec.Owner, node); apiErr != nil {
-			s.writeErr(w, apiErr.status, apiErr.Code, apiErr.Message, apiErr.Detail)
-			return
+			return nil, apiErr
 		}
 	}
-
-	if err := s.Client.Create(r.Context(), dp); err != nil {
-		// k8s Status errors (CEL rejections etc.) pass through verbatim.
-		s.writeErr(w, http.StatusBadRequest, "BAD_REQUEST", "create rejected", err.Error())
-		return
-	}
-	s.writeJSON(w, http.StatusCreated, dp)
+	return dp, nil
 }
 
 type serverErr struct {

@@ -126,3 +126,13 @@ var (
 	NormalizeRegistryHostForTest = normalizeRegistryHost
 	ImageRegistryHostForTest     = imageRegistryHost
 )
+
+// PrepareDevPodForTest runs the create path up to, not including, the
+// write; it returns the error code, "" when the DevPod may be created.
+func (s *Server) PrepareDevPodForTest(r *http.Request, user string, req CreateRequest, pending []*devpodv1alpha1.DevPod) (*devpodv1alpha1.DevPod, string) {
+	dp, apiErr := s.prepareDevPod(r, Session{User: user}, req, pending)
+	if apiErr != nil {
+		return nil, apiErr.Code
+	}
+	return dp, ""
+}
