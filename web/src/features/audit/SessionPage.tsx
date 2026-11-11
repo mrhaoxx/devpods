@@ -1,6 +1,7 @@
 // 会话详情 (UI spec §5.8): timeline (channels, commands, files, 拦截,
 // 告警) beside one player that is live for an open session and can be
-// scrubbed back (audit spec §16); only pty / shell channels play.
+// scrubbed back (audit spec §16); shells, terminals and commands play,
+// file transfers and forwards do not.
 import { useCallback, useMemo, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
@@ -16,7 +17,7 @@ import { EmptyState } from "../../design/EmptyState";
 import { Panel } from "../../design/Panel";
 import { SessionPlayer, type Marker } from "./SessionPlayer";
 import { AuditError, confirmDownload, fmtTS } from "./common";
-import { channelLabel, replayable } from "./replay";
+import { channelLabel, plainOutput, replayable } from "./replay";
 
 const kindTone: Record<TimelineItem["kind"], string> = {
   channel: "text-faint",
@@ -211,6 +212,7 @@ export function SessionPage() {
                 channel={current.channel_id}
                 open={open}
                 openedAt={current.opened_at}
+                text={plainOutput(current)}
                 markers={markers}
                 seek={seek}
                 onPosition={onPosition}
@@ -220,7 +222,7 @@ export function SessionPage() {
             )
           ) : (
             <div className="space-y-2 rounded-md border border-dashed border-line p-3 text-xs">
-              <p className="text-muted">该通道（{channelLabel(current)}）是二进制通道，不提供回放。</p>
+              <p className="text-muted">该通道（{channelLabel(current)}）传输的是二进制数据（文件传输或转发），没有可显示的文本。</p>
               {channelFiles.length > 0 && (
                 <ul className="space-y-1">
                   {channelFiles.map((f) => (

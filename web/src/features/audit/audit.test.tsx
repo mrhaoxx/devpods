@@ -2,14 +2,14 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { fireEvent, screen, within } from "@testing-library/react";
 import { Route, Routes } from "react-router-dom";
 import { renderWithProviders, stubFetch, stubMe } from "../../test/render";
-import { replayable } from "./replay";
+import { plainOutput, replayable } from "./replay";
 import { SessionPage } from "./SessionPage";
 import { SessionsPage } from "./SessionsPage";
 import type { ChannelRow, SessionDetail } from "../../data/api";
 
 vi.mock("./SessionPlayer", () => ({
-  SessionPlayer: ({ sessionId, channel, open, seek, markers }: { sessionId: string; channel: number; open: boolean; seek?: { t: number }; markers?: { t: number; label: string }[] }) => (
-    <div data-testid="player" data-markers={(markers ?? []).map((m) => `${m.t}:${m.label}`).join(",")}>
+  SessionPlayer: ({ sessionId, channel, open, seek, markers, text }: { sessionId: string; channel: number; open: boolean; seek?: { t: number }; markers?: { t: number; label: string }[]; text?: boolean }) => (
+    <div data-testid="player" data-text={text ? "text" : "tty"} data-markers={(markers ?? []).map((m) => `${m.t}:${m.label}`).join(",")}>
       {sessionId}/{channel}|{open ? "open" : "ended"}|{seek?.t ?? ""}
     </div>
   ),
@@ -78,25 +78,31 @@ describe("audit pages", () => {
     vi.restoreAllMocks();
   });
 
-  it("replayable is true only for pty and shell", () => {
+  it("replayable: shells, terminals and commands; not file transfers or forwards", () => {
     expect(replayable(ch({ pty: true, command: "vim" }))).toBe(true);
     expect(replayable(ch({}))).toBe(true); // shell
+    expect(replayable(ch({ command: "ls -la" }))).toBe(true); // a command without a terminal: its output is text
+    expect(replayable(ch({ command: "command -v git" }))).toBe(true);
     expect(replayable(ch({ subsystem: "sftp" }))).toBe(false);
     expect(replayable(ch({ command: "scp -t /tmp" }))).toBe(false);
-    expect(replayable(ch({ command: "ls -la" }))).toBe(false);
+    expect(replayable(ch({ command: "/usr/bin/rsync --server -vlogDtpre.iLsfxC . /tmp" }))).toBe(false);
+    expect(replayable(ch({ command: "git-upload-pack '/repo.git'" }))).toBe(false);
     expect(replayable(ch({ type: "direct-tcpip" }))).toBe(false);
+    // without a terminal the output is plain text for the player to lay out
+    expect(plainOutput(ch({ command: "ls -la" }))).toBe(true);
+    expect(plainOutput(ch({ pty: true }))).toBe(false);
   });
 
   it("sftp channel shows raw download for admins only", async () => {
     const d = session([ch({ subsystem: "sftp" })]);
     renderSession(d, true);
-    await screen.findByText(/不提供回放/);
+    await screen.findByText(/没有可显示的文本/);
     expect(screen.queryByTestId("player")).toBeNull();
     expect(screen.getByRole("link", { name: "out" })).toBeTruthy();
   });
   it("sftp channel hides raw download from non-admins", async () => {
     renderSession(session([ch({ subsystem: "sftp" })]), false);
-    await screen.findByText(/不提供回放/);
+    await screen.findByText(/没有可显示的文本/);
     expect(screen.queryByRole("link", { name: "out" })).toBeNull();
   });
 
@@ -148,6 +154,14 @@ describe("audit pages", () => {
     expect(screen.queryByRole("radio")).toBeNull(); // no separate live / replay modes
     fireEvent.click(within(screen.getByText(/make test/).closest("li")!).getByRole("button", { name: /跳到/ }));
     expect(screen.getByTestId("player").textContent).toBe("s1/0|open|30000");
+  });
+
+  it("a command run without a terminal plays too, as plain text", async () => {
+    renderSession(session([ch({ command: "ls -la" })]));
+    const player = await screen.findByTestId("player");
+    expect(player.textContent).toBe("s1/0|ended|");
+    expect(player.dataset.text).toBe("text");
+    expect(screen.queryByText(/二进制/)).toBeNull();
   });
 
   it("an ended session plays its recording", async () => {

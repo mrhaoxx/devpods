@@ -101,6 +101,7 @@ export function SessionPlayer({
   open,
   openedAt,
   markers = [],
+  text,
   seek,
   onPosition,
 }: {
@@ -111,6 +112,8 @@ export function SessionPlayer({
   /** when the channel opened (the tape's zero), ISO */
   openedAt: string;
   markers?: Marker[];
+  /** the channel had no terminal: plain text output (see streamTape) */
+  text?: boolean;
   /** a jump request, ms on the channel clock; n makes repeats distinct */
   seek?: { t: number; n: number };
   onPosition?: (ms: number) => void;
@@ -158,7 +161,7 @@ export function SessionPlayer({
     // keep the terminal's own play state (space key, cursor blink) in step
     const sync = () => dispatch?.(player.getView().mode === "paused" ? "pause" : "playing");
     const unsub = player.subscribe(sync);
-    const stop = streamTape({ live: open ? liveURL(sessionId, channel) : undefined, cast: castURL(sessionId, channel) }, player);
+    const stop = streamTape({ live: open ? liveURL(sessionId, channel) : undefined, cast: castURL(sessionId, channel) }, player, fetch, { text });
     return () => {
       stop();
       unsub();

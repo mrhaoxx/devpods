@@ -52,4 +52,17 @@ describe("streamTape", () => {
     await vi.waitFor(() => expect(t.calls.slice(2)).toEqual(["header 80", "done"]));
     stop();
   });
+  it("text mode: bare line feeds become CR LF and the screen is at least 120x30", async () => {
+    const calls: string[] = [];
+    const t = {
+      header: (h: { cols: number; rows: number }) => calls.push(`header ${h.cols}x${h.rows}`),
+      push: (e: { t: number; o?: string }) => calls.push(JSON.stringify(e.o ?? "size")),
+      live: () => {},
+      done: () => calls.push("done"),
+      offline: () => {},
+    };
+    const fetchFn = vi.fn(async (_url: string) => body('{"version":2,"width":80,"height":24}\n[1,"o","a\\nb\\r\\nc"]\n[2,"r","90x20"]\n'));
+    streamTape({ cast: "/cast" }, t, fetchFn as unknown as typeof fetch, { text: true });
+    await vi.waitFor(() => expect(calls).toEqual(["header 120x30", JSON.stringify("a\r\nb\r\nc"), '"size"', "done"]));
+  });
 });

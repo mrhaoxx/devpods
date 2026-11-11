@@ -9,7 +9,13 @@ type Target = Pick<TapePlayer, "header" | "push" | "live" | "done" | "offline">;
 
 const MESSAGES: Record<number, string> = { 429: "观看人数已满，稍后自动重试", 502: "网关不可达", 503: "网关不可达" };
 
-export function streamTape(src: TapeSource, p: Target, fetchFn: typeof fetch = fetch): () => void {
+/** Without a terminal a program ends lines with a bare line feed and
+ *  reports no size: text mode turns them into CR LF and gives the tape a
+ *  roomier screen. */
+export const TEXT_SIZE = { cols: 120, rows: 30 };
+const crlf = (s: string) => s.replace(/\r?\n/g, "\r\n");
+
+export function streamTape(src: TapeSource, p: Target, fetchFn: typeof fetch = fetch, opts: { text?: boolean } = {}): () => void {
   const ctl = new AbortController();
   let timer: ReturnType<typeof setTimeout> | undefined;
   let useLive = !!src.live;
@@ -40,8 +46,8 @@ export function streamTape(src: TapeSource, p: Target, fetchFn: typeof fetch = f
         const l = parseLine(line);
         if (l.kind === "header") {
           delay = 1000;
-          p.header(l);
-        } else if (l.kind === "event") p.push(l.ev);
+          p.header(opts.text ? { ...l, cols: Math.max(l.cols, TEXT_SIZE.cols), rows: Math.max(l.rows, TEXT_SIZE.rows) } : l);
+        } else if (l.kind === "event") p.push(opts.text && l.ev.o !== undefined ? { ...l.ev, o: crlf(l.ev.o) } : l.ev);
         else if (l.kind === "live") p.live();
         else if (l.kind === "done") finished = true;
         else if (l.kind === "offline") dropped = l.why;
