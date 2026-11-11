@@ -58,7 +58,7 @@ Scopes: `snapshots:read` (list, read, follow progress) and `snapshots:write`
 
 | Call | What it does |
 |---|---|
-| `POST /api/devpods/{name}/snapshots` | Save a running DevPod. `{name, tag?, pause?}` goes to the platform registry (the server builds the address); `{image, pushAuth: {username, password}, pause?}` goes to an address you name — credentials are required unless the address is your own place in the platform registry. `400 PUSH_AUTH_REQUIRED`, `409 NOT_RUNNING` / `IMAGE_EXISTS` / `SNAPSHOT_QUOTA` |
+| `POST /api/devpods/{name}/snapshots` | Save a running DevPod. `{name, tag?, pause?}` goes to the platform registry (the server builds the address); `{image, pushAuth?: {username, password}, pause?}` goes to an address you name. It is pushed with `pushAuth`; without it, with the credential you saved for that registry; without either, with no credentials at all (a registry that takes pushes without a login) — the platform's own credentials are only ever used for your place in the platform registry. `400 PUSH_AUTH_REQUIRED` (half a credential), `409 NOT_RUNNING` / `IMAGE_BUSY` / `SNAPSHOT_QUOTA` |
 | `GET /api/snapshots[?devpod=][&scope=all]` | Your snapshots (`scope=all`: everyone's, admins) |
 | `GET /api/snapshots/{id}` | One snapshot: `{id, devpod, owner, image, phase, digest, sizeBytes, message, customRegistry, createdAt, startedAt, completedAt}` |
 | `GET /api/snapshots/{id}/progress` | Server-sent events until it ends; each `data:` is `{phase, stage, elapsedSeconds, sizeBytes?, digest?, message?, lines}` with `stage` one of `pending`, `commit`, `push`, `done`, `error`, and `lines` the last lines of the job's output |
@@ -90,9 +90,22 @@ curl -X PATCH -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/js
 
 # delete
 curl -X DELETE -H "Authorization: Bearer $TOKEN" $DEVPOD/api/devpods/alice-train
+
+# the manifest as YAML, and saving an edited one back (the spec is replaced;
+# name and owner cannot change; the rules are those of creating from YAML)
+curl -H "Authorization: Bearer $TOKEN" $DEVPOD/api/devpods/alice-train/yaml          # → {"yaml": "…", "running": true}
+curl -X PUT … -d "$(jq -Rs '{yaml: .}' train.yaml)" $DEVPOD/api/devpods/alice-train/yaml   # → {"devpod": …, "rebuild": true}
+
+# the Pod behind it, as `kubectl describe pod` tells it: conditions, each
+# container's state and why, volumes ({"pod": null} when stopped)
+curl -H "Authorization: Bearer $TOKEN" $DEVPOD/api/devpods/alice-train/pod
 ```
 
-Errors are JSON: `{"code": "SCOPE", "message": "…", "detail": …}` with the
+`cpu` and `memory` are optional. A DevPod created here is named
+`<you>-<name>`; DevPods made with kubectl keep whatever name they have.
+
+Errors are JSON: `{"code": "SCOPE", "message": "…", "detail": …}` (when the
+cluster refuses a change, the message says why: `update rejected: <reason>`) with the
 matching HTTP status (`401` bad or expired token, `403` scope or permission,
 `404` not found or not yours, `409` conflict / quota).
 

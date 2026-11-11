@@ -37,6 +37,8 @@ import { EventList } from "./EventsTab";
 import { MonitorTab } from "./MonitorTab";
 import { ContainerTab } from "./ContainerTab";
 import { PortsPanel } from "./PortsPanel";
+import { PodTab } from "./PodTab";
+import { YamlTab } from "./YamlTab";
 import { SnapshotControl } from "../../images/SnapshotControl";
 import { devpodToConfig } from "../../configs/exportConfig";
 
@@ -153,7 +155,9 @@ export function DetailPage() {
     ...(audit ? ([["sessions", "会话"]] as [string, string][]) : []),
     ...(me?.features.httpProxy ? ([["ports", "端口"]] as [string, string][]) : []),
     ["container", "容器"],
+    ["pod", "Pod"],
     ["events", "事件"],
+    ["yaml", "YAML"],
   ];
   // the container's sshd port: never proxied, so not listed among the ports
   const sshPort = Number(dp.status?.endpoint?.split(":").pop()) || undefined;
@@ -255,6 +259,8 @@ export function DetailPage() {
       )}
       {url.tab === "ports" && me?.features.httpProxy && <PortsPanel name={name} sshPort={sshPort} />}
       {url.tab === "container" && <ContainerTab name={name} />}
+      {url.tab === "pod" && <PodTab name={name} />}
+      {url.tab === "yaml" && <YamlTab name={name} />}
       {url.tab === "events" && (
         <Panel title="事件">
           <EventList events={events} />

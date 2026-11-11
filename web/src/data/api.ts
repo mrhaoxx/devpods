@@ -399,6 +399,50 @@ export const probeShell = (name: string) => req<void>("GET", `/api/devpods/${nam
 /** publicPorts: anyone with the link; userPorts: anyone signed in to the console; the rest: owner, collaborators, admins. */
 export type HttpView = { id: string; urlTemplate: string; publicPorts: number[]; userPorts: number[] };
 export const getHttp = (n: string) => req<HttpView>("GET", `/api/devpods/${n}/http`);
+
+/** The Pod behind a DevPod, as `kubectl describe pod` tells it. */
+export type PodContainer = {
+  name: string;
+  image: string;
+  state?: string;
+  tone?: "ok" | "wait" | "fail" | "";
+  lastState?: string;
+  ready: boolean;
+  restarts: number;
+  requests?: Record<string, string>;
+  limits?: Record<string, string>;
+  mounts?: string[];
+};
+export type PodDetail = {
+  name: string;
+  phase: string;
+  reason?: string;
+  message?: string;
+  ready: string;
+  restarts: number;
+  qos?: string;
+  node?: string;
+  hostIP?: string;
+  podIP?: string;
+  createdAt?: string;
+  startedAt?: string;
+  deletingSince?: string;
+  restartPolicy?: string;
+  serviceAccount?: string;
+  gracePeriodSeconds?: number;
+  hostNetwork?: boolean;
+  conditions: { type: string; status: string; reason?: string; message?: string; since?: string }[];
+  initContainers: PodContainer[];
+  containers: PodContainer[];
+  volumes: { name: string; kind: string; detail?: string }[];
+  labels: Record<string, string>;
+  nodeSelector: Record<string, string>;
+  tolerations: string[];
+};
+export const getDevPodPod = (n: string) => req<{ pod: PodDetail | null }>("GET", `/api/devpods/${n}/pod`);
+/** A DevPod's manifest as YAML, and saving it back (the spec is replaced). */
+export const getDevPodYaml = (n: string) => req<{ yaml: string; running: boolean }>("GET", `/api/devpods/${n}/yaml`);
+export const putDevPodYaml = (n: string, yaml: string) => req<{ devpod: DevPod; rebuild: boolean }>("PUT", `/api/devpods/${n}/yaml`, { yaml });
 export const putHttp = (n: string, body: { publicPorts?: number[]; userPorts?: number[]; reset?: boolean }) => req<HttpView>("PUT", `/api/devpods/${n}/http`, body);
 /** httpTicket: the URL that signs this browser in on a private port's hostname. */
 export const httpTicket = (host: string, rd: string) => req<{ url: string }>("POST", "/api/http/ticket", { host, rd });

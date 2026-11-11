@@ -112,6 +112,9 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("GET /api/devpods/{name}/events", s.handleDevPodEvents)
 	// Single SSE connection carrying both DevPod status and its events.
 	mux.HandleFunc("GET /api/devpods/{name}/stream", s.handleDevPodStream)
+	mux.HandleFunc("GET /api/devpods/{name}/pod", s.handleDevPodPod)
+	mux.HandleFunc("GET /api/devpods/{name}/yaml", s.handleGetDevPodYAML)
+	mux.HandleFunc("PUT /api/devpods/{name}/yaml", s.handlePutDevPodYAML)
 	mux.HandleFunc("GET /api/devpods/{name}/topology", s.handleDevPodTopology)
 	s.registerAuditRoutes(mux)
 	mux.HandleFunc("GET /api/live/devpods", s.handleLiveDevPods)
