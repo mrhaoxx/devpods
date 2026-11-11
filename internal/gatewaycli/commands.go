@@ -60,6 +60,7 @@ type Env struct {
 type parsed struct {
 	pos  []string
 	val  map[string]string
+	all  map[string][]string // every value of a flag given more than once
 	has  map[string]bool
 	json bool
 }
@@ -108,6 +109,7 @@ func init() {
 	}
 	commands = append(commands, snapshotCommands()...)
 	commands = append(commands, registryCommands()...)
+	commands = append(commands, configCommands()...)
 }
 
 func find(name string) *command {
@@ -165,7 +167,7 @@ func Help(w io.Writer, name string) bool {
 }
 
 func parse(c *command, argv []string) (*parsed, error) {
-	a := &parsed{val: map[string]string{}, has: map[string]bool{}}
+	a := &parsed{val: map[string]string{}, all: map[string][]string{}, has: map[string]bool{}}
 	for i := 0; i < len(argv); i++ {
 		w := argv[i]
 		if w == "--" {
@@ -216,6 +218,7 @@ func parse(c *command, argv []string) (*parsed, error) {
 				return nil, err
 			}
 			a.val[name] = v
+			a.all[name] = append(a.all[name], v)
 		case slices.Contains(c.bools, name):
 			a.has[name] = true
 		default:

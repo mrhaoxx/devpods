@@ -43,6 +43,9 @@ type APIError struct {
 	Code    string `json:"code"`
 	Message string `json:"message"`
 	Detail  any    `json:"detail,omitempty"`
+	// Body is the answer as sent: some refusals carry more than the
+	// three fields above (a rejected launch lists every DevPod).
+	Body []byte `json:"-"`
 }
 
 func (e *APIError) Error() string {
@@ -94,7 +97,7 @@ func (a *API) Do(ctx context.Context, user, method, path string, body any) ([]by
 		return nil, &APIError{Status: resp.StatusCode, Code: "TOO_LARGE", Message: "the API response is too large for the CLI"}
 	}
 	if resp.StatusCode < 200 || resp.StatusCode > 299 {
-		e := &APIError{Status: resp.StatusCode}
+		e := &APIError{Status: resp.StatusCode, Body: b}
 		if json.Unmarshal(b, e) != nil || e.Message == "" {
 			e.Code, e.Message = "HTTP_"+fmt.Sprint(resp.StatusCode), strings.TrimSpace(string(b))
 			if e.Message == "" {

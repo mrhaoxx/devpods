@@ -49,6 +49,12 @@ The login name `devpod` is configurable (`--cli-user`, chart value `gateway.cli.
 | `registry` (`registries`) `[list]` | Your saved registry logins (host, user name, whether it has taken effect yet). |
 | `registry add <host> [--username U] [--password-stdin]` | Save or replace the login for one registry. The password is asked for without echo, or read from standard input; never on the command line. |
 | `registry rm <host>` | Remove a saved login. |
+| `config` (`configs`) `[list] [--mine\|--shared\|--public]` | Saved configs you may use: your own, those shared with you, the public ones. See [Saved configs](#saved-configs). |
+| `config show <name>` | A config's details, variables and YAML. |
+| `config save <id> [--title T] [--description D] [--public]` | Save the YAML on standard input as `<you>-<id>`; an existing one gets the new YAML. |
+| `config share <name> [user…]` / `config public <name> on\|off` | Who may use it besides you (no user: nobody) / open it to everyone signed in. |
+| `config delete <name>` | Delete a config. |
+| `config launch <name> [--set VAR=value]… [--node N]… [--count N] [--dry-run]` | Create DevPods from a config, one per `--node` or `--count` of them. |
 
 `<name>` is the DevPod's full name as `list` shows it (`alice-a`), except in `create`, where it is the part after your user name.
 
@@ -113,6 +119,37 @@ $ printf '%s\n' "$REGISTRY_PASSWORD" | ssh alice+devpod@gateway registry add har
 - **Effect**: adding or removing a login never restarts a running DevPod; it applies to DevPods started afterwards.
 - When `snapshot --image` answers that the address needs credentials (`PUSH_AUTH_REQUIRED`), the message names the `registry add <host>` that would save them.
 
+## Saved configs
+
+A config is a DevPod manifest saved as text, with variables — `${NAME}`, `${NODE}`, `${OWNER}`, `${INDEX}` and any `${VAR}` or `${VAR:-default}` of your own (the full rules are in [the API notes](api.md#saved-configs)). You save it once and create DevPods from it; you can share it with named users or make it public. Whoever launches a config creates DevPods **as themselves**: their quota, their node rules.
+
+```console
+$ ssh alice+devpod@gateway config save sglang --title "SGLang 8 GPUs" < sglang.yaml
+saved alice-sglang (3 variables)
+
+$ ssh alice+devpod@gateway config share sglang bob carol
+alice-sglang is shared with bob, carol
+
+$ ssh alice+devpod@gateway config list
+NAME          OWNER  ACCESS    VARIABLES        TITLE
+alice-sglang  alice  shared:2  NAME,NODE,IMAGE  SGLang 8 GPUs
+bob-k3s       bob    public    NAME             k3s
+
+# one DevPod per node, named alice-sg-1 and alice-sg-2
+$ ssh alice+devpod@gateway config launch sglang --set NAME=sg --node m602 --node m603
+ok   alice-sg-1  m602
+ok   alice-sg-2  m603
+```
+
+- `<name>` is the config's full name as `list` shows it (`bob-k3s`); your own may be given without your user name (`sglang`).
+- `--set NAME=…` is the part of the DevPod's name after your user name. `OWNER` and `INDEX` are filled in for you; nodes are given with `--node`, not `--set NODE=`.
+- A config with `${NODE}` creates one DevPod per `--node`, in the order given. One without takes `--count N` (default 1, at most 32). Several get `-1`, `-2`, … after the name, unless the config places `${INDEX}` itself.
+- The launch is checked as a whole first. If any DevPod cannot be created — quota, a name already taken, a reserved node, a value that breaks the YAML — **none is**: each line says `pass` or `FAIL … CODE: message`, and the exit status is `1`.
+- If the check passed and a write still failed (someone took the name in between), the others are created and stay: `ok` and `FAIL` lines, exit status `1`.
+- `--dry-run` only checks, and prints `--- <name>` and the YAML each DevPod would be created from.
+- `config save` reads the whole of standard input (at most 64 KiB). Saving an id you already have replaces its YAML and changes only what the flags say.
+- With `--json`, `launch` prints the API's answer (`{"items": [{index, name, node, ok, code, message, yaml}]}`), also when the launch was rejected.
+
 ## For scripts and agents
 
 ```sh
@@ -137,6 +174,9 @@ until ssh alice+devpod@gateway snapshot show "$id" --json | jq -e '.phase == "Su
 
 # push to a registry of your own; the password comes from standard input
 printf '%s\n' "$REGISTRY_PASSWORD" | ssh alice+devpod@gateway snapshot alice-train1 --image registry.example.com/me/env:v1 --username me --password-stdin
+
+# launch three workers from a saved config; non-zero exit if any was not created
+ssh alice+devpod@gateway config launch workers --set NAME=w --count 3 --json
 
 # stop everything of mine
 ssh alice+devpod@gateway stop $(ssh alice+devpod@gateway list --json | jq -r '.items[].metadata.name')
