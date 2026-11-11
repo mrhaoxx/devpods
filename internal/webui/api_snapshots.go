@@ -251,6 +251,7 @@ func (s *Server) handleCreateSnapshot(w http.ResponseWriter, r *http.Request) {
 	var image string
 	var auth *devpodv1alpha1.PushAuthInline // non-nil: credentials typed for this address
 	savedSecret := ""                       // non-empty: the owner's saved registry credentials
+	custom := false                         // an address outside the owner's place in the platform registry
 	if req.Image == "" {
 		if cfg.ImageTemplate == "" {
 			bad("this deployment has no default registry: give the image address and its credentials")
@@ -275,18 +276,22 @@ func (s *Server) handleCreateSnapshot(w http.ResponseWriter, r *http.Request) {
 		}
 		image = req.Image
 		// the platform's Secret is only for the owner's own place in the
-		// platform registry; any other address needs its own credentials
-		// (spec §5.2): credentials in the request win; else a registry the
-		// DevPod's owner saved credentials for; else they are required.
+		// platform registry. Any other address is pushed to with (spec
+		// §5.2): credentials in the request; else the one the DevPod's
+		// owner saved for that registry; else none at all — a registry
+		// that takes pushes without a login. Nobody's Secret is lent to
+		// an address that is not theirs.
 		if !cfg.ownAddress(image, owner) {
+			custom = true
 			switch {
-			case req.PushAuth != nil && req.PushAuth.Username != "" && req.PushAuth.Password != "":
+			case req.PushAuth != nil && (req.PushAuth.Username != "" || req.PushAuth.Password != ""):
+				if req.PushAuth.Username == "" || req.PushAuth.Password == "" {
+					s.writeErr(w, http.StatusBadRequest, "PUSH_AUTH_REQUIRED", "give both a user name and a password for the registry, or neither (a registry that needs no login)", nil)
+					return
+				}
 				auth = &devpodv1alpha1.PushAuthInline{Username: req.PushAuth.Username, Password: req.PushAuth.Password}
 			case s.savedRegistry(r, owner, imageRegistryHost(image)):
 				savedSecret = devpodv1alpha1.RegistryCredentialsSecretName(owner)
-			default:
-				s.writeErr(w, http.StatusBadRequest, "PUSH_AUTH_REQUIRED", "this address is outside your default repository and not a registry you saved credentials for: give the username and password to push there", nil)
-				return
 			}
 		}
 	}
@@ -341,6 +346,10 @@ func (s *Server) handleCreateSnapshot(w http.ResponseWriter, r *http.Request) {
 		sn.Annotations = map[string]string{customRegistryAnnotation: "true"}
 	case savedSecret != "":
 		sn.Spec.PushSecretRef = &devpodv1alpha1.LocalObjectRef{Name: savedSecret}
+		sn.Annotations = map[string]string{customRegistryAnnotation: "true"}
+	case custom:
+		// no credentials: pushed as nobody. The platform's Secret is not
+		// for an address outside the owner's place in its registry.
 		sn.Annotations = map[string]string{customRegistryAnnotation: "true"}
 	case cfg.PushSecret != "":
 		sn.Spec.PushSecretRef = &devpodv1alpha1.LocalObjectRef{Name: cfg.PushSecret}

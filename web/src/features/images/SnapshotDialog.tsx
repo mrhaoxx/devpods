@@ -195,12 +195,12 @@ function CreateForm({ devpod, owner, onCreated }: { devpod: string; owner: strin
   const fresh = tagMode === "new";
   // with a generated tag the address may be typed without one
   const imageOK = validImageRef(fresh ? withTag(image, "t") : image);
-  const ok = target === "default" ? NAME_RE.test(name) && (fresh || NAME_RE.test(tag)) : imageOK && (!!saved || (username !== "" && password !== ""));
+  const ok = target === "default" ? NAME_RE.test(name) && (fresh || NAME_RE.test(tag)) : imageOK && (!!saved || (useOther ? username !== "" && password !== "" : (username === "") === (password === "")));
   const submit = () => {
     if (!ok) return;
     const stamp = timestampTag(new Date());
     const ref = fresh ? withTag(image, stamp) : image;
-    create.mutate(target === "default" ? { name, tag: fresh ? stamp : tag, pause } : saved ? { image: ref, pause } : { image: ref, pushAuth: { username, password }, pause });
+    create.mutate(target === "default" ? { name, tag: fresh ? stamp : tag, pause } : saved || username === "" ? { image: ref, pause } : { image: ref, pushAuth: { username, password }, pause });
   };
   const err = create.error;
   return (
@@ -259,14 +259,14 @@ function CreateForm({ devpod, owner, onCreated }: { devpod: string; owner: strin
             <>
               <div className="grid gap-3 sm:grid-cols-2">
                 <Field label="用户名">
-                  <Input aria-label="用户名" className="mono" value={username} onChange={(e) => setUsername(e.target.value)} autoComplete="off" required />
+                  <Input aria-label="用户名" className="mono" value={username} onChange={(e) => setUsername(e.target.value)} autoComplete="off" />
                 </Field>
                 <Field label="密码">
-                  <Input aria-label="密码" type="password" value={password} onChange={(e) => setPassword(e.target.value)} autoComplete="new-password" required />
+                  <Input aria-label="密码" type="password" value={password} onChange={(e) => setPassword(e.target.value)} autoComplete="new-password" />
                 </Field>
               </div>
               <p className="text-[11px] text-muted">
-                用户名和密码只用于这一次推送，控制台不保存，之后也不会再显示。常用的仓库可以在 设置 → 镜像仓库凭证 里保存一次。
+                仓库不需要登录就留空。用户名和密码只用于这一次推送，控制台不保存，之后也不会再显示。常用的仓库可以在 设置 → 镜像仓库凭证 里保存一次。
                 {useOther && (
                   <button type="button" onClick={() => setUseOther(false)} className="ml-1 text-accent hover:underline">
                     改回已保存的凭证

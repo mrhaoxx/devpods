@@ -10,6 +10,8 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/utils/ptr"
 
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+
 	devpodv1alpha1 "github.com/mrhaoxx/devpod/api/v1alpha1"
 	"github.com/mrhaoxx/devpod/internal/render"
 )
@@ -199,5 +201,28 @@ func TestParseSnapshotResult(t *testing.T) {
 		if got := render.ParseSnapshotResult(in); got != want {
 			t.Errorf("%q: %+v, want %+v", in, got, want)
 		}
+	}
+}
+
+// Registries reached over plain HTTP are handed to the Job by name.
+func TestSnapshotJob_PlainHTTPRegistries(t *testing.T) {
+	snap := &devpodv1alpha1.DevPodSnapshot{
+		ObjectMeta: metav1.ObjectMeta{Name: "s1", Namespace: "devpods"},
+		Spec:       devpodv1alpha1.DevPodSnapshotSpec{DevPodName: "dp", Image: "172.20.11.8:32500/dh/test:1", Push: true},
+	}
+	env := func(t2 render.SnapshotTarget) map[string]string {
+		out := map[string]string{}
+		for _, e := range render.SnapshotJob(snap, t2).Spec.Template.Spec.Containers[0].Env {
+			out[e.Name] = e.Value
+		}
+		return out
+	}
+	base := render.SnapshotTarget{Runtime: render.RuntimeContainerd, ContainerID: "c", NodeName: "n", Image: "img"}
+	if _, has := env(base)["PLAIN_HTTP_REGISTRIES"]; has {
+		t.Fatal("set without any registry named")
+	}
+	base.PlainHTTPRegistries = []string{"172.20.11.8:32500", "reg.local"}
+	if got := env(base)["PLAIN_HTTP_REGISTRIES"]; got != "172.20.11.8:32500,reg.local" {
+		t.Fatalf("PLAIN_HTTP_REGISTRIES = %q", got)
 	}
 }

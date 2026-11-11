@@ -266,3 +266,7 @@ snapshot:
   # runtime's API through it (containerd or Docker).
   containerdSocket: /run/containerd/containerd.sock   # on the nodes
   dockerImage: ""                # Job image for Docker nodes; "" = image.snapshot
+  # Registries pushed to over plain HTTP (host or host:port) — a registry
+  # inside the cluster's network. Everything else is HTTPS. (containerd
+  # nodes; on Docker nodes the daemon's own insecure-registries apply.)
+  plainHTTPRegistries: []

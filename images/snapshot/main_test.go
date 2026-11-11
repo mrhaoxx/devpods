@@ -182,6 +182,28 @@ func TestRun(t *testing.T) {
 			t.Fatalf("calls %v", b.calls)
 		}
 	})
+	t.Run("a registry that wants a login says so, with what to do", func(t *testing.T) {
+		for _, refusal := range []string{
+			`failed to authorize: failed to fetch anonymous token: unexpected status from GET request to https://reg.test/token: 401 Unauthorized`,
+			`unexpected status from HEAD request to https://reg.test/v2/a/blobs/sha256:1: 401 Unauthorized`,
+			`pull access denied, repository does not exist or may require authorization: server message: insufficient_scope: authorization failed`,
+			`unauthorized: authentication required`,
+			`denied: requested access to the resource is denied`,
+		} {
+			b := &fakeBackend{size: 1, pushErr: errors.New(refusal)}
+			_, lines, _ := runFake(t, context.Background(), options{push: true, image: "reg.test/a/b:1"}, b)
+			last := lines[len(lines)-1]
+			if !strings.HasPrefix(last, "@error ") || !strings.Contains(last, "镜像仓库凭证") || !strings.Contains(last, refusal[:20]) {
+				t.Fatalf("%q → %q", refusal, last)
+			}
+		}
+		// any other failure is left as it is
+		b := &fakeBackend{size: 1, pushErr: errors.New("dial tcp: connection refused")}
+		_, lines, _ := runFake(t, context.Background(), options{push: true, image: "reg.test/a/b:1"}, b)
+		if last := lines[len(lines)-1]; strings.Contains(last, "镜像仓库凭证") {
+			t.Fatalf("a network failure blamed on credentials: %q", last)
+		}
+	})
 	t.Run("commit only keeps the image", func(t *testing.T) {
 		b := &fakeBackend{size: 7}
 		code, lines, res := runFake(t, context.Background(), options{push: false}, b)
@@ -192,8 +214,8 @@ func TestRun(t *testing.T) {
 	t.Run("a failed push rolls back and says why", func(t *testing.T) {
 		b := &fakeBackend{size: 7, pushErr: errors.New("denied: requested access to the resource is denied")}
 		code, lines, res := runFake(t, context.Background(), options{push: true}, b)
-		if code != 1 || lines[len(lines)-1] != "@error push failed: denied: requested access to the resource is denied" ||
-			res != "error=push failed: denied: requested access to the resource is denied" || strings.Join(b.calls, ",") != "commit,push,rollback" {
+		const why = "push failed: denied: requested access to the resource is denied" + credentialHint
+		if code != 1 || lines[len(lines)-1] != "@error "+why || res != "error="+why || strings.Join(b.calls, ",") != "commit,push,rollback" {
 			t.Fatalf("code %d lines %v result %q calls %v", code, lines, res, b.calls)
 		}
 		for _, l := range lines {
@@ -282,6 +304,41 @@ func TestParseFlags(t *testing.T) {
 	t.Setenv("CONTAINER_ID", "")
 	if _, err := parseFlags(nil); err == nil {
 		t.Fatal("missing container accepted")
+	}
+}
+
+// credentialHint is what follows a push the registry refused.
+const credentialHint = "（仓库拒绝了这次推送：检查这个仓库的凭证 — 设置 → 镜像仓库凭证，或保存时填写用户名和密码）"
+
+// Registries served over plain HTTP are named, host for host: nothing
+// else is ever pushed to without TLS.
+func TestPlainHTTPRegistries(t *testing.T) {
+	t.Setenv("RUNTIME", "containerd")
+	t.Setenv("CONTAINER_ID", "abc")
+	t.Setenv("TARGET_IMAGE", "172.20.11.8:32500/dh/test:1")
+	if o, err := parseFlags(nil); err != nil || len(o.plainHTTP) != 0 || o.usesPlainHTTP("172.20.11.8:32500") {
+		t.Fatalf("by default: %+v %v", o, err)
+	}
+	t.Setenv("PLAIN_HTTP_REGISTRIES", " 172.20.11.8:32500, Reg.Local ,,")
+	o, err := parseFlags(nil)
+	if err != nil || len(o.plainHTTP) != 2 {
+		t.Fatalf("%+v %v", o, err)
+	}
+	for host, want := range map[string]bool{
+		"172.20.11.8:32500": true,
+		"reg.local":         true,
+		"REG.LOCAL":         true,
+		"172.20.11.8":       false, // another port is another registry
+		"172.20.11.8:5000":  false,
+		"evil-reg.local":    false,
+		"":                  false,
+	} {
+		if got := o.usesPlainHTTP(host); got != want {
+			t.Errorf("usesPlainHTTP(%q) = %v", host, got)
+		}
+	}
+	if o, _ := parseFlags([]string{"--plain-http-registries=a:1"}); !o.usesPlainHTTP("a:1") || o.usesPlainHTTP("reg.local") {
+		t.Fatalf("the flag: %+v", o)
 	}
 }
 
@@ -592,7 +649,8 @@ func TestDocker_PushErrorRemovesTheImage(t *testing.T) {
 		`{"errorDetail":{"message":"unauthorized: authentication required"},"error":"unauthorized: authentication required"}`,
 	}
 	code, lines, res, out := runDocker(t, context.Background(), f, "--pause=false")
-	if code != 1 || lines[len(lines)-1] != "@error push failed: unauthorized: authentication required" || res != "error=push failed: unauthorized: authentication required" {
+	const why = "push failed: unauthorized: authentication required" + credentialHint
+	if code != 1 || lines[len(lines)-1] != "@error "+why || res != "error="+why {
 		t.Fatalf("code %d lines %v result %q\n%s", code, lines, res, out)
 	}
 	if !f.has("commit c1 -> "+img+" pause=false") || !f.has("delete "+img) || f.image(img) != "" {

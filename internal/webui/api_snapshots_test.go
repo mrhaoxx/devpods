@@ -267,12 +267,21 @@ func TestSnapshotAPI(t *testing.T) {
 			t.Helper()
 			return call("POST", "/api/devpods/sn-alice-dev1/snapshots", alice, body, want)
 		}
-		if out := post(`{"image":"other.test/team/env:v1"}`, http.StatusBadRequest); out["code"] != "PUSH_AUTH_REQUIRED" {
-			t.Fatalf("no credentials: %v", out)
+		// no credentials at all: pushed as nobody — a registry that takes
+		// pushes without a login. No Secret of anyone's is lent to it.
+		anon := post(`{"image":"open.test/team/env:anon"}`, http.StatusCreated)
+		if sn := getSnap(anon["id"].(string)); sn.Spec.PushAuth != nil || sn.Spec.PushSecretRef != nil || anon["customRegistry"] != true {
+			t.Fatalf("no credentials: view %v spec %+v", anon, sn.Spec)
 		}
-		// another user's place in the platform registry is "other" too
-		if out := post(`{"image":"reg.test/users/sn-bob/env:v1"}`, http.StatusBadRequest); out["code"] != "PUSH_AUTH_REQUIRED" {
-			t.Fatalf("someone else's path: %v", out)
+		// another user's place in the platform registry is "other" too:
+		// without credentials it is tried as nobody, never with the platform's
+		other := post(`{"image":"reg.test/users/sn-bob/env:anon"}`, http.StatusCreated)
+		if sn := getSnap(other["id"].(string)); sn.Spec.PushAuth != nil || sn.Spec.PushSecretRef != nil {
+			t.Fatalf("someone else's path: %+v", sn.Spec)
+		}
+		// half a credential is a mistake, not "none"
+		if out := post(`{"image":"other.test/team/env:v1","pushAuth":{"username":"","password":"p"}}`, http.StatusBadRequest); out["code"] != "PUSH_AUTH_REQUIRED" {
+			t.Fatalf("empty user name: %v", out)
 		}
 		if out := post(`{"image":"other.test/team/env:v1","pushAuth":{"username":"u","password":""}}`, http.StatusBadRequest); out["code"] != "PUSH_AUTH_REQUIRED" {
 			t.Fatalf("empty password: %v", out)
@@ -306,7 +315,7 @@ func TestSnapshotAPI(t *testing.T) {
 	var ids []string
 	t.Run("lists by owner; admins see all; tokens limited to DevPods see only those", func(t *testing.T) {
 		list := call("GET", "/api/snapshots", alice, "", http.StatusOK)["items"].([]any)
-		if len(list) != 5 {
+		if len(list) != 7 {
 			t.Fatalf("alice sees %d", len(list))
 		}
 		for _, it := range list {
@@ -319,7 +328,7 @@ func TestSnapshotAPI(t *testing.T) {
 			t.Fatalf("bob sees %d", len(l))
 		}
 		call("GET", "/api/snapshots?scope=all", alice, "", http.StatusForbidden)
-		if l := call("GET", "/api/snapshots?scope=all", root, "", http.StatusOK)["items"].([]any); len(l) != 5 {
+		if l := call("GET", "/api/snapshots?scope=all", root, "", http.StatusOK)["items"].([]any); len(l) != 7 {
 			t.Fatalf("admin sees %d", len(l))
 		}
 		call("GET", "/api/snapshots/"+ids[0], bob, "", http.StatusNotFound)
@@ -457,8 +466,9 @@ func TestSnapshotAPI(t *testing.T) {
 		s.Snapshots = bare
 		defer func() { s.Snapshots = cfg }()
 		call("POST", "/api/devpods/sn-alice-dev1/snapshots", alice, `{"name":"env","tag":"v2"}`, http.StatusBadRequest)
-		if out := call("POST", "/api/devpods/sn-alice-dev1/snapshots", alice, `{"image":"reg.test/users/sn-alice/env:v2"}`, http.StatusBadRequest); out["code"] != "PUSH_AUTH_REQUIRED" {
-			t.Fatalf("no template: %v", out)
+		anon := call("POST", "/api/devpods/sn-alice-dev1/snapshots", alice, `{"image":"reg.test/users/sn-alice/env:v2anon"}`, http.StatusCreated)
+		if sn := getSnap(anon["id"].(string)); sn.Spec.PushSecretRef != nil || sn.Spec.PushAuth != nil {
+			t.Fatalf("no template, no credentials: %+v", sn.Spec)
 		}
 		v := call("POST", "/api/devpods/sn-alice-dev1/snapshots", alice, `{"image":"reg.test/users/sn-alice/env:v2","pushAuth":{"username":"u","password":"p"}}`, http.StatusCreated)
 		if sn := getSnap(v["id"].(string)); sn.Spec.PushSecretRef != nil || sn.Spec.PushAuth == nil {
@@ -477,8 +487,9 @@ func TestSnapshotAPI(t *testing.T) {
 		}
 		// someone else's saved registry does not help
 		call("PUT", "/api/me/registries/saved.test", bob, `{"username":"bob","password":"bobpw"}`, http.StatusOK)
-		if out := post(`{"image":"saved.test/team/env:s1"}`, http.StatusBadRequest); out["code"] != "PUSH_AUTH_REQUIRED" {
-			t.Fatalf("bob's registry used for alice: %v", out)
+		notHers := post(`{"image":"saved.test/team/env:s0"}`, http.StatusCreated)
+		if sn := getSnap(notHers["id"].(string)); sn.Spec.PushSecretRef != nil || sn.Spec.PushAuth != nil {
+			t.Fatalf("bob's registry used for alice: %+v", sn.Spec)
 		}
 		call("PUT", "/api/me/registries/saved.test", alice, `{"username":"alice","password":"alicepw"}`, http.StatusOK)
 		v := post(`{"image":"saved.test/team/env:s1"}`, http.StatusCreated)
@@ -494,8 +505,9 @@ func TestSnapshotAPI(t *testing.T) {
 		}
 		// an admin saving alice's DevPod uses alice's registries, not their own
 		call("PUT", "/api/me/registries/rootonly.test", root, `{"username":"root","password":"rootpw"}`, http.StatusOK)
-		if out := call("POST", "/api/devpods/sn-alice-dev1/snapshots", root, `{"image":"rootonly.test/x/env:s3"}`, http.StatusBadRequest); out["code"] != "PUSH_AUTH_REQUIRED" {
-			t.Fatalf("the caller's registry used for the owner's DevPod: %v", out)
+		byRoot := call("POST", "/api/devpods/sn-alice-dev1/snapshots", root, `{"image":"rootonly.test/x/env:s3"}`, http.StatusCreated)
+		if sn := getSnap(byRoot["id"].(string)); sn.Spec.PushSecretRef != nil || sn.Spec.PushAuth != nil {
+			t.Fatalf("the caller's registry used for the owner's DevPod: %+v", sn.Spec)
 		}
 	})
 }

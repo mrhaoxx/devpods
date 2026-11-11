@@ -58,6 +58,7 @@ func main() {
 		homeDirMountPrefix                            string
 		snapshotImage                                 string
 		snapshotDockerImage, snapshotContainerdSocket string
+		snapshotPlainHTTP                             string
 		ingestURL                                     string
 		ingestKeyFile                                 string
 		tel                                           = config.DefaultConfig()
@@ -87,6 +88,8 @@ func main() {
 		"snapshot Job image for Docker nodes; empty = --snapshot-image")
 	flag.StringVar(&snapshotContainerdSocket, "snapshot-containerd-socket", "/run/containerd/containerd.sock",
 		"containerd socket on the nodes, mounted into snapshot Jobs")
+	flag.StringVar(&snapshotPlainHTTP, "snapshot-plain-http-registries", "",
+		"registries snapshot Jobs push to over plain HTTP, comma separated (host or host:port); every other registry is HTTPS")
 
 	opts := zap.Options{Development: true, Level: zapcore.InfoLevel}
 	opts.BindFlags(flag.CommandLine)
@@ -193,6 +196,7 @@ func main() {
 		Client:        mgr.GetClient(),
 		Scheme:        mgr.GetScheme(),
 		SnapshotImage: snapshotImage, DockerImage: snapshotDockerImage, ContainerdSocket: snapshotContainerdSocket,
+		PlainHTTPRegistries: splitList(snapshotPlainHTTP),
 	}).SetupWithManager(mgr); err != nil {
 		die(err, "set up DevPodSnapshotReconciler")
 	}
@@ -238,4 +242,15 @@ func parseDurations(s string) ([]time.Duration, error) {
 		out = append(out, d)
 	}
 	return out, nil
+}
+
+// splitList splits a comma-separated flag, dropping blanks.
+func splitList(v string) []string {
+	var out []string
+	for _, p := range strings.Split(v, ",") {
+		if p = strings.TrimSpace(p); p != "" {
+			out = append(out, p)
+		}
+	}
+	return out
 }

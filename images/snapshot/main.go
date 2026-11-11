@@ -18,6 +18,8 @@ import (
 	"io"
 	"os"
 	"os/signal"
+	"slices"
+	"strings"
 	"syscall"
 	"time"
 )
@@ -51,6 +53,15 @@ type options struct {
 	pause, push                bool
 	dockerConfig               string
 	termPath                   string
+	// plainHTTP are the registries (host or host:port, lower case) pushed
+	// to without TLS — a registry inside the cluster's network. Named one
+	// by one: a registry not listed is never spoken to in the clear.
+	plainHTTP []string
+}
+
+// usesPlainHTTP reports whether registry host is one of the named ones.
+func (o options) usesPlainHTTP(host string) bool {
+	return host != "" && slices.Contains(o.plainHTTP, strings.ToLower(host))
 }
 
 func envOr(key, def string) string {
@@ -82,9 +93,15 @@ func parseFlags(args []string) (options, error) {
 	fs.BoolVar(&o.pause, "pause", envBool("PAUSE", true), "pause the container while committing")
 	fs.BoolVar(&o.push, "push", envBool("PUSH", true), "push the image after committing")
 	fs.StringVar(&o.dockerConfig, "docker-config", envOr("DOCKER_CONFIG", ""), "directory holding config.json with the push credentials")
+	plain := fs.String("plain-http-registries", envOr("PLAIN_HTTP_REGISTRIES", ""), "registries pushed to over plain HTTP, comma separated (host or host:port)")
 	fs.StringVar(&o.termPath, "termination-log", envOr("TERMINATION_LOG", "/dev/termination-log"), "where the result line is written")
 	if err := fs.Parse(args); err != nil {
 		return o, err
+	}
+	for _, h := range strings.Split(*plain, ",") {
+		if h = strings.ToLower(strings.TrimSpace(h)); h != "" {
+			o.plainHTTP = append(o.plainHTTP, h)
+		}
 	}
 	if o.container == "" || o.image == "" {
 		return o, errors.New("the container ID and the target image are required")
@@ -102,6 +119,18 @@ func parseFlags(args []string) (options, error) {
 		return o, fmt.Errorf("unknown runtime %q (containerd or docker)", o.runtime)
 	}
 	return o, nil
+}
+
+// wantsLogin reports whether a push failed because the registry refused
+// whoever was pushing: no credentials, or wrong ones.
+func wantsLogin(err error) bool {
+	msg := strings.ToLower(err.Error())
+	for _, sign := range []string{"401", "unauthorized", "authorization", "authentication required", "denied", "no basic auth credentials"} {
+		if strings.Contains(msg, sign) {
+			return true
+		}
+	}
+	return false
 }
 
 // rollbackTimeout bounds the cleanup after a failure or cancel; it has to
@@ -158,6 +187,9 @@ func run(ctx context.Context, o options, b backend, e *emitter) int {
 	e.Logf("推送到 %s", o.image)
 	digest, err := b.Push(ctx, e.Push, e.Layer)
 	if err != nil {
+		if wantsLogin(err) {
+			return fail("push failed", fmt.Errorf("%w（仓库拒绝了这次推送：检查这个仓库的凭证 — 设置 → 镜像仓库凭证，或保存时填写用户名和密码）", err))
+		}
 		return fail("push failed", err)
 	}
 	e.PushEnd()

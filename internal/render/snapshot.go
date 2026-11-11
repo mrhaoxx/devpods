@@ -73,6 +73,8 @@ type SnapshotTarget struct {
 	Image string
 	// ContainerdSocket on the node; "" = DefaultContainerdSocket.
 	ContainerdSocket string
+	// PlainHTTPRegistries are pushed to without TLS (host or host:port).
+	PlainHTTPRegistries []string
 }
 
 // SnapshotJob renders the batch/v1 Job that commits the container on its
@@ -105,6 +107,9 @@ func SnapshotJob(snap *devpodv1alpha1.DevPodSnapshot, t SnapshotTarget) *batchv1
 	}
 	if t.Runtime == RuntimeContainerd {
 		env = append(env, corev1.EnvVar{Name: "CONTAINERD_NAMESPACE", Value: containerdNamespace})
+	}
+	if len(t.PlainHTTPRegistries) > 0 {
+		env = append(env, corev1.EnvVar{Name: "PLAIN_HTTP_REGISTRIES", Value: strings.Join(t.PlainHTTPRegistries, ",")})
 	}
 
 	socketType := corev1.HostPathSocket

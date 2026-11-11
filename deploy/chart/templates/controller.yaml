@@ -33,6 +33,9 @@ spec:
         {{- with .containerdSocket }}
         - --snapshot-containerd-socket={{ . }}
         {{- end }}
+        {{- with .plainHTTPRegistries }}
+        - --snapshot-plain-http-registries={{ join "," . }}
+        {{- end }}
         {{- with .dockerImage }}
         - --snapshot-docker-image={{ . }}
         {{- end }}

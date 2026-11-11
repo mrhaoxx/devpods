@@ -52,6 +52,7 @@ type containerdBackend struct {
 	containerID string
 	ref         string // normalised target reference
 	domain      string // its registry host
+	plainHTTP   bool   // that registry is one of the named plain-HTTP ones
 	pause       bool
 
 	prev      *ocispec.Descriptor // what the target name pointed at before ("" = nothing)
@@ -83,7 +84,7 @@ func newContainerdBackend(ctx context.Context, o options, e *emitter) (backend, 
 	cfg.Address, cfg.Namespace = o.socket, o.namespace
 	return &containerdBackend{
 		client: client, ctx: nsCtx, cancel: cancel, gopts: types.GlobalCommandOptions(*cfg), e: e,
-		containerID: o.container, ref: parsed.String(), domain: parsed.Domain, pause: o.pause,
+		containerID: o.container, ref: parsed.String(), domain: parsed.Domain, plainHTTP: o.usesPlainHTTP(parsed.Domain), pause: o.pause,
 	}, nil
 }
 
@@ -207,7 +208,11 @@ func (c *containerdBackend) Push(ctx context.Context, progress func(pushed, tota
 
 	// a fresh tracker per push, as nerdctl does (pushImageWithLocal)
 	tracker := docker.NewInMemoryTracker()
-	ho, err := dockerconfigresolver.NewHostOptions(ctx, c.domain, dockerconfigresolver.WithHostsDirs(c.gopts.HostsDir))
+	hostOpts := []dockerconfigresolver.Opt{dockerconfigresolver.WithHostsDirs(c.gopts.HostsDir)}
+	if c.plainHTTP {
+		hostOpts = append(hostOpts, dockerconfigresolver.WithPlainHTTP(true))
+	}
+	ho, err := dockerconfigresolver.NewHostOptions(ctx, c.domain, hostOpts...)
 	if err != nil {
 		return "", err
 	}

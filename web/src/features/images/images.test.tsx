@@ -95,7 +95,7 @@ describe("snapshots", () => {
     expect(screen.queryByRole("button", { name: "取消保存" })).toBeNull();
   });
 
-  it("a custom address needs credentials, and cancel asks first", async () => {
+  it("a custom address takes credentials for one push, and cancel asks first", async () => {
     const stream = progressStream();
     const calls = stubFetch({
       "POST /api/devpods/alice-a/snapshots": new Response(JSON.stringify(view({ phase: "Pending", image: "other.test/team/a:v1", customRegistry: true })), { status: 201 }),
@@ -107,8 +107,11 @@ describe("snapshots", () => {
     fireEvent.click(await screen.findByRole("radio", { name: "自定义地址" }));
     const start = screen.getByRole("button", { name: "开始保存" }) as HTMLButtonElement;
     fireEvent.change(screen.getByLabelText("镜像地址"), { target: { value: "other.test/team/a:v1" } });
-    expect(start.disabled).toBe(true); // no credentials yet
+    // no credentials is a choice (a registry without a login); half a credential is not
+    expect(start.disabled).toBe(false);
+    expect(screen.getByText(/仓库不需要登录就留空/)).toBeTruthy();
     fireEvent.change(screen.getByLabelText("用户名"), { target: { value: "robot" } });
+    expect(start.disabled).toBe(true);
     const pw = screen.getByLabelText("密码") as HTMLInputElement;
     expect(pw.type).toBe("password");
     fireEvent.change(pw, { target: { value: "s3cret" } });
@@ -182,6 +185,19 @@ describe("snapshots", () => {
     expect((screen.getByLabelText("密码") as HTMLInputElement).value).toBe("");
   });
 
+  it("a custom address without credentials is pushed as nobody", async () => {
+    const calls = stubFetch({
+      "POST /api/devpods/alice-a/snapshots": new Response(JSON.stringify(view({ phase: "Pending", image: "10.0.0.8:32500/dh/a:v1", customRegistry: true })), { status: 201 }),
+      "/api/snapshots/alice-a-abc123/progress": () => new Response(""),
+      "/api/snapshots": { items: [] },
+    });
+    renderWithProviders(<SnapshotDialog devpod="alice-a" owner="alice" onClose={() => {}} />, { me: features() });
+    fireEvent.click(await screen.findByRole("radio", { name: "自定义地址" }));
+    fireEvent.change(screen.getByLabelText("镜像地址"), { target: { value: "10.0.0.8:32500/dh/a:v1" } });
+    fireEvent.click(screen.getByRole("button", { name: "开始保存" }));
+    await waitFor(() => expect(calls.find((c) => c.method === "POST")?.body).toBe('{"image":"10.0.0.8:32500/dh/a:v1","pause":true}'));
+  });
+
   it("an address on a saved registry pushes with the saved credential; 改用其他凭证 brings the fields back", async () => {
     const stream = progressStream();
     const calls = stubFetch({
@@ -196,7 +212,7 @@ describe("snapshots", () => {
     // another registry: credentials are asked for as before
     fireEvent.change(screen.getByLabelText("镜像地址"), { target: { value: "other.test/team/a:v1" } });
     expect(screen.getByLabelText("用户名")).toBeTruthy();
-    expect(start.disabled).toBe(true);
+    expect(start.disabled).toBe(false); // no credentials: pushed as nobody
     // the saved registry: no fields, ready to go
     fireEvent.change(screen.getByLabelText("镜像地址"), { target: { value: "harbor.test/team/a:v1" } });
     await waitFor(() => expect(screen.getByRole("status").textContent).toMatch(/将使用已保存的凭证（用户名 robot）/));
