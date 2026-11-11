@@ -30,8 +30,8 @@ import (
 // DevPodSnapshotReconciler reconciles DevPodSnapshot objects.
 type DevPodSnapshotReconciler struct {
 	client.Client
-	Scheme        *runtime.Scheme
-	SnapshotImage string
+	Scheme          *runtime.Scheme
+	SnapshotOptions render.SnapshotOptions
 }
 
 // +kubebuilder:rbac:groups=devpod.io,resources=devpodsnapshots,verbs=get;list;watch;update;patch
@@ -97,7 +97,7 @@ func (r *DevPodSnapshotReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 		return ctrl.Result{}, r.setFailed(ctx, &snap, "Pod %q is not running (phase: %s)", pod.Name, pod.Status.Phase)
 	}
 
-	containerID, err := extractContainerID(pod.Status.ContainerStatuses, pod.Spec.Containers[0].Name)
+	runtimeName, containerID, err := extractContainerID(pod.Status.ContainerStatuses, pod.Spec.Containers[0].Name)
 	if err != nil {
 		return ctrl.Result{}, r.setFailed(ctx, &snap, "container ID: %v", err)
 	}
@@ -107,11 +107,10 @@ func (r *DevPodSnapshotReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 		return ctrl.Result{}, r.setFailed(ctx, &snap, "Pod %q has no nodeName", pod.Name)
 	}
 
-	var pushSecret *string
-	if snap.Spec.PushSecretRef != nil {
-		pushSecret = &snap.Spec.PushSecretRef.Name
+	job, err := render.SnapshotJob(&snap, runtimeName, containerID, nodeName, r.SnapshotOptions)
+	if err != nil {
+		return ctrl.Result{}, r.setFailed(ctx, &snap, "snapshot Job: %v", err)
 	}
-	job := render.SnapshotJob(&snap, containerID, nodeName, pushSecret, r.SnapshotImage, snap.Spec.Push)
 
 	if err := controllerutil.SetControllerReference(&snap, job, r.Scheme); err != nil {
 		return ctrl.Result{}, fmt.Errorf("set ownerref on job: %w", err)
@@ -138,10 +137,13 @@ func (r *DevPodSnapshotReconciler) reconcileExistingJob(ctx context.Context, sna
 
 	for _, c := range job.Status.Conditions {
 		if c.Type == batchv1.JobComplete && c.Status == corev1.ConditionTrue {
-			digest := r.extractDigest(ctx, &job)
+			digest := r.snapshotResult(ctx, &job)
 			return ctrl.Result{}, r.setSucceeded(ctx, snap, digest)
 		}
 		if c.Type == batchv1.JobFailed && c.Status == corev1.ConditionTrue {
+			if message := r.snapshotResult(ctx, &job); message != "" {
+				return ctrl.Result{}, r.setFailed(ctx, snap, "snapshot Job failed: %s", message)
+			}
 			return ctrl.Result{}, r.setFailed(ctx, snap, "snapshot Job failed: %s", c.Message)
 		}
 	}
@@ -149,7 +151,7 @@ func (r *DevPodSnapshotReconciler) reconcileExistingJob(ctx context.Context, sna
 	return ctrl.Result{}, nil
 }
 
-func (r *DevPodSnapshotReconciler) extractDigest(ctx context.Context, job *batchv1.Job) string {
+func (r *DevPodSnapshotReconciler) snapshotResult(ctx context.Context, job *batchv1.Job) string {
 	var pods corev1.PodList
 	if err := r.List(ctx, &pods,
 		client.InNamespace(job.Namespace),
@@ -165,20 +167,21 @@ func (r *DevPodSnapshotReconciler) extractDigest(ctx context.Context, job *batch
 	return ""
 }
 
-func extractContainerID(statuses []corev1.ContainerStatus, name string) (string, error) {
+func extractContainerID(statuses []corev1.ContainerStatus, name string) (string, string, error) {
 	for _, cs := range statuses {
 		if cs.Name == name {
 			id := cs.ContainerID
 			if id == "" {
-				return "", fmt.Errorf("container %q has no containerID", name)
+				return "", "", fmt.Errorf("container %q has no containerID", name)
 			}
-			if idx := strings.Index(id, "://"); idx >= 0 {
-				id = id[idx+3:]
+			runtimeName, containerID, ok := strings.Cut(id, "://")
+			if !ok || runtimeName == "" || containerID == "" {
+				return "", "", fmt.Errorf("container %q has invalid containerID %q: expected runtime://id", name, id)
 			}
-			return id, nil
+			return runtimeName, containerID, nil
 		}
 	}
-	return "", fmt.Errorf("container %q not found in pod status", name)
+	return "", "", fmt.Errorf("container %q not found in pod status", name)
 }
 
 func (r *DevPodSnapshotReconciler) setFailed(ctx context.Context, snap *devpodv1alpha1.DevPodSnapshot, format string, args ...any) error {

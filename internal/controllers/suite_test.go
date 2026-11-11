@@ -23,6 +23,7 @@ import (
 
 	devpodv1alpha1 "github.com/mrhaoxx/devpod/api/v1alpha1"
 	"github.com/mrhaoxx/devpod/internal/controllers"
+	"github.com/mrhaoxx/devpod/internal/render"
 )
 
 var (
@@ -91,9 +92,9 @@ func setupSuiteWith(t *testing.T, opt func(*controllers.DevPodReconciler)) {
 		t.Fatalf("setup UserReconciler: %v", err)
 	}
 	if err := (&controllers.DevPodSnapshotReconciler{
-		Client:        mgr.GetClient(),
-		Scheme:        mgr.GetScheme(),
-		SnapshotImage: "docker:cli",
+		Client:          mgr.GetClient(),
+		Scheme:          mgr.GetScheme(),
+		SnapshotOptions: render.SnapshotOptions{DockerImage: "docker:cli"},
 	}).SetupWithManager(mgr); err != nil {
 		t.Fatalf("setup DevPodSnapshotReconciler: %v", err)
 	}

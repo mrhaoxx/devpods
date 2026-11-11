@@ -1,0 +1,19 @@
+# Kustomize JSON patch for an existing controller Deployment.
+# Add this file under patches, targeting apps/v1 Deployment/devpod-controller.
+# The existing controller is containers[0]; other args remain in place.
+# Replace the documentation registry address before deployment.
+- op: replace
+  path: /spec/template/spec/containers/0/image
+  value: 192.0.2.10:5000/devpod-controller:rke2-snapshot
+- op: add
+  path: /spec/template/spec/containers/0/args/-
+  value: --snapshot-containerd-image=192.0.2.10:5000/devpod-snapshot:nerdctl-2.2.1
+- op: add
+  path: /spec/template/spec/containers/0/args/-
+  value: --snapshot-containerd-address=/run/k3s/containerd/containerd.sock
+- op: add
+  path: /spec/template/spec/containers/0/args/-
+  value: --snapshot-containerd-namespace=k8s.io
+- op: add
+  path: /spec/template/spec/containers/0/args/-
+  value: --snapshot-containerd-insecure-registry=true

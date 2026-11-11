@@ -4,6 +4,9 @@ Kubernetes-native multi-tenant remote development environments.
 
 See `docs/superpowers/specs/2026-05-12-devpod-design.md` for the design.
 
+For Docker and RKE2/containerd snapshot configuration, see
+[the snapshot tool image guide](images/snapshot/README.md).
+
 ## Commands
 
     # Build all binaries

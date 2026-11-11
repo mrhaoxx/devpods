@@ -13,6 +13,10 @@ image:
   snapshot:
     repository: docker
     tag: cli
+  containerdSnapshot:
+    # Build images/snapshot/Dockerfile and publish to your registry first.
+    repository: ghcr.io/mrhaoxx/devpod-snapshot
+    tag: nerdctl-2.2.1
   webui:
     repository: ghcr.io/mrhaoxx/devpod-webui
     tag: dev
@@ -29,6 +33,18 @@ namespaces:
 # Pull secrets (must exist in namespaces.system) for the controller,
 # gateway, webui and audit-migrate pods, e.g. [{name: harbor-pull}].
 imagePullSecrets: []
+
+snapshot:
+  containerd:
+    # RKE2: /run/k3s/containerd/containerd.sock
+    address: /run/containerd/containerd.sock
+    namespace: k8s.io
+    # nerdctl only: allows HTTP and skips TLS certificate verification.
+    insecureRegistry: false
+  # Optional NetworkPolicy egress rules for containerd snapshot Pods.
+  # With namespace isolation, allow DNS plus source/target registries here.
+  # See deploy/examples/snapshot-rke2/values.yaml.
+  egress: []
 
 controller:
   replicas: 1

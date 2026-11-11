@@ -1,3 +1,6 @@
+{{- $snapshot := .Values.snapshot | default dict -}}
+{{- $containerd := $snapshot.containerd | default dict -}}
+{{- $containerdImage := .Values.image.containerdSnapshot | default dict -}}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -29,6 +32,10 @@ spec:
         - --leader-elect=true
         - --zap-devel=false
         - --snapshot-image={{ .Values.image.snapshot.repository }}:{{ .Values.image.snapshot.tag }}
+        - --snapshot-containerd-image={{ $containerdImage.repository | default "ghcr.io/mrhaoxx/devpod-snapshot" }}:{{ $containerdImage.tag | default "nerdctl-2.2.1" }}
+        - --snapshot-containerd-address={{ $containerd.address | default "/run/containerd/containerd.sock" }}
+        - --snapshot-containerd-namespace={{ $containerd.namespace | default "k8s.io" }}
+        - --snapshot-containerd-insecure-registry={{ $containerd.insecureRegistry | default false }}
         - --internal-pubkey-file=/etc/devpod/internal/ssh_host_ed25519_key.pub
         {{- with .Values.controller.homeHostPath }}
         - --home-host-path={{ . }}

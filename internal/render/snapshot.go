@@ -5,6 +5,9 @@
 package render
 
 import (
+	"fmt"
+	"strconv"
+
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -14,64 +17,112 @@ import (
 )
 
 const (
-	LabelSnapshot = "devpod.io/snapshot"
+	LabelSnapshot        = "devpod.io/snapshot"
+	LabelSnapshotRuntime = "devpod.io/snapshot-runtime"
 
-	snapshotCommitPush = `set -eo pipefail; docker commit "$CONTAINER_ID" "$TARGET_IMAGE" && docker push "$TARGET_IMAGE" 2>&1 | tee /tmp/push.log && sed -n 's/.*digest: \(\S\+\).*/\1/p' /tmp/push.log > /dev/termination-log`
+	snapshotCommitPush = `set -eo pipefail; docker commit "$CONTAINER_ID" "$TARGET_IMAGE" && docker push "$TARGET_IMAGE" 2>&1 | tee /tmp/push.log && sed -n 's/.*digest: \([^[:space:]]*\).*/\1/p' /tmp/push.log > /dev/termination-log`
 	snapshotCommitOnly = `docker commit "$CONTAINER_ID" "$TARGET_IMAGE" > /dev/termination-log`
+
+	containerdSnapshotCLI = `set -eu
+nerdctl() {
+  command nerdctl --address "$CONTAINERD_ADDRESS" --namespace "$CONTAINERD_NAMESPACE" --data-root /work/nerdctl --insecure-registry="$CONTAINERD_INSECURE_REGISTRY" "$@"
+}
+`
+	containerdCommitOnly = containerdSnapshotCLI + `nerdctl commit --format oci "$CONTAINER_ID" "$TARGET_IMAGE" > /dev/termination-log`
+	containerdCommitPush = containerdSnapshotCLI + `nerdctl commit --format oci "$CONTAINER_ID" "$TARGET_IMAGE"
+nerdctl push "$TARGET_IMAGE"
+nerdctl image inspect --mode native --format '{{.Image.Target.Digest}}' "$TARGET_IMAGE" > /dev/termination-log`
 )
+
+// SnapshotOptions are operator settings, shared by all snapshot Jobs.
+type SnapshotOptions struct {
+	DockerImage                string
+	ContainerdImage            string
+	ContainerdAddress          string
+	ContainerdNamespace        string
+	ContainerdInsecureRegistry bool
+}
 
 // SnapshotJobName returns the deterministic Job name for a DevPodSnapshot.
 func SnapshotJobName(snap *devpodv1alpha1.DevPodSnapshot) string {
 	return "snapshot-" + snap.Name
 }
 
-// SnapshotJob renders the batch/v1 Job that performs docker commit (+ optional push).
+// SnapshotJob renders a commit (+ optional push) Job for the source runtime.
 func SnapshotJob(
 	snap *devpodv1alpha1.DevPodSnapshot,
+	runtimeName string,
 	containerID string,
 	nodeName string,
-	pushSecret *string,
-	snapshotImage string,
-	push bool,
-) *batchv1.Job {
+	opts SnapshotOptions,
+) (*batchv1.Job, error) {
 	labels := map[string]string{
-		LabelSnapshot: snap.Name,
-		LabelDevPod:   snap.Spec.DevPodName,
-		LabelManaged:  "devpod-controller",
+		LabelSnapshot:        snap.Name,
+		LabelSnapshotRuntime: runtimeName,
+		LabelDevPod:          snap.Spec.DevPodName,
+		LabelManaged:         "devpod-controller",
+	}
+
+	image, socketName, socketPath := opts.DockerImage, "docker-sock", "/var/run/docker.sock"
+	script := snapshotCommitOnly
+	if snap.Spec.Push {
+		script = snapshotCommitPush
+	}
+	env := []corev1.EnvVar{
+		{Name: "CONTAINER_ID", Value: containerID},
+		{Name: "TARGET_IMAGE", Value: snap.Spec.Image},
+	}
+	switch runtimeName {
+	case "docker":
+	case "containerd":
+		if opts.ContainerdImage == "" || opts.ContainerdAddress == "" || opts.ContainerdNamespace == "" {
+			return nil, fmt.Errorf("containerd snapshots require an image, socket address and namespace")
+		}
+		image, socketName, socketPath = opts.ContainerdImage, "containerd-sock", opts.ContainerdAddress
+		script = containerdCommitOnly
+		if snap.Spec.Push {
+			script = containerdCommitPush
+		}
+		env = append(env,
+			corev1.EnvVar{Name: "CONTAINERD_ADDRESS", Value: socketPath},
+			corev1.EnvVar{Name: "CONTAINERD_NAMESPACE", Value: opts.ContainerdNamespace},
+			corev1.EnvVar{Name: "CONTAINERD_INSECURE_REGISTRY", Value: strconv.FormatBool(opts.ContainerdInsecureRegistry)},
+		)
+	default:
+		return nil, fmt.Errorf("unsupported container runtime %q (supported: docker, containerd)", runtimeName)
 	}
 
 	socketType := corev1.HostPathSocket
 	volumes := []corev1.Volume{{
-		Name: "docker-sock",
+		Name: socketName,
 		VolumeSource: corev1.VolumeSource{
 			HostPath: &corev1.HostPathVolumeSource{
-				Path: "/var/run/docker.sock",
+				Path: socketPath,
 				Type: &socketType,
 			},
 		},
 	}}
 
 	mounts := []corev1.VolumeMount{{
-		Name:      "docker-sock",
-		MountPath: "/var/run/docker.sock",
+		Name:      socketName,
+		MountPath: socketPath,
 	}}
 
-	script := snapshotCommitOnly
-	if push {
-		script = snapshotCommitPush
+	if runtimeName == "containerd" {
+		volumes = append(volumes, corev1.Volume{
+			Name:         "work",
+			VolumeSource: corev1.VolumeSource{EmptyDir: &corev1.EmptyDirVolumeSource{}},
+		})
+		mounts = append(mounts, corev1.VolumeMount{Name: "work", MountPath: "/work"})
 	}
 
-	env := []corev1.EnvVar{
-		{Name: "CONTAINER_ID", Value: containerID},
-		{Name: "TARGET_IMAGE", Value: snap.Spec.Image},
-	}
-
-	if push && pushSecret != nil {
+	// nerdctl commit may fetch missing base layers even without a push.
+	if snap.Spec.PushSecretRef != nil && (snap.Spec.Push || runtimeName == "containerd") {
 		volumes = append(volumes, corev1.Volume{
 			Name: "push-secret",
 			VolumeSource: corev1.VolumeSource{
 				Secret: &corev1.SecretVolumeSource{
-					SecretName: *pushSecret,
+					SecretName: snap.Spec.PushSecretRef.Name,
 					Items: []corev1.KeyToPath{{
 						Key:  ".dockerconfigjson",
 						Path: "config.json",
@@ -100,12 +151,13 @@ func SnapshotJob(
 			TTLSecondsAfterFinished: ptr.To[int32](300),
 			BackoffLimit:            ptr.To[int32](0),
 			Template: corev1.PodTemplateSpec{
+				ObjectMeta: metav1.ObjectMeta{Labels: labels},
 				Spec: corev1.PodSpec{
 					RestartPolicy: corev1.RestartPolicyNever,
 					NodeName:      nodeName,
 					Containers: []corev1.Container{{
 						Name:                     "snapshot",
-						Image:                    snapshotImage,
+						Image:                    image,
 						Command:                  []string{"sh", "-c"},
 						Args:                     []string{script},
 						Env:                      env,
@@ -117,5 +169,5 @@ func SnapshotJob(
 				},
 			},
 		},
-	}
+	}, nil
 }

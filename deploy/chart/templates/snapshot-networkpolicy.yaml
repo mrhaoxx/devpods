@@ -1,0 +1,16 @@
+{{- $snapshot := .Values.snapshot | default dict -}}
+{{- with $snapshot.egress }}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: devpod-snapshot-egress
+  namespace: {{ $.Values.namespaces.devpods }}
+  labels: {{ include "devpod.labels" $ | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/managed-by: devpod-controller
+      devpod.io/snapshot-runtime: containerd
+  policyTypes: [Egress]
+  egress: {{- toYaml . | nindent 4 }}
+{{- end }}

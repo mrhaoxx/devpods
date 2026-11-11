@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Render the chart in the audit configurations and assert the wiring.
+# Render the chart in supported configurations and assert the wiring.
 # Requires helm. Run from anywhere; CI runs it in the helm-render job.
 set -euo pipefail
 
@@ -29,6 +29,27 @@ render defaults "${WEBUI[@]}"
 lacks defaults "devpod-audit-"
 lacks defaults "--audit-"
 lacks defaults "terminationGracePeriodSeconds: 300"
+
+# Docker's image flag remains intact; containerd gets its own configuration.
+docHas defaults Deployment devpod-controller "--snapshot-image=docker:cli"
+docHas defaults Deployment devpod-controller "--snapshot-containerd-image=ghcr.io/mrhaoxx/devpod-snapshot:nerdctl-2.2.1"
+docHas defaults Deployment devpod-controller "--snapshot-containerd-address=/run/containerd/containerd.sock"
+docHas defaults Deployment devpod-controller "--snapshot-containerd-namespace=k8s.io"
+docHas defaults Deployment devpod-controller "--snapshot-containerd-insecure-registry=false"
+lacks defaults "name: devpod-snapshot-egress"
+render rke2 -f "$ROOT/deploy/examples/snapshot-rke2/values.yaml" \
+  --set namespaces.devpods=workspaces --set snapshot.containerd.namespace=custom-k8s \
+  --set image.snapshot.repository=mirror.example/docker --set image.snapshot.tag=cli-pinned
+docHas rke2 Deployment devpod-controller "--snapshot-image=mirror.example/docker:cli-pinned"
+docHas rke2 Deployment devpod-controller "192.0.2.10:5000/devpod-controller:rke2-snapshot"
+docHas rke2 Deployment devpod-controller "--snapshot-containerd-image=192.0.2.10:5000/devpod-snapshot:nerdctl-2.2.1"
+docHas rke2 Deployment devpod-controller "--snapshot-containerd-address=/run/k3s/containerd/containerd.sock"
+docHas rke2 Deployment devpod-controller "--snapshot-containerd-namespace=custom-k8s"
+docHas rke2 Deployment devpod-controller "--snapshot-containerd-insecure-registry=true"
+docHas rke2 NetworkPolicy devpod-snapshot-egress "namespace: workspaces"
+docHas rke2 NetworkPolicy devpod-snapshot-egress "devpod.io/snapshot-runtime: containerd"
+docHas rke2 NetworkPolicy devpod-snapshot-egress "cidr: 192.0.2.10/32"
+docHas rke2 NetworkPolicy devpod-snapshot-egress "port: 5000"
 
 # (b) bundled Silo + ClickHouse.
 render bundled "${WEBUI[@]}" --set audit.enabled=true \
@@ -176,6 +197,8 @@ cp "$ROOT/hack/testdata/chart-values-v0.1.yaml" "$OLD/values.yaml"
 if helm template devpod "$OLD" "${WEBUI[@]}" >"$OUT/reuse.yaml" 2>"$OUT/reuse.err"; then
   lacks reuse "--audit-"
   has reuse "- --gateway-config-name=default"
+  docHas reuse Deployment devpod-controller "--snapshot-image=docker:cli"
+  docHas reuse Deployment devpod-controller "--snapshot-containerd-address=/run/containerd/containerd.sock"
 else
   echo "FAIL [reuse]: old values do not render: $(cat "$OUT/reuse.err")"; fail=1
 fi

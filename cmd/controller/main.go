@@ -54,7 +54,7 @@ func main() {
 		internalPubFile      string
 		homeDirHostPath      string
 		homeDirMountPrefix   string
-		snapshotImage        string
+		snapshotOptions      render.SnapshotOptions
 		ingestURL            string
 		ingestKeyFile        string
 		tel                  = config.DefaultConfig()
@@ -73,8 +73,16 @@ func main() {
 		"hostPath prefix for per-owner home directories (e.g. /mnt/afs/home); empty disables injection")
 	flag.StringVar(&homeDirMountPrefix, "home-mount-prefix", "/home",
 		"container mount prefix for home directories (e.g. /home → /home/{owner})")
-	flag.StringVar(&snapshotImage, "snapshot-image", "docker:cli",
-		"container image for snapshot Jobs (must contain docker CLI)")
+	flag.StringVar(&snapshotOptions.DockerImage, "snapshot-image", "docker:cli",
+		"container image for Docker snapshot Jobs (must contain docker CLI)")
+	flag.StringVar(&snapshotOptions.ContainerdImage, "snapshot-containerd-image", "ghcr.io/mrhaoxx/devpod-snapshot:nerdctl-2.2.1",
+		"container image for containerd snapshot Jobs (must contain nerdctl)")
+	flag.StringVar(&snapshotOptions.ContainerdAddress, "snapshot-containerd-address", "/run/containerd/containerd.sock",
+		"host containerd socket path; use /run/k3s/containerd/containerd.sock for RKE2")
+	flag.StringVar(&snapshotOptions.ContainerdNamespace, "snapshot-containerd-namespace", "k8s.io",
+		"containerd namespace containing the Kubernetes containers")
+	flag.BoolVar(&snapshotOptions.ContainerdInsecureRegistry, "snapshot-containerd-insecure-registry", false,
+		"allow HTTP and skip TLS certificate verification for registries accessed by nerdctl")
 
 	opts := zap.Options{Development: true, Level: zapcore.InfoLevel}
 	opts.BindFlags(flag.CommandLine)
@@ -108,11 +116,11 @@ func main() {
 	// (combined with the ClusterRole) and a real memory inflator on
 	// large clusters.
 	mgr, err := ctrl.NewManager(ctrl.GetConfigOrDie(), ctrl.Options{
-		Scheme:                 scheme,
-		Metrics:                server.Options{BindAddress: metricsAddr},
-		HealthProbeBindAddress: probeAddr,
-		LeaderElection:         enableLeaderElection,
-		LeaderElectionID:       leaderElectionID,
+		Scheme:                  scheme,
+		Metrics:                 server.Options{BindAddress: metricsAddr},
+		HealthProbeBindAddress:  probeAddr,
+		LeaderElection:          enableLeaderElection,
+		LeaderElectionID:        leaderElectionID,
 		LeaderElectionNamespace: gatewayNamespace,
 		Cache: cache.Options{
 			DefaultNamespaces: map[string]cache.Config{
@@ -157,9 +165,9 @@ func main() {
 		die(err, "set up UserReconciler")
 	}
 	if err := (&controllers.DevPodSnapshotReconciler{
-		Client:        mgr.GetClient(),
-		Scheme:        mgr.GetScheme(),
-		SnapshotImage: snapshotImage,
+		Client:          mgr.GetClient(),
+		Scheme:          mgr.GetScheme(),
+		SnapshotOptions: snapshotOptions,
 	}).SetupWithManager(mgr); err != nil {
 		die(err, "set up DevPodSnapshotReconciler")
 	}
