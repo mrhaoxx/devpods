@@ -16,6 +16,7 @@ import (
 
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/utils/ptr"
 
@@ -387,5 +388,44 @@ func TestPrepareDevPod_PendingCountsTowardQuota(t *testing.T) {
 	}
 	if _, code := s.PrepareDevPodForTest(r, "pq-alice", big("b"), []*devpodv1alpha1.DevPod{first}); code != "QUOTA_EXCEEDED" {
 		t.Fatalf("with the first pending: %q, want QUOTA_EXCEEDED", code)
+	}
+}
+
+// DevPods made with kubectl, or before owner-scoped names, are named
+// freely: the cluster accepts them and the console starts, stops and
+// edits them like any other. (The console itself still names what it
+// creates <owner>-<name>.)
+func TestLegacyNamedDevPod(t *testing.T) {
+	setupSuite(t)
+	s, sm := newServer(t)
+	t.Cleanup(func() { cleanupDevPods(t) })
+	ctx := context.Background()
+	dp := &devpodv1alpha1.DevPod{
+		ObjectMeta: metav1.ObjectMeta{Name: "lk-1102-1", Namespace: "devpods"},
+		Spec: devpodv1alpha1.DevPodSpec{Owner: "lg-kuoli", Running: false, Pod: &devpodv1alpha1.PodWorkloadSpec{Spec: corev1.PodSpec{
+			Containers: []corev1.Container{{Name: "dev", Image: "ubuntu:24.04"}},
+		}}},
+	}
+	if err := k8sClient.Create(ctx, dp); err != nil {
+		t.Fatalf("a DevPod without the owner prefix was refused: %v", err)
+	}
+	waitDevPod(t, "lk-1102-1")
+	owner := forge(sm, "lg-kuoli", false)
+	path := map[string]string{"name": "lk-1102-1"}
+	if rec := doJSON(t, s.HandlePatchDevPodForTest(), "PATCH", "/api/devpods/lk-1102-1", path, owner, `{"running":true}`); rec.Code != http.StatusOK {
+		t.Fatalf("start: %d %s", rec.Code, rec.Body)
+	}
+	waitRunning(t, "lk-1102-1", true)
+	if rec := doJSON(t, s.HandlePatchDevPodForTest(), "PATCH", "/api/devpods/lk-1102-1", path, owner, `{"image":"ubuntu:25.04"}`); rec.Code != http.StatusOK {
+		t.Fatalf("edit: %d %s", rec.Code, rec.Body)
+	}
+	// it is its owner's, not someone's whose name it happens to start with
+	if rec := doJSON(t, s.HandleGetDevPodForTest(), "GET", "/api/devpods/lk-1102-1", path, forge(sm, "lk", false), ""); rec.Code != http.StatusNotFound {
+		t.Fatalf("user lk sees it: %d", rec.Code)
+	}
+	// the console's own creations keep the prefix
+	yamlBody := fmt.Sprintf(`{"yaml":%q}`, "apiVersion: devpod.io/v1alpha1\nkind: DevPod\nmetadata: {name: free-name}\nspec:\n  owner: lg-kuoli\n  running: true\n  pod: {spec: {containers: [{name: dev, image: 'ubuntu:24.04'}]}}\n")
+	if rec := doJSON(t, s.HandleCreateDevPodForTest(), "POST", "/api/devpods", nil, owner, yamlBody); rec.Code != http.StatusBadRequest {
+		t.Fatalf("console create without the prefix: %d %s", rec.Code, rec.Body)
 	}
 }

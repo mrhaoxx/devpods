@@ -32,7 +32,14 @@ spec:
     name: v1alpha1
     schema:
       openAPIV3Schema:
-        description: DevPod is the schema for development environments.
+        description: |-
+          DevPod is the schema for development environments.
+
+          A DevPod's name is free: the console names what it creates
+          <owner>-<name> (so that two users can each have a "day2"), but that is
+          its convention, not a rule of the cluster — DevPods made with kubectl,
+          or before that convention, keep whatever name they have and are
+          started, stopped and edited like any other.
         properties:
           apiVersion:
             description: |-
@@ -8345,8 +8352,6 @@ spec:
         - message: DevPod name must be at most 22 characters (length budget for derived
             Pod/PVC/Service names)
           rule: size(self.metadata.name) <= 22
-        - message: DevPod name must start with '<owner>-'
-          rule: self.metadata.name.startsWith(self.spec.owner + '-')
     served: true
     storage: true
     subresources:
