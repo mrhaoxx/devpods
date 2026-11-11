@@ -113,6 +113,15 @@ describe("console shell and routes", () => {
     expect(labels.indexOf("/configs")).toBe(labels.indexOf("/images") + 1);
   });
 
+  // The sidebar is 180px wide: a label that does not fit is cut off.
+  it("the settings entry has a label short enough for the sidebar", async () => {
+    stubFetch({ "/api/devpods": empty });
+    renderWithProviders(app(), { route: "/" });
+    const link = await screen.findByRole("link", { name: /密钥与凭证/ });
+    expect(link.getAttribute("href")).toBe("/settings");
+    expect(link.getAttribute("title")).toBe("SSH 公钥、访问令牌、镜像仓库凭证");
+  });
+
   // Visually hidden labels in a long table are absolutely positioned: with
   // no positioned ancestor they sit in the page, far below the window, and
   // give the page a scrollbar and an empty tail of its own. The scrolling

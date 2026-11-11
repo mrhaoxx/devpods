@@ -5,7 +5,7 @@ import { useQuery } from "@tanstack/react-query";
 import { listAlerts, listDevPods, listNodes, listAdminUsers, type Me } from "../data/api";
 import { qk } from "../data/queries";
 
-type Item = { to: string; label: string; icon: string; count?: string; countTone?: "fail"; end?: boolean };
+type Item = { to: string; label: string; icon: string; count?: string; countTone?: "fail"; end?: boolean; hint?: string };
 
 function NavItem({ it, onNavigate }: { it: Item; onNavigate?: () => void }) {
   return (
@@ -13,7 +13,7 @@ function NavItem({ it, onNavigate }: { it: Item; onNavigate?: () => void }) {
       to={it.to}
       end={it.end}
       onClick={onNavigate}
-      title={it.label}
+      title={it.hint ?? it.label}
       className={({ isActive }) =>
         `flex h-7 items-center gap-2 rounded-md px-2 text-[13px] whitespace-nowrap ${
           isActive ? "bg-accent-soft text-accent" : "text-muted hover:bg-sunk hover:text-ink"
@@ -70,7 +70,7 @@ export function Sidebar({ me, onNavigate }: { me: Me; onNavigate?: () => void })
     ...(me.features.reservations ? [{ to: "/reservations", label: "节点预约", icon: "▥" }] : []),
     ...(audit ? [{ to: "/sessions", label: "我的会话", icon: "◷" }] : []),
   ];
-  const settings: Item[] = [{ to: "/settings", label: "密钥 · 令牌 · 仓库凭证", icon: "⚙" }];
+  const settings: Item[] = [{ to: "/settings", label: "密钥与凭证", icon: "⚙", hint: "SSH 公钥、访问令牌、镜像仓库凭证" }];
   const cluster: Item[] = [
     { to: "/admin", label: "总览", icon: "◎", end: true },
     { to: "/admin/devpods", label: "全部 DevPod", icon: "▤", count: all.data ? `${running}/${allItems.length}` : undefined },
