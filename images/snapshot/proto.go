@@ -46,6 +46,59 @@ func (e *emitter) Error(msg string)  { e.line("@error %s", oneLine(msg)) }
 // Log writes ordinary log text (never a protocol line).
 func (e *emitter) Log(msg string) { e.line("%s", strings.TrimLeft(oneLine(msg), "@")) }
 
+// Logf is Log with a format: the human-readable account of the run that
+// the console and the CLI show next to the progress.
+func (e *emitter) Logf(format string, args ...any) { e.Log(fmt.Sprintf(format, args...)) }
+
+// Layer says that one blob of the image is in the registry.
+func (e *emitter) Layer(id string, size int64) {
+	if size > 0 {
+		e.Logf("%s %s 已推送", blobName(id), humanBytes(size))
+	} else {
+		e.Logf("%s 仓库里已有，跳过", blobName(id))
+	}
+}
+
+// blobName turns a push key ("layer-sha256:…", "manifest-sha256:…", a
+// Docker layer id) into "层 sha256:1a2b3c4d5e6f".
+func blobName(id string) string {
+	kind := "层"
+	for prefix, name := range map[string]string{"layer-": "层", "manifest-": "清单", "config-": "配置", "index-": "索引"} {
+		if rest, ok := strings.CutPrefix(id, prefix); ok {
+			kind, id = name, rest
+			break
+		}
+	}
+	return kind + " " + shortDigest(id)
+}
+
+// shortDigest keeps the algorithm and 12 hex digits.
+func shortDigest(d string) string {
+	algo, hex, ok := strings.Cut(d, ":")
+	if !ok {
+		algo, hex = "", d
+	}
+	if len(hex) > 12 {
+		hex = hex[:12]
+	}
+	if algo == "" {
+		return hex
+	}
+	return algo + ":" + hex
+}
+
+func humanBytes(n int64) string {
+	switch {
+	case n >= 1<<30:
+		return fmt.Sprintf("%.1f GiB", float64(n)/(1<<30))
+	case n >= 1<<20:
+		return fmt.Sprintf("%.1f MiB", float64(n)/(1<<20))
+	case n >= 1<<10:
+		return fmt.Sprintf("%.1f KiB", float64(n)/(1<<10))
+	}
+	return fmt.Sprintf("%d B", n)
+}
+
 // pushInterval: progress goes out at most this often.
 const pushInterval = time.Second
 
@@ -108,33 +161,63 @@ type layerProgress struct {
 	mu     sync.Mutex
 	offset map[string]int64
 	total  map[string]int64
+	done   map[string]bool
+	// onDone, when set, hears once per layer that it is up; size 0 means
+	// the registry already had it.
+	onDone func(id string, size int64)
 }
 
-func newLayerProgress() *layerProgress {
-	return &layerProgress{offset: map[string]int64{}, total: map[string]int64{}}
+func newLayerProgress(onDone func(id string, size int64)) *layerProgress {
+	return &layerProgress{offset: map[string]int64{}, total: map[string]int64{}, done: map[string]bool{}, onDone: onDone}
+}
+
+// finishLocked marks id complete; it returns the callback to run once
+// the lock is released, or nil when id was complete already.
+func (p *layerProgress) finishLocked(id string) func() {
+	if p.done[id] {
+		return nil
+	}
+	p.done[id] = true
+	if p.onDone == nil {
+		return nil
+	}
+	size, fn := p.total[id], p.onDone
+	return func() { fn(id, size) }
 }
 
 // Set records a layer's progress; total <= 0 keeps the remembered total.
 func (p *layerProgress) Set(id string, offset, total int64) {
 	p.mu.Lock()
-	defer p.mu.Unlock()
 	if total > 0 {
 		p.total[id] = total
 	}
-	if t := p.total[id]; t > 0 && offset > t {
+	t := p.total[id]
+	if t > 0 && offset > t {
 		offset = t
 	}
 	if offset > p.offset[id] { // progress never goes backwards
 		p.offset[id] = offset
+	}
+	var tell func()
+	if t > 0 && p.offset[id] >= t {
+		tell = p.finishLocked(id)
+	}
+	p.mu.Unlock()
+	if tell != nil {
+		tell()
 	}
 }
 
 // Finish marks a layer complete.
 func (p *layerProgress) Finish(id string) {
 	p.mu.Lock()
-	defer p.mu.Unlock()
 	if t := p.total[id]; t > 0 {
 		p.offset[id] = t
+	}
+	tell := p.finishLocked(id)
+	p.mu.Unlock()
+	if tell != nil {
+		tell()
 	}
 }
 

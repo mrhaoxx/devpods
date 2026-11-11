@@ -301,7 +301,7 @@ func readPushStream(r io.Reader, lp *layerProgress, progress func(pushed, total 
 	}
 }
 
-func (d *dockerBackend) Push(ctx context.Context, progress func(pushed, total int64)) (string, error) {
+func (d *dockerBackend) Push(ctx context.Context, progress func(pushed, total int64), layer func(id string, size int64)) (string, error) {
 	auth, err := loadRegistryAuth(d.configDir, d.ref)
 	if err != nil {
 		return "", err
@@ -312,7 +312,7 @@ func (d *dockerBackend) Push(ctx context.Context, progress func(pushed, total in
 		return "", err
 	}
 	defer resp.Body.Close()
-	digest, err := readPushStream(resp.Body, newLayerProgress(), progress)
+	digest, err := readPushStream(resp.Body, newLayerProgress(layer), progress)
 	if err != nil {
 		return "", err
 	}

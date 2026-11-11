@@ -197,7 +197,7 @@ func (j *pushJobs) snapshot() map[string]int64 {
 	return out
 }
 
-func (c *containerdBackend) Push(ctx context.Context, progress func(pushed, total int64)) (string, error) {
+func (c *containerdBackend) Push(ctx context.Context, progress func(pushed, total int64), layer func(id string, size int64)) (string, error) {
 	ctx = c.ns(ctx)
 	img, err := c.client.ImageService().Get(ctx, c.ref)
 	if err != nil {
@@ -227,7 +227,7 @@ func (c *containerdBackend) Push(ctx context.Context, progress func(pushed, tota
 		}
 		return st.Offset, st.Total, true
 	}
-	lp := newLayerProgress()
+	lp := newLayerProgress(layer)
 	done := make(chan struct{})
 	var wg sync.WaitGroup
 	wg.Add(1)

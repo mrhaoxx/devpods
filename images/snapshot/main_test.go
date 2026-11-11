@@ -84,7 +84,7 @@ func TestEmitter_LinesAndResult(t *testing.T) {
 }
 
 func TestLayerProgress(t *testing.T) {
-	p := newLayerProgress()
+	p := newLayerProgress(nil)
 	p.Set("a", 10, 100)
 	p.Set("b", 0, 50)
 	p.Set("a", 60, 0)   // total remembered
@@ -102,7 +102,7 @@ func TestLayerProgress(t *testing.T) {
 }
 
 func TestReport_FoldsTrackerStatus(t *testing.T) {
-	lp := newLayerProgress()
+	lp := newLayerProgress(nil)
 	jobs := map[string]int64{"layer-1": 1000, "layer-2": 500, "config": 10}
 	seen := map[string][2]int64{"layer-1": {400, 1000}, "config": {10, 0}} // total 0: fall back to the blob's size
 	status := func(ref string) (int64, int64, bool) {
@@ -137,9 +137,11 @@ func (f *fakeBackend) Commit(context.Context) error {
 func (f *fakeBackend) Size(context.Context) (int64, error) {
 	return f.size, nil
 }
-func (f *fakeBackend) Push(_ context.Context, progress func(int64, int64)) (string, error) {
+func (f *fakeBackend) Push(_ context.Context, progress func(int64, int64), layer func(string, int64)) (string, error) {
 	f.calls = append(f.calls, "push")
 	progress(1, 2)
+	layer("layer-sha256:1a2b3c4d5e6f7a8b9c0d", 2<<20)
+	layer("manifest-sha256:feedfacefeedface0000", 0)
 	if f.onPush != nil {
 		f.onPush()
 	}
@@ -215,6 +217,49 @@ func TestRun(t *testing.T) {
 			t.Fatalf("code %d lines %v result %q calls %v", code, lines, res, b.calls)
 		}
 	})
+}
+
+// The log box in the console (and the CLI) shows the lines that are not
+// protocol: a run must say what it is doing in words too.
+func TestRun_SaysWhatItDoes(t *testing.T) {
+	var buf bytes.Buffer
+	b := &fakeBackend{size: 3 << 20, digest: "sha256:feed"}
+	o := options{push: true, pause: true, container: "f2dab30670b4677ba01e59145ca8d01d", image: "reg.test/u/img:v1"}
+	if code := run(context.Background(), o, b, newEmitter(&buf, filepath.Join(t.TempDir(), "term"))); code != 0 {
+		t.Fatalf("exit %d\n%s", code, buf.String())
+	}
+	var human []string
+	for _, l := range strings.Split(strings.TrimSpace(buf.String()), "\n") {
+		if !strings.HasPrefix(l, "@") {
+			human = append(human, l)
+		}
+	}
+	want := []string{
+		"提交容器 f2dab30670b4（期间容器暂停）",
+		"已提交，镜像 3.0 MiB",
+		"推送到 reg.test/u/img:v1",
+		"层 sha256:1a2b3c4d5e6f 2.0 MiB 已推送",
+		"清单 sha256:feedfacefeed 仓库里已有，跳过",
+		"推送完成，摘要 sha256:feed",
+		"完成，用时 0s",
+	}
+	if strings.Join(human, "|") != strings.Join(want, "|") {
+		t.Fatalf("log lines\n got %q\nwant %q", human, want)
+	}
+}
+
+func TestLayerProgress_TellsOncePerLayer(t *testing.T) {
+	var told []string
+	lp := newLayerProgress(func(id string, size int64) { told = append(told, fmt.Sprintf("%s=%d", id, size)) })
+	lp.Set("a", 5, 10)
+	lp.Set("a", 10, 10) // reaches its total
+	lp.Set("a", 10, 10)
+	lp.Finish("a")
+	lp.Finish("b") // never reported a size: the registry had it
+	lp.Finish("b")
+	if strings.Join(told, ",") != "a=10,b=0" {
+		t.Fatalf("told %v", told)
+	}
 }
 
 func TestParseFlags(t *testing.T) {

@@ -31,7 +31,9 @@ type backend interface {
 	Size(ctx context.Context) (int64, error)
 	// Push uploads the image and returns its digest; progress receives
 	// (pushedBytes, totalBytes) as often as the runtime reports.
-	Push(ctx context.Context, progress func(pushed, total int64)) (string, error)
+	// layer hears once per blob that reached the registry (size 0: it
+	// was there already).
+	Push(ctx context.Context, progress func(pushed, total int64), layer func(id string, size int64)) (string, error)
 	// Rollback undoes Commit after a failure or a cancel: an image name
 	// this run created is removed; one that existed before is pointed
 	// back at what it was. It never removes an image the run did not create.
@@ -112,6 +114,7 @@ func run(ctx context.Context, o options, b backend, e *emitter) int {
 		msg, code := fmt.Sprintf("%s: %v", what, err), 1
 		if ctx.Err() != nil { // SIGTERM: the snapshot was cancelled
 			msg, code = "cancelled", 143
+			e.Log("已取消，正在清理")
 		}
 		e.PushEnd()
 		rctx, cancel := context.WithTimeout(context.Background(), rollbackTimeout)
@@ -124,7 +127,13 @@ func run(ctx context.Context, o options, b backend, e *emitter) int {
 		return code
 	}
 
+	started := time.Now()
 	e.Stage("commit")
+	if o.pause {
+		e.Logf("提交容器 %s（期间容器暂停）", shortDigest(o.container))
+	} else {
+		e.Logf("提交容器 %s（不暂停容器）", shortDigest(o.container))
+	}
 	if err := b.Commit(ctx); err != nil {
 		return fail("commit failed", err)
 	}
@@ -136,27 +145,32 @@ func run(ctx context.Context, o options, b backend, e *emitter) int {
 		e.Log(fmt.Sprintf("image size unknown: %v", err))
 	} else if size > 0 {
 		e.Size(size)
+		e.Logf("已提交，镜像 %s", humanBytes(size))
 	}
 	if !o.push {
+		e.Logf("完成（只提交，不推送），用时 %s", time.Since(started).Round(time.Second))
 		e.Result("", size, "")
 		e.Done()
 		return 0
 	}
 
 	e.Stage("push")
-	digest, err := b.Push(ctx, e.Push)
+	e.Logf("推送到 %s", o.image)
+	digest, err := b.Push(ctx, e.Push, e.Layer)
 	if err != nil {
 		return fail("push failed", err)
 	}
 	e.PushEnd()
 	if digest != "" {
 		e.Digest(digest)
+		e.Logf("推送完成，摘要 %s", digest)
 	}
 	rctx, cancel := context.WithTimeout(context.Background(), rollbackTimeout)
 	defer cancel()
 	if err := b.Release(rctx); err != nil {
 		e.Log(fmt.Sprintf("cleanup: %v", err))
 	}
+	e.Logf("完成，用时 %s", time.Since(started).Round(time.Second))
 	e.Result(digest, size, "")
 	e.Done()
 	return 0
