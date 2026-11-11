@@ -54,6 +54,10 @@ spec:
         - --password-auth=true
         - --password-min-length={{ .Values.webui.passwordMinLength }}
         {{- end }}
+        {{- if .Values.webui.ldapAuth }}
+        {{- if not .Values.gateway.ldap.enabled }}{{ fail "webui.ldapAuth needs gateway.ldap.enabled: the console signs users in against the gateway's LDAP directory" }}{{ end }}
+        - --ldap-auth=true
+        {{- end }}
         {{- if .Values.webui.gitlab.issuerURL }}
         - --gitlab-issuer-url={{ .Values.webui.gitlab.issuerURL }}
         - --oauth-client-id={{ required "webui.gitlab.clientID is required when gitlab.issuerURL is set" .Values.webui.gitlab.clientID }}
@@ -147,6 +151,9 @@ spec:
         - {name: oauth, mountPath: /etc/devpod/webui/oauth, readOnly: true}
         {{- end }}
         - {name: session, mountPath: /etc/devpod/webui/session, readOnly: true}
+        {{- if .Values.webui.ldapAuth }}
+        - {name: ldap-secrets, mountPath: /etc/devpod/webui/ldap, readOnly: true}
+        {{- end }}
         - {name: quota, mountPath: /etc/devpod/webui/default-quota.yaml, subPath: default-quota.yaml, readOnly: true}
         {{- if (.Values.webui.webshell | default dict).enabled }}
         - {name: webshell-key, mountPath: /etc/devpod/webshell, readOnly: true}
@@ -165,6 +172,21 @@ spec:
         {{- include "devpod.telemetry.keyMount" . | nindent 8 }}
         {{- end }}
       volumes:
+      {{- if .Values.webui.ldapAuth }}
+      - name: ldap-secrets
+        projected:
+          sources:
+          - secret:
+              name: {{ required "gateway.ldap.caSecret.name is required when ldap is enabled" .Values.gateway.ldap.caSecret.name | quote }}
+              items:
+              - key: ca.crt
+                path: ca.crt
+          - secret:
+              name: {{ required "gateway.ldap.bindPasswordSecret.name is required when ldap is enabled" .Values.gateway.ldap.bindPasswordSecret.name | quote }}
+              items:
+              - key: password
+                path: password
+      {{- end }}
       {{- if .Values.webui.gitlab.issuerURL }}
       - name: oauth
         secret:

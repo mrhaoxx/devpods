@@ -134,6 +134,11 @@ webui:
   # must be enabled.
   passwordAuth: false
   passwordMinLength: 8
+  # Sign users in with their password in the LDAP directory the gateway
+  # takes SSH keys from (gateway.ldap, which must be enabled): the same
+  # server, service account and user filter. Such users need no User
+  # object; name the admins among them in webui.admins.
+  ldapAuth: false
   # Let users edit User.spec.pubkeys via the UI. Disable when SSH keys
   # are managed externally (e.g. LDAP is the source of truth).
   pubkeySelfService: true

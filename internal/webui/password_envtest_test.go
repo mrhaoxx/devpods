@@ -6,7 +6,9 @@ package webui_test
 
 import (
 	"context"
+	"errors"
 	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
@@ -199,4 +201,98 @@ func TestAdminUserCRUD(t *testing.T) {
 		}
 		waitLogin(t, s, "erin", "resetsecret9", http.StatusOK)
 	})
+}
+
+// fakeDirectory stands in for the LDAP directory behind a login.
+type fakeDirectory struct {
+	people map[string]string
+	err    error
+	asked  []string
+}
+
+func (f *fakeDirectory) Authenticate(_ context.Context, user, pass string) (bool, error) {
+	f.asked = append(f.asked, user)
+	if f.err != nil {
+		return false, f.err
+	}
+	pw, ok := f.people[user]
+	return ok && pw == pass, nil
+}
+
+// Users of the LDAP directory sign in with their directory password,
+// without a User object; a built-in password still works beside it.
+func TestLDAPLogin(t *testing.T) {
+	setupSuite(t)
+	s, sm := newServer(t)
+	s.Admins = map[string]bool{"ld-root": true}
+	dir := &fakeDirectory{people: map[string]string{"ld-alice": "alice-pw", "ld-root": "root-pw", "ld-both": "ldap-pw"}}
+	login := func(user, pass string) *httptest.ResponseRecorder {
+		t.Helper()
+		return doJSON(t, s.HandlePasswordLoginForTest(), "POST", "/api/auth/password", nil, nil, `{"username":"`+user+`","password":"`+pass+`"}`)
+	}
+	session := func(rec *httptest.ResponseRecorder) webui.Session {
+		t.Helper()
+		for _, c := range rec.Result().Cookies() {
+			if c.Name == webui.SessionCookie {
+				sess, err := sm.Verify(c.Value, time.Now())
+				if err != nil {
+					t.Fatal(err)
+				}
+				return sess
+			}
+		}
+		t.Fatalf("no session cookie: %d %s", rec.Code, rec.Body)
+		return webui.Session{}
+	}
+
+	// off: the endpoint is not there, and the login page is told so
+	if rec := login("ld-alice", "alice-pw"); rec.Code != http.StatusNotFound {
+		t.Fatalf("disabled: %d", rec.Code)
+	}
+	s.LDAPAuth = dir
+	if rec := doJSON(t, s.HandleAuthConfigForTest(), "GET", "/api/auth/config", nil, nil, ""); !strings.Contains(rec.Body.String(), `"password":true`) || !strings.Contains(rec.Body.String(), `"ldap":true`) {
+		t.Fatalf("config %s", rec.Body)
+	}
+
+	if sess := session(login("ld-alice", "alice-pw")); sess.User != "ld-alice" || sess.Admin {
+		t.Fatalf("session %+v", sess)
+	}
+	if sess := session(login("ld-root", "root-pw")); !sess.Admin {
+		t.Fatalf("an admin by --admins: %+v", sess)
+	}
+	if rec := login("ld-alice", "wrong"); rec.Code != http.StatusUnauthorized || len(rec.Result().Cookies()) != 0 {
+		t.Fatalf("wrong password: %d", rec.Code)
+	}
+	if rec := login("ld-nobody", "x"); rec.Code != http.StatusUnauthorized {
+		t.Fatalf("unknown user: %d", rec.Code)
+	}
+
+	// the directory in trouble is said to be that, not a wrong password
+	dir.err = errors.New("dial tcp: connection refused")
+	if rec := login("ld-alice", "alice-pw"); rec.Code != http.StatusServiceUnavailable || strings.Contains(rec.Body.String(), "connection refused") {
+		t.Fatalf("directory down: %d %s", rec.Code, rec.Body)
+	}
+	dir.err = nil
+
+	// a built-in password wins without asking the directory; a wrong
+	// one falls through to it
+	s.PasswordAuth, s.PasswordMinLength = true, 8
+	hash, err := webui.HashPassword("built-in-pw", 8)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	u := &devpodv1alpha1.User{ObjectMeta: metav1.ObjectMeta{Name: "ld-both"}, Spec: devpodv1alpha1.UserSpec{PasswordHash: hash}}
+	if err := k8sClient.Create(ctx, u); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = k8sClient.Delete(ctx, u) })
+	waitLogin(t, s, "ld-both", "built-in-pw", http.StatusOK)
+	dir.asked = nil
+	if rec := login("ld-both", "built-in-pw"); rec.Code != http.StatusOK || len(dir.asked) != 0 {
+		t.Fatalf("built-in password: %d, directory asked %v", rec.Code, dir.asked)
+	}
+	if rec := login("ld-both", "ldap-pw"); rec.Code != http.StatusOK {
+		t.Fatalf("directory password of a user with a built-in one: %d", rec.Code)
+	}
 }

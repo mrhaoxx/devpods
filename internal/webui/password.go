@@ -5,8 +5,10 @@
 package webui
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"time"
 
@@ -66,13 +68,16 @@ func (s *Server) handleLogout(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleAuthConfig(w http.ResponseWriter, r *http.Request) {
 	s.writeJSON(w, http.StatusOK, map[string]bool{
-		"password": s.PasswordAuth,
+		// the name-and-password form: built-in passwords, the LDAP
+		// directory's, or both
+		"password": s.PasswordAuth || s.LDAPAuth != nil,
+		"ldap":     s.LDAPAuth != nil,
 		"oauth":    s.OAuth != nil,
 	})
 }
 
 func (s *Server) handlePasswordLogin(w http.ResponseWriter, r *http.Request) {
-	if !s.PasswordAuth {
+	if !s.PasswordAuth && s.LDAPAuth == nil {
 		s.writeErr(w, http.StatusNotFound, "NOT_FOUND", "password login is disabled", nil)
 		return
 	}
@@ -97,16 +102,28 @@ func (s *Server) handlePasswordLogin(w http.ResponseWriter, r *http.Request) {
 		s.writeErr(w, http.StatusUnauthorized, "UNAUTHORIZED", "invalid username or password", nil)
 	}
 
+	// A user may have no User object at all (their identity is the
+	// directory's); userPtr stays nil then.
 	var u devpodv1alpha1.User
+	userPtr := &u
 	if err := s.Client.Get(r.Context(), types.NamespacedName{Name: req.Username}, &u); err != nil {
+		userPtr = nil
+	}
+	ok := s.PasswordAuth && userPtr != nil && u.Spec.PasswordHash != "" && VerifyPassword(u.Spec.PasswordHash, req.Password)
+	// not a built-in password: the directory's, when there is one
+	if !ok && s.LDAPAuth != nil {
+		var err error
+		if ok, err = s.LDAPAuth.Authenticate(r.Context(), req.Username, req.Password); err != nil {
+			slog.Error("ldap login", "user", req.Username, "err", err)
+			s.writeErr(w, http.StatusServiceUnavailable, "LDAP_UNAVAILABLE", "the login directory cannot be reached; try again in a moment", nil)
+			return
+		}
+	}
+	if !ok {
 		fail()
 		return
 	}
-	if u.Spec.PasswordHash == "" || !VerifyPassword(u.Spec.PasswordHash, req.Password) {
-		fail()
-		return
-	}
-	s.setSession(w, req.Username, s.adminFor(req.Username, &u))
+	s.setSession(w, req.Username, s.adminFor(req.Username, userPtr))
 	s.writeJSON(w, http.StatusOK, map[string]any{"user": req.Username})
 }
 
@@ -155,4 +172,11 @@ func (s *Server) handleChangePassword(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// PasswordChecker says whether a password is a user's somewhere else
+// (an LDAP directory). An error is that place being in trouble, not a
+// wrong password.
+type PasswordChecker interface {
+	Authenticate(ctx context.Context, username, password string) (bool, error)
 }

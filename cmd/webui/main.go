@@ -61,6 +61,8 @@ func main() {
 		pubkeySelfService bool
 		sshAdvertise      string
 		passwordAuth      bool
+		ldapAuth          bool
+		ldapSecretDir     string
 		passwordMinLength int
 		externalURL       string
 		sshLoginSuffix    string
@@ -87,6 +89,10 @@ func main() {
 	flag.BoolVar(&passwordAuth, "password-auth", false,
 		"enable built-in username+password login (independent of OAuth)")
 	flag.IntVar(&passwordMinLength, "password-min-length", 8, "minimum password length for create/reset/change")
+	flag.BoolVar(&ldapAuth, "ldap-auth", false,
+		"sign users in with their password in the LDAP directory of GatewayConfig.spec.ldap (the one the gateway takes SSH keys from)")
+	flag.StringVar(&ldapSecretDir, "ldap-secret-dir", "/etc/devpod/webui/ldap",
+		"directory holding the LDAP CA bundle ('ca.crt') and bind password ('password'); used with --ldap-auth")
 	flag.StringVar(&externalURL, "external-url", "",
 		"external base URL of the UI (https → Secure cookies + Origin check); defaults to the OAuth redirect's origin")
 	af := addAuditFlags(flag.CommandLine)
@@ -105,8 +111,8 @@ func main() {
 	// OAuth is enabled when its issuer URL is set; password auth is an
 	// independent switch. At least one must be on.
 	oauthEnabled := issuerURL != ""
-	if !oauthEnabled && !passwordAuth {
-		fatal(fmt.Errorf("no login method enabled: set --password-auth and/or --gitlab-issuer-url"))
+	if !oauthEnabled && !passwordAuth && !ldapAuth {
+		fatal(fmt.Errorf("no login method enabled: set --password-auth, --ldap-auth and/or --gitlab-issuer-url"))
 	}
 	if sessionKeyFile == "" {
 		fatal(fmt.Errorf("--session-key-file is required"))
@@ -237,6 +243,11 @@ func main() {
 		}
 	}
 	srv.GatewayConfigName = *gcName
+	if ldapAuth {
+		if srv.LDAPAuth, err = ldapLogin(mgr.GetAPIReader(), *gcName, ldapSecretDir); err != nil {
+			fatal(fmt.Errorf("--ldap-auth: %w", err))
+		}
+	}
 	if srv.Reservations, err = rf.build(); err != nil {
 		slog.Error("reservations", "err", err)
 		os.Exit(1)
@@ -286,7 +297,7 @@ func main() {
 		}
 		srv.OAuth = oauth
 	}
-	slog.Info("auth methods", "password", passwordAuth, "oauth", oauthEnabled, "secureCookies", srv.SecureCookies)
+	slog.Info("auth methods", "password", passwordAuth, "ldap", ldapAuth, "oauth", oauthEnabled, "secureCookies", srv.SecureCookies)
 
 	httpSrv := &http.Server{Addr: listen, Handler: srv.Routes(), ReadHeaderTimeout: 5 * time.Second}
 	go func() {

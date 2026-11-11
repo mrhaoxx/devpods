@@ -63,6 +63,10 @@ type Server struct {
 
 	// PasswordAuth enables the built-in username+password login path.
 	PasswordAuth bool
+	// LDAPAuth, when set, signs in users with their password in the
+	// LDAP directory (the one the gateway takes SSH keys from). It needs
+	// no User object.
+	LDAPAuth PasswordChecker
 	// PasswordMinLength gates password create/reset/change.
 	PasswordMinLength int
 	// Admins is the --admins username allowlist; effective admin also
