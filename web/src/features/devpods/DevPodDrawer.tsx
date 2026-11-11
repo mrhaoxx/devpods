@@ -200,10 +200,10 @@ export function DevPodDrawer(p: Props) {
                 </Field>
                 <div className="grid grid-cols-3 gap-2">
                   <Field label="CPU" error={errs.cpu}>
-                    <Input aria-label="CPU" value={cpu} onChange={(e) => setCpu(e.target.value)} className="mono" required />
+                    <Input aria-label="CPU" value={cpu} onChange={(e) => setCpu(e.target.value)} className="mono" placeholder="不限" />
                   </Field>
                   <Field label="内存" error={errs.memory}>
-                    <Input aria-label="内存" value={memory} onChange={(e) => setMemory(e.target.value)} className="mono" required />
+                    <Input aria-label="内存" value={memory} onChange={(e) => setMemory(e.target.value)} className="mono" placeholder="不限" />
                   </Field>
                   <Field label="GPU" error={errs.gpu}>
                     <Input aria-label="GPU" value={gpu} onChange={(e) => setGpu(e.target.value)} className="mono" placeholder="0" />

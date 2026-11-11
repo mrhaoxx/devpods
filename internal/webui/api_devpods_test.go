@@ -312,11 +312,15 @@ spec:
 		}
 	})
 
-	t.Run("missing limits rejected", func(t *testing.T) {
+	t.Run("cpu and memory limits are optional", func(t *testing.T) {
+		t.Cleanup(func() { cleanupDevPods(t) })
 		body := `{"name":"nolim","image":"ubuntu:24.04"}`
 		rec := doJSON(t, s.HandleCreateDevPodForTest(), "POST", "/api/devpods", nil, alice, body)
-		if rec.Code != http.StatusBadRequest {
+		if rec.Code != http.StatusCreated {
 			t.Fatalf("status = %d body=%s", rec.Code, rec.Body)
+		}
+		if dp := waitDevPod(t, "gl-alice-nolim"); len(dp.Spec.Pod.Spec.Containers[0].Resources.Limits) != 0 {
+			t.Fatalf("limits %v", dp.Spec.Pod.Spec.Containers[0].Resources.Limits)
 		}
 	})
 

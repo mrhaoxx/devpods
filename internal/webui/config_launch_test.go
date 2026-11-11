@@ -366,7 +366,7 @@ spec:
 `
 
 // The example as it was written: an admin launches it on several nodes;
-// an ordinary user is told what their DevPods need that it lacks.
+// so does an ordinary user.
 func TestConfigLaunch_Example(t *testing.T) {
 	setupSuite(t)
 	s, sm := newServer(t)
@@ -404,9 +404,13 @@ func TestConfigLaunch_Example(t *testing.T) {
 		t.Fatalf("created %+v", dp.Spec)
 	}
 
-	// an ordinary user's DevPods are metered: cpu and memory limits are required
-	items = launchItems(t, apiCall(t, srv, "POST", "/api/configs/ex-root-sglang/launch", bob, req, http.StatusUnprocessableEntity))
-	if len(items) != 2 || items[0].OK || !strings.Contains(items[0].Message, "cpu and memory limits") {
+	// an ordinary user launches it too: cpu and memory limits are optional
+	items = launchItems(t, apiCall(t, srv, "POST", "/api/configs/ex-root-sglang/launch", bob, req, http.StatusOK))
+	if len(items) != 2 || !items[0].OK || !items[1].OK || items[1].Name != "ex-bob-sg-2" {
 		t.Fatalf("user launch %+v", items)
+	}
+	waitDevPod(t, "ex-bob-sg-1")
+	if dp := waitDevPod(t, "ex-bob-sg-2"); dp.Spec.Owner != "ex-bob" {
+		t.Fatalf("owner %s", dp.Spec.Owner)
 	}
 }

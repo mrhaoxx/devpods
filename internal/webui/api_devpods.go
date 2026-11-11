@@ -418,9 +418,6 @@ func (s *Server) prepareDevPod(r *http.Request, sess Session, req CreateRequest,
 		if dp.Spec.Pod == nil {
 			return nil, &serverErr{http.StatusBadRequest, "BAD_REQUEST", "spec.pod is required (or pick a preset template)", nil}
 		}
-		if err := RequireLimits(&dp.Spec.Pod.Spec); err != nil {
-			return nil, &serverErr{http.StatusBadRequest, "BAD_REQUEST", err.Error(), nil}
-		}
 	}
 	if apiErr := s.quotaErrFor(r, sess, dp, "", pending...); apiErr != nil {
 		return nil, apiErr
@@ -690,11 +687,6 @@ func (s *Server) patchDevPod(r *http.Request, sess Session, dp *devpodv1alpha1.D
 	if dp.Spec.Running && !before.Spec.Running {
 		if apiErr := s.pinErr(r.Context(), dp.Spec.Owner, pinnedNode(dp)); apiErr != nil {
 			return PatchResponse{}, apiErr
-		}
-	}
-	if !sess.Admin && req.editsSpec() {
-		if err := RequireLimits(&dp.Spec.Pod.Spec); err != nil {
-			return PatchResponse{}, &serverErr{http.StatusBadRequest, "BAD_REQUEST", err.Error(), nil}
 		}
 	}
 	// waking, or resizing a running DevPod, re-enters the compute quota

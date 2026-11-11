@@ -43,6 +43,16 @@ describe("DevPodDrawer", () => {
     expect(screen.getByText(/会重建 Pod 并断开所有会话/)).toBeTruthy();
   });
 
+  it("CPU and memory may be left empty: no limit", () => {
+    stubFetch({ "/api/templates": { items: [] } });
+    renderWithProviders(<DevPodDrawer mode="create" open onClose={() => {}} />);
+    for (const label of ["CPU", "内存"]) {
+      const input = screen.getByLabelText(label) as HTMLInputElement;
+      expect(input.required).toBe(false);
+      expect(input.placeholder).toBe("不限");
+    }
+  });
+
   it("server QUOTA_EXCEEDED shows next to the field", async () => {
     stubFetch({
       "/api/templates": { items: [] },

@@ -76,23 +76,8 @@ func PodLimits(spec *corev1.PodSpec) corev1.ResourceList {
 	return sum
 }
 
-// RequireLimits enforces the must-declare-limits rule for non-admin
-// DevPods: every container and initContainer needs cpu and memory
-// limits, otherwise quota cannot be summed.
-func RequireLimits(spec *corev1.PodSpec) error {
-	check := func(kind string, cs []corev1.Container) error {
-		for _, c := range cs {
-			if c.Resources.Limits.Cpu().IsZero() || c.Resources.Limits.Memory().IsZero() {
-				return fmt.Errorf("%s %q must declare cpu and memory limits (required for quota accounting)", kind, c.Name)
-			}
-		}
-		return nil
-	}
-	if err := check("container", spec.Containers); err != nil {
-		return err
-	}
-	return check("initContainer", spec.InitContainers)
-}
+// cpu and memory limits are optional: a container that declares none
+// counts as nothing toward the compute quota.
 
 // CheckQuota validates proposed against q given the user's other
 // DevPods. existing MUST exclude the DevPod being updated. Compute

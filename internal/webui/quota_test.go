@@ -126,15 +126,12 @@ func TestCheckQuotaInitContainersCount(t *testing.T) {
 	}
 }
 
-func TestRequireLimits(t *testing.T) {
-	ok := mkDevPod(true, "1", "1Gi", "")
-	if err := webui.RequireLimits(&ok.Spec.Pod.Spec); err != nil {
+// Limits are optional: a container without them is within any quota.
+func TestCheckQuota_NoLimitsCountsAsNothing(t *testing.T) {
+	none := mkDevPod(true, "1", "1Gi", "")
+	none.Spec.Pod.Spec.Containers[0].Resources.Limits = nil
+	if err := webui.CheckQuota(quota(10, "1", "1Gi", ""), nil, &none); err != nil {
 		t.Fatalf("unexpected: %v", err)
-	}
-	missing := mkDevPod(true, "1", "1Gi", "")
-	missing.Spec.Pod.Spec.Containers[0].Resources.Limits = nil
-	if err := webui.RequireLimits(&missing.Spec.Pod.Spec); err == nil {
-		t.Fatal("expected error for missing limits")
 	}
 }
 
