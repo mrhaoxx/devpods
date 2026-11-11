@@ -205,16 +205,20 @@ func TestCommands(t *testing.T) {
 		t.Fatalf("collab: %d %q", code, out)
 	}
 
-	if code, out, _ = f.run("ports alice-a"); code != 0 || out != "address: https://abcdefgh2345-{port}-devpod.apps.test\npublic:  8080\n" {
+	if code, out, _ = f.run("ports alice-a"); code != 0 || out != "address: https://abcdefgh2345-{port}-devpod.apps.test\npublic:  8080 (anyone with the link)\nusers:   none (anyone signed in to the console)\nother ports: owner, collaborators and admins, after a console sign-in\n" {
 		t.Fatalf("ports: %d %q", code, out)
 	}
 	if code, out, _ = f.run("ports alice-a url 8888"); code != 0 || out != "https://abcdefgh2345-8888-devpod.apps.test\n" {
 		t.Fatalf("ports url: %d %q", code, out)
 	}
-	if f.run("ports alice-a public 8888"); last() != `PUT /api/devpods/alice-a/http {"publicPorts":[8080,8888]}` {
+	if f.run("ports alice-a public 8888"); last() != `PUT /api/devpods/alice-a/http {"publicPorts":[8080,8888],"userPorts":[]}` {
 		t.Fatalf("ports public sent %s", last())
 	}
-	if f.run("ports alice-a private 8080"); last() != `PUT /api/devpods/alice-a/http {"publicPorts":[]}` {
+	// one level per port: opening 8080 to signed-in users takes it off the public list
+	if f.run("ports alice-a users 8080 9000"); last() != `PUT /api/devpods/alice-a/http {"publicPorts":[],"userPorts":[8080,9000]}` {
+		t.Fatalf("users: %s", last())
+	}
+	if f.run("ports alice-a private 8080"); last() != `PUT /api/devpods/alice-a/http {"publicPorts":[],"userPorts":[]}` {
 		t.Fatalf("ports private sent %s", last())
 	}
 	if f.run("ports alice-a reset"); last() != `PUT /api/devpods/alice-a/http {"reset":true}` {

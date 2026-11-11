@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { fireEvent, screen, waitFor } from "@testing-library/react";
-import { PortsPanel, portRows } from "./PortsPanel";
+import { accessOf, PortsPanel, portRows, withAccess } from "./PortsPanel";
 import { renderWithProviders, stubFetch } from "../../../test/render";
 
 describe("PortsPanel", () => {
@@ -26,7 +26,7 @@ describe("PortsPanel", () => {
   });
 
   it("links use the random id, and 公开 saves the port", async () => {
-    const view = { id: "abcdefgh2345", urlTemplate: "https://abcdefgh2345-{port}-devpod.apps.test", publicPorts: [] as number[] };
+    const view = { id: "abcdefgh2345", urlTemplate: "https://abcdefgh2345-{port}-devpod.apps.test", publicPorts: [] as number[], userPorts: [] as number[] };
     const calls = stubFetch({
       "/api/devpods/alice-a/http": view,
       "/api/devpods/alice-a/info": { info: { ts: "", cpu_limit: 1, mem_limit: 1 }, infoTs: "", snapshot: { ts: "", procs: 1, threads: 1, zombies: 0, listen: [{ port: 8080, proto: "tcp", addr: "0.0.0.0" }] } },
@@ -36,8 +36,20 @@ describe("PortsPanel", () => {
     const open = await screen.findByRole("link", { name: /打开/ });
     expect(open.getAttribute("href")).toBe("https://abcdefgh2345-8080-devpod.apps.test");
     expect(screen.getByText("仅本人和协作者")).toBeTruthy();
-    fireEvent.click(screen.getByLabelText("公开端口 8080"));
-    await waitFor(() => expect(calls.some((c) => c.method === "PUT" && c.body === '{"publicPorts":[8080]}')).toBe(true));
+    const sel = screen.getByLabelText("端口 8080 的访问方式") as HTMLSelectElement;
+    expect(sel.value).toBe("private");
+    expect([...sel.options].map((o) => o.value)).toEqual(["private", "users", "public"]);
+    fireEvent.change(sel, { target: { value: "public" } });
+    await waitFor(() => expect(calls.some((c) => c.method === "PUT" && c.body === '{"publicPorts":[8080],"userPorts":[]}')).toBe(true));
     expect(await screen.findByText("公开")).toBeTruthy();
+  });
+  it("three access levels; the container's sshd port is never listed", () => {
+    const v = { publicPorts: [8080], userPorts: [8888] };
+    expect([accessOf(v, 8080), accessOf(v, 8888), accessOf(v, 7000)]).toEqual(["public", "users", "private"]);
+    expect(withAccess(v, 8080, "users")).toEqual({ publicPorts: [], userPorts: [8888, 8080] });
+    expect(withAccess(v, 8888, "private")).toEqual({ publicPorts: [8080], userPorts: [] });
+    expect(withAccess(v, 7000, "public")).toEqual({ publicPorts: [8080, 7000], userPorts: [8888] });
+    // sshd listens on 2222 in a DevPod
+    expect(portRows([{ port: 2222, proto: "tcp", addr: "0.0.0.0" }, { port: 8000, proto: "tcp", addr: "0.0.0.0" }], [2222, 9000], 2222).map((r) => r.port)).toEqual([8000, 9000]);
   });
 });

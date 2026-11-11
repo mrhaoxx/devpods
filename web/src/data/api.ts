@@ -396,9 +396,10 @@ export const shellSocketURL = (name: string, cols: number, rows: number, loc: Pi
 export const probeShell = (name: string) => req<void>("GET", `/api/devpods/${name}/shell?probe=1`);
 
 /* api_http.go: DevPod ports published through the gateway's HTTP proxy */
-export type HttpView = { id: string; urlTemplate: string; publicPorts: number[] };
+/** publicPorts: anyone with the link; userPorts: anyone signed in to the console; the rest: owner, collaborators, admins. */
+export type HttpView = { id: string; urlTemplate: string; publicPorts: number[]; userPorts: number[] };
 export const getHttp = (n: string) => req<HttpView>("GET", `/api/devpods/${n}/http`);
-export const putHttp = (n: string, body: { publicPorts?: number[]; reset?: boolean }) => req<HttpView>("PUT", `/api/devpods/${n}/http`, body);
+export const putHttp = (n: string, body: { publicPorts?: number[]; userPorts?: number[]; reset?: boolean }) => req<HttpView>("PUT", `/api/devpods/${n}/http`, body);
 /** httpTicket: the URL that signs this browser in on a private port's hostname. */
 export const httpTicket = (host: string, rd: string) => req<{ url: string }>("POST", "/api/http/ticket", { host, rd });
 

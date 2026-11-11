@@ -33,9 +33,10 @@ The login name `devpod` is configurable (`--cli-user`, chart value `gateway.cli.
 | `delete <name>… --yes` (`rm`) | Delete DevPods and their data. `--yes` is required. |
 | `set <name> [--image IMG] [--cpu N] [--memory SIZE] [--gpu N] [--shell S]` | Change a DevPod; a running one is rebuilt. |
 | `collab <name> [add\|remove\|set user…]` | Show or change collaborators. |
-| `ports <name>` | The HTTP address pattern and the public ports. |
+| `ports <name>` | The HTTP address pattern and each access level's ports. |
 | `ports <name> url <port>` | One port's address. |
-| `ports <name> public <port>…` / `private <port>…` | Open a port to people who are not signed in, or close it again. |
+| `ports <name> users <port>…` | Open ports to anyone signed in to the console. |
+| `ports <name> public <port>…` / `private <port>…` | Open a port to anyone with the link, or back to owner, collaborators and admins only. |
 | `ports <name> reset` | Draw a new random address; every old link stops working. |
 | `ssh <name>` | Print the `ssh` command that logs into the DevPod. |
 | `templates` | List DevPod templates. |

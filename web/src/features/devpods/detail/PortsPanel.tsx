@@ -1,7 +1,8 @@
 // 端口: HTTP services of the DevPod published through the gateway as
 // https://{id}-{port}… — the address shows a random id, never the DevPod
-// or its owner. A port is private (owner, collaborators, admins, signed
-// in through the console) until the owner makes it public.
+// or its owner. Each port has one of three access levels: private (owner,
+// collaborators, admins), signed-in users (anyone logged in to the
+// console) or public (anyone with the link).
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { getHttp, putHttp, type HttpView } from "../../../data/api";
@@ -10,15 +11,37 @@ import { Badge } from "../../../design/Badge";
 import { Button } from "../../../design/Button";
 import { ConfirmDialog } from "../../../design/ConfirmDialog";
 import { useCopied } from "../../../design/Copy";
-import { Input } from "../../../design/Form";
+import { Input, Select } from "../../../design/Form";
 import { Panel } from "../../../design/Panel";
 
 type Listen = { port: number; proto: string; addr?: string; pid?: number };
 const loopback = (addr?: string) => !!addr && (addr.startsWith("127.") || addr === "::1" || addr.startsWith("[::1]"));
 
-/** portRows: the TCP listeners (one row per port, sshd left out) plus
- *  public ports nothing listens on right now. */
-export function portRows(listen: Listen[], publicPorts: number[], sshPort = 22): { port: number; local: boolean; listening: boolean }[] {
+export type PortAccess = "private" | "users" | "public";
+const ACCESS: [PortAccess, string][] = [
+  ["private", "仅本人和协作者"],
+  ["users", "登录用户"],
+  ["public", "公开（任何拿到链接的人）"],
+];
+
+/** accessOf: a port's level; public wins if it is listed twice. */
+export function accessOf(v: { publicPorts: number[]; userPorts: number[] }, port: number): PortAccess {
+  return v.publicPorts.includes(port) ? "public" : v.userPorts.includes(port) ? "users" : "private";
+}
+
+/** withAccess: the two port lists after setting one port's level. */
+export function withAccess(v: { publicPorts: number[]; userPorts: number[] }, port: number, access: PortAccess): { publicPorts: number[]; userPorts: number[] } {
+  const without = (l: number[]) => l.filter((p) => p !== port);
+  return {
+    publicPorts: access === "public" ? [...without(v.publicPorts), port] : without(v.publicPorts),
+    userPorts: access === "users" ? [...without(v.userPorts), port] : without(v.userPorts),
+  };
+}
+
+/** portRows: the TCP listeners (one row per port; the container's own
+ *  sshd port is never proxied and is left out) plus opened ports nothing
+ *  listens on right now. */
+export function portRows(listen: Listen[], openedPorts: number[], sshPort = 22): { port: number; local: boolean; listening: boolean }[] {
   const rows = new Map<number, { port: number; local: boolean; listening: boolean }>();
   for (const l of listen) {
     if (!l.proto.startsWith("tcp") || l.port === sshPort) continue;
@@ -26,7 +49,7 @@ export function portRows(listen: Listen[], publicPorts: number[], sshPort = 22):
     // reachable if any listener on the port is not loopback-only
     rows.set(l.port, { port: l.port, listening: true, local: (cur?.local ?? true) && loopback(l.addr) });
   }
-  for (const p of publicPorts) if (!rows.has(p)) rows.set(p, { port: p, local: false, listening: false });
+  for (const p of openedPorts) if (p !== sshPort && !rows.has(p)) rows.set(p, { port: p, local: false, listening: false });
   return [...rows.values()].sort((a, b) => a.port - b.port);
 }
 
@@ -39,7 +62,7 @@ function CopyLink({ url }: { url: string }) {
   );
 }
 
-export function PortsPanel({ name }: { name: string }) {
+export function PortsPanel({ name, sshPort }: { name: string; /** the container's sshd port (from the DevPod's endpoint) */ sshPort?: number }) {
   const qc = useQueryClient();
   const key = ["http", name];
   const http = useQuery({ queryKey: key, queryFn: () => getHttp(name), retry: false });
@@ -47,14 +70,15 @@ export function PortsPanel({ name }: { name: string }) {
   const [other, setOther] = useState("");
   const [reset, setReset] = useState(false);
   const save = useMutation({
-    mutationFn: (body: { publicPorts?: number[]; reset?: boolean }) => putHttp(name, body),
+    mutationFn: (body: { publicPorts?: number[]; userPorts?: number[]; reset?: boolean }) => putHttp(name, body),
     onSuccess: (v: HttpView) => qc.setQueryData(key, v),
   });
   if (!http.data) return null;
   const v = http.data;
   const url = (port: number) => v.urlTemplate.replace("{port}", String(port));
-  const rows = portRows(info.data?.snapshot?.listen ?? [], v.publicPorts);
-  const setPublic = (port: number, on: boolean) => save.mutate({ publicPorts: on ? [...v.publicPorts, port] : v.publicPorts.filter((p) => p !== port) });
+  const lists = { publicPorts: v.publicPorts, userPorts: v.userPorts ?? [] };
+  const rows = portRows(info.data?.snapshot?.listen ?? [], [...lists.publicPorts, ...lists.userPorts], sshPort);
+  const setAccess = (port: number, access: PortAccess) => save.mutate(withAccess(lists, port, access));
   const otherPort = Number(other);
   const otherOK = Number.isInteger(otherPort) && otherPort >= 1 && otherPort <= 65535;
 
@@ -69,7 +93,7 @@ export function PortsPanel({ name }: { name: string }) {
     >
       <div className="space-y-2 p-3 text-xs">
         <p className="text-muted">
-          容器里的 HTTP 服务可以通过 <code className="mono text-ink">{url(0).replace("-0", "-{端口}")}</code> 访问。默认只有你、协作者和管理员能打开（需要登录本控制台）；设为公开后，任何拿到链接的人都能访问。
+          容器里的 HTTP 服务可以通过 <code className="mono text-ink">{url(0).replace("-0", "-{端口}")}</code> 访问。每个端口有三种访问方式：默认只有你、协作者和管理员能打开；「登录用户」是任何登录了本控制台的人；「公开」是任何拿到链接的人，不需要登录。
         </p>
         {rows.length > 0 && (
           <table className="w-full border-collapse">
@@ -82,18 +106,24 @@ export function PortsPanel({ name }: { name: string }) {
             </thead>
             <tbody>
               {rows.map((r) => {
-                const pub = v.publicPorts.includes(r.port);
+                const access = accessOf(lists, r.port);
                 return (
                   <tr key={r.port} className="h-8 border-b border-line last:border-0">
                     <td className="mono w-24">
                       {r.port}
                       {!r.listening && <span className="ml-1 text-faint">未监听</span>}
                     </td>
-                    <td className="w-40">
-                      <label className="inline-flex items-center gap-1.5">
-                        <input type="checkbox" aria-label={`公开端口 ${r.port}`} checked={pub} disabled={save.isPending} onChange={(e) => setPublic(r.port, e.target.checked)} />
-                        {pub ? <Badge tone="warm">公开</Badge> : <span className="text-muted">仅本人和协作者</span>}
-                      </label>
+                    <td className="w-72">
+                      <span className="inline-flex items-center gap-2">
+                        <Select aria-label={`端口 ${r.port} 的访问方式`} value={access} disabled={save.isPending} onChange={(e) => setAccess(r.port, e.target.value as PortAccess)} className="!h-6 !w-52 text-xs">
+                          {ACCESS.map(([id, label]) => (
+                            <option key={id} value={id}>
+                              {label}
+                            </option>
+                          ))}
+                        </Select>
+                        {access === "public" && <Badge tone="warm">公开</Badge>}
+                      </span>
                     </td>
                     <td>
                       {r.local ? (

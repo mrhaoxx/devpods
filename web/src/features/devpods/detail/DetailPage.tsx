@@ -150,9 +150,12 @@ export function DetailPage() {
     ["overview", "概览"],
     ["processes", "进程"],
     ...(audit ? ([["sessions", "会话"]] as [string, string][]) : []),
+    ...(me?.features.httpProxy ? ([["ports", "端口"]] as [string, string][]) : []),
     ["container", "容器"],
     ["events", "事件"],
   ];
+  // the container's sshd port: never proxied, so not listed among the ports
+  const sshPort = Number(dp.status?.endpoint?.split(":").pop()) || undefined;
   const ssh = me ? sshCommand(me, owner, suffix) : "";
 
   return (
@@ -246,12 +249,8 @@ export function DetailPage() {
           <SessionList items={sessions.data?.items} error={sessions.error} now={now} />
         </Panel>
       )}
-      {url.tab === "container" && (
-        <div className="space-y-3">
-          {me?.features.httpProxy && <PortsPanel name={name} />}
-          <ContainerTab name={name} />
-        </div>
-      )}
+      {url.tab === "ports" && me?.features.httpProxy && <PortsPanel name={name} sshPort={sshPort} />}
+      {url.tab === "container" && <ContainerTab name={name} />}
       {url.tab === "events" && (
         <Panel title="事件">
           <EventList events={events} />

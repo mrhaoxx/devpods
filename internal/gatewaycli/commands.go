@@ -97,7 +97,7 @@ func init() {
 		{name: "delete", aliases: []string{"rm"}, args: "<name>… --yes", short: "delete DevPods and their data", bools: []string{"yes"}, run: runDelete},
 		{name: "set", args: "<name> [--image IMG] [--cpu N] [--memory SIZE] [--gpu N] [--shell S]", short: "change a DevPod (a running one is rebuilt)", vals: edit, run: runSet},
 		{name: "collab", args: "<name> [add|remove|set user…]", short: "show or change collaborators", run: runCollab},
-		{name: "ports", args: "<name> [url <port> | public <port>… | private <port>… | reset]", short: "HTTP addresses of a DevPod's ports",
+		{name: "ports", args: "<name> [url <port> | public <port>… | users <port>… | private <port>… | reset]", short: "HTTP addresses of a DevPod's ports",
 			long: "Without a subcommand: the address pattern and the public ports.\nurl prints one port's address; public / private open or close a port to\npeople who are not signed in; reset draws a new random address (old links die).",
 			run:  runPorts},
 		{name: "ssh", args: "<name>", short: "print the ssh command for a DevPod", run: runSSH},
@@ -697,6 +697,7 @@ type httpView struct {
 	ID          string `json:"id"`
 	URLTemplate string `json:"urlTemplate"`
 	PublicPorts []int  `json:"publicPorts"`
+	UserPorts   []int  `json:"userPorts"` // open to anyone signed in to the console
 }
 
 func runPorts(e *Env, a *parsed) int {
@@ -735,35 +736,41 @@ func runPorts(e *Env, a *parsed) int {
 			}
 			u := strings.Replace(v.URLTemplate, "{port}", strconv.Itoa(ps[0]), 1)
 			if a.json {
-				b, _ := json.Marshal(map[string]any{"url": u, "port": ps[0], "public": slices.Contains(v.PublicPorts, ps[0])})
+				b, _ := json.Marshal(map[string]any{"url": u, "port": ps[0], "public": slices.Contains(v.PublicPorts, ps[0]), "access": portAccess(v.PublicPorts, v.UserPorts, ps[0])})
 				printJSON(e, b)
 			} else {
 				fmt.Fprintln(e.Out, u)
 			}
 			return ExitOK
-		case "public", "private":
+		case "public", "users", "private":
+			// one access level per port: public (anyone with the link),
+			// users (anyone signed in to the console), private (owner,
+			// collaborators, admins)
 			ps, err := ports(rest)
 			if err != nil {
 				return usage(e, c, err.Error())
 			}
-			next := []int{}
-			for _, p := range v.PublicPorts {
-				if action == "public" || !slices.Contains(ps, p) {
-					next = append(next, p)
-				}
-			}
-			if action == "public" {
-				for _, p := range ps {
-					if !slices.Contains(next, p) {
-						next = append(next, p)
+			without := func(list []int) []int {
+				out := []int{}
+				for _, p := range list {
+					if !slices.Contains(ps, p) {
+						out = append(out, p)
 					}
 				}
+				return out
 			}
-			body = map[string]any{"publicPorts": next}
+			pub, users := without(v.PublicPorts), without(v.UserPorts)
+			switch action {
+			case "public":
+				pub = append(pub, ps...)
+			case "users":
+				users = append(users, ps...)
+			}
+			body = map[string]any{"publicPorts": pub, "userPorts": users}
 		case "reset":
 			body = map[string]any{"reset": true}
 		default:
-			return usage(e, c, fmt.Sprintf("unknown action %q (url, public, private or reset)", action))
+			return usage(e, c, fmt.Sprintf("unknown action %q (url, public, users, private or reset)", action))
 		}
 		if raw, err = call(e, "PUT", path, body, &v); err != nil {
 			return fail(e, err)
@@ -774,15 +781,19 @@ func runPorts(e *Env, a *parsed) int {
 		return ExitOK
 	}
 	fmt.Fprintf(e.Out, "address: %s\n", v.URLTemplate)
-	if len(v.PublicPorts) == 0 {
-		fmt.Fprintln(e.Out, "public:  none (every port needs a console sign-in: owner, collaborators, admins)")
-	} else {
-		s := make([]string, len(v.PublicPorts))
-		for i, p := range v.PublicPorts {
-			s[i] = strconv.Itoa(p)
+	list := func(ports []int) string {
+		if len(ports) == 0 {
+			return "none"
 		}
-		fmt.Fprintf(e.Out, "public:  %s\n", strings.Join(s, ", "))
+		out := make([]string, len(ports))
+		for i, p := range ports {
+			out[i] = strconv.Itoa(p)
+		}
+		return strings.Join(out, ", ")
 	}
+	fmt.Fprintf(e.Out, "public:  %s (anyone with the link)\n", list(v.PublicPorts))
+	fmt.Fprintf(e.Out, "users:   %s (anyone signed in to the console)\n", list(v.UserPorts))
+	fmt.Fprintln(e.Out, "other ports: owner, collaborators and admins, after a console sign-in")
 	return ExitOK
 }
 
@@ -941,4 +952,15 @@ func runMigrate(e *Env, a *parsed) int {
 		fmt.Fprintf(e.Out, "%s: pinned to %s%s\n", a.pos[0], node, rebuildNote(r))
 	}
 	return ExitOK
+}
+
+// portAccess is a port's access level; public wins if it is listed twice.
+func portAccess(public, users []int, port int) string {
+	switch {
+	case slices.Contains(public, port):
+		return "public"
+	case slices.Contains(users, port):
+		return "users"
+	}
+	return "private"
 }
