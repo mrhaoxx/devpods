@@ -5,7 +5,7 @@ import { renderWithProviders, stubFetch } from "../../test/render";
 import { shellSocketURL } from "../../data/api";
 import { ShellPage } from "./ShellPage";
 
-const term = vi.hoisted(() => ({ written: [] as string[], onData: (_: string) => {}, onResize: (_: { cols: number; rows: number }) => {} }));
+const term = vi.hoisted(() => ({ written: [] as string[], onData: (_: string) => {}, onResize: (_: { cols: number; rows: number }) => {}, onKey: (_: KeyboardEvent): boolean => true }));
 vi.mock("@xterm/xterm", () => ({
   Terminal: class {
     cols = 100;
@@ -23,6 +23,13 @@ vi.mock("@xterm/xterm", () => ({
       term.onData = fn;
       return { dispose() {} };
     }
+    attachCustomKeyEventHandler(fn: (e: KeyboardEvent) => boolean) {
+      term.onKey = fn;
+    }
+    getSelection() {
+      return "";
+    }
+    paste() {}
     onResize(fn: (s: { cols: number; rows: number }) => void) {
       term.onResize = fn;
       return { dispose() {} };
@@ -90,6 +97,14 @@ describe("ShellPage", () => {
     expect(new TextDecoder().decode(ws.sent[0] as Uint8Array)).toBe("ls\r");
     term.onResize({ cols: 120, rows: 40 });
     expect(ws.sent[1]).toBe('{"type":"resize","cols":120,"rows":40}');
+    // Option+→ goes out as "forward one word" and never reaches xterm or the browser
+    const ev = new KeyboardEvent("keydown", { key: "ArrowRight", altKey: true, cancelable: true });
+    expect(term.onKey(ev)).toBe(false);
+    expect(ev.defaultPrevented).toBe(true);
+    expect(new TextDecoder().decode(ws.sent[2] as Uint8Array)).toBe("\x1bf");
+    expect(term.onKey(new KeyboardEvent("keyup", { key: "ArrowRight", altKey: true }))).toBe(false);
+    expect(ws.sent.length).toBe(3); // sent once, on keydown
+    expect(term.onKey(new KeyboardEvent("keydown", { key: "a" }))).toBe(true);
   });
 
   it("shows why the shell ended and reconnects on demand", async () => {

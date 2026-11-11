@@ -10,6 +10,7 @@ import "@xterm/xterm/css/xterm.css";
 import { ApiFailure, probeShell, shellSocketURL } from "../../data/api";
 import { useMe } from "../../data/queries";
 import { Button } from "../../design/Button";
+import { termClipboardAction, termKeySequence } from "../../lib/termKeys";
 
 type State = { kind: "connecting" } | { kind: "open" } | { kind: "closed"; reason: string };
 
@@ -45,15 +46,34 @@ export function ShellPage() {
 
   useEffect(() => {
     if (!host.current) return;
-    const t = new Terminal({ cursorBlink: true, fontSize: 13, fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Consolas, monospace', theme: termTheme(), scrollback: 5000 });
+    // Option is Meta (ESC prefix), as in desktop terminals: Option+B / F /
+    // D reach the shell instead of starting a dead-key composition that
+    // leaves the input stuck
+    const t = new Terminal({ macOptionIsMeta: true, cursorBlink: true, fontSize: 13, fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Consolas, monospace', theme: termTheme(), scrollback: 5000 });
     const fit = new FitAddon();
     t.loadAddon(fit);
     t.open(host.current);
     fit.fit();
     term.current = t;
     const enc = new TextEncoder();
-    const data = t.onData((d) => {
+    const send = (d: string) => {
       if (sock.current?.readyState === WebSocket.OPEN) sock.current.send(enc.encode(d));
+    };
+    const data = t.onData(send);
+    const mac = /Mac|iPhone|iPad/.test(navigator.platform);
+    // editing shortcuts (word / line movement and deletion) and
+    // Ctrl+Shift+C / V: handled here, kept from xterm and the browser
+    t.attachCustomKeyEventHandler((ev) => {
+      const seq = termKeySequence(ev, mac);
+      const clip = seq === null ? termClipboardAction(ev, mac) : null;
+      if (seq === null && clip === null) return true;
+      ev.preventDefault();
+      if (ev.type === "keydown") {
+        if (seq !== null) send(seq);
+        else if (clip === "copy") void navigator.clipboard?.writeText(t.getSelection());
+        else void navigator.clipboard?.readText().then((text) => t.paste(text));
+      }
+      return false;
     });
     const resize = t.onResize(({ cols, rows }) => {
       if (sock.current?.readyState === WebSocket.OPEN) sock.current.send(JSON.stringify({ type: "resize", cols, rows }));
