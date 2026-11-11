@@ -285,7 +285,7 @@ func (s *Server) handleCreateConfig(w http.ResponseWriter, r *http.Request) {
 			s.writeErr(w, http.StatusConflict, "CONFIG_EXISTS", fmt.Sprintf("you already have a config %q", req.ID), nil)
 			return
 		}
-		s.writeErr(w, http.StatusBadRequest, "BAD_REQUEST", "create rejected", err.Error())
+		s.writeErr(w, http.StatusBadRequest, "BAD_REQUEST", rejected("create", err), err.Error())
 		return
 	}
 	s.writeJSON(w, http.StatusCreated, configView(c, sess, true))
@@ -357,7 +357,7 @@ func (s *Server) handlePatchConfig(w http.ResponseWriter, r *http.Request) {
 			s.writeErr(w, http.StatusConflict, "CONFLICT", "the config changed meanwhile; reload and try again", nil)
 			return
 		}
-		s.writeErr(w, http.StatusBadRequest, "BAD_REQUEST", "update rejected", err.Error())
+		s.writeErr(w, http.StatusBadRequest, "BAD_REQUEST", rejected("update", err), err.Error())
 		return
 	}
 	s.writeJSON(w, http.StatusOK, configView(c, sess, true))

@@ -519,7 +519,7 @@ func (s *Server) handlePutAuditPolicy(w http.ResponseWriter, r *http.Request) {
 			s.writeErr(w, http.StatusNotFound, "NOT_FOUND", "user not found (LDAP-only users follow the cluster default)", nil)
 			return
 		}
-		s.writeErr(w, http.StatusBadRequest, "BAD_REQUEST", "update rejected", err.Error())
+		s.writeErr(w, http.StatusBadRequest, "BAD_REQUEST", rejected("update", err), err.Error())
 		return
 	}
 	_ = s.insertAccess(r, sess.User, "edit_policy", "", "user/"+name) // the edit already happened

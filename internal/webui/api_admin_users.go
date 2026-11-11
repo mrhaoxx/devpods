@@ -223,7 +223,7 @@ func (s *Server) handleCreateUser(w http.ResponseWriter, r *http.Request) {
 			s.writeErr(w, http.StatusConflict, "ALREADY_EXISTS", "user already exists", nil)
 			return
 		}
-		s.writeErr(w, http.StatusBadRequest, "BAD_REQUEST", "create rejected", err.Error())
+		s.writeErr(w, http.StatusBadRequest, "BAD_REQUEST", rejected("create", err), err.Error())
 		return
 	}
 	s.writeJSON(w, http.StatusCreated, adminUser{Name: u.Name, DisplayName: u.Spec.DisplayName, HasPassword: true})
@@ -359,7 +359,7 @@ func (s *Server) handleDeleteUser(w http.ResponseWriter, r *http.Request) {
 	if err := s.Client.Delete(r.Context(), u); err != nil && !apierrors.IsNotFound(err) {
 		// The gateway's finalizer blocks deletion while the user owns
 		// DevPods — surface that verbatim.
-		s.writeErr(w, http.StatusBadRequest, "BAD_REQUEST", "delete rejected", err.Error())
+		s.writeErr(w, http.StatusBadRequest, "BAD_REQUEST", rejected("delete", err), err.Error())
 		return
 	}
 	if err := s.dropUserConfigs(r.Context(), u.Name); err != nil {

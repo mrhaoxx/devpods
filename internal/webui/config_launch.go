@@ -237,7 +237,7 @@ func (s *Server) runLaunch(r *http.Request, plan *LaunchPlan) ([]LaunchItem, int
 			if apierrors.IsAlreadyExists(err) {
 				it.fail("NAME_TAKEN", fmt.Sprintf("a DevPod named %q already exists", it.Name))
 			} else {
-				it.fail("BAD_REQUEST", "create rejected: "+err.Error())
+				it.fail("BAD_REQUEST", rejected("create", err))
 			}
 			status = http.StatusMultiStatus
 		}

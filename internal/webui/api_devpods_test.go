@@ -429,3 +429,37 @@ func TestLegacyNamedDevPod(t *testing.T) {
 		t.Fatalf("console create without the prefix: %d %s", rec.Code, rec.Body)
 	}
 }
+
+// What the cluster refuses is said with its reason, in the message: a
+// bare "update rejected" tells the person nothing.
+func TestRejectionsCarryTheReason(t *testing.T) {
+	setupSuite(t)
+	s, sm := newServer(t)
+	t.Cleanup(func() { cleanupDevPods(t) })
+	root := forge(sm, "rj-root", true)
+	message := func(rec *httptest.ResponseRecorder) string {
+		t.Helper()
+		var body struct{ Code, Message string }
+		if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+			t.Fatal(err)
+		}
+		return body.Message
+	}
+	// a name past the cluster's 22 characters (an admin's YAML is not held to the console's own check)
+	long := fmt.Sprintf(`{"yaml":%q}`, "apiVersion: devpod.io/v1alpha1\nkind: DevPod\nmetadata: {name: rj-root-a-name-that-is-too-long}\nspec:\n  owner: rj-root\n  running: false\n  pod: {spec: {containers: [{name: dev, image: 'ubuntu:24.04'}]}}\n")
+	rec := doJSON(t, s.HandleCreateDevPodForTest(), "POST", "/api/devpods", nil, root, long)
+	if msg := message(rec); rec.Code != http.StatusBadRequest || !strings.Contains(msg, "create rejected: ") || !strings.Contains(msg, "at most 22 characters") {
+		t.Fatalf("create: %d %q", rec.Code, msg)
+	} else if strings.Contains(msg, `"object"`) || strings.Contains(msg, "<nil>") {
+		t.Fatalf("the reason carries the API server's packaging: %q", msg)
+	}
+	// an edit the cluster refuses: a container without an image
+	if rec := doJSON(t, s.HandleCreateDevPodForTest(), "POST", "/api/devpods", nil, root, `{"name":"ok","image":"ubuntu:24.04"}`); rec.Code != http.StatusCreated {
+		t.Fatalf("create: %d %s", rec.Code, rec.Body)
+	}
+	waitDevPod(t, "rj-root-ok")
+	rec = doJSON(t, s.HandlePatchDevPodForTest(), "PATCH", "/api/devpods/rj-root-ok", map[string]string{"name": "rj-root-ok"}, root, `{"shell":"powershell"}`)
+	if msg := message(rec); rec.Code != http.StatusBadRequest || !strings.Contains(msg, "update rejected: ") || !strings.Contains(msg, "shell") {
+		t.Fatalf("update: %d %q", rec.Code, msg)
+	}
+}

@@ -137,7 +137,7 @@ func (s *Server) handlePutPubkeys(w http.ResponseWriter, r *http.Request) {
 	}
 	u.Spec.Pubkeys = req.Pubkeys
 	if err := s.Client.Update(r.Context(), &u); err != nil {
-		s.writeErr(w, http.StatusBadRequest, "BAD_REQUEST", "update rejected", err.Error())
+		s.writeErr(w, http.StatusBadRequest, "BAD_REQUEST", rejected("update", err), err.Error())
 		return
 	}
 	s.writeJSON(w, http.StatusOK, map[string]any{"pubkeys": u.Spec.Pubkeys})

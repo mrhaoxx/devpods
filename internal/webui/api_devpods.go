@@ -6,6 +6,7 @@ package webui
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"slices"
@@ -374,7 +375,7 @@ func (s *Server) handleCreateDevPod(w http.ResponseWriter, r *http.Request) {
 	}
 	if err := s.Client.Create(r.Context(), dp); err != nil {
 		// k8s Status errors (CEL rejections etc.) pass through verbatim.
-		s.writeErr(w, http.StatusBadRequest, "BAD_REQUEST", "create rejected", err.Error())
+		s.writeErr(w, http.StatusBadRequest, "BAD_REQUEST", rejected("create", err), err.Error())
 		return
 	}
 	s.writeJSON(w, http.StatusCreated, dp)
@@ -458,6 +459,37 @@ func (s *Server) prepareDevPod(r *http.Request, sess Session, req CreateRequest,
 		}
 	}
 	return dp, nil
+}
+
+// rejected is the message for something the API server refused: what was
+// tried, and the server's reason — in the message, where a person sees
+// it, not only in the detail. For a validation failure the reason is the
+// rules that failed, without the server's packaging around them.
+func rejected(what string, err error) string {
+	reason := err.Error()
+	var st apierrors.APIStatus
+	if errors.As(err, &st) {
+		status := st.Status()
+		reason = status.Message
+		if d := status.Details; d != nil && len(d.Causes) > 0 {
+			var parts []string
+			for _, c := range d.Causes {
+				msg := c.Message
+				// a rule on the whole object is reported as: Invalid value: "object": <the rule's message>
+				for _, wrap := range []string{`Invalid value: "object": `, `Invalid value: "string": `, `Invalid value: "integer": `} {
+					msg = strings.TrimPrefix(msg, wrap)
+				}
+				if c.Field != "" && c.Field != "<nil>" && !strings.Contains(msg, c.Field) {
+					msg = c.Field + ": " + msg
+				}
+				if !slices.Contains(parts, msg) {
+					parts = append(parts, msg)
+				}
+			}
+			reason = strings.Join(parts, "; ")
+		}
+	}
+	return what + " rejected: " + reason
 }
 
 type serverErr struct {
@@ -706,7 +738,7 @@ func (s *Server) patchDevPod(r *http.Request, sess Session, dp *devpodv1alpha1.D
 		if apierrors.IsConflict(err) {
 			return PatchResponse{}, &serverErr{http.StatusConflict, "CONFLICT", "the DevPod changed meanwhile", err.Error()}
 		}
-		return PatchResponse{}, &serverErr{http.StatusBadRequest, "BAD_REQUEST", "update rejected", err.Error()}
+		return PatchResponse{}, &serverErr{http.StatusBadRequest, "BAD_REQUEST", rejected("update", err), err.Error()}
 	}
 	return PatchResponse{DevPod: dp, Rebuild: rebuild}, nil
 }
