@@ -224,7 +224,32 @@ func TestSnapshotAPI(t *testing.T) {
 		if img := v2["image"].(string); !strings.HasPrefix(img, "reg.test/users/sn-alice/env:20") || len(img) != len("reg.test/users/sn-alice/env:20261111-1530") {
 			t.Fatalf("default tag: %s", img)
 		}
-		call("POST", "/api/devpods/sn-alice-dev1/snapshots", alice, `{"name":"env","tag":"v1"}`, http.StatusConflict) // same image again
+		// the same address while it is still being saved: refused…
+		if busy := call("POST", "/api/devpods/sn-alice-dev1/snapshots", alice, `{"name":"env","tag":"v1"}`, http.StatusConflict); busy["code"] != "IMAGE_BUSY" {
+			t.Fatalf("same address in progress: %v", busy)
+		}
+		// …once it has finished, saving there again overwrites the tag
+		var first devpodv1alpha1.DevPodSnapshot
+		if err := s.Reader.Get(ctx, types.NamespacedName{Name: v["id"].(string), Namespace: "devpods"}, &first); err != nil {
+			t.Fatal(err)
+		}
+		first.Status.Phase = devpodv1alpha1.SnapshotSucceeded
+		if err := k8sClient.Status().Update(ctx, &first); err != nil {
+			t.Fatal(err)
+		}
+		again := call("POST", "/api/devpods/sn-alice-dev1/snapshots", alice, `{"name":"env","tag":"v1"}`, http.StatusCreated)
+		if again["image"] != v["image"] || again["id"] == v["id"] {
+			t.Fatalf("overwrite: %v", again)
+		}
+		// leave things as the later subtests expect: one pending snapshot of this address
+		call("DELETE", "/api/snapshots/"+again["id"].(string), alice, "", http.StatusNoContent)
+		if err := s.Reader.Get(ctx, types.NamespacedName{Name: v["id"].(string), Namespace: "devpods"}, &first); err != nil {
+			t.Fatal(err)
+		}
+		first.Status.Phase = ""
+		if err := k8sClient.Status().Update(ctx, &first); err != nil {
+			t.Fatal(err)
+		}
 		for _, body := range []string{`{"name":"Env"}`, `{"name":"../x"}`, `{"name":"env","tag":"a b"}`, `{"name":""}`, `{"name":"env","unknown":1}`} {
 			call("POST", "/api/devpods/sn-alice-dev1/snapshots", alice, body, http.StatusBadRequest)
 		}

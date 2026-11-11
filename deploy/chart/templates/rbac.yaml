@@ -69,7 +69,8 @@ rules:
   verbs: ["update"]
 - apiGroups: ["devpod.io"]
   resources: ["devpodsnapshots"]
-  verbs: ["get","list","watch","update","patch"]
+  # delete: a save that overwrites an address drops the older records of it
+  verbs: ["get","list","watch","update","patch","delete"]
 - apiGroups: ["devpod.io"]
   resources: ["devpodsnapshots/status"]
   verbs: ["patch"]

@@ -6,7 +6,7 @@ import { useEffect, useRef, useState } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { Link } from "react-router-dom";
 import { ApiFailure, createSnapshot, deleteSnapshot, streamSnapshotProgress, type SnapshotProgress, type SnapshotRequest, type SnapshotView } from "../../data/api";
-import { lastImage, rememberImage } from "./lastImage";
+import { lastImage, lastTagMode, rememberImage, rememberTagMode, timestampTag, withTag, type TagMode } from "./lastImage";
 import { useMe } from "../../data/queries";
 import { Button } from "../../design/Button";
 import { ConfirmDialog } from "../../design/ConfirmDialog";
@@ -150,8 +150,16 @@ function CreateForm({ devpod, owner, onCreated }: { devpod: string; owner: strin
   const touched = useRef(false); // the user picked a target or typed an address
   const [target, setTargetState] = useState<"default" | "custom">(hasDefault ? "default" : "custom");
   const [name, setName] = useState(defaultSnapshotName(devpod, owner));
-  const [tag, setTag] = useState("");
+  const [tag, setTag] = useState("latest");
   const [image, setImageState] = useState("");
+  // keep: the tag given is used, and saving to the same address again
+  // overwrites it; new: the tag is the date and time, made here in the
+  // browser when the save starts
+  const [tagMode, setTagModeState] = useState<TagMode>("keep");
+  const setTagMode = (m: TagMode) => {
+    setTagModeState(m);
+    rememberTagMode(user, m);
+  };
   const setTarget = (t: "default" | "custom") => {
     touched.current = true;
     setTargetState(t);
@@ -161,6 +169,7 @@ function CreateForm({ devpod, owner, onCreated }: { devpod: string; owner: strin
     setImageState(v);
   };
   useEffect(() => {
+    setTagModeState(lastTagMode(user));
     const last = lastImage(user, devpod);
     if (last && !touched.current) {
       setImageState(last);
@@ -183,10 +192,15 @@ function CreateForm({ devpod, owner, onCreated }: { devpod: string; owner: strin
       onCreated(s);
     },
   });
-  const ok = target === "default" ? NAME_RE.test(name) && (tag === "" || NAME_RE.test(tag)) : validImageRef(image) && (!!saved || (username !== "" && password !== ""));
+  const fresh = tagMode === "new";
+  // with a generated tag the address may be typed without one
+  const imageOK = validImageRef(fresh ? withTag(image, "t") : image);
+  const ok = target === "default" ? NAME_RE.test(name) && (fresh || NAME_RE.test(tag)) : imageOK && (!!saved || (username !== "" && password !== ""));
   const submit = () => {
     if (!ok) return;
-    create.mutate(target === "default" ? { name, ...(tag ? { tag } : {}), pause } : saved ? { image, pause } : { image, pushAuth: { username, password }, pause });
+    const stamp = timestampTag(new Date());
+    const ref = fresh ? withTag(image, stamp) : image;
+    create.mutate(target === "default" ? { name, tag: fresh ? stamp : tag, pause } : saved ? { image: ref, pause } : { image: ref, pushAuth: { username, password }, pause });
   };
   const err = create.error;
   return (
@@ -216,13 +230,19 @@ function CreateForm({ devpod, owner, onCreated }: { devpod: string; owner: strin
           <Field label="名称" error={name && !NAME_RE.test(name) ? "小写字母、数字和 . _ -，以字母或数字开头" : undefined}>
             <Input aria-label="名称" className="mono" value={name} onChange={(e) => setName(e.target.value)} required autoFocus />
           </Field>
-          <Field label="标签" hint="留空 = 自动（时间戳）" error={tag && !NAME_RE.test(tag) ? "小写字母、数字和 . _ -" : undefined}>
-            <Input aria-label="标签" className="mono" value={tag} onChange={(e) => setTag(e.target.value)} placeholder="自动（时间戳）" />
-          </Field>
+          {!fresh && (
+            <Field label="标签" error={!NAME_RE.test(tag) ? "小写字母、数字和 . _ -，不能为空" : undefined}>
+              <Input aria-label="标签" className="mono" value={tag} onChange={(e) => setTag(e.target.value)} required />
+            </Field>
+          )}
         </div>
       ) : (
         <div className="space-y-3">
-          <Field label="镜像地址" hint="完整地址，带标签" error={image && !validImageRef(image) ? "形如 registry.example.com/team/name:tag" : undefined}>
+          <Field
+            label="镜像地址"
+            hint={fresh ? "完整地址；标签会被换成日期时间" : "完整地址，带标签"}
+            error={image && !imageOK ? (fresh ? "形如 registry.example.com/team/name" : "形如 registry.example.com/team/name:tag") : undefined}
+          >
             <Input aria-label="镜像地址" className="mono" value={image} onChange={(e) => setImage(e.target.value)} placeholder="registry.example.com/team/name:tag" required autoFocus />
           </Field>
           {saved ? (
@@ -257,6 +277,29 @@ function CreateForm({ devpod, owner, onCreated }: { devpod: string; owner: strin
           )}
         </div>
       )}
+      <div className="space-y-1">
+        <div role="radiogroup" aria-label="标签方式" className="inline-flex rounded-md border border-line bg-sunk p-0.5">
+          {(
+            [
+              ["keep", "保留标签"],
+              ["new", "生成新标签"],
+            ] as const
+          ).map(([id, label]) => (
+            <button key={id} type="button" role="radio" aria-checked={tagMode === id} onClick={() => setTagMode(id)} className={`rounded px-2.5 py-0.5 ${tagMode === id ? "bg-surface font-medium shadow-sm" : "text-muted hover:text-ink"}`}>
+              {label}
+            </button>
+          ))}
+        </div>
+        <p className="text-[11px] text-muted">
+          {fresh ? (
+            <>
+              开始保存时用当前日期时间作标签，例如 <span className="mono">{timestampTag(new Date())}</span>；每次保存都是一个新镜像。
+            </>
+          ) : (
+            "用上面填的标签；这个地址之前保存过的话会被覆盖，旧的那条记录随之移除。"
+          )}
+        </p>
+      </div>
       <label className="flex items-start gap-1.5">
         <input type="checkbox" className="mt-0.5" checked={pause} onChange={(e) => setPause(e.target.checked)} />
         <span>

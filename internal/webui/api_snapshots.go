@@ -299,12 +299,20 @@ func (s *Server) handleCreateSnapshot(w http.ResponseWriter, r *http.Request) {
 		s.writeErr(w, http.StatusInternalServerError, "INTERNAL", err.Error(), nil)
 		return
 	}
+	// Saving to an address again overwrites that tag: the registry gets
+	// the new image, and the controller drops the older records of the
+	// address once this one succeeds. Only two saves to one address at the
+	// same time are refused. An overwrite takes no new place in the quota.
 	kept := 0
 	for i := range mine {
 		sn := &mine[i]
-		if sn.Spec.Image == image && sn.Status.Phase != devpodv1alpha1.SnapshotFailed {
-			s.writeErr(w, http.StatusConflict, "IMAGE_EXISTS", fmt.Sprintf("%s is already saved or being saved; pick another name or tag", image), map[string]string{"id": sn.Name})
-			return
+		terminal := sn.Status.Phase == devpodv1alpha1.SnapshotSucceeded || sn.Status.Phase == devpodv1alpha1.SnapshotFailed
+		if sn.Spec.Image == image {
+			if !terminal {
+				s.writeErr(w, http.StatusConflict, "IMAGE_BUSY", fmt.Sprintf("%s is being saved right now; wait for it or cancel it", image), map[string]string{"id": sn.Name})
+				return
+			}
+			continue
 		}
 		if sn.Status.Phase == devpodv1alpha1.SnapshotSucceeded {
 			kept++

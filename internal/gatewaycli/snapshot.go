@@ -55,10 +55,10 @@ With --json the progress is one JSON object per line.`
 
 func snapshotCommands() []*command {
 	return []*command{
-		{name: "snapshot", args: "<devpod> [--name N] [--tag T] [--image REF [--username U] [--password-stdin]] [--no-pause] [--detach] | show <id> | follow <id> | cancel <id> | rm <id>",
+		{name: "snapshot", args: "<devpod> [--name N] [--tag T | --new-tag] [--image REF [--username U] [--password-stdin]] [--no-pause] [--detach] | show <id> | follow <id> | cancel <id> | rm <id>",
 			short: "save a DevPod as an image and follow it (Ctrl-C or disconnecting cancels; --detach does not follow)",
 			long:  snapshotLong,
-			vals:  []string{"name", "tag", "image", "username"}, bools: []string{"no-pause", "detach", "password-stdin"}, run: runSnapshot},
+			vals:  []string{"name", "tag", "image", "username"}, bools: []string{"no-pause", "detach", "password-stdin", "new-tag"}, run: runSnapshot},
 		{name: "snapshots", aliases: []string{"images"}, args: "[--all] [--devpod D]", short: "list snapshots (--all: everyone's, admin)",
 			bools: []string{"all"}, vals: []string{"devpod"}, run: runSnapshots},
 	}
@@ -267,6 +267,20 @@ func snapCreate(e *Env, a *parsed, c *command, devpod string) int {
 	if req.Image == "" && req.Name == "" {
 		// the DevPod's own name, without the caller's prefix
 		req.Name = strings.TrimPrefix(devpod, e.User+"-")
+	}
+	// Saving to an address again overwrites that tag. --new-tag stamps the
+	// address with the date and time instead (made here, not by the API),
+	// so every save is a new image.
+	if a.has["new-tag"] {
+		if req.Tag != "" {
+			return usage(e, c, "--tag and --new-tag exclude each other")
+		}
+		stamp := e.Now().In(shanghai).Format("20060102-150405")
+		if req.Image != "" {
+			req.Image = withTag(req.Image, stamp)
+		} else {
+			req.Tag = stamp
+		}
 	}
 	if a.has["no-pause"] {
 		f := false
@@ -582,4 +596,17 @@ func runSnapshots(e *Env, a *parsed) int {
 		}
 	})
 	return ExitOK
+}
+
+// shanghai: tags are stamped in the deployment's local time.
+var shanghai = time.FixedZone("Asia/Shanghai", 8*3600)
+
+// withTag replaces (or adds) the tag of an image reference; the port of a
+// registry host is not a tag.
+func withTag(image, tag string) string {
+	slash := strings.LastIndexByte(image, '/')
+	if i := strings.IndexByte(image[slash+1:], ':'); i >= 0 {
+		image = image[:slash+1+i]
+	}
+	return image + ":" + tag
 }

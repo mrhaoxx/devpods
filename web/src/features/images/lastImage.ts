@@ -33,3 +33,41 @@ export function rememberImage(user: string, devpod: string, image: string): void
     /* not remembered: the field just starts empty next time */
   }
 }
+
+/* ---- tags ---- */
+
+/** How the tag of a saved image is chosen: keep the one given (saving to
+ *  the same address again overwrites it) or a new one from the clock. */
+export type TagMode = "keep" | "new";
+const tagModeKey = (user: string) => `devpod.snapshot.tagMode.${user}`;
+
+export function lastTagMode(user: string): TagMode {
+  try {
+    return user && store()?.getItem(tagModeKey(user)) === "new" ? "new" : "keep";
+  } catch {
+    return "keep";
+  }
+}
+
+export function rememberTagMode(user: string, mode: TagMode): void {
+  if (!user) return;
+  try {
+    store()?.setItem(tagModeKey(user), mode);
+  } catch {
+    /* not remembered */
+  }
+}
+
+const pad = (n: number) => String(n).padStart(2, "0");
+/** timestampTag: 20261111-163012, in the browser's local time. */
+export function timestampTag(d: Date): string {
+  return `${d.getFullYear()}${pad(d.getMonth() + 1)}${pad(d.getDate())}-${pad(d.getHours())}${pad(d.getMinutes())}${pad(d.getSeconds())}`;
+}
+
+/** withTag replaces (or adds) the tag of an image reference; the port of
+ *  a registry host is not a tag. */
+export function withTag(image: string, tag: string): string {
+  const slash = image.lastIndexOf("/");
+  const colon = image.indexOf(":", slash + 1);
+  return `${colon < 0 ? image : image.slice(0, colon)}:${tag}`;
+}

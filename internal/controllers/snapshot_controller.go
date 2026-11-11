@@ -39,7 +39,7 @@ type DevPodSnapshotReconciler struct {
 	ContainerdSocket string
 }
 
-// +kubebuilder:rbac:groups=devpod.io,resources=devpodsnapshots,verbs=get;list;watch;update;patch
+// +kubebuilder:rbac:groups=devpod.io,resources=devpodsnapshots,verbs=get;list;watch;update;patch;delete
 // +kubebuilder:rbac:groups=devpod.io,resources=devpodsnapshots/status,verbs=patch
 // +kubebuilder:rbac:groups=devpod.io,resources=devpods,verbs=get;list;watch
 // +kubebuilder:rbac:groups=core,resources=pods,verbs=get;list;watch
@@ -240,7 +240,36 @@ func (r *DevPodSnapshotReconciler) setSucceeded(ctx context.Context, snap *devpo
 		Reason:             "Succeeded",
 		LastTransitionTime: metav1.Now(),
 	})
-	return r.Status().Patch(ctx, snap, patch)
+	if err := r.Status().Patch(ctx, snap, patch); err != nil {
+		return err
+	}
+	return r.dropSuperseded(ctx, snap)
+}
+
+// dropSuperseded removes the older finished snapshots of the same image
+// address and owner: the tag now points at this one, so they describe an
+// image the address no longer has. Running ones are left alone.
+func (r *DevPodSnapshotReconciler) dropSuperseded(ctx context.Context, snap *devpodv1alpha1.DevPodSnapshot) error {
+	var list devpodv1alpha1.DevPodSnapshotList
+	if err := r.List(ctx, &list, client.InNamespace(snap.Namespace)); err != nil {
+		return fmt.Errorf("list snapshots: %w", err)
+	}
+	for i := range list.Items {
+		o := &list.Items[i]
+		if o.Name == snap.Name || o.Spec.Image != snap.Spec.Image || o.Labels[render.LabelOwner] != snap.Labels[render.LabelOwner] {
+			continue
+		}
+		if o.Status.Phase != devpodv1alpha1.SnapshotSucceeded && o.Status.Phase != devpodv1alpha1.SnapshotFailed {
+			continue
+		}
+		if o.CreationTimestamp.After(snap.CreationTimestamp.Time) {
+			continue // a later save of the same address: it will do the tidying
+		}
+		if err := r.Delete(ctx, o); err != nil && !apierrors.IsNotFound(err) {
+			return fmt.Errorf("delete superseded snapshot %s: %w", o.Name, err)
+		}
+	}
+	return nil
 }
 
 // materializePushAuth creates a dockerconfigjson Secret from inline

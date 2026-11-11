@@ -6,7 +6,10 @@ package controllers_test
 
 import (
 	"context"
+	"sort"
+	"strings"
 	"testing"
+	"time"
 
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
@@ -184,5 +187,59 @@ func TestSnapshot_UnknownRuntimeFails(t *testing.T) {
 	}
 	if s := getSnap(t, c); s.Status.Phase != devpodv1alpha1.SnapshotFailed || s.Status.Message == "" {
 		t.Fatalf("status %+v", s.Status)
+	}
+}
+
+// Saving to an address again overwrites it: once the new snapshot
+// succeeds, the older finished records of that address (same owner) go;
+// other addresses, other owners and running ones stay.
+func TestSnapshot_SuccessDropsOlderRecordsOfTheSameAddress(t *testing.T) {
+	ctx := context.Background()
+	r, c, req := snapshotRig(t, "containerd://abc123")
+	old := metav1.NewTime(time.Now().Add(-time.Hour))
+	mk := func(name, image, owner string, phase devpodv1alpha1.DevPodSnapshotPhase) {
+		sn := &devpodv1alpha1.DevPodSnapshot{
+			ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "devpods", CreationTimestamp: old, Labels: map[string]string{render.LabelOwner: owner}},
+			Spec:       devpodv1alpha1.DevPodSnapshotSpec{DevPodName: "alice-dev", Image: image, Push: true},
+		}
+		if err := c.Create(ctx, sn); err != nil {
+			t.Fatal(err)
+		}
+		sn.Status.Phase = phase
+		if err := c.Status().Update(ctx, sn); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// the snapshot under test belongs to alice
+	cur := getSnap(t, c)
+	cur.Labels = map[string]string{render.LabelOwner: "alice"}
+	cur.CreationTimestamp = metav1.Now() // the fake client leaves it zero
+	if err := c.Update(ctx, &cur); err != nil {
+		t.Fatal(err)
+	}
+	mk("old-ok", "reg.test/alice/img:v1", "alice", devpodv1alpha1.SnapshotSucceeded)
+	mk("old-failed", "reg.test/alice/img:v1", "alice", devpodv1alpha1.SnapshotFailed)
+	mk("other-tag", "reg.test/alice/img:v2", "alice", devpodv1alpha1.SnapshotSucceeded)
+	mk("other-owner", "reg.test/alice/img:v1", "bob", devpodv1alpha1.SnapshotSucceeded)
+	mk("still-running", "reg.test/alice/img:v1", "alice", devpodv1alpha1.SnapshotRunning)
+
+	if _, err := r.Reconcile(ctx, req); err != nil {
+		t.Fatal(err)
+	}
+	finishJob(t, c, batchv1.JobComplete, "digest=sha256:feedface size=1\n")
+	if _, err := r.Reconcile(ctx, req); err != nil {
+		t.Fatal(err)
+	}
+	var list devpodv1alpha1.DevPodSnapshotList
+	if err := c.List(ctx, &list); err != nil {
+		t.Fatal(err)
+	}
+	var left []string
+	for _, sn := range list.Items {
+		left = append(left, sn.Name)
+	}
+	sort.Strings(left)
+	if got := strings.Join(left, ","); got != "other-owner,other-tag,s1,still-running" {
+		t.Fatalf("left: %s", got)
 	}
 }

@@ -3,6 +3,7 @@ import { fireEvent, screen, waitFor, within } from "@testing-library/react";
 import { renderWithProviders, stubFetch, stubMe } from "../../test/render";
 import type { SnapshotProgress, SnapshotView } from "../../data/api";
 import { defaultSnapshotName, fmtElapsed, stepStates, validImageRef } from "./progress";
+import { timestampTag, withTag } from "./lastImage";
 import { SnapshotDialog } from "./SnapshotDialog";
 import { ImagesPage } from "./ImagesPage";
 import { MyImagesList } from "./MyImages";
@@ -69,7 +70,7 @@ describe("snapshots", () => {
     expect(screen.getByText(/不含持久卷/)).toBeTruthy();
     expect((screen.getByRole("checkbox") as HTMLInputElement).checked).toBe(true); // pause by default
     fireEvent.click(screen.getByRole("button", { name: "开始保存" }));
-    await waitFor(() => expect(calls.find((c) => c.method === "POST")?.body).toBe('{"name":"a","pause":true}'));
+    await waitFor(() => expect(calls.find((c) => c.method === "POST")?.body).toBe('{"name":"a","tag":"latest","pause":true}'));
 
     await screen.findByRole("list", { name: "进度" });
     stream.send(ev({ stage: "commit", elapsedSeconds: 3, lines: ["committing…"] }));
@@ -125,6 +126,35 @@ describe("snapshots", () => {
     stream.send(ev({ stage: "error", message: "已取消" }));
     stream.end();
     expect(await screen.findByText("已取消")).toBeTruthy();
+  });
+
+  it("tags: kept by default (saving again overwrites); 生成新标签 stamps the address in the browser and is remembered", async () => {
+    expect(timestampTag(new Date(2026, 10, 11, 16, 30, 12))).toBe("20261111-163012");
+    expect(withTag("reg.test:5000/team/a:v1", "t2")).toBe("reg.test:5000/team/a:t2");
+    expect(withTag("reg.test:5000/team/a", "t2")).toBe("reg.test:5000/team/a:t2");
+
+    const calls = stubFetch({
+      "POST /api/devpods/alice-a/snapshots": new Response(JSON.stringify(view({ phase: "Pending", image: "other.test/team/a:x", customRegistry: true })), { status: 201 }),
+      "/api/snapshots/alice-a-abc123/progress": () => progressStream().response,
+      "/api/snapshots": { items: [] },
+    });
+    const first = renderWithProviders(<SnapshotDialog devpod="alice-a" owner="alice" onClose={() => {}} />, { me: features() });
+    fireEvent.click(await screen.findByRole("radio", { name: "自定义地址" }));
+    expect(screen.getByRole("radio", { name: "保留标签" }).getAttribute("aria-checked")).toBe("true");
+    fireEvent.click(screen.getByRole("radio", { name: "生成新标签" }));
+    // the address may come without a tag now; the old tag is replaced
+    fireEvent.change(screen.getByLabelText("镜像地址"), { target: { value: "other.test/team/a:old" } });
+    fireEvent.change(screen.getByLabelText("用户名"), { target: { value: "robot" } });
+    fireEvent.change(screen.getByLabelText("密码"), { target: { value: "pw" } });
+    fireEvent.click(screen.getByRole("button", { name: "开始保存" }));
+    await waitFor(() => expect(calls.some((c) => c.method === "POST")).toBe(true));
+    const sent = JSON.parse(calls.find((c) => c.method === "POST")!.body!) as { image: string };
+    expect(sent.image).toMatch(/^other\.test\/team\/a:20\d{6}-\d{6}$/);
+    first.unmount();
+
+    // the choice comes back next time
+    renderWithProviders(<SnapshotDialog devpod="alice-b" owner="alice" onClose={() => {}} />, { me: features() });
+    await waitFor(() => expect(screen.getByRole("radio", { name: "生成新标签" }).getAttribute("aria-checked")).toBe("true"));
   });
 
   it("remembers the last custom address in this browser, never the credentials", async () => {

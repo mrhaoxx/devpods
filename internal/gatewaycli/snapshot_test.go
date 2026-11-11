@@ -103,6 +103,14 @@ func (f *snapFake) seen() []string {
 	return append([]string(nil), f.calls...)
 }
 
+// lastBody is the most recent call as recorded ("METHOD path body").
+func (f *snapFake) lastBody() string {
+	if c := f.seen(); len(c) > 0 {
+		return c[len(c)-1]
+	}
+	return ""
+}
+
 func (f *snapFake) count(prefix string) int {
 	n := 0
 	for _, c := range f.seen() {
@@ -207,6 +215,24 @@ func TestSnapshotsList(t *testing.T) {
 	}
 	if got := f.seen(); !reflect.DeepEqual(got, []string{"GET /api/snapshots", "GET /api/snapshots?scope=all&devpod=alice-a"}) {
 		t.Fatalf("requests %v", got)
+	}
+}
+
+func TestSnapshotNewTag(t *testing.T) {
+	// the fake clock is 2026-11-11 12:00 UTC = 20:00 in Shanghai
+	for cmd, want := range map[string]string{
+		"snapshot alice-a --new-tag --detach":                               `"tag":"20261111-200000"`,
+		"snapshot alice-a --image reg.test:5000/t/a:old --new-tag --detach": `"image":"reg.test:5000/t/a:20261111-200000"`,
+		"snapshot alice-a --image reg.test:5000/t/a --new-tag --detach":     `"image":"reg.test:5000/t/a:20261111-200000"`,
+	} {
+		f := newSnapFake(t)
+		if code, out, errs := f.run(cmd, nil); code != ExitOK || !strings.Contains(f.lastBody(), want) {
+			t.Fatalf("%s: exit %d body %s out %q err %q", cmd, code, f.lastBody(), out, errs)
+		}
+	}
+	f := newSnapFake(t)
+	if code, _, errs := f.run("snapshot alice-a --tag v1 --new-tag", nil); code != ExitUsage || !strings.Contains(errs, "exclude") {
+		t.Fatalf("--tag with --new-tag: %d %q", code, errs)
 	}
 }
 
