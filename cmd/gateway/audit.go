@@ -31,9 +31,6 @@ import (
 	"github.com/mrhaoxx/devpod/internal/gateway"
 )
 
-// DefaultAuditNotice is prepended to the login banner while audit is on.
-const DefaultAuditNotice = "本会话将被记录用于安全审计"
-
 type auditFlags struct {
 	s3Endpoint, s3Bucket, s3Region, s3CredsDir string
 	s3PathStyle                                bool
@@ -92,18 +89,15 @@ func sessionPolicy(gc *devpodv1alpha1.GatewayConfig, u *devpodv1alpha1.User) pol
 	return policy.Resolve(def, usr)
 }
 
-// bannerText renders the login banner: the audit notice (when audit is
-// enabled) followed by the configured template.
+// bannerText renders the login banner: the configured template, preceded
+// by GatewayConfig.spec.audit.notice when audit is on and a notice is
+// set. There is no default notice.
 func bannerText(gc *devpodv1alpha1.GatewayConfig, tmpl *template.Template, meta ssh.ConnMetadata) string {
 	body := renderBanner(tmpl, meta)
-	if !auditEnabled(gc) {
+	if !auditEnabled(gc) || gc.Spec.Audit.Notice == "" {
 		return body
 	}
-	notice := gc.Spec.Audit.Notice
-	if notice == "" {
-		notice = DefaultAuditNotice
-	}
-	return notice + "\n" + body
+	return gc.Spec.Audit.Notice + "\n" + body
 }
 
 func renderBanner(tmpl *template.Template, meta ssh.ConnMetadata) string {

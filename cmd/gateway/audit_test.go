@@ -62,7 +62,8 @@ func TestBannerText_AuditNotice(t *testing.T) {
 
 	on := gcWith(&devpodv1alpha1.AuditSpec{Enabled: true})
 	got := bannerText(on, tmpl, meta)
-	if first, rest, _ := strings.Cut(got, "\n"); first != DefaultAuditNotice || rest != "hi alice\n" {
+	// no notice unless one is configured
+	if got != "hi alice\n" {
 		t.Fatalf("enabled, default notice: %q", got)
 	}
 	custom := gcWith(&devpodv1alpha1.AuditSpec{Enabled: true, Notice: "recorded"})
@@ -72,7 +73,7 @@ func TestBannerText_AuditNotice(t *testing.T) {
 	if got := bannerText(gcWith(nil), tmpl, meta); got != "hi alice\n" {
 		t.Fatalf("disabled must be the template only: %q", got)
 	}
-	if got := bannerText(on, nil, meta); strings.TrimSpace(got) != DefaultAuditNotice {
+	if got := bannerText(on, nil, meta); got != "" {
 		t.Fatalf("no template: %q", got)
 	}
 	if got := bannerText(nil, nil, meta); got != "" {

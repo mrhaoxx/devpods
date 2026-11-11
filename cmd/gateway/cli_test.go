@@ -5,9 +5,13 @@
 package main
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
+
+	"github.com/mrhaoxx/devpod/internal/gateway"
 )
 
 func TestCLIFlags_Build(t *testing.T) {
@@ -34,5 +38,20 @@ func TestCLIFlags_Build(t *testing.T) {
 	d, err := (&cliFlags{user: "dp", apiURL: "http://webui/", keyFile: key, maxConns: 7}).build()
 	if err != nil || d.user != "dp" || d.srv.API.BaseURL != "http://webui" || d.srv.API.Key != "s3cret" || d.srv.MaxConns != 7 {
 		t.Fatalf("built %+v %v", d, err)
+	}
+}
+
+func TestCLIAuthHint(t *testing.T) {
+	if got := cliAuthHint("devpod", "", gateway.ErrCLIAmbiguousKey); !strings.Contains(got, "devpod+<用户名>@") || !strings.Contains(got, "多个用户") {
+		t.Fatalf("ambiguous key: %q", got)
+	}
+	if got := cliAuthHint("dp", "", gateway.ErrCLINeedsUser); !strings.Contains(got, "dp+<用户名>@") {
+		t.Fatalf("unknown key: %q", got)
+	}
+	if got := cliAuthHint("devpod", "alice", errors.New("key mismatch")); !strings.Contains(got, "alice") {
+		t.Fatalf("named user: %q", got)
+	}
+	if got := cliAuthHint("devpod", "", errors.New("other")); got != "" {
+		t.Fatalf("nothing to say: %q", got)
 	}
 }

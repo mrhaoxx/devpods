@@ -116,7 +116,7 @@ export function ShellPage() {
         <Link to={`/devpods/${name}`} className="mono font-semibold text-ink hover:text-accent">
           {name}
         </Link>
-        <span className="text-muted">终端 · 经 SSH 网关，会话会被记录</span>
+        <span className="text-muted">终端</span>
         <span role="status" className="ml-auto text-muted">
           {state.kind === "connecting" ? "连接中…" : state.kind === "open" ? "已连接" : state.reason}
         </span>
