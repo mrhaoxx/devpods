@@ -300,3 +300,113 @@ func TestConfigLaunch(t *testing.T) {
 		waitDevPod(t, "cl-bob-tk")
 	})
 }
+
+// exampleConfig is the manifest the config center was designed around
+// (spec §2): a whole-node GPU DevPod on the host network.
+const exampleConfig = `apiVersion: devpod.io/v1alpha1
+kind: DevPod
+metadata:
+  name: ${NAME}
+  namespace: devpods
+spec:
+  owner: ${OWNER}
+  pod:
+    spec:
+      containers:
+        - command:
+            - sleep
+            - infinity
+          image: 10.12.11.7:16622/sglang-main-4153af44c
+          imagePullPolicy: IfNotPresent
+          name: dev
+          resources:
+            limits:
+              nvidia.com/gpu: '8'
+            requests:
+              nvidia.com/gpu: '8'
+          securityContext:
+            capabilities:
+              add:
+                - IPC_LOCK
+                - SYS_RESOURCE
+            privileged: true
+          volumeMounts:
+            - mountPath: /models
+              name: model
+              readOnly: true
+            - mountPath: /dev/shm
+              name: dshm
+            - mountPath: /dev/infiniband
+              name: ib
+            - mountPath: /mnt
+              name: mnt
+      dnsPolicy: ClusterFirstWithHostNet
+      hostNetwork: true
+      nodeSelector:
+        kubernetes.io/hostname: ${NODE}
+      volumes:
+        - hostPath:
+            path: /data/models
+            type: DirectoryOrCreate
+          name: model
+        - emptyDir:
+            medium: Memory
+            sizeLimit: 1300Gi
+          name: dshm
+        - hostPath:
+            path: /dev/infiniband
+            type: DirectoryOrCreate
+          name: ib
+        - hostPath:
+            path: /mnt
+            type: DirectoryOrCreate
+          name: mnt
+  running: true
+  shell: zsh
+`
+
+// The example as it was written: an admin launches it on several nodes;
+// an ordinary user is told what their DevPods need that it lacks.
+func TestConfigLaunch_Example(t *testing.T) {
+	setupSuite(t)
+	s, sm := newServer(t)
+	ctx := context.Background()
+	for _, n := range []string{"ex-node-a", "ex-node-b"} {
+		node := &corev1.Node{ObjectMeta: metav1.ObjectMeta{Name: n}}
+		if err := k8sClient.Create(ctx, node); err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = k8sClient.Delete(ctx, node) })
+	}
+	t.Cleanup(func() { cleanupDevPods(t); cleanupConfigs(t) })
+	root, bob := forge(sm, "ex-root", true), forge(sm, "ex-bob", false)
+	srv := httptest.NewServer(s.Routes())
+	t.Cleanup(srv.Close)
+	v := apiCall(t, srv, "POST", "/api/configs", root, jsonBody(map[string]any{"id": "sglang", "title": "SGLang", "content": exampleConfig, "public": true}), http.StatusCreated)
+	var names []string
+	for _, x := range v["variables"].([]any) {
+		names = append(names, x.(map[string]any)["name"].(string))
+	}
+	if strings.Join(names, ",") != "NAME,OWNER,NODE" {
+		t.Fatalf("variables %v", names)
+	}
+	req := jsonBody(map[string]any{"vars": map[string]string{"NAME": "sg"}, "nodes": []string{"ex-node-a", "ex-node-b"}})
+
+	items := launchItems(t, apiCall(t, srv, "POST", "/api/configs/ex-root-sglang/launch", root, req, http.StatusOK))
+	if len(items) != 2 || !items[0].OK || !items[1].OK || items[0].Name != "ex-root-sg-1" || items[1].Node != "ex-node-b" {
+		t.Fatalf("admin launch %+v", items)
+	}
+	dp := waitDevPod(t, "ex-root-sg-2")
+	waitDevPod(t, "ex-root-sg-1")
+	spec := dp.Spec.Pod.Spec
+	if dp.Spec.Owner != "ex-root" || dp.Spec.Shell != "zsh" || !spec.HostNetwork || !*spec.Containers[0].SecurityContext.Privileged ||
+		spec.NodeSelector["kubernetes.io/hostname"] != "ex-node-b" || len(spec.Volumes) != 4 || spec.Containers[0].Resources.Limits.Name("nvidia.com/gpu", "").String() != "8" {
+		t.Fatalf("created %+v", dp.Spec)
+	}
+
+	// an ordinary user's DevPods are metered: cpu and memory limits are required
+	items = launchItems(t, apiCall(t, srv, "POST", "/api/configs/ex-root-sglang/launch", bob, req, http.StatusUnprocessableEntity))
+	if len(items) != 2 || items[0].OK || !strings.Contains(items[0].Message, "cpu and memory limits") {
+		t.Fatalf("user launch %+v", items)
+	}
+}
