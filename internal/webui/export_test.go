@@ -136,3 +136,23 @@ func (s *Server) PrepareDevPodForTest(r *http.Request, user string, req CreateRe
 	}
 	return dp, ""
 }
+
+// PlanLaunchForTest checks a launch as user without writing; the code
+// is "" when the request as a whole is acceptable.
+func (s *Server) PlanLaunchForTest(r *http.Request, user, config string, req LaunchRequest) (*LaunchPlan, string) {
+	sess := Session{User: user}
+	c, apiErr := s.visibleConfig(r.Context(), sess, config)
+	if apiErr != nil {
+		return nil, apiErr.Code
+	}
+	plan, apiErr := s.planLaunch(r, sess, c, req)
+	if apiErr != nil {
+		return nil, apiErr.Code
+	}
+	return plan, ""
+}
+
+// RunLaunchForTest writes a checked plan.
+func (s *Server) RunLaunchForTest(r *http.Request, plan *LaunchPlan) ([]LaunchItem, int) {
+	return s.runLaunch(r, plan)
+}

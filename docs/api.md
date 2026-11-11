@@ -121,6 +121,58 @@ Times are RFC 3339 and must fall on the granularity from
 `GET /api/reservations/rules`. A period that overlaps someone else's answers
 `409 RESERVATION_CONFLICT` with the winner in `detail`.
 
+## Saved configs
+
+A config is a DevPod manifest kept as text, with variables. Its name is
+`<owner>-<id>`. The owner changes it; users it is shared with (`sharedWith`) and
+— when it is `public` — every signed-in user may read it and launch from it.
+A config you may not see answers `404`. Admins see every config and may delete
+one or take it off the public list (`PATCH {"public": false}`), nothing else.
+
+| Variable | Meaning |
+|---|---|
+| `${VAR}` | must be given |
+| `${VAR:-default}` | optional; the default ends at the first `}` |
+| `$${` | a literal `${` |
+| `${OWNER}` | whoever launches (filled by the server) |
+| `${NAME}` | the DevPod's full name: you give the short name, your prefix is added |
+| `${NODE}` | a node; given as `nodes`, one DevPod per node |
+| `${INDEX}` | the DevPod's number in the launch, from 1 (filled by the server) |
+
+A name is `[A-Z][A-Z0-9_]*`; any other `${…}` (a shell's `${home}`) is left as
+it is. Values are single-line text of at most 1024 bytes.
+
+```sh
+# save (id + title + the YAML), share, publish
+curl … -d '{"id":"sglang","title":"SGLang 8 GPUs","content":"apiVersion: …"}' $DEVPOD/api/configs
+curl -X PATCH … -d '{"sharedWith":["alice","bob"]}' $DEVPOD/api/configs/star-sglang
+curl -X PATCH … -d '{"public":true}' $DEVPOD/api/configs/star-sglang
+
+# list (scope=mine|shared|public; default: all three), read one with its variables
+curl … "$DEVPOD/api/configs?scope=public"
+curl … $DEVPOD/api/configs/star-sglang
+
+# launch: one DevPod per node, named <me>-sg-1, <me>-sg-2
+curl … -d '{"vars":{"NAME":"sg"},"nodes":["m602","m603"]}' $DEVPOD/api/configs/star-sglang/launch
+# a config without ${NODE} takes a count instead (default 1, at most 32)
+curl … -d '{"vars":{"NAME":"w","IMAGE":"debian:12"},"count":3}' $DEVPOD/api/configs/star-plain/launch
+```
+
+Launching needs `configs:read` and `devpods:create`. Each DevPod is created
+exactly as `POST /api/devpods` with that YAML would create it, as you: the same
+quota, node and manifest rules. With several, the name gets `-<index>` unless
+the config uses `${INDEX}` itself.
+
+The launch is checked as a whole first. The answer is `{"items": [{index, name,
+node, ok, code, message}]}` with:
+
+| Status | Meaning |
+|---|---|
+| `200` | every DevPod was created (or, with `"dryRun": true`, would be — each item then carries its `yaml`) |
+| `422` `LAUNCH_REJECTED` | at least one could not be created; **nothing was**. The failing items say why (`QUOTA_EXCEEDED`, `NAME_TAKEN`, `DUPLICATE_NAME`, `BAD_NAME`, `NODE_RESERVED`, `BAD_REQUEST` for YAML the values broke, …) and carry their `yaml` |
+| `207` | the check passed but a write failed meanwhile; the others were created and are not undone |
+| `400` `BAD_VARIABLES` | a variable is missing or unknown (`detail` names them), or a value is not single-line text |
+
 ## Without a token: the CLI over SSH
 
 `ssh <user>+devpod@<gateway> <command>` runs the same operations authenticated by

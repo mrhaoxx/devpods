@@ -101,6 +101,7 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("GET /api/configs/{name}", s.handleGetConfig)
 	mux.HandleFunc("PATCH /api/configs/{name}", s.handlePatchConfig)
 	mux.HandleFunc("DELETE /api/configs/{name}", s.handleDeleteConfig)
+	mux.HandleFunc("POST /api/configs/{name}/launch", s.handleLaunchConfig)
 	mux.HandleFunc("GET /api/reservations", s.handleListReservations)
 	mux.HandleFunc("GET /api/reservations/rules", s.handleReservationRules)
 	mux.HandleFunc("POST /api/reservations", s.handleCreateReservation)
