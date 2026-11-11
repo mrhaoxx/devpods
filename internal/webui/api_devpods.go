@@ -412,6 +412,20 @@ func (s *Server) handleCreateDevPod(w http.ResponseWriter, r *http.Request) {
 		}
 		dp.Spec.Pod.Spec.NodeSelector[hostnameLabel] = req.Node
 	}
+	// spec.nodeName would bypass the scheduler and the node choice rule:
+	// it becomes the same pin as a node picked in the form
+	if dp.Spec.Pod != nil && dp.Spec.Pod.Spec.NodeName != "" {
+		name := dp.Spec.Pod.Spec.NodeName
+		if sel := dp.Spec.Pod.Spec.NodeSelector[hostnameLabel]; sel != "" && sel != name {
+			s.writeErr(w, http.StatusBadRequest, "BAD_REQUEST", fmt.Sprintf("nodeName %q and the %s node selector %q name different nodes", name, hostnameLabel, sel), nil)
+			return
+		}
+		if dp.Spec.Pod.Spec.NodeSelector == nil {
+			dp.Spec.Pod.Spec.NodeSelector = map[string]string{}
+		}
+		dp.Spec.Pod.Spec.NodeSelector[hostnameLabel] = name
+		dp.Spec.Pod.Spec.NodeName = ""
+	}
 	if node := pinnedNode(dp); node != "" {
 		var n corev1.Node
 		if err := s.Client.Get(r.Context(), types.NamespacedName{Name: node}, &n); err != nil {

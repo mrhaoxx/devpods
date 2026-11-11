@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -315,6 +316,25 @@ func TestNodeChoiceRule(t *testing.T) {
 	yaml, _ := json.Marshal(map[string]string{"yaml": fmt.Sprintf("apiVersion: devpod.io/v1alpha1\nkind: DevPod\nmetadata:\n  name: nc-bob-y\nspec:\n  owner: nc-bob\n  running: true\n  pod:\n    spec:\n      nodeSelector:\n        kubernetes.io/hostname: %s\n      containers:\n      - name: dev\n        image: ubuntu:24.04\n        resources:\n          limits: {cpu: \"1\", memory: 1Gi}\n", node)})
 	if rec := doJSON(t, s.HandleCreateDevPodForTest(), "POST", "/api/devpods", nil, bob, string(yaml)); rec.Code != http.StatusConflict {
 		t.Fatalf("yaml create onto a held node: %d %s", rec.Code, rec.Body)
+	}
+	// spec.nodeName would bypass the scheduler and this rule: it is
+	// turned into the same pin, so it is judged the same way
+	byName := func(name, owner string) string {
+		b, _ := json.Marshal(map[string]string{"yaml": fmt.Sprintf("apiVersion: devpod.io/v1alpha1\nkind: DevPod\nmetadata:\n  name: %s\nspec:\n  owner: %s\n  running: true\n  pod:\n    spec:\n      nodeName: %s\n      containers:\n      - name: dev\n        image: ubuntu:24.04\n        resources:\n          limits: {cpu: \"1\", memory: 1Gi}\n", name, owner, node)})
+		return string(b)
+	}
+	if rec := doJSON(t, s.HandleCreateDevPodForTest(), "POST", "/api/devpods", nil, bob, byName("nc-bob-n", "nc-bob")); rec.Code != http.StatusConflict || !strings.Contains(rec.Body.String(), "NODE_RESERVED") {
+		t.Fatalf("yaml nodeName onto a held node: %d %s", rec.Code, rec.Body)
+	}
+	if rec := doJSON(t, s.HandleCreateDevPodForTest(), "POST", "/api/devpods", nil, alice, byName("nc-alice-n", "nc-alice")); rec.Code != http.StatusCreated {
+		t.Fatalf("holder's yaml nodeName: %d %s", rec.Code, rec.Body)
+	}
+	var named devpodv1alpha1.DevPod
+	if err := s.Reader.Get(ctx, client_key("nc-alice-n"), &named); err != nil {
+		t.Fatal(err)
+	}
+	if named.Spec.Pod.Spec.NodeName != "" || named.Spec.Pod.Spec.NodeSelector["kubernetes.io/hostname"] != node {
+		t.Fatalf("nodeName not turned into a pin: nodeName=%q selector=%v", named.Spec.Pod.Spec.NodeName, named.Spec.Pod.Spec.NodeSelector)
 	}
 
 	// starting a DevPod that was pinned there before the reservation began
