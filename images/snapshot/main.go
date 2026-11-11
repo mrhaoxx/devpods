@@ -7,7 +7,7 @@
 // pushes it — talking to the node's container runtime through its API
 // (containerd: the containerd client plus nerdctl's commit package;
 // Docker: the Engine API), not through a CLI. Progress goes to stdout in
-// the snapshot v2 protocol (docs/superpowers/specs/2026-11-11-devpod-snapshot-v2.md §2.1).
+// the snapshot protocol (see proto.go).
 package main
 
 import (

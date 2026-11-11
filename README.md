@@ -2,8 +2,6 @@
 
 Kubernetes-native multi-tenant remote development environments.
 
-See `docs/superpowers/specs/2026-05-12-devpod-design.md` for the design.
-
 ## Web console
 
 The optional web UI (`webui.enabled`) is a console: a permanent sidebar,
