@@ -69,7 +69,7 @@ export function Sidebar({ me, onNavigate }: { me: Me; onNavigate?: () => void })
     ...(me.features.reservations ? [{ to: "/reservations", label: "节点预约", icon: "▥" }] : []),
     ...(audit ? [{ to: "/sessions", label: "我的会话", icon: "◷" }] : []),
   ];
-  const settings: Item[] = [{ to: "/settings", label: "SSH 密钥 · 密码", icon: "⚙" }];
+  const settings: Item[] = [{ to: "/settings", label: "密钥 · 令牌 · 仓库凭证", icon: "⚙" }];
   const cluster: Item[] = [
     { to: "/admin", label: "总览", icon: "◎", end: true },
     { to: "/admin/devpods", label: "全部 DevPod", icon: "▤", count: all.data ? `${running}/${allItems.length}` : undefined },
