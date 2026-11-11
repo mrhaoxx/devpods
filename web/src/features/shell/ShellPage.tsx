@@ -11,16 +11,14 @@ import { ApiFailure, probeShell, shellSocketURL } from "../../data/api";
 import { useMe } from "../../data/queries";
 import { Button } from "../../design/Button";
 import { termClipboardAction, termKeySequence } from "../../lib/termKeys";
+import { termTheme } from "../../lib/termTheme";
+import { useTheme } from "../../app/theme";
 
 type State = { kind: "connecting" } | { kind: "open" } | { kind: "closed"; reason: string };
 
-const cssVar = (name: string, fallback: string) => getComputedStyle(document.documentElement).getPropertyValue(name).trim() || fallback;
-const termTheme = () => ({
-  background: cssVar("--color-surface", "#ffffff"),
-  foreground: cssVar("--color-ink", "#1f2328"),
-  cursor: cssVar("--color-ink", "#1f2328"),
-  selectionBackground: cssVar("--color-accent-soft", "#ddf4ff"),
-});
+// the console's resolved theme (it follows the system unless the user
+// picked one): the terminal takes the matching full color set
+const currentTheme = () => termTheme(document.documentElement.dataset.theme === "dark" ? "dark" : "light");
 
 const REASONS: [RegExp, string][] = [
   [/^shell exited with status (\d+)$/, "shell 已退出（状态码 $1）"],
@@ -39,6 +37,7 @@ export function ShellPage() {
   const sock = useRef<WebSocket | null>(null);
   const [state, setState] = useState<State>({ kind: "connecting" });
   const [attempt, setAttempt] = useState(0);
+  useTheme(); // this page is its own tab: follow the system theme here too
 
   useEffect(() => {
     document.title = `${name} · 终端`;
@@ -49,11 +48,26 @@ export function ShellPage() {
     // Option is Meta (ESC prefix), as in desktop terminals: Option+B / F /
     // D reach the shell instead of starting a dead-key composition that
     // leaves the input stuck
-    const t = new Terminal({ macOptionIsMeta: true, cursorBlink: true, fontSize: 13, fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Consolas, monospace', theme: termTheme(), scrollback: 5000 });
+    const t = new Terminal({ macOptionIsMeta: true, cursorBlink: true, fontSize: 13, fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Consolas, monospace', theme: currentTheme(), scrollback: 5000 });
     const fit = new FitAddon();
     t.loadAddon(fit);
     t.open(host.current);
+    // Fit on the next frame, and only when the box really changed: the
+    // terminal's own scrollbar keeps a fixed gutter (see .term-host in
+    // index.css), so the columns do not jump when scrollback appears.
+    let raf = 0;
+    const refit = () => {
+      cancelAnimationFrame(raf);
+      raf = requestAnimationFrame(() => {
+        try {
+          fit.fit();
+        } catch {
+          /* not laid out yet */
+        }
+      });
+    };
     fit.fit();
+    void document.fonts?.ready.then(refit); // the cell width changes when the font arrives
     term.current = t;
     const enc = new TextEncoder();
     const send = (d: string) => {
@@ -78,11 +92,12 @@ export function ShellPage() {
     const resize = t.onResize(({ cols, rows }) => {
       if (sock.current?.readyState === WebSocket.OPEN) sock.current.send(JSON.stringify({ type: "resize", cols, rows }));
     });
-    const ro = new ResizeObserver(() => fit.fit());
+    const ro = new ResizeObserver(refit);
     ro.observe(host.current);
-    const mo = new MutationObserver(() => (t.options.theme = termTheme()));
+    const mo = new MutationObserver(() => (t.options.theme = currentTheme()));
     mo.observe(document.documentElement, { attributes: true, attributeFilter: ["data-theme"] });
     return () => {
+      cancelAnimationFrame(raf);
       mo.disconnect();
       ro.disconnect();
       data.dispose();
@@ -103,6 +118,8 @@ export function ShellPage() {
     ws.onopen = () => {
       opened = true;
       setState({ kind: "open" });
+      // the size in the URL was read before the layout settled: say it again
+      ws.send(JSON.stringify({ type: "resize", cols: t.cols, rows: t.rows }));
       t.focus();
     };
     ws.onmessage = (m) => {
@@ -146,7 +163,11 @@ export function ShellPage() {
           </Button>
         )}
       </header>
-      <div ref={host} className="min-h-0 flex-1 p-1" />
+      {/* the padding lives on the wrapper: the fit measures the inner box,
+          which has none and never overflows the page */}
+      <div className="min-h-0 flex-1 overflow-hidden p-1" style={{ background: "var(--color-surface)" }}>
+        <div ref={host} className="term-host h-full w-full overflow-hidden" />
+      </div>
     </div>
   );
 }

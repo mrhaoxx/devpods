@@ -94,16 +94,18 @@ describe("ShellPage", () => {
     act(() => ws.onmessage?.({ data: new TextEncoder().encode("$ ").buffer }));
     expect(term.written).toEqual(["$ "]);
     term.onData("ls\r");
-    expect(new TextDecoder().decode(ws.sent[0] as Uint8Array)).toBe("ls\r");
+    // on open the page states its size again (the URL's was read before layout settled)
+    expect(ws.sent[0]).toBe('{"type":"resize","cols":100,"rows":30}');
+    expect(new TextDecoder().decode(ws.sent[1] as Uint8Array)).toBe("ls\r");
     term.onResize({ cols: 120, rows: 40 });
-    expect(ws.sent[1]).toBe('{"type":"resize","cols":120,"rows":40}');
+    expect(ws.sent[2]).toBe('{"type":"resize","cols":120,"rows":40}');
     // Option+→ goes out as "forward one word" and never reaches xterm or the browser
     const ev = new KeyboardEvent("keydown", { key: "ArrowRight", altKey: true, cancelable: true });
     expect(term.onKey(ev)).toBe(false);
     expect(ev.defaultPrevented).toBe(true);
-    expect(new TextDecoder().decode(ws.sent[2] as Uint8Array)).toBe("\x1bf");
+    expect(new TextDecoder().decode(ws.sent[3] as Uint8Array)).toBe("\x1bf");
     expect(term.onKey(new KeyboardEvent("keyup", { key: "ArrowRight", altKey: true }))).toBe(false);
-    expect(ws.sent.length).toBe(3); // sent once, on keydown
+    expect(ws.sent.length).toBe(4); // sent once, on keydown
     expect(term.onKey(new KeyboardEvent("keydown", { key: "a" }))).toBe(true);
   });
 

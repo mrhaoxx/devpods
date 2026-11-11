@@ -204,3 +204,24 @@ kbd {
     display: revert;
   }
 }
+
+/* Web terminal: the scrollback's scrollbar keeps the same gutter whether
+   or not there is anything to scroll, so the column count is stable. */
+.term-host .xterm-viewport {
+  overflow-y: scroll;
+  scrollbar-gutter: stable;
+  scrollbar-width: thin;
+  scrollbar-color: var(--color-line-strong) transparent;
+}
+.term-host .xterm-viewport::-webkit-scrollbar {
+  width: 10px;
+}
+.term-host .xterm-viewport::-webkit-scrollbar-thumb {
+  background: var(--color-line-strong);
+  border-radius: 5px;
+  border: 2px solid transparent;
+  background-clip: padding-box;
+}
+.term-host .xterm-viewport::-webkit-scrollbar-track {
+  background: transparent;
+}
