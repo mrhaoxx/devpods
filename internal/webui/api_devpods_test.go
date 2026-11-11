@@ -81,8 +81,15 @@ func cleanupDevPods(t *testing.T) {
 	deadline := time.Now().Add(60 * time.Second)
 	for time.Now().Before(deadline) {
 		var left devpodv1alpha1.DevPodList
-		if err := k8sClient.List(ctx, &left); err == nil && len(left.Items) == 0 {
-			return
+		if err := k8sClient.List(ctx, &left); err == nil {
+			if len(left.Items) == 0 {
+				return
+			}
+			// one created just before the cleanup reaches the cache
+			// after the first pass: delete what shows up, too
+			for i := range left.Items {
+				_ = k8sClient.Delete(ctx, &left.Items[i])
+			}
 		}
 		time.Sleep(100 * time.Millisecond)
 	}
