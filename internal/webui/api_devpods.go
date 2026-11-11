@@ -359,6 +359,15 @@ func (s *Server) handleCreateDevPod(w http.ResponseWriter, r *http.Request) {
 	if !s.rejectKore(w, sess, dp) {
 		return
 	}
+	// What the user wrote themselves (the YAML path) may not reach
+	// Secrets or a service account token. Checked before a template is
+	// applied: an admin's preset is not the user's writing.
+	if !sess.Admin && dp.Spec.Pod != nil {
+		if apiErr := guardUserPodSpec(&dp.Spec.Pod.Spec, sess.User); apiErr != nil {
+			s.writeErr(w, apiErr.status, apiErr.Code, apiErr.Message, apiErr.Detail)
+			return
+		}
+	}
 
 	if req.TemplateRef != "" {
 		var tpl devpodv1alpha1.DevPodTemplate

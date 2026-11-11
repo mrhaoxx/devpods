@@ -5,6 +5,7 @@
 package webui
 
 import (
+	corev1 "k8s.io/api/core/v1"
 	"net/http"
 	"time"
 
@@ -110,3 +111,18 @@ func FoldSnapshotLogForTest(sn *devpodv1alpha1.DevPodSnapshot, lines []string, n
 	}
 	return progressOf(sn, f, now)
 }
+
+// GuardUserPodSpecForTest returns the code and field path of the first
+// violation ("" when the spec is allowed).
+func GuardUserPodSpecForTest(spec *corev1.PodSpec, user string) (code, path string) {
+	if e := guardUserPodSpec(spec, user); e != nil {
+		d, _ := e.Detail.(map[string]string)
+		return e.Code, d["path"]
+	}
+	return "", ""
+}
+
+var (
+	NormalizeRegistryHostForTest = normalizeRegistryHost
+	ImageRegistryHostForTest     = imageRegistryHost
+)

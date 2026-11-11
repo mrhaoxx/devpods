@@ -28,11 +28,15 @@ const userFinalizer = "devpod.io/user-cleanup"
 type UserReconciler struct {
 	client.Client
 	Scheme *runtime.Scheme
+	// DevPodNamespace is where the users' registry credential Secrets
+	// live (GatewayConfig.spec.devPodNamespace); empty turns that off.
+	DevPodNamespace string
 }
 
 // +kubebuilder:rbac:groups=devpod.io,resources=users,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=devpod.io,resources=users/status,verbs=get;update;patch
 // +kubebuilder:rbac:groups=devpod.io,resources=users/finalizers,verbs=update
+// +kubebuilder:rbac:groups=core,resources=secrets,verbs=get;create;update;delete
 
 func (r *UserReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	log := log.FromContext(ctx).WithValues("user", req.NamespacedName)
@@ -74,6 +78,10 @@ func (r *UserReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.
 			return ctrl.Result{}, fmt.Errorf("add finalizer: %w", err)
 		}
 		return ctrl.Result{Requeue: true}, nil
+	}
+
+	if err := r.reconcileRegistries(ctx, &u); err != nil {
+		return ctrl.Result{}, err
 	}
 
 	if u.Status.DevPodCount != ownedCount {

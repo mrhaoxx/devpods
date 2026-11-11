@@ -42,7 +42,8 @@ Use --detach to start it and return at once; nothing is cancelled then.
 "snapshot follow <id>" re-attaches; there Ctrl-C only stops following.
 
 The image goes to your default address unless --image names another
-(registry/path:tag). Another address needs its own credentials: give
+(registry/path:tag). Another address needs its own credentials, unless
+you saved a login for that registry ("registry add <host>"): give
 --username; the password is asked for without echo on a terminal, or read
 from the first line of standard input (--password-stdin forces that). The
 password never goes on the command line.
@@ -287,10 +288,10 @@ func snapCreate(e *Env, a *parsed, c *command, devpod string) int {
 	var ae *APIError
 	if errors.As(err, &ae) && ae.Code == "PUSH_AUTH_REQUIRED" && req.PushAuth == nil {
 		if e.ReadLine == nil {
-			fmt.Fprintf(e.Err, "error: pushing to %s needs that registry's credentials: add --username U and give the password on the first line of standard input (PUSH_AUTH_REQUIRED)\n", req.Image)
+			fmt.Fprintf(e.Err, "error: pushing to %s needs that registry's credentials: add --username U and give the password on the first line of standard input, or save a login once with `registry add %s` (PUSH_AUTH_REQUIRED)\n", req.Image, imageRegistry(req.Image))
 			return ExitAPI
 		}
-		fmt.Fprintf(e.Err, "%s is not your default address: it needs that registry's credentials.\n", req.Image)
+		fmt.Fprintf(e.Err, "%s is not your default address: it needs that registry's credentials.\n(`registry add %s` saves a login so this is not asked again.)\n", req.Image, imageRegistry(req.Image))
 		auth, cerr := credentials(e, a)
 		if cerr != nil {
 			if errors.Is(cerr, errInterrupted) {

@@ -564,6 +564,30 @@ func (r *DevPodReconciler) syncTelemetryKeys(ctx context.Context, dp *devpodv1al
 	return nil
 }
 
+// attachRegistrySecret adds the owner's registry credentials Secret to a
+// new Pod's imagePullSecrets when the Secret exists.
+func (r *DevPodReconciler) attachRegistrySecret(ctx context.Context, dp *devpodv1alpha1.DevPod, pod *corev1.Pod) error {
+	name := devpodv1alpha1.RegistryCredentialsSecretName(dp.Spec.Owner)
+	var sec corev1.Secret
+	if err := r.Get(ctx, types.NamespacedName{Name: name, Namespace: pod.Namespace}, &sec); err != nil {
+		if apierrors.IsNotFound(err) {
+			return nil
+		}
+		return fmt.Errorf("get registry secret: %w", err)
+	}
+	// only the Secret the user controller wrote for this owner
+	if sec.Labels[devpodv1alpha1.RegistryCredentialsLabel] != "true" || sec.Labels[devpodv1alpha1.OwnerLabel] != dp.Spec.Owner {
+		return nil
+	}
+	for _, ref := range pod.Spec.ImagePullSecrets {
+		if ref.Name == name {
+			return nil
+		}
+	}
+	pod.Spec.ImagePullSecrets = append(pod.Spec.ImagePullSecrets, corev1.LocalObjectReference{Name: name})
+	return nil
+}
+
 // specHashAnnotation tags a rendered Pod with a SHA256 of its spec.
 // On each reconcile the controller compares it against the live Pod;
 // a mismatch triggers a delete-then-recreate cycle since most Pod
@@ -605,6 +629,9 @@ func (r *DevPodReconciler) applyPodWithDriftRecreate(ctx context.Context, dp *de
 			// with, whatever is reserved now
 			pod.Spec.Affinity = live.Spec.Affinity.DeepCopy()
 		}
+		// imagePullSecrets are immutable too: the Pod keeps the ones it
+		// was created with, whatever credentials its owner has now
+		pod.Spec.ImagePullSecrets = live.Spec.ImagePullSecrets
 	case apierrors.IsNotFound(err):
 		// First create — check backoff before recreating.
 		if dp.Status.LastFailureAt != nil {
@@ -619,6 +646,12 @@ func (r *DevPodReconciler) applyPodWithDriftRecreate(ctx context.Context, dp *de
 		// spec §4.1). Added after the hash on purpose: reservations coming
 		// and going must never read as drift and recreate a running Pod.
 		excludeNodes(pod, r.excluded)
+		// The owner's registry credentials (snapshot spec v2 §5.2), also
+		// after the hash: saving or removing a credential must not
+		// recreate running Pods, it only reaches Pods created later.
+		if err := r.attachRegistrySecret(ctx, dp, pod); err != nil {
+			return err
+		}
 	default:
 		return fmt.Errorf("get live pod: %w", err)
 	}

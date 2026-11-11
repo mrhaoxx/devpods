@@ -41,6 +41,7 @@ Revoking a token in the console takes effect at once.
 | `audit:read` | Sessions, commands, file records, replays (your own) |
 | `snapshots:read` / `snapshots:write` | See saved images and follow a save / save a DevPod as an image, cancel, forget |
 | `keys:read` / `keys:write` | SSH public keys |
+| `registries:read` / `registries:write` | See the image registries you saved credentials for / add, replace, remove them (passwords are never returned) |
 | `admin:read` | Act as admin for reads (everyone's DevPods, nodes, users, audit). Admins only |
 | `admin:write` | Act as admin for changes (other users' DevPods, users, policies, disconnect). Admins only |
 
@@ -123,3 +124,23 @@ Times are RFC 3339 and must fall on the granularity from
 
 `ssh devpod@<gateway> <command>` runs the same operations authenticated by
 your SSH key — see [cli.md](cli.md).
+
+## Registry credentials
+
+Save credentials for an image registry once; they are then used to pull
+private images into your DevPods and to push snapshots to that registry.
+
+| Call | Notes |
+|---|---|
+| `GET /api/me/registries` | `{"items":[{"host","username","pending"}]}`; `pending` = not stored yet |
+| `PUT /api/me/registries/{host}` | `{"username","password"}`; `host` is `registry[:port]`. Answers the list |
+| `DELETE /api/me/registries/{host}` | 204; 404 when not saved |
+
+Docker Hub is one registry: `docker.io`, `index.docker.io` and
+`registry-1.docker.io` all name it. Credentials reach Pods created after
+they are saved; running DevPods are not restarted. A token limited to
+specific DevPods cannot use these calls.
+
+A DevPod written as YAML by a non-admin cannot refer to Secrets (volumes,
+environment, image pull secrets — `400 SECRET_REFERENCE` with the field
+path) or use a service account token (`400 SERVICE_ACCOUNT`).

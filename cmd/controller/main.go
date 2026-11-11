@@ -183,8 +183,9 @@ func main() {
 		}
 	}
 	if err := (&controllers.UserReconciler{
-		Client: mgr.GetClient(),
-		Scheme: mgr.GetScheme(),
+		Client:          mgr.GetClient(),
+		Scheme:          mgr.GetScheme(),
+		DevPodNamespace: gw.Spec.DevPodNamespace,
 	}).SetupWithManager(mgr); err != nil {
 		die(err, "set up UserReconciler")
 	}

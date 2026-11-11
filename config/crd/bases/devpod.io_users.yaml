@@ -233,6 +233,51 @@ spec:
                     pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
                     x-kubernetes-int-or-string: true
                 type: object
+              registries:
+                description: |-
+                  Registries are the image registries the user saved credentials
+                  for: used to pull private images into their DevPods and to push
+                  snapshots. The credentials live in the Secret
+                  devpod-registry-<user>, written only by the user controller.
+                items:
+                  description: UserRegistry is a registry the user saved credentials
+                    for (no password).
+                  properties:
+                    host:
+                      description: Host is registry[:port], lowercase.
+                      minLength: 1
+                      type: string
+                    username:
+                      type: string
+                  required:
+                  - host
+                  type: object
+                maxItems: 20
+                type: array
+              registryAuth:
+                description: |-
+                  RegistryAuth holds credentials on their way into the Secret; the
+                  user controller clears it.
+                items:
+                  description: |-
+                    UserRegistryAuth carries a credential that is not in the Secret yet.
+                    The user controller merges it into the user's registry Secret and
+                    clears it: the plaintext exists for one reconcile.
+                  properties:
+                    host:
+                      minLength: 1
+                      type: string
+                    password:
+                      type: string
+                    username:
+                      type: string
+                  required:
+                  - host
+                  - password
+                  - username
+                  type: object
+                maxItems: 20
+                type: array
             type: object
           status:
             description: UserStatus reports observed state.

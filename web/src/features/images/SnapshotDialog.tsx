@@ -12,6 +12,8 @@ import { ConfirmDialog } from "../../design/ConfirmDialog";
 import { CopyField } from "../../design/Copy";
 import { Field, Input, Notice } from "../../design/Form";
 import { fmtBytes } from "../../lib/format";
+import { savedRegistryFor } from "../../lib/registry";
+import { useRegistries } from "../settings/Registries";
 import { defaultSnapshotName, fmtElapsed, NAME_RE, STEPS, stepStates, validImageRef, type StepState } from "./progress";
 
 const mark: Record<StepState, string> = { todo: "○", active: "◐", done: "●", failed: "✕" };
@@ -147,6 +149,11 @@ function CreateForm({ devpod, owner, onCreated }: { devpod: string; owner: strin
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [pause, setPause] = useState(true);
+  // a registry the user saved a login for (设置 → 镜像仓库凭证) needs no
+  // credentials here: the server pushes with the saved one
+  const registries = useRegistries().data?.items ?? [];
+  const [useOther, setUseOther] = useState(false);
+  const saved = useOther ? undefined : savedRegistryFor(image, registries);
   const create = useMutation({
     mutationFn: (body: SnapshotRequest) => createSnapshot(devpod, body),
     onSuccess: (s) => {
@@ -154,10 +161,10 @@ function CreateForm({ devpod, owner, onCreated }: { devpod: string; owner: strin
       onCreated(s);
     },
   });
-  const ok = target === "default" ? NAME_RE.test(name) && (tag === "" || NAME_RE.test(tag)) : validImageRef(image) && username !== "" && password !== "";
+  const ok = target === "default" ? NAME_RE.test(name) && (tag === "" || NAME_RE.test(tag)) : validImageRef(image) && (!!saved || (username !== "" && password !== ""));
   const submit = () => {
     if (!ok) return;
-    create.mutate(target === "default" ? { name, ...(tag ? { tag } : {}), pause } : { image, pushAuth: { username, password }, pause });
+    create.mutate(target === "default" ? { name, ...(tag ? { tag } : {}), pause } : saved ? { image, pause } : { image, pushAuth: { username, password }, pause });
   };
   const err = create.error;
   return (
@@ -196,15 +203,36 @@ function CreateForm({ devpod, owner, onCreated }: { devpod: string; owner: strin
           <Field label="镜像地址" hint="完整地址，带标签" error={image && !validImageRef(image) ? "形如 registry.example.com/team/name:tag" : undefined}>
             <Input aria-label="镜像地址" className="mono" value={image} onChange={(e) => setImage(e.target.value)} placeholder="registry.example.com/team/name:tag" required autoFocus />
           </Field>
-          <div className="grid gap-3 sm:grid-cols-2">
-            <Field label="用户名">
-              <Input aria-label="用户名" className="mono" value={username} onChange={(e) => setUsername(e.target.value)} autoComplete="off" required />
-            </Field>
-            <Field label="密码">
-              <Input aria-label="密码" type="password" value={password} onChange={(e) => setPassword(e.target.value)} autoComplete="new-password" required />
-            </Field>
-          </div>
-          <p className="text-[11px] text-muted">用户名和密码只用于这一次推送，控制台不保存，之后也不会再显示。</p>
+          {saved ? (
+            <p className="flex flex-wrap items-center gap-x-2 gap-y-1 rounded-md bg-sunk px-3 py-2" role="status">
+              <span>
+                将使用已保存的凭证（用户名 <span className="mono text-ink">{saved.username}</span>）
+                {saved.pending && <span className="text-warm">；它还在写入集群，稍等片刻再保存更稳妥</span>}
+              </span>
+              <button type="button" onClick={() => setUseOther(true)} className="text-accent hover:underline">
+                改用其他凭证
+              </button>
+            </p>
+          ) : (
+            <>
+              <div className="grid gap-3 sm:grid-cols-2">
+                <Field label="用户名">
+                  <Input aria-label="用户名" className="mono" value={username} onChange={(e) => setUsername(e.target.value)} autoComplete="off" required />
+                </Field>
+                <Field label="密码">
+                  <Input aria-label="密码" type="password" value={password} onChange={(e) => setPassword(e.target.value)} autoComplete="new-password" required />
+                </Field>
+              </div>
+              <p className="text-[11px] text-muted">
+                用户名和密码只用于这一次推送，控制台不保存，之后也不会再显示。常用的仓库可以在 设置 → 镜像仓库凭证 里保存一次。
+                {useOther && (
+                  <button type="button" onClick={() => setUseOther(false)} className="ml-1 text-accent hover:underline">
+                    改回已保存的凭证
+                  </button>
+                )}
+              </p>
+            </>
+          )}
         </div>
       )}
       <label className="flex items-start gap-1.5">

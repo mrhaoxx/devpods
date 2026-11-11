@@ -72,6 +72,38 @@ type APIToken struct {
 	ExpiresAt *metav1.Time `json:"expiresAt,omitempty"`
 }
 
+// RegistryCredentialsSecretPrefix + <user> names the Secret (in the
+// DevPod namespace) holding a user's registry credentials.
+const (
+	RegistryCredentialsSecretPrefix = "devpod-registry-"
+	RegistryCredentialsLabel        = "devpod.io/registry-credentials"
+	OwnerLabel                      = "devpod.io/owner"
+)
+
+// RegistryCredentialsSecretName is the user's registry credentials Secret.
+func RegistryCredentialsSecretName(user string) string { return RegistryCredentialsSecretPrefix + user }
+
+// UserRegistry is a registry the user saved credentials for (no password).
+type UserRegistry struct {
+	// Host is registry[:port], lowercase.
+	//
+	// +kubebuilder:validation:MinLength=1
+	Host string `json:"host"`
+
+	// +optional
+	Username string `json:"username,omitempty"`
+}
+
+// UserRegistryAuth carries a credential that is not in the Secret yet.
+// The user controller merges it into the user's registry Secret and
+// clears it: the plaintext exists for one reconcile.
+type UserRegistryAuth struct {
+	// +kubebuilder:validation:MinLength=1
+	Host     string `json:"host"`
+	Username string `json:"username"`
+	Password string `json:"password"`
+}
+
 // UserSpec defines the desired state of a DevPod user.
 type UserSpec struct {
 	// Pubkeys is the list of OpenSSH-format authorized public keys for
@@ -119,6 +151,22 @@ type UserSpec struct {
 	// +optional
 	// +kubebuilder:validation:MaxItems=50
 	APITokens []APIToken `json:"apiTokens,omitempty"`
+
+	// Registries are the image registries the user saved credentials
+	// for: used to pull private images into their DevPods and to push
+	// snapshots. The credentials live in the Secret
+	// devpod-registry-<user>, written only by the user controller.
+	//
+	// +optional
+	// +kubebuilder:validation:MaxItems=20
+	Registries []UserRegistry `json:"registries,omitempty"`
+
+	// RegistryAuth holds credentials on their way into the Secret; the
+	// user controller clears it.
+	//
+	// +optional
+	// +kubebuilder:validation:MaxItems=20
+	RegistryAuth []UserRegistryAuth `json:"registryAuth,omitempty"`
 
 	// AuditPolicy overrides fields of the cluster default audit policy
 	// (GatewayConfig.spec.audit.policy) for sessions this user starts.

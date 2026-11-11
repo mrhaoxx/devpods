@@ -443,4 +443,34 @@ func TestSnapshotAPI(t *testing.T) {
 			t.Fatalf("features %v", me)
 		}
 	})
+
+	t.Run("a registry the owner saved credentials for needs none in the request", func(t *testing.T) {
+		s.Snapshots.MaxPerUser = 0 // the quota has its own test above
+		post := func(body string, want int) map[string]any {
+			t.Helper()
+			return call("POST", "/api/devpods/sn-alice-dev1/snapshots", alice, body, want)
+		}
+		// someone else's saved registry does not help
+		call("PUT", "/api/me/registries/saved.test", bob, `{"username":"bob","password":"bobpw"}`, http.StatusOK)
+		if out := post(`{"image":"saved.test/team/env:s1"}`, http.StatusBadRequest); out["code"] != "PUSH_AUTH_REQUIRED" {
+			t.Fatalf("bob's registry used for alice: %v", out)
+		}
+		call("PUT", "/api/me/registries/saved.test", alice, `{"username":"alice","password":"alicepw"}`, http.StatusOK)
+		v := post(`{"image":"saved.test/team/env:s1"}`, http.StatusCreated)
+		sn := getSnap(v["id"].(string))
+		if v["customRegistry"] != true || sn.Spec.PushAuth != nil || sn.Spec.PushSecretRef == nil || sn.Spec.PushSecretRef.Name != "devpod-registry-sn-alice" {
+			t.Fatalf("saved registry: view %v spec %+v", v, sn.Spec)
+		}
+		// credentials typed in the request win over the saved ones
+		v = post(`{"image":"saved.test/team/env:s2","pushAuth":{"username":"typed","password":"typedpw"}}`, http.StatusCreated)
+		sn = getSnap(v["id"].(string))
+		if sn.Spec.PushSecretRef != nil || sn.Spec.PushAuth == nil || sn.Spec.PushAuth.Username != "typed" {
+			t.Fatalf("typed credentials: %+v", sn.Spec)
+		}
+		// an admin saving alice's DevPod uses alice's registries, not their own
+		call("PUT", "/api/me/registries/rootonly.test", root, `{"username":"root","password":"rootpw"}`, http.StatusOK)
+		if out := call("POST", "/api/devpods/sn-alice-dev1/snapshots", root, `{"image":"rootonly.test/x/env:s3"}`, http.StatusBadRequest); out["code"] != "PUSH_AUTH_REQUIRED" {
+			t.Fatalf("the caller's registry used for the owner's DevPod: %v", out)
+		}
+	})
 }

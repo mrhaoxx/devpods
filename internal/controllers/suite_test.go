@@ -85,8 +85,9 @@ func setupSuiteWith(t *testing.T, opt func(*controllers.DevPodReconciler)) {
 		t.Fatalf("setup DevPodReconciler: %v", err)
 	}
 	if err := (&controllers.UserReconciler{
-		Client: mgr.GetClient(),
-		Scheme: mgr.GetScheme(),
+		Client:          mgr.GetClient(),
+		Scheme:          mgr.GetScheme(),
+		DevPodNamespace: "devpods",
 	}).SetupWithManager(mgr); err != nil {
 		t.Fatalf("setup UserReconciler: %v", err)
 	}

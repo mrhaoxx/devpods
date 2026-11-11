@@ -521,3 +521,10 @@ export function streamSnapshotProgress(id: string, onEvent: (p: SnapshotProgress
   })();
   return () => ctl.abort();
 }
+
+/* registry credentials (snapshot spec v2 §5.3): used to pull private
+ * images for the user's DevPods and to push snapshots to that registry */
+export type RegistryView = { host: string; username: string; pending: boolean };
+export const listRegistries = () => req<{ items: RegistryView[] }>("GET", "/api/me/registries");
+export const putRegistry = (host: string, body: { username: string; password: string }) => req<void>("PUT", `/api/me/registries/${encodeURIComponent(host)}`, body);
+export const deleteRegistry = (host: string) => req<void>("DELETE", `/api/me/registries/${encodeURIComponent(host)}`);

@@ -124,6 +124,36 @@ describe("snapshots", () => {
     expect(await screen.findByText("已取消")).toBeTruthy();
   });
 
+  it("an address on a saved registry pushes with the saved credential; 改用其他凭证 brings the fields back", async () => {
+    const stream = progressStream();
+    const calls = stubFetch({
+      "/api/me/registries": { items: [{ host: "harbor.test", username: "robot", pending: false }] },
+      "POST /api/devpods/alice-a/snapshots": new Response(JSON.stringify(view({ phase: "Pending", image: "harbor.test/team/a:v1", customRegistry: true })), { status: 201 }),
+      "/api/snapshots/alice-a-abc123/progress": () => stream.response,
+      "/api/snapshots": { items: [] },
+    });
+    renderWithProviders(<SnapshotDialog devpod="alice-a" owner="alice" onClose={() => {}} />, { me: features() });
+    fireEvent.click(await screen.findByRole("radio", { name: "自定义地址" }));
+    const start = screen.getByRole("button", { name: "开始保存" }) as HTMLButtonElement;
+    // another registry: credentials are asked for as before
+    fireEvent.change(screen.getByLabelText("镜像地址"), { target: { value: "other.test/team/a:v1" } });
+    expect(screen.getByLabelText("用户名")).toBeTruthy();
+    expect(start.disabled).toBe(true);
+    // the saved registry: no fields, ready to go
+    fireEvent.change(screen.getByLabelText("镜像地址"), { target: { value: "harbor.test/team/a:v1" } });
+    await waitFor(() => expect(screen.getByRole("status").textContent).toMatch(/将使用已保存的凭证（用户名 robot）/));
+    expect(screen.queryByLabelText("用户名")).toBeNull();
+    expect(screen.queryByLabelText("密码")).toBeNull();
+    expect(start.disabled).toBe(false);
+    fireEvent.click(screen.getByRole("button", { name: "改用其他凭证" }));
+    expect(screen.getByLabelText("用户名")).toBeTruthy();
+    expect(start.disabled).toBe(true);
+    fireEvent.click(screen.getByRole("button", { name: "改回已保存的凭证" }));
+    expect(screen.queryByLabelText("密码")).toBeNull();
+    fireEvent.click(start);
+    await waitFor(() => expect(calls.find((c) => c.method === "POST")?.body).toBe('{"image":"harbor.test/team/a:v1","pause":true}'));
+  });
+
   it("without a default registry only the custom address is offered", async () => {
     stubFetch({ "/api/snapshots": { items: [] } });
     renderWithProviders(<SnapshotDialog devpod="alice-a" owner="alice" onClose={() => {}} />, { me: features({ snapshotDefaultRegistry: false }) });

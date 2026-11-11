@@ -8,6 +8,7 @@ import { CopyBlock } from "../../design/Copy";
 import { Field, Input, Notice, Textarea } from "../../design/Form";
 import { Panel } from "../../design/Panel";
 import { Tokens } from "./Tokens";
+import { Registries } from "./Registries";
 
 function Keys({ editable }: { editable: boolean }) {
   const [text, setText] = useState("");
@@ -104,6 +105,9 @@ export function SettingsPage() {
       </Panel>
       <Panel title="访问令牌">
         <Tokens />
+      </Panel>
+      <Panel title="镜像仓库凭证">
+        <Registries />
       </Panel>
       <Panel title="密码">
         {!me.features.passwordAuth ? (

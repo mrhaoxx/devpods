@@ -121,6 +121,18 @@ func validCustomImage(image string) bool {
 	return slash > 0 && colon > 0 && colon < len(last)-1
 }
 
+// savedRegistry reports whether the user saved credentials for host.
+func (s *Server) savedRegistry(r *http.Request, user, host string) bool {
+	if host == "" {
+		return false
+	}
+	var u devpodv1alpha1.User
+	if err := s.Reader.Get(r.Context(), types.NamespacedName{Name: user}, &u); err != nil {
+		return false
+	}
+	return slices.ContainsFunc(u.Spec.Registries, func(reg devpodv1alpha1.UserRegistry) bool { return reg.Host == host })
+}
+
 // customRegistryAnnotation marks a snapshot pushed to an address the
 // user chose with their own credentials.
 const customRegistryAnnotation = "devpod.io/custom-registry"
@@ -237,7 +249,8 @@ func (s *Server) handleCreateSnapshot(w http.ResponseWriter, r *http.Request) {
 	bad := func(msg string) { s.writeErr(w, http.StatusBadRequest, "BAD_REQUEST", msg, nil) }
 	owner := dp.Spec.Owner
 	var image string
-	var auth *devpodv1alpha1.PushAuthInline // non-nil: the user's own registry
+	var auth *devpodv1alpha1.PushAuthInline // non-nil: credentials typed for this address
+	savedSecret := ""                       // non-empty: the owner's saved registry credentials
 	if req.Image == "" {
 		if cfg.ImageTemplate == "" {
 			bad("this deployment has no default registry: give the image address and its credentials")
@@ -263,12 +276,18 @@ func (s *Server) handleCreateSnapshot(w http.ResponseWriter, r *http.Request) {
 		image = req.Image
 		// the platform's Secret is only for the owner's own place in the
 		// platform registry; any other address needs its own credentials
+		// (spec §5.2): credentials in the request win; else a registry the
+		// DevPod's owner saved credentials for; else they are required.
 		if !cfg.ownAddress(image, owner) {
-			if req.PushAuth == nil || req.PushAuth.Username == "" || req.PushAuth.Password == "" {
-				s.writeErr(w, http.StatusBadRequest, "PUSH_AUTH_REQUIRED", "this address is outside your default repository: give the username and password to push there", nil)
+			switch {
+			case req.PushAuth != nil && req.PushAuth.Username != "" && req.PushAuth.Password != "":
+				auth = &devpodv1alpha1.PushAuthInline{Username: req.PushAuth.Username, Password: req.PushAuth.Password}
+			case s.savedRegistry(r, owner, imageRegistryHost(image)):
+				savedSecret = devpodv1alpha1.RegistryCredentialsSecretName(owner)
+			default:
+				s.writeErr(w, http.StatusBadRequest, "PUSH_AUTH_REQUIRED", "this address is outside your default repository and not a registry you saved credentials for: give the username and password to push there", nil)
 				return
 			}
-			auth = &devpodv1alpha1.PushAuthInline{Username: req.PushAuth.Username, Password: req.PushAuth.Password}
 		}
 	}
 	if dp.Status.Phase != devpodv1alpha1.DevPodRunning {
@@ -311,6 +330,9 @@ func (s *Server) handleCreateSnapshot(w http.ResponseWriter, r *http.Request) {
 	case auth != nil:
 		// the controller turns this into a Secret and clears it at once
 		sn.Spec.PushAuth = auth
+		sn.Annotations = map[string]string{customRegistryAnnotation: "true"}
+	case savedSecret != "":
+		sn.Spec.PushSecretRef = &devpodv1alpha1.LocalObjectRef{Name: savedSecret}
 		sn.Annotations = map[string]string{customRegistryAnnotation: "true"}
 	case cfg.PushSecret != "":
 		sn.Spec.PushSecretRef = &devpodv1alpha1.LocalObjectRef{Name: cfg.PushSecret}

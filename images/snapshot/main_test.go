@@ -300,6 +300,12 @@ type fakeDocker struct {
 	images map[string]string
 	calls  []string
 	auth   string
+	// the API range the daemon serves (GET /version); requests outside it
+	// are refused the way the daemon's version middleware does
+	apiMax, apiMin string
+	hasAuthHeader  bool
+	commitCT       string
+	commitBody     int64
 	// pushStream is what POST /images/…/push answers, line by line;
 	// pushBlock, if set, is closed-over by a handler that waits on it
 	// after the first line (to cancel mid-push).
@@ -316,7 +322,7 @@ func newFakeDocker(t *testing.T) *fakeDocker {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { os.RemoveAll(dir) })
-	f := &fakeDocker{t: t, images: map[string]string{}, socket: filepath.Join(dir, "d.sock"), pushing: make(chan struct{}, 1)}
+	f := &fakeDocker{t: t, images: map[string]string{}, socket: filepath.Join(dir, "d.sock"), pushing: make(chan struct{}, 1), apiMax: "1.47", apiMin: "1.24"}
 	ln, err := net.Listen("unix", f.socket)
 	if err != nil {
 		t.Fatal(err)
@@ -351,11 +357,30 @@ func (f *fakeDocker) image(name string) string {
 }
 
 func (f *fakeDocker) serve(w http.ResponseWriter, r *http.Request) {
-	p, ok := strings.CutPrefix(r.URL.Path, "/"+dockerAPIVersion)
-	if !ok {
-		http.Error(w, `{"message":"wrong API version"}`, http.StatusBadRequest)
+	if r.Method == "GET" && r.URL.Path == "/version" {
+		f.log("version")
+		// the fields of the reference's SystemVersion this code reads
+		_, _ = fmt.Fprintf(w, `{"Version":"27.5.1","ApiVersion":%q,"MinAPIVersion":%q,"Os":"linux","Arch":"amd64"}`, f.apiMax, f.apiMin)
 		return
 	}
+	ver, p, ok := strings.Cut(strings.TrimPrefix(r.URL.Path, "/v"), "/")
+	if !ok || !strings.HasPrefix(r.URL.Path, "/v") {
+		http.Error(w, `{"message":"page not found"}`, http.StatusNotFound)
+		return
+	}
+	p = "/" + p
+	// moby api/server/middleware/version.go
+	if apiVersionLess(ver, f.apiMin) {
+		w.WriteHeader(http.StatusBadRequest)
+		_, _ = fmt.Fprintf(w, `{"message":"client version %s is too old. Minimum supported API version is %s, please upgrade your client to a newer version"}`, ver, f.apiMin)
+		return
+	}
+	if apiVersionLess(f.apiMax, ver) {
+		w.WriteHeader(http.StatusBadRequest)
+		_, _ = fmt.Fprintf(w, `{"message":"client version %s is too new. Maximum supported API version is %s"}`, ver, f.apiMax)
+		return
+	}
+	f.log("api %s", ver)
 	q := r.URL.Query()
 	notFound := func() {
 		w.WriteHeader(http.StatusNotFound)
@@ -365,6 +390,9 @@ func (f *fakeDocker) serve(w http.ResponseWriter, r *http.Request) {
 	case r.Method == "POST" && p == "/commit":
 		name := q.Get("repo") + ":" + q.Get("tag")
 		f.log("commit %s -> %s pause=%s", q.Get("container"), name, q.Get("pause"))
+		f.mu.Lock()
+		f.commitCT, f.commitBody = r.Header.Get("Content-Type"), r.ContentLength
+		f.mu.Unlock()
 		if q.Get("container") == "missing" {
 			w.WriteHeader(http.StatusNotFound)
 			_, _ = io.WriteString(w, `{"message":"No such container: missing"}`)
@@ -388,6 +416,7 @@ func (f *fakeDocker) serve(w http.ResponseWriter, r *http.Request) {
 		f.log("push %s", name)
 		f.mu.Lock()
 		f.auth = r.Header.Get("X-Registry-Auth")
+		_, f.hasAuthHeader = r.Header["X-Registry-Auth"]
 		f.mu.Unlock()
 		fl := w.(http.Flusher)
 		w.WriteHeader(http.StatusOK)
@@ -443,6 +472,18 @@ var okStream = []string{
 	`{"status":"Pushed","progressDetail":{},"id":"aaa"}`,
 	`{"status":"v1: digest: sha256:` + strings.Repeat("ab", 32) + ` size: 741"}`,
 	`{"progressDetail":{},"aux":{"Tag":"v1","Digest":"sha256:` + strings.Repeat("ab", 32) + `","Size":741}}`,
+}
+
+// the containerd image store's stream (moby daemon/containerd/progress.go
+// and image_push.go; the default store from Docker 29): the same layer
+// statuses, the digest only in the closing status line — no aux.
+var c8dStream = []string{
+	`{"status":"The push refers to repository [reg.test:5000/u/img]"}`,
+	`{"status":"Waiting","progressDetail":{},"id":"0123456789ab"}`,
+	`{"status":"Pushing","progressDetail":{"current":1024,"total":4096},"id":"0123456789ab"}`,
+	`{"status":"Mounted from library/ubuntu","progressDetail":{},"id":"cdef01234567"}`,
+	`{"status":"Pushed","progressDetail":{},"id":"0123456789ab"}`,
+	`{"status":"v1: digest: sha256:` + strings.Repeat("cd", 32) + ` size: 855"}`,
 }
 
 func runDocker(t *testing.T, ctx context.Context, f *fakeDocker, extra ...string) (int, []string, string, string) {
@@ -574,5 +615,126 @@ func TestDocker_CommitOnlyKeepsTheImage(t *testing.T) {
 	}
 	if f.has("push "+img) || f.image(img) != "sha256:new" {
 		t.Fatalf("calls %v images %v", f.calls, f.images)
+	}
+}
+
+// Docker 29 refuses API versions below 1.44; an old daemon tops out below
+// the version this code was written against. Either way the calls go out
+// in a version the daemon serves.
+func TestDocker_SpeaksAVersionTheDaemonServes(t *testing.T) {
+	for _, c := range []struct{ min, max, want string }{
+		{"1.24", "1.47", "1.41"}, // Docker 27: ours is in range
+		{"1.44", "1.52", "1.44"}, // Docker 29: its minimum
+		{"1.12", "1.40", "1.40"}, // Docker 19.03: its maximum
+	} {
+		f := newFakeDocker(t)
+		f.apiMin, f.apiMax = c.min, c.max
+		f.pushStream = okStream
+		if code, _, _, out := runDocker(t, context.Background(), f); code != 0 {
+			t.Fatalf("daemon %s..%s: exit %d\n%s", c.min, c.max, code, out)
+		}
+		if !f.has("api "+c.want) || !f.has("version") {
+			t.Fatalf("daemon %s..%s: calls %v", c.min, c.max, f.calls)
+		}
+		for _, call := range f.calls {
+			if strings.HasPrefix(call, "api ") && call != "api "+c.want {
+				t.Fatalf("daemon %s..%s: a call used %q", c.min, c.max, call)
+			}
+		}
+	}
+	if pickAPIVersion("", "") != "1.41" || !apiVersionLess("1.9", "1.41") || apiVersionLess("1.44", "1.41") {
+		t.Fatal("version comparison")
+	}
+}
+
+// The request shapes the reference asks for: commit without a body (so
+// no Content-Type), and X-Registry-Auth always present — "{}" when the
+// push is anonymous.
+func TestDocker_RequestShapes(t *testing.T) {
+	f := newFakeDocker(t)
+	f.pushStream = okStream
+	if code, _, _, out := runDocker(t, context.Background(), f); code != 0 {
+		t.Fatalf("exit %d\n%s", code, out)
+	}
+	if f.commitCT != "" || f.commitBody > 0 {
+		t.Fatalf("commit sent Content-Type %q, %d body bytes", f.commitCT, f.commitBody)
+	}
+	raw, err := base64.URLEncoding.DecodeString(f.auth)
+	if !f.hasAuthHeader || err != nil || string(raw) != "{}" {
+		t.Fatalf("anonymous X-Registry-Auth: present=%v %q %v", f.hasAuthHeader, raw, err)
+	}
+}
+
+// With the containerd image store the digest only appears in the closing
+// status line, and a layer mounted from another repository never reports
+// a size.
+func TestDocker_ContainerdImageStoreStream(t *testing.T) {
+	f := newFakeDocker(t)
+	f.pushStream = c8dStream
+	code, lines, res, out := runDocker(t, context.Background(), f)
+	digest := "sha256:" + strings.Repeat("cd", 32)
+	if code != 0 || res != "digest="+digest+" size=4242" {
+		t.Fatalf("code %d result %q\n%s", code, res, out)
+	}
+	if last := lines[len(lines)-3]; last != "@push 4096 4096" {
+		t.Fatalf("final progress %q in %v", last, lines)
+	}
+}
+
+// A stream that ends without a digest and without an error is a failure,
+// not a success with nothing to show.
+func TestDocker_NoDigestIsAFailure(t *testing.T) {
+	f := newFakeDocker(t)
+	f.pushStream = okStream[:8]
+	code, lines, _, out := runDocker(t, context.Background(), f)
+	if code != 1 || !strings.Contains(lines[len(lines)-1], "without reporting a digest") {
+		t.Fatalf("code %d lines %v\n%s", code, lines, out)
+	}
+	if f.image(img) != "" {
+		t.Fatalf("the image was left on the node: %v", f.images)
+	}
+}
+
+// config.json the way the docker CLI reads it.
+func TestRegistryAuth_LikeTheDockerCLI(t *testing.T) {
+	write := func(body string) string {
+		dir := t.TempDir()
+		if err := os.WriteFile(filepath.Join(dir, "config.json"), []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		return dir
+	}
+	b64 := func(s string) string { return base64.StdEncoding.EncodeToString([]byte(s)) }
+
+	// the exact key wins over one that merely reduces to the host; "auth" wins over the separate fields
+	dir := write(`{"auths":{"https://harbor.x.io/v2/":{"username":"legacy","password":"old"},"harbor.x.io":{"auth":"` + b64("robot:pw") + `","username":"stale","password":"stale"}}}`)
+	if a, err := loadRegistryAuth(dir, "harbor.x.io/p/img:1"); err != nil || a.Username != "robot" || a.Password != "pw" {
+		t.Fatalf("exact key / auth precedence: %+v %v", a, err)
+	}
+	// a host with a port; a legacy key with scheme and path
+	dir = write(`{"auths":{"http://reg.test:5000/v1/":{"auth":"` + b64("u:p:with:colons") + `"}}}`)
+	if a, err := loadRegistryAuth(dir, "reg.test:5000/u/img:v1"); err != nil || a.Username != "u" || a.Password != "p:with:colons" || a.ServerAddress != "reg.test:5000" {
+		t.Fatalf("legacy key: %+v %v", a, err)
+	}
+	// an identity token instead of a password
+	dir = write(`{"auths":{"harbor.x.io":{"identitytoken":"tok"}}}`)
+	if a, err := loadRegistryAuth(dir, "harbor.x.io/p/img:1"); err != nil || a.IdentityToken != "tok" || a.Username != "" {
+		t.Fatalf("identity token: %+v %v", a, err)
+	}
+	// credential helpers cannot run here: say so instead of pushing anonymously
+	for _, body := range []string{
+		`{"auths":{"harbor.x.io":{}},"credsStore":"osxkeychain"}`,
+		`{"credHelpers":{"harbor.x.io":"ecr-login"}}`,
+	} {
+		if _, err := loadRegistryAuth(write(body), "harbor.x.io/p/img:1"); err == nil || !strings.Contains(err.Error(), "not supported") {
+			t.Fatalf("%s: %v", body, err)
+		}
+	}
+	// a helper for another registry does not concern this push
+	if a, err := loadRegistryAuth(write(`{"credHelpers":{"other.io":"x"}}`), "harbor.x.io/p/img:1"); err != nil || a.Username != "" {
+		t.Fatalf("unrelated helper: %+v %v", a, err)
+	}
+	if _, err := loadRegistryAuth(write(`{"auths":{"harbor.x.io":{"auth":"!!!"}}}`), "harbor.x.io/p/img:1"); err == nil {
+		t.Fatal("a malformed auth value was accepted")
 	}
 }

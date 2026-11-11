@@ -10,6 +10,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 )
 
@@ -50,7 +51,11 @@ func registryKey(s string) string {
 	return s
 }
 
-// registryAuth is the JSON carried (base64url) in X-Registry-Auth.
+// registryAuth is the JSON carried in X-Registry-Auth, base64url encoded
+// with padding (RFC 4648 §5; the daemon decodes with base64.URLEncoding).
+// serveraddress is "a domain/IP without a protocol". With no credentials
+// the header is still sent, as "{}" — the docker CLI does the same, and
+// without the header the daemon tries to read the auth from the body.
 type registryAuth struct {
 	Username      string `json:"username,omitempty"`
 	Password      string `json:"password,omitempty"`
@@ -59,8 +64,13 @@ type registryAuth struct {
 }
 
 // loadRegistryAuth reads the credentials for ref's registry from
-// <dir>/config.json. No file, or no entry for the registry, is not an
-// error: the push then goes out anonymously.
+// <dir>/config.json the way the docker CLI does: the entry whose key is
+// the registry exactly (Docker Hub: "https://index.docker.io/v1/"), else
+// one whose key reduces to it once scheme and path are dropped; an
+// "auth" value (base64 "user:password") wins over separate fields. No
+// file, or no entry for the registry, is not an error: the push then
+// goes out anonymously. Credential helpers (credsStore / credHelpers)
+// cannot run here: a registry that would need one is an error.
 func loadRegistryAuth(dir, ref string) (registryAuth, error) {
 	var out registryAuth
 	if dir == "" {
@@ -73,29 +83,59 @@ func loadRegistryAuth(dir, ref string) (registryAuth, error) {
 	if err != nil {
 		return out, err
 	}
+	type entry struct {
+		Auth          string `json:"auth"`
+		Username      string `json:"username"`
+		Password      string `json:"password"`
+		IdentityToken string `json:"identitytoken"`
+	}
 	var cfg struct {
-		Auths map[string]struct {
-			Auth          string `json:"auth"`
-			Username      string `json:"username"`
-			Password      string `json:"password"`
-			IdentityToken string `json:"identitytoken"`
-		} `json:"auths"`
+		Auths       map[string]entry  `json:"auths"`
+		CredsStore  string            `json:"credsStore"`
+		CredHelpers map[string]string `json:"credHelpers"`
 	}
 	if err := json.Unmarshal(b, &cfg); err != nil {
 		return out, errors.New("the push credentials (config.json) are not valid JSON")
 	}
-	want := registryKey(registryOf(ref))
-	for key, a := range cfg.Auths {
-		if registryKey(key) != want {
-			continue
+	host := registryOf(ref)
+	want := registryKey(host)
+	exact := host
+	if want == "docker.io" {
+		exact = "https://index.docker.io/v1/"
+	}
+	a, found := cfg.Auths[exact]
+	if !found {
+		keys := make([]string, 0, len(cfg.Auths))
+		for key := range cfg.Auths {
+			keys = append(keys, key)
 		}
-		out = registryAuth{Username: a.Username, Password: a.Password, IdentityToken: a.IdentityToken, ServerAddress: registryOf(ref)}
-		if out.Username == "" && a.Auth != "" {
-			if dec, err := base64.StdEncoding.DecodeString(a.Auth); err == nil {
-				out.Username, out.Password, _ = strings.Cut(string(dec), ":")
+		sort.Strings(keys) // a stable choice when several keys reduce to the host
+		for _, key := range keys {
+			if registryKey(key) == want {
+				a, found = cfg.Auths[key], true
+				break
 			}
 		}
+	}
+	if !found || (a.Auth == "" && a.Username == "" && a.IdentityToken == "") {
+		for key := range cfg.CredHelpers {
+			if registryKey(key) == want {
+				return out, errors.New("the push credentials for " + host + " need a credential helper, which is not supported here")
+			}
+		}
+		if cfg.CredsStore != "" {
+			return out, errors.New("the push credentials use a credential store (credsStore), which is not supported here")
+		}
 		return out, nil
+	}
+	out = registryAuth{Username: a.Username, Password: a.Password, IdentityToken: a.IdentityToken, ServerAddress: host}
+	if a.Auth != "" {
+		dec, err := base64.StdEncoding.DecodeString(a.Auth)
+		user, pass, ok := strings.Cut(string(dec), ":")
+		if err != nil || !ok {
+			return out, errors.New("the push credentials for " + host + " are malformed (auth must be base64 of user:password)")
+		}
+		out.Username, out.Password = user, pass
 	}
 	return out, nil
 }

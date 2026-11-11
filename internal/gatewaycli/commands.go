@@ -107,6 +107,7 @@ func init() {
 		{name: "migrate", args: "<name> <node|->", short: "pin a DevPod to a node (- lets the scheduler choose)", admin: true, run: runMigrate},
 	}
 	commands = append(commands, snapshotCommands()...)
+	commands = append(commands, registryCommands()...)
 }
 
 func find(name string) *command {

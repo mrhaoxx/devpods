@@ -18,9 +18,40 @@ import (
 	"strings"
 )
 
-// dockerAPIVersion pins the Engine API (v1.41 = Docker 20.10; newer
-// daemons serve older versions).
-const dockerAPIVersion = "v1.41"
+// dockerAPIVersion is the Engine API version this code was written
+// against (v1.41 = Docker 20.10). A daemon serves a range of versions
+// and refuses requests outside it — Docker 29 no longer serves anything
+// below v1.44 — so the version actually used is negotiated from
+// GET /version (see pickAPIVersion). The five calls made here have the
+// same shape in every version from v1.41 to the current one.
+const dockerAPIVersion = "1.41"
+
+// apiVersionLess compares "major.minor" API versions.
+func apiVersionLess(a, b string) bool {
+	parse := func(s string) (int, int) {
+		maj, min, _ := strings.Cut(s, ".")
+		x, _ := strconv.Atoi(maj)
+		y, _ := strconv.Atoi(min)
+		return x, y
+	}
+	am, an := parse(a)
+	bm, bn := parse(b)
+	return am < bm || (am == bm && an < bn)
+}
+
+// pickAPIVersion chooses the version to speak: the one this code was
+// written against when the daemon serves it, else the nearest end of the
+// daemon's range [min, max] (both from GET /version: MinAPIVersion and
+// ApiVersion).
+func pickAPIVersion(min, max string) string {
+	switch {
+	case min != "" && apiVersionLess(dockerAPIVersion, min):
+		return min
+	case max != "" && apiVersionLess(max, dockerAPIVersion):
+		return max
+	}
+	return dockerAPIVersion
+}
 
 // dockerBackend drives the Docker Engine API over the daemon's unix
 // socket with plain net/http:
@@ -32,7 +63,7 @@ const dockerAPIVersion = "v1.41"
 //	DELETE /images/{name}
 type dockerBackend struct {
 	hc        *http.Client
-	base      string // http://docker/<version>
+	base      string // http://docker/v<version>, set by negotiate
 	container string
 	ref       string
 	repo, tag string
@@ -56,7 +87,7 @@ func newDockerBackend(o options) (*dockerBackend, error) {
 		},
 	}
 	return &dockerBackend{
-		hc: &http.Client{Transport: tr}, base: "http://docker/" + dockerAPIVersion,
+		hc:        &http.Client{Transport: tr},
 		container: o.container, ref: repo + ":" + tag, repo: repo, tag: tag, pause: o.pause, configDir: o.dockerConfig,
 	}, nil
 }
@@ -73,9 +104,38 @@ func imagePath(name string) string {
 	return strings.Join(parts, "/")
 }
 
+// negotiate asks the daemon which API versions it serves (the
+// unversioned GET /version) and fixes the prefix for every later call.
+func (d *dockerBackend) negotiate(ctx context.Context) error {
+	if d.base != "" {
+		return nil
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "http://docker/version", nil)
+	if err != nil {
+		return err
+	}
+	resp, err := d.hc.Do(req)
+	if err != nil {
+		return fmt.Errorf("cannot reach the Docker daemon: %w", err)
+	}
+	defer resp.Body.Close()
+	var v struct {
+		APIVersion    string `json:"ApiVersion"`
+		MinAPIVersion string `json:"MinAPIVersion"`
+	}
+	if resp.StatusCode != http.StatusOK || json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(&v) != nil || v.APIVersion == "" {
+		return fmt.Errorf("the Docker daemon did not report its API version (HTTP %d)", resp.StatusCode)
+	}
+	d.base = "http://docker/v" + pickAPIVersion(v.MinAPIVersion, v.APIVersion)
+	return nil
+}
+
 // do sends a request; a non-2xx answer becomes an error carrying the
-// daemon's message.
+// daemon's message ({"message": "…"}, the API's ErrorResponse).
 func (d *dockerBackend) do(ctx context.Context, method, path string, q url.Values, hdr map[string]string) (*http.Response, error) {
+	if err := d.negotiate(ctx); err != nil {
+		return nil, err
+	}
 	u := d.base + path
 	if len(q) > 0 {
 		u += "?" + q.Encode()
@@ -152,7 +212,9 @@ func (d *dockerBackend) Commit(ctx context.Context) error {
 		d.prevID = prev
 	}
 	q := url.Values{"container": {d.container}, "repo": {d.repo}, "tag": {d.tag}, "pause": {strconv.FormatBool(d.pause)}}
-	resp, err := d.do(ctx, http.MethodPost, "/commit", q, map[string]string{"Content-Type": "application/json"})
+	// no container config in the body: the daemon takes an empty body
+	// (and then needs no Content-Type)
+	resp, err := d.do(ctx, http.MethodPost, "/commit", q, nil)
 	if err != nil {
 		return err
 	}
@@ -169,7 +231,19 @@ func (d *dockerBackend) Size(ctx context.Context) (int64, error) {
 	return size, nil
 }
 
-// pushMessage is one line of the push stream.
+// pushMessage is one line of the push stream (moby's jsonmessage.JSONMessage).
+// What the daemon sends, by image store:
+//
+//   - classic store: per layer "Preparing", "Waiting", "Pushing" with
+//     progressDetail{current,total}, then "Pushed" / "Layer already
+//     exists" / "Mounted from <repo>"; at the end the status
+//     "<tag>: digest: sha256:… size: N" and an aux {Tag, Digest, Size}.
+//   - containerd image store (the default from Docker 29): the same
+//     layer statuses and the "<tag>: digest: …" status, but no aux with
+//     the digest.
+//
+// A failure after the stream began is a line with errorDetail{message}
+// (and the deprecated "error"); before that it is a plain HTTP error.
 type pushMessage struct {
 	Status         string `json:"status"`
 	ID             string `json:"id"`
@@ -244,6 +318,9 @@ func (d *dockerBackend) Push(ctx context.Context, progress func(pushed, total in
 	}
 	if ctx.Err() != nil {
 		return "", ctx.Err()
+	}
+	if digest == "" {
+		return "", errors.New("the Docker daemon ended the push without reporting a digest")
 	}
 	return digest, nil
 }

@@ -68,6 +68,8 @@ var Scopes = []Scope{
 	{ID: "audit:read", Group: "审计", Label: "查看会话、命令、文件记录和回放"},
 	{ID: "keys:read", Group: "账号", Label: "查看 SSH 公钥"},
 	{ID: "keys:write", Group: "账号", Label: "修改 SSH 公钥"},
+	{ID: "registries:read", Group: "账号", Label: "查看已保存的镜像仓库"},
+	{ID: "registries:write", Group: "账号", Label: "添加、替换、删除镜像仓库凭证"},
 	{ID: "admin:read", Group: "管理员", Label: "以管理员身份查看（全部 DevPod、节点、用户、审计）", Admin: true},
 	{ID: "admin:write", Group: "管理员", Label: "以管理员身份修改（他人的 DevPod、用户、策略、断开会话）", Admin: true},
 }
@@ -145,6 +147,9 @@ var apiRoutes = []apiRoute{
 
 	{"GET /api/me/pubkeys", "keys:read", "My SSH public keys"},
 	{"PUT /api/me/pubkeys", "keys:write", "Replace my SSH public keys"},
+	{"GET /api/me/registries", "registries:read", "Registries I saved credentials for (no passwords)"},
+	{"PUT /api/me/registries/{host}", "registries:write", "Save the credential for a registry: {username, password}"},
+	{"DELETE /api/me/registries/{host}", "registries:write", "Remove a registry's credential"},
 	{"PUT /api/me/password", scopeNone, "Change my password (browser only)"},
 	{"GET /api/me/tokens", scopeNone, "My access tokens (browser only)"},
 	{"POST /api/me/tokens", scopeNone, "Create an access token (browser only)"},

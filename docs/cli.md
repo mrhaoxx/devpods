@@ -48,6 +48,9 @@ The login name `devpod` is configurable (`--cli-user`, chart value `gateway.cli.
 | `snapshot <devpod> --image REF [--username U] [--password-stdin]` | The same, to an image address of your choice with that registry's credentials. |
 | `snapshots` (`images`) `[--all] [--devpod D]` | List snapshots; `--all` lists everyone's (admin). |
 | `snapshot show <id>` / `follow <id>` / `cancel <id>` / `rm <id>` | One snapshot in detail / re-attach to its progress / stop one in progress / remove a finished one's record. |
+| `registry` (`registries`) `[list]` | Your saved registry logins (host, user name, whether it has taken effect yet). |
+| `registry add <host> [--username U] [--password-stdin]` | Save or replace the login for one registry. The password is asked for without echo, or read from standard input; never on the command line. |
+| `registry rm <host>` | Remove a saved login. |
 
 `<name>` is the DevPod's full name as `list` shows it (`alice-a`), except in `create`, where it is the part after your user name.
 
@@ -84,6 +87,33 @@ layer sha256:1c2d… pushed
 - Errors go to stderr as `error: <message> (<CODE>)`, where `<CODE>` is the API's error code (`NOT_FOUND`, `FORBIDDEN`, `QUOTA_EXCEEDED`, …).
 - Exit status: `0` success, `1` the API refused or failed (for several names: at least one failed; for a snapshot: it failed or could no longer be followed), `2` the command line is wrong (nothing was sent), `130` you interrupted a snapshot follow.
 - Following a snapshot with `--json` prints one JSON object per line: the API's progress object (`phase`, `stage` = `pending` / `commit` / `push` / `done` / `error`, `elapsedSeconds`, `sizeBytes`, `digest`, `message`, `lines`) plus `id` and `image`. The last line has `stage` `done` (with `digest`) or `error` (with `message`). `snapshot … --detach --json` prints the snapshot itself.
+
+
+## Registry logins
+
+A saved login for an image registry does two things: it lets the DevPods you start **pull private images** from that registry, and it is what `snapshot --image` **pushes** with when the address is on that registry — no credentials to type each time.
+
+```console
+$ ssh -t devpod@gateway registry add harbor.example.com
+仓库用户名: bob
+仓库密码（不回显）:
+saved the login for harbor.example.com (user bob)
+
+$ ssh devpod@gateway registry list
+HOST                USERNAME  STATUS
+harbor.example.com  bob       ready
+
+# without a terminal (scripts, agents): the password is the first line of standard input
+$ printf '%s\n' "$REGISTRY_PASSWORD" | ssh devpod@gateway registry add harbor.example.com --username bob --json
+{"host":"harbor.example.com","saved":true,"username":"bob"}
+```
+
+- **The password** is never an argument (there is no `--password`), is not logged and is not shown again. `--password-stdin` forces reading it from standard input even on a terminal and needs `--username`.
+- **The host** is `registry[:port]`; a pasted `https://…/path` is reduced to the host.
+- **Replacing**: `registry add` for a host that is already saved replaces its login.
+- **`pending`** in the list means the login has been accepted but is not written to the cluster yet; it turns `ready` within seconds.
+- **Effect**: adding or removing a login never restarts a running DevPod; it applies to DevPods started afterwards.
+- When `snapshot --image` answers that the address needs credentials (`PUSH_AUTH_REQUIRED`), the message names the `registry add <host>` that would save them.
 
 ## For scripts and agents
 
