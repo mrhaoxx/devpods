@@ -38,6 +38,7 @@ Revoking a token in the console takes effect at once.
 | `shell` | Open the web terminal (WebSocket) |
 | `http:read` / `http:write` / `http:connect` | See port links / make ports public, reset the address / get a ticket for a private port |
 | `reservations:read` / `reservations:write` | See the node reservation timeline / reserve, move, extend, cancel |
+| `configs:read` / `configs:write` | See saved configs (mine, shared with me, public) / save, change, share, delete them |
 | `audit:read` | Sessions, commands, file records, replays (your own) |
 | `snapshots:read` / `snapshots:write` | See saved images and follow a save / save a DevPod as an image, cancel, forget |
 | `keys:read` / `keys:write` | SSH public keys |

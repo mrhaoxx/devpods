@@ -65,6 +65,8 @@ var Scopes = []Scope{
 	{ID: "snapshots:write", Group: "镜像", Label: "把 DevPod 保存为镜像、取消、删除记录"},
 	{ID: "reservations:read", Group: "预约", Label: "查看节点预约时间轴"},
 	{ID: "reservations:write", Group: "预约", Label: "预约、修改、延长、取消节点"},
+	{ID: "configs:read", Group: "配置", Label: "查看配置（自己的、分享给我的、公开的）"},
+	{ID: "configs:write", Group: "配置", Label: "保存、修改、分享、删除配置"},
 	{ID: "audit:read", Group: "审计", Label: "查看会话、命令、文件记录和回放"},
 	{ID: "keys:read", Group: "账号", Label: "查看 SSH 公钥"},
 	{ID: "keys:write", Group: "账号", Label: "修改 SSH 公钥"},
@@ -144,6 +146,12 @@ var apiRoutes = []apiRoute{
 	{"GET /api/audit/access-log", "admin:read", "Who looked at which audit data"},
 	{"POST /api/audit/sessions/{id}/disconnect", "admin:write", "Cut a session's SSH connection"},
 	{"GET /api/search", "devpods:read", "Search users, DevPods, sessions and commands"},
+
+	{"GET /api/configs", "configs:read", "Saved configs I may see (?scope=mine|shared|public)"},
+	{"GET /api/configs/{name}", "configs:read", "One config: its YAML and variables"},
+	{"POST /api/configs", "configs:write", "Save a config: {id, title, description?, content, sharedWith?, public?}"},
+	{"PATCH /api/configs/{name}", "configs:write", "Change a config of mine: title, description, content, sharedWith, public"},
+	{"DELETE /api/configs/{name}", "configs:write", "Delete a config"},
 
 	{"GET /api/me/pubkeys", "keys:read", "My SSH public keys"},
 	{"PUT /api/me/pubkeys", "keys:write", "Replace my SSH public keys"},

@@ -362,5 +362,9 @@ func (s *Server) handleDeleteUser(w http.ResponseWriter, r *http.Request) {
 		s.writeErr(w, http.StatusBadRequest, "BAD_REQUEST", "delete rejected", err.Error())
 		return
 	}
+	if err := s.dropUserConfigs(r.Context(), u.Name); err != nil {
+		s.writeErr(w, http.StatusInternalServerError, "INTERNAL", "the user is deleted; their saved configs could not all be removed", err.Error())
+		return
+	}
 	w.WriteHeader(http.StatusNoContent)
 }
