@@ -139,6 +139,8 @@ const customRegistryAnnotation = "devpod.io/custom-registry"
 
 // snapshotView is the API's shape of a DevPodSnapshot.
 type snapshotView struct {
+	// Cluster: the cluster it is in, in a console of several.
+	Cluster   string `json:"cluster,omitempty"`
 	ID        string `json:"id"`
 	DevPod    string `json:"devpod"`
 	Owner     string `json:"owner"`
@@ -439,16 +441,20 @@ func (s *Server) handleListSnapshots(w http.ResponseWriter, r *http.Request) {
 		}
 		owner = ""
 	}
-	list, err := s.ownedSnapshots(r.Context(), owner)
-	if err != nil {
-		s.writeErr(w, http.StatusInternalServerError, "INTERNAL", err.Error(), nil)
-		return
-	}
 	devpod := r.URL.Query().Get("devpod")
-	items := make([]snapshotView, 0, len(list))
-	for i := range list {
-		if (devpod == "" || list[i].Spec.DevPodName == devpod) && sess.AllowsDevPod(list[i].Spec.DevPodName) {
-			items = append(items, viewSnapshot(&list[i]))
+	items := []snapshotView{}
+	for _, cc := range s.ks(r) {
+		list, err := s.ownedSnapshots(s.in(r.Context(), cc), owner)
+		if err != nil {
+			s.writeErr(w, http.StatusInternalServerError, "INTERNAL", err.Error(), nil)
+			return
+		}
+		for i := range list {
+			if (devpod == "" || list[i].Spec.DevPodName == devpod) && sess.AllowsDevPod(list[i].Spec.DevPodName) {
+				v := viewSnapshot(&list[i])
+				v.Cluster = s.clusterLabel(cc)
+				items = append(items, v)
+			}
 		}
 	}
 	sort.Slice(items, func(i, j int) bool { return items[i].CreatedAt.After(items[j].CreatedAt) })

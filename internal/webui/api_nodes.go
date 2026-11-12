@@ -39,6 +39,8 @@ type rdmaView struct {
 
 // NodeView is one node on the admin nodes page.
 type NodeView struct {
+	// Cluster: the cluster it is in, in a console of several.
+	Cluster string            `json:"cluster,omitempty"`
 	Name    string            `json:"name"`
 	Ready   bool              `json:"ready"`
 	Labels  map[string]string `json:"labels"`
@@ -120,8 +122,17 @@ func (s *Server) handleAdminNodes(w http.ResponseWriter, r *http.Request) {
 	if _, ok := s.requireAdmin(w, r); !ok {
 		return
 	}
-	views, _, _, ok := s.nodeViews(r.Context())
-	s.writeJSON(w, http.StatusOK, map[string]any{"items": views, "live": ok})
+	items := []NodeView{}
+	live := false
+	for _, cc := range s.ks(r) {
+		views, _, _, ok := s.nodeViews(s.in(r.Context(), cc))
+		for i := range views {
+			views[i].Cluster = s.clusterLabel(cc)
+		}
+		items = append(items, views...)
+		live = live || ok
+	}
+	s.writeJSON(w, http.StatusOK, map[string]any{"items": items, "live": live})
 }
 
 // handleAdminNode serves GET /api/admin/nodes/{name}: the node, its

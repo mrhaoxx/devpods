@@ -260,9 +260,9 @@ func TestClusterScope(t *testing.T) {
 	} else if usage, _ := out["usage"].(map[string]any); usage["devpods"] != float64(3) {
 		t.Fatalf("my usage over both clusters: %v", out["usage"])
 	}
-	// what is a cluster's has to say which
-	if code, out, _ := w.call("gl-alice", "GET", "/api/nodes", ""); code != http.StatusBadRequest || out["code"] != "CLUSTER_REQUIRED" {
-		t.Fatalf("nodes without a cluster: %d %v", code, out)
+	// what is done in a cluster has to say which
+	if code, out, _ := w.call("gl-alice", "POST", "/api/devpods", `{"name":"which","image":"ubuntu:24.04"}`); code != http.StatusBadRequest || out["code"] != "CLUSTER_REQUIRED" {
+		t.Fatalf("a create without a cluster: %d %v", code, out)
 	} else if names, _ := out["detail"].([]any); len(names) != 2 {
 		t.Fatalf("CLUSTER_REQUIRED names the clusters: %v", out)
 	}

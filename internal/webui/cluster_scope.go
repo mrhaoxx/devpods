@@ -402,3 +402,12 @@ func (s *Server) clusterQuota(ctx context.Context, cc *clusters.ClusterClients) 
 	}
 	return out
 }
+
+// clusterLabel is what a list says an item's cluster is: cc's name in a
+// console of several clusters, nothing in a console of its own one.
+func (s *Server) clusterLabel(cc *clusters.ClusterClients) string {
+	if s.Clusters == nil {
+		return ""
+	}
+	return cc.Name
+}

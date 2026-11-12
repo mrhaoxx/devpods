@@ -191,6 +191,8 @@ func (s *Server) pinErr(ctx context.Context, owner, node string) *serverErr {
 // reservationView is one block on the timeline: consecutive segments of
 // one user (an original plus its extensions) merged.
 type reservationView struct {
+	// Cluster: the cluster it is in, in a console of several.
+	Cluster     string    `json:"cluster,omitempty"`
 	ID          string    `json:"id"` // the first segment
 	Segments    []string  `json:"segments"`
 	Node        string    `json:"node"`
@@ -308,15 +310,18 @@ func (s *Server) handleListReservations(w http.ResponseWriter, r *http.Request) 
 			*dst = t
 		}
 	}
-	all, err := s.allReservations(r.Context())
-	if err != nil {
-		s.writeErr(w, http.StatusInternalServerError, "INTERNAL", err.Error(), nil)
-		return
-	}
 	items := []reservationView{}
-	for _, v := range mergeReservations(effectiveReservations(all), sess.User, now) {
-		if v.Start.Before(to) && from.Before(v.End) && (q.Get("node") == "" || q.Get("node") == v.Node) {
-			items = append(items, v)
+	for _, cc := range s.ks(r) {
+		all, err := s.allReservations(s.in(r.Context(), cc))
+		if err != nil {
+			s.writeErr(w, http.StatusInternalServerError, "INTERNAL", err.Error(), nil)
+			return
+		}
+		for _, v := range mergeReservations(effectiveReservations(all), sess.User, now) {
+			if v.Start.Before(to) && from.Before(v.End) && (q.Get("node") == "" || q.Get("node") == v.Node) {
+				v.Cluster = s.clusterLabel(cc)
+				items = append(items, v)
+			}
 		}
 	}
 	s.writeJSON(w, http.StatusOK, map[string]any{"items": items})
@@ -714,6 +719,8 @@ type nodeNext struct {
 
 // nodeChoice is one node in GET /api/nodes.
 type nodeChoice struct {
+	// Cluster: the cluster it is in, in a console of several.
+	Cluster    string    `json:"cluster,omitempty"`
 	Name       string    `json:"name"`
 	Ready      bool      `json:"ready"`
 	CPU        resView   `json:"cpu"`
@@ -738,14 +745,36 @@ func (s *Server) handleNodes(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	views, _, _, _ := s.nodeViews(r.Context())
+	items := []nodeChoice{}
+	for _, cc := range s.ks(r) {
+		part, err := s.nodeChoicesIn(s.in(r.Context(), cc), sess)
+		if err != nil {
+			s.writeErr(w, http.StatusInternalServerError, "INTERNAL", err.Error(), nil)
+			return
+		}
+		for i := range part {
+			part[i].Cluster = s.clusterLabel(cc)
+		}
+		items = append(items, part...)
+	}
+	sort.SliceStable(items, func(i, j int) bool {
+		if items[i].Cluster != items[j].Cluster {
+			return items[i].Cluster < items[j].Cluster
+		}
+		return items[i].Name < items[j].Name
+	})
+	s.writeJSON(w, http.StatusOK, map[string]any{"items": items})
+}
+
+// nodeChoicesIn: the nodes of ctx's cluster a user may pick.
+func (s *Server) nodeChoicesIn(ctx context.Context, sess Session) ([]nodeChoice, error) {
+	views, _, _, _ := s.nodeViews(ctx)
 	var all []devpodv1alpha1.Reservation
 	now := time.Now()
 	if s.Reservations != nil {
 		var err error
-		if all, err = s.allReservations(r.Context()); err != nil {
-			s.writeErr(w, http.StatusInternalServerError, "INTERNAL", err.Error(), nil)
-			return
+		if all, err = s.allReservations(ctx); err != nil {
+			return nil, err
 		}
 		all = effectiveReservations(all)
 		now = s.Reservations.now()
@@ -772,6 +801,5 @@ func (s *Server) handleNodes(w http.ResponseWriter, r *http.Request) {
 		}
 		items = append(items, c)
 	}
-	sort.Slice(items, func(i, j int) bool { return items[i].Name < items[j].Name })
-	s.writeJSON(w, http.StatusOK, map[string]any{"items": items})
+	return items, nil
 }
