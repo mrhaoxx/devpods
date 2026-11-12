@@ -1,18 +1,21 @@
-// 用配置创建 (config center spec §6.3): a field per variable of the
-// config, then one DevPod or several. A config pinned to a node takes
-// one DevPod per picked node, in click order; any other takes a count.
-// The server checks the launch as a whole before writing anything.
-import * as Dialog from "@radix-ui/react-dialog";
-import { useEffect, useState } from "react";
+// 用配置创建 (config-centric create spec §5.1): a field per variable the
+// config's text has — by its type — then one DevPod or several. A config
+// pinned to a node takes one DevPod per picked node, in click order; any
+// other takes a count. The server checks the launch as a whole before
+// writing anything. Shown in the new-DevPod drawer.
+import { useEffect, useMemo, useState } from "react";
+import { parse } from "yaml";
 import { Link } from "react-router-dom";
 import { useQueryClient } from "@tanstack/react-query";
 import { ApiFailure } from "../../data/api";
 import { useMe } from "../../data/queries";
 import { Button } from "../../design/Button";
 import { Field, Input, Notice } from "../../design/Form";
+import { fmtBytes, fmtCores, parseQuantity } from "../../lib/format";
 import { OrderedNodes } from "../devpods/BulkDialog";
 import { launchConfig, type ConfigSummary, type LaunchBody, type LaunchItem } from "./api";
-import { INDEX, NAME, NODE, OWNER } from "./vars";
+import { COUNT, INDEX, LEADER, NAME, NODE, OWNER } from "./vars";
+import { VarInput } from "./VarInput";
 
 export const MAX_LAUNCH = 32;
 
@@ -21,12 +24,32 @@ export const MAX_LAUNCH = 32;
  *  itself, in which case only the config knows the final names. */
 export function launchNames(user: string, short: string, n: number, usesIndex: boolean): string[] {
   const base = `${user}-${short}`;
-  return Array.from({ length: n }, (_, i) => (n > 1 && !usesIndex ? `${base}-${i + 1}` : base));
+  return Array.from({ length: n }, (_, i) => (n > 1 && !usesIndex ? `${base}-${i}` : base));
 }
 
-type Outcome = { kind: "preview" | "created" | "rejected"; items: LaunchItem[] };
+type Outcome = { kind: "preview" | "created" | "rejected"; items: LaunchItem[]; group?: string };
 
-function Items({ outcome }: { outcome: Outcome }) {
+/** requested: what the DevPods of a checked launch ask for, from their YAML. */
+export function requested(yamls: string[]): { cpu: number; memory: number; gpu: number } {
+  const out = { cpu: 0, memory: 0, gpu: 0 };
+  for (const y of yamls) {
+    let doc: { spec?: { pod?: { spec?: { containers?: { resources?: { limits?: Record<string, string | number> } }[] } } } };
+    try {
+      doc = parse(y) ?? {};
+    } catch {
+      continue;
+    }
+    for (const c of doc.spec?.pod?.spec?.containers ?? []) {
+      const lim = c.resources?.limits ?? {};
+      out.cpu += parseQuantity(lim.cpu === undefined ? undefined : String(lim.cpu));
+      out.memory += parseQuantity(lim.memory === undefined ? undefined : String(lim.memory));
+      out.gpu += parseQuantity(lim["nvidia.com/gpu"] === undefined ? undefined : String(lim["nvidia.com/gpu"]));
+    }
+  }
+  return out;
+}
+
+function Items({ outcome, onEditOnce }: { outcome: Outcome; onEditOnce?: (yaml: string) => void }) {
   return (
     <ol aria-label="结果" className="max-h-56 space-y-1 overflow-y-auto rounded-md border border-line bg-sunk p-2 text-xs">
       {outcome.items.map((it) => (
@@ -53,6 +76,11 @@ function Items({ outcome }: { outcome: Outcome }) {
           {it.yaml && (
             <details className="mt-0.5">
               <summary className="cursor-pointer text-[11px] text-muted">YAML</summary>
+              {onEditOnce && outcome.kind === "preview" && (
+                <Button className="mt-1" onClick={() => onEditOnce(it.yaml!)} title="把这份 YAML 带进编辑器改一改再创建（不记录来源配置）">
+                  只为这次改一改
+                </Button>
+              )}
               <pre className="mono mt-1 max-h-48 overflow-auto rounded border border-line bg-surface p-2 text-[11px] whitespace-pre">{it.yaml}</pre>
             </details>
           )}
@@ -62,14 +90,25 @@ function Items({ outcome }: { outcome: Outcome }) {
   );
 }
 
-export function LaunchDialog({ config, onClose }: { config: Pick<ConfigSummary, "name" | "title" | "variables">; onClose: () => void }) {
+export function LaunchForm({
+  config,
+  onBack,
+  onDone,
+  onEditOnce,
+}: {
+  config: Pick<ConfigSummary, "name" | "title" | "variables" | "owner">;
+  onBack?: () => void;
+  onDone: (r: { items: LaunchItem[]; group?: string }) => void;
+  /** "只为这次改一改": the YAML of one checked instance, to edit and create by hand */
+  onEditOnce?: (yaml: string) => void;
+}) {
   const me = useMe().data;
   const qc = useQueryClient();
   const has = (n: string) => config.variables.some((v) => v.name === n);
   const usesName = has(NAME);
   const usesNode = has(NODE);
   const usesIndex = has(INDEX);
-  const others = config.variables.filter((v) => ![OWNER, NAME, NODE, INDEX].includes(v.name));
+  const others = config.variables.filter((v) => ![OWNER, NAME, NODE, INDEX, COUNT, LEADER].includes(v.name));
 
   const [short, setShort] = useState("");
   const [nodes, setNodes] = useState<string[]>([]);
@@ -104,10 +143,11 @@ export function LaunchDialog({ config, onClose }: { config: Pick<ConfigSummary, 
     setOutcome(null);
     try {
       const r = await launchConfig(config.name, body(dryRun));
-      setOutcome({ kind: r.status === 422 ? "rejected" : dryRun ? "preview" : "created", items: r.items });
+      setOutcome({ kind: r.status === 422 ? "rejected" : dryRun ? "preview" : "created", items: r.items, group: r.group });
       if (!dryRun && r.status !== 422) {
         void qc.invalidateQueries({ queryKey: ["devpods"] });
         void qc.invalidateQueries({ queryKey: ["me"] });
+        onDone({ items: r.items, group: r.group });
       }
     } catch (e) {
       if (e instanceof ApiFailure && e.status === 404) setGone(true);
@@ -117,21 +157,31 @@ export function LaunchDialog({ config, onClose }: { config: Pick<ConfigSummary, 
     }
   };
 
+  const asked = useMemo(() => {
+    const ys = (outcome?.kind === "preview" ? outcome.items : []).map((i) => i.yaml ?? "").filter(Boolean);
+    return ys.length ? requested(ys) : null;
+  }, [outcome]);
+  const left = (key: string) => {
+    const lim = me?.quota.compute?.[key];
+    return lim ? parseQuantity(lim) - parseQuantity(me?.usage.compute?.[key]) : null;
+  };
   const made = outcome?.kind === "created" ? outcome.items.filter((i) => i.ok).length : 0;
   const failed = outcome?.kind === "created" ? outcome.items.length - made : 0;
   const done = outcome?.kind === "created";
 
   return (
-    <Dialog.Root open onOpenChange={(o) => !o && onClose()}>
-      <Dialog.Portal>
-        <Dialog.Overlay className="fixed inset-0 z-40 bg-black/30" />
-        <Dialog.Content
-          aria-describedby={undefined}
-          className="fixed left-1/2 top-[12vh] z-50 max-h-[80vh] w-[min(94vw,520px)] -translate-x-1/2 space-y-3 overflow-y-auto rounded-lg border border-line bg-surface p-4 shadow-xl"
-        >
-          <Dialog.Title className="text-sm font-semibold">
-            用配置创建：{config.title} <span className="mono text-xs font-normal text-muted">{config.name}</span>
-          </Dialog.Title>
+    <div className="space-y-3">
+      <div className="flex items-baseline justify-between gap-2">
+        <div className="min-w-0">
+          <div className="truncate text-sm font-semibold">{config.title}</div>
+          <div className="mono truncate text-[11px] text-muted">
+            {config.name} · {config.owner}
+          </div>
+        </div>
+        <Link to={`/configs/${config.name}`} className="shrink-0 text-xs text-accent hover:underline">
+          打开配置
+        </Link>
+      </div>
           {gone && <Notice>配置已不可用：它被删除，或不再分享给你。</Notice>}
           <fieldset disabled={gone || busy || done} className="space-y-3 text-xs">
             {usesName && (
@@ -155,9 +205,7 @@ export function LaunchDialog({ config, onClose }: { config: Pick<ConfigSummary, 
               </p>
             )}
             {others.map((v) => (
-              <Field key={v.name} label={v.name} hint={v.required ? "必填" : v.default ? `默认 ${v.default}` : "可留空"}>
-                <Input aria-label={v.name} value={values[v.name] ?? ""} onChange={(e) => setValues((m) => ({ ...m, [v.name]: e.target.value }))} className="mono" spellCheck={false} />
-              </Field>
+              <VarInput key={v.name} v={v} value={values[v.name] ?? ""} onChange={(x) => setValues((m) => ({ ...m, [v.name]: x }))} />
             ))}
           </fieldset>
           {names.length > 0 && !outcome && (
@@ -184,11 +232,21 @@ export function LaunchDialog({ config, onClose }: { config: Pick<ConfigSummary, 
               {failed ? `已创建 ${made} 个，失败 ${failed} 个。已创建的不会撤销。` : `已创建 ${made} 个。`}
             </p>
           )}
-          {outcome && <Items outcome={outcome} />}
+          {asked && (
+            <p aria-label="本次申请" className="rounded-md bg-sunk px-3 py-2 text-xs">
+              本次申请 {fmtCores(asked.cpu)} 核 CPU · {fmtBytes(asked.memory)} 内存 · {asked.gpu} GPU
+              {[left("cpu"), left("memory"), left("nvidia.com/gpu")].some((x) => x !== null) && (
+                <span className="text-muted">
+                  {" "}
+                  （剩余配额：{left("cpu") !== null ? `${fmtCores(Math.max(0, left("cpu")!))} 核` : "不限"} · {left("memory") !== null ? fmtBytes(Math.max(0, left("memory")!)) : "不限"} ·{" "}
+                  {left("nvidia.com/gpu") !== null ? `${Math.max(0, left("nvidia.com/gpu")!)} GPU` : "不限"}）
+                </span>
+              )}
+            </p>
+          )}
+          {outcome && <Items outcome={outcome} onEditOnce={onEditOnce} />}
           <div className="flex justify-end gap-2">
-            <Dialog.Close asChild>
-              <Button>{done ? "关闭" : "取消"}</Button>
-            </Dialog.Close>
+            {onBack && !done && <Button onClick={onBack}>上一步</Button>}
             {!done && (
               <>
                 <Button disabled={!ready} onClick={() => void run(true)}>
@@ -200,8 +258,6 @@ export function LaunchDialog({ config, onClose }: { config: Pick<ConfigSummary, 
               </>
             )}
           </div>
-        </Dialog.Content>
-      </Dialog.Portal>
-    </Dialog.Root>
+    </div>
   );
 }

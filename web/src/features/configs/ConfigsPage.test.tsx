@@ -61,7 +61,7 @@ describe("配置 page", () => {
     renderWithProviders(<ConfigsPage />);
     await screen.findByText("共享的");
     const r = within(row("共享的"));
-    expect(r.getByRole("button", { name: "用此配置创建" })).toBeTruthy();
+    expect(r.getByRole("link", { name: "用此配置创建" })).toBeTruthy();
     expect(r.getByRole("button", { name: "另存为副本" })).toBeTruthy();
     expect(r.queryByRole("link", { name: "编辑" })).toBeNull();
     expect(r.queryByRole("button", { name: /删除/ })).toBeNull();
@@ -91,12 +91,12 @@ describe("配置 page", () => {
     await waitFor(() => expect(calls.find((c) => c.method === "PATCH")?.body).toBe('{"public":false}'));
   });
 
-  it("用此配置创建 opens the launch dialog for that config", async () => {
-    lists({ "/api/nodes": { items: [] } });
+  it("用此配置创建 opens the new-DevPod drawer on that config", async () => {
+    lists();
     renderWithProviders(<ConfigsPage />);
     await screen.findByText("共享的");
-    fireEvent.click(within(row("共享的")).getByRole("button", { name: "用此配置创建" }));
-    expect(await screen.findByRole("dialog", { name: /用配置创建.*共享的/ })).toBeTruthy();
+    const link = within(row("共享的")).getByRole("link", { name: "用此配置创建" });
+    expect(link.getAttribute("href")).toMatch(/^\/\?new=1&config=[a-z0-9-]+$/);
   });
 
   it("says so when there is nothing", async () => {

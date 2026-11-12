@@ -56,6 +56,11 @@ export function OrderedNodes({ picked, setPicked, disabled, legend = "目标节�
             >
               {at >= 0 && <span className="rounded bg-accent px-1 text-[10px] text-white">{at + 1}</span>}
               {n.name}
+              {n.gpuTotal > 0 && (
+                <span className="font-sans text-[10px]" title="空闲 / 总数">
+                  {n.gpuModel ?? "GPU"} {n.gpuTotal - n.gpuUsed}/{n.gpuTotal}
+                </span>
+              )}
               {!n.selectable && <span className="font-sans text-[10px]">已被预约</span>}
               {n.selectable && !n.ready && <span className="font-sans text-[10px]">未就绪</span>}
             </button>

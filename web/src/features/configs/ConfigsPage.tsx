@@ -13,7 +13,6 @@ import { EmptyState } from "../../design/EmptyState";
 import { Notice } from "../../design/Form";
 import { fmtAge } from "../../lib/format";
 import { deleteConfig, getConfig, listConfigs, patchConfig, type ConfigScope, type ConfigSummary } from "./api";
-import { LaunchDialog } from "./LaunchDialog";
 
 export const configsKey = (scope: ConfigScope) => ["configs", scope] as const;
 const useConfigs = (scope: ConfigScope) => useQuery({ queryKey: configsKey(scope), queryFn: () => listConfigs(scope), retry: false });
@@ -24,7 +23,6 @@ function Group({
   items,
   showOwner,
   admin,
-  onLaunch,
   onCopy,
   onDelete,
   onUnpublish,
@@ -34,7 +32,6 @@ function Group({
   items: ConfigSummary[];
   showOwner: boolean;
   admin: boolean;
-  onLaunch: (c: ConfigSummary) => void;
   onCopy: (c: ConfigSummary) => void;
   onDelete: (c: ConfigSummary) => void;
   onUnpublish: (c: ConfigSummary) => void;
@@ -90,9 +87,9 @@ function Group({
                   </td>
                   <td className="px-3 py-1.5 text-right whitespace-nowrap">
                     <span className="inline-flex gap-3">
-                      <button type="button" onClick={() => onLaunch(c)} className="text-accent hover:underline">
+                      <Link to={`/?new=1&config=${encodeURIComponent(c.name)}`} className="text-accent hover:underline">
                         用此配置创建
-                      </button>
+                      </Link>
                       {c.mine && (
                         <Link to={`/configs/${c.name}`} className="text-muted hover:text-accent">
                           编辑
@@ -131,7 +128,6 @@ export function ConfigsPage() {
   const mine = useConfigs("mine");
   const shared = useConfigs("shared");
   const pub = useConfigs("public");
-  const [launch, setLaunch] = useState<ConfigSummary | null>(null);
   const [forget, setForget] = useState<ConfigSummary | null>(null);
   const [error, setError] = useState<string | null>(null);
   const refresh = () => void qc.invalidateQueries({ queryKey: ["configs"] });
@@ -152,7 +148,7 @@ export function ConfigsPage() {
   const loading = mine.isLoading || shared.isLoading || pub.isLoading;
   const failed = mine.isError && shared.isError && pub.isError;
   const none = !loading && !failed && my.length + sh.length + pu.length === 0;
-  const act = { admin, onLaunch: setLaunch, onCopy: (c: ConfigSummary) => void copy(c), onDelete: setForget, onUnpublish: (c: ConfigSummary) => unpublish.mutate(c.name) };
+  const act = { admin, onCopy: (c: ConfigSummary) => void copy(c), onDelete: setForget, onUnpublish: (c: ConfigSummary) => unpublish.mutate(c.name) };
 
   return (
     <div className="space-y-3 p-3">
@@ -180,7 +176,6 @@ export function ConfigsPage() {
           <Group title="公开" empty="没有其他公开的配置。" items={pu} showOwner {...act} />
         </>
       )}
-      {launch && <LaunchDialog config={launch} onClose={() => setLaunch(null)} />}
       <ConfirmDialog
         open={!!forget}
         onOpenChange={(o) => !o && setForget(null)}

@@ -11,7 +11,6 @@ import { EmptyState } from "../../design/EmptyState";
 import { Field, Group, Input, Notice } from "../../design/Form";
 import { YamlEditor } from "../../design/yaml/YamlEditor";
 import { createConfig, getConfig, patchConfig, type Config, type ConfigPatch, type ParsedVar } from "./api";
-import { LaunchDialog } from "./LaunchDialog";
 import { INDEX, NAME, NODE, OWNER, parseVars } from "./vars";
 
 /** What a page hands over to start a new config from. */
@@ -71,7 +70,6 @@ export function ConfigEditor() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [saved, setSaved] = useState(false);
-  const [launch, setLaunch] = useState(false);
 
   useEffect(() => {
     if (!loaded) return;
@@ -149,7 +147,11 @@ export function ConfigEditor() {
         <h1 className="text-sm font-semibold">{creating ? "新建配置" : loaded!.title}</h1>
         {!creating && <span className="mono text-xs text-muted">{loaded!.name}</span>}
         <span className="flex-1" />
-        {!creating && <Button onClick={() => setLaunch(true)}>用此配置创建</Button>}
+        {!creating && loaded && (
+          <Link to={`/?new=1&config=${encodeURIComponent(loaded.name)}`} className="inline-flex h-7 items-center rounded-md border border-line px-2.5 text-xs hover:bg-sunk">
+            用此配置创建
+          </Link>
+        )}
         {!creating && (
           <Button onClick={() => nav("/configs/new", { state: { content, title, description } satisfies NewConfigState })}>另存为副本</Button>
         )}
@@ -211,7 +213,6 @@ export function ConfigEditor() {
           )}
         </div>
       </div>
-      {launch && loaded && <LaunchDialog config={{ name: loaded.name, title: loaded.title, variables: loaded.variables }} onClose={() => setLaunch(false)} />}
     </form>
   );
 }

@@ -64,7 +64,7 @@ export type LaunchItem = { index: number; name: string; node?: string; ok: boole
 export type LaunchBody = { vars: Record<string, string>; nodes?: string[]; count?: number; dryRun?: boolean };
 /** 200: all created (or, on a dry run, would be). 207: some were. 422:
  *  the check refused the launch and nothing was created. */
-export type LaunchResult = { status: 200 | 207 | 422; items: LaunchItem[] };
+export type LaunchResult = { status: 200 | 207 | 422; items: LaunchItem[]; group?: string };
 
 /** launchConfig creates DevPods from a config. The three answers that
  *  carry per-DevPod outcomes are returned; anything else throws. */
@@ -81,7 +81,8 @@ export async function launchConfig(name: string, body: LaunchBody): Promise<Laun
     parsed = null;
   }
   const items = (parsed as { items?: LaunchItem[] } | null)?.items;
-  if ((resp.status === 200 || resp.status === 207 || resp.status === 422) && Array.isArray(items)) return { status: resp.status, items };
+  const group = (parsed as { group?: string } | null)?.group;
+  if ((resp.status === 200 || resp.status === 207 || resp.status === 422) && Array.isArray(items)) return { status: resp.status, items, ...(group ? { group } : {}) };
   const err = parsed as ApiError | null;
   throw new ApiFailure(resp.status, err && typeof err.code === "string" ? err : { code: `HTTP_${resp.status}`, message: `${resp.status} ${resp.statusText}`.trim() });
 }
