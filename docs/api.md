@@ -140,7 +140,11 @@ A config is a DevPod manifest kept as text, with variables. Its name is
 `<owner>-<id>`. The owner changes it; users it is shared with (`sharedWith`) and
 — when it is `public` — every signed-in user may read it and launch from it.
 A config you may not see answers `404`. Admins see every config and may delete
-one or take it off the public list (`PATCH {"public": false}`), nothing else.
+one, take it off the public list (`PATCH {"public": false}`) or mark a public
+one official (`PATCH {"official": true}`; official configs are listed first,
+`?scope=official` lists them alone), nothing else. Taking a config off the
+public list also takes away its official mark. A config's text is at most
+256 KiB.
 
 | Variable | Meaning |
 |---|---|
@@ -201,6 +205,31 @@ node, ok, code, message}]}` with:
 | `422` `LAUNCH_REJECTED` | at least one could not be created; **nothing was**. The failing items say why (`QUOTA_EXCEEDED`, `NAME_TAKEN`, `DUPLICATE_NAME`, `BAD_NAME`, `BAD_VALUE`, `GROUP_TAKEN`, `NODE_RESERVED`, `BAD_REQUEST` for YAML the values broke, …) and carry their `yaml` |
 | `207` | the check passed but a write failed meanwhile; the others were created and are not undone |
 | `400` `BAD_VARIABLES` | a variable is missing or unknown (`detail` names them), or a value is not single-line text |
+
+### Checking a config before saving it
+
+`POST /api/configs:check` with `{content, variables?, vars?}` (scope
+`configs:write`) renders the text with example values — the ones given in
+`vars`, else the text's defaults, else one of each variable's type — and puts
+it through what you may write in a DevPod: fields that exist, nothing that
+reaches Secrets or a service account token, no Kore annotations unless you are
+an admin, a valid name. It answers `200` with `{"problems": [{line?, code,
+message}]}` (`BAD_VARIABLES`, `BAD_YAML`, `FORBIDDEN_CONTENT`, `BAD_NAME`); an
+empty list means none. Quota, free nodes and taken names are the launch's to
+check.
+
+### Rebuilding a DevPod from its config
+
+`POST /api/devpods/{name}/rebuild-from-config` (scopes `devpods:update` and
+`configs:read`) renders the config the DevPod came from, as it is now, with the
+values recorded at launch (its group number, size and leader too), and saves it
+the way `PUT /api/devpods/{name}/yaml` does: the same checks, and a running
+DevPod's Pod is recreated if its definition changes. `{"dryRun": true}` only
+answers `{yaml, rebuild}`. `409` with `CONFIG_GONE` (no config, or it is no
+longer yours to see), `CONFIG_VARS` (the recorded values no longer fit the
+config's variables; `detail` names them) or `CONFIG_RENAMES` (the config now
+gives another name). `GET /api/devpods/{name}` says `configOutdated: true` when
+the config has changed since — only when you may see that config.
 
 ## Several clusters
 
