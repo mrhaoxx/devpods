@@ -14,6 +14,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"log/slog"
 	"net"
 	"net/http"
 	"time"
@@ -89,6 +90,9 @@ func (a *Agent) Run(ctx context.Context, t tunnel.ClientOptions) error {
 	t.Hello = tunnel.Hello{Kind: Kind, Name: a.o.Cluster}
 	t.Sign = a.o.Identity.Sign
 	t.Handle = a.handle
+	if t.OnError == nil {
+		t.OnError = func(err error) { slog.Warn("agent_connect", "cluster", a.o.Cluster, "err", err.Error()) }
+	}
 	go func() { _ = a.kube.Serve(a.ln) }()
 	defer func() { _ = a.kube.Close() }()
 	return tunnel.NewClient(t).Run(ctx)

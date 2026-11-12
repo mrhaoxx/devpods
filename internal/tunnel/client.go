@@ -31,6 +31,9 @@ type ClientOptions struct {
 	// wait between attempts that fail.
 	Heartbeat, Dead        time.Duration
 	BackoffMin, BackoffMax time.Duration
+	// OnError is told why an attempt failed, once per distinct reason in
+	// a row (a refusal repeats for as long as it lasts).
+	OnError func(error)
 }
 
 // InstanceStatus is what an initiator holds on one server instance.
@@ -141,8 +144,12 @@ func (c *Client) Run(ctx context.Context) error {
 		switch {
 		case err != nil:
 			c.mu.Lock()
+			fresh := c.err == nil || c.err.Error() != err.Error()
 			c.err = err
 			c.mu.Unlock()
+			if fresh && c.o.OnError != nil {
+				c.o.OnError(err)
+			}
 			if !sleep(backoff) {
 				return ctx.Err()
 			}

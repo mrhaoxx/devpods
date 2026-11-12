@@ -400,6 +400,18 @@ func TestAuthorize(t *testing.T) {
 	if err := stranger.LastError(); err == nil || !bytes.Contains([]byte(err.Error()), []byte("not you")) {
 		t.Fatalf("the reason did not reach the client: %v", err)
 	}
+	// said once, however many times it is refused
+	var told atomic.Int64
+	c := tunnel.NewClient(tunnel.ClientOptions{
+		Dial: s.dial, Hello: tunnel.Hello{Kind: "agent", Name: "st3"}, Sign: func(n []byte) []byte { return n },
+		Handle: func(context.Context, []byte, net.Conn) {}, BackoffMin: 2 * time.Millisecond, BackoffMax: 5 * time.Millisecond,
+		OnError: func(error) { told.Add(1) },
+	})
+	go func() { _ = c.Run(ctx) }()
+	time.Sleep(80 * time.Millisecond)
+	if told.Load() != 1 {
+		t.Fatalf("OnError called %d times for one lasting refusal", told.Load())
+	}
 	ok, _ := newClient(t, ctx, s, "mulan", 1)
 	eventually(t, "the right one gets in", func() bool { return settled(ok, []string{"i0"}, 1) })
 	// two nonces are never the same

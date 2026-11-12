@@ -24,7 +24,7 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
-	"k8s.io/client-go/rest"
+	"sigs.k8s.io/controller-runtime/pkg/client/config"
 
 	"github.com/mrhaoxx/devpod/internal/agent"
 	"github.com/mrhaoxx/devpod/internal/tunnel"
@@ -53,9 +53,10 @@ func main() {
 		fatal(errors.New("--cluster and --console are required"))
 	}
 
-	cfg, err := rest.InClusterConfig()
+	// in a cluster: the Pod's service account; outside one: --kubeconfig or $KUBECONFIG
+	cfg, err := config.GetConfig()
 	if err != nil {
-		fatal(fmt.Errorf("in-cluster config: %w", err))
+		fatal(fmt.Errorf("kubernetes config: %w", err))
 	}
 	kc, err := kubernetes.NewForConfig(cfg)
 	if err != nil {
