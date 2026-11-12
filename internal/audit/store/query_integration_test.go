@@ -31,7 +31,13 @@ func freshDB(t *testing.T) *CH {
 	return c
 }
 
-var base = time.Date(2026, 11, 9, 8, 0, 0, 0, time.UTC)
+// base is a recent moment (the shortest retention is 48 hours: a fixed
+// date would age out of it), early enough in its day that the rows the
+// tests place after it stay within that day.
+var base = func() time.Time {
+	y := time.Now().UTC().Add(-24 * time.Hour)
+	return time.Date(y.Year(), y.Month(), y.Day(), 8, 0, 0, 0, time.UTC)
+}()
 
 func sess(id, user, uid string, at time.Time, version uint64, closed bool) SessionRow {
 	r := SessionRow{SessionID: id, User: user, DevPod: user + "-dev", DevPodUID: uid, OpenedAt: at, Version: version}
