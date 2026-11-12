@@ -33,6 +33,37 @@ describe("cluster switcher", () => {
     expect(calls.length).toBe(1);
   });
 
+  it("takes a console that does not know of clusters for a console of one", async () => {
+    stubFetch({}); // every route answers 404
+    renderWithProviders(
+      <ClusterGate>
+        <p>content</p>
+      </ClusterGate>,
+      { clusters: null },
+    );
+    expect(await screen.findByText("content")).toBeTruthy();
+    expect(currentCluster()).toBe("");
+  });
+
+  it("keeps the page when a later refresh of the list fails", async () => {
+    let fail = false;
+    stubFetch({
+      "GET /api/clusters": () => (fail ? new Response(JSON.stringify({ code: "INTERNAL", message: "boom" }), { status: 500 }) : two),
+    });
+    const { client } = renderWithProviders(
+      <ClusterGate>
+        <p>content</p>
+      </ClusterGate>,
+      { clusters: null },
+    );
+    expect(await screen.findByText("content")).toBeTruthy();
+    fail = true;
+    await client.refetchQueries({ queryKey: ["clusters"] });
+    expect(client.getQueryState(["clusters"])?.status).toBe("error");
+    expect(screen.getByText("content")).toBeTruthy();
+    expect(screen.queryByText("无法加载集群列表")).toBeNull();
+  });
+
   it("is not there with a single cluster either, which is then the one in use", async () => {
     stubFetch({ "GET /api/clusters": { items: [two.items[0]] } });
     renderWithProviders(

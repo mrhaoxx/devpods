@@ -1,16 +1,17 @@
 // One user (UI spec §5.5): quota with current usage beside each field
 // (blank = default), DevPods, recent sessions, policy override, SSH keys,
 // 设为管理员 / 删除用户 behind confirmation.
+import { useClusters } from "../clusters/ClusterSwitcher";
 import { useState } from "react";
 import { Link } from "react-router-dom";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { deleteUser, listDevPods, setUserAdmin, setUserQuota, ApiFailure, type AdminUserRow, type UserQuota } from "../../data/api";
+import { deleteUser, listDevPods, setUserAdmin, setUserClusterQuota, setUserQuota, ApiFailure, type AdminUserRow, type UserQuota } from "../../data/api";
 import { qk, useAuditSessions, useMe } from "../../data/queries";
 import { Drawer } from "../../design/Drawer";
 import { Panel } from "../../design/Panel";
 import { Button } from "../../design/Button";
 import { Badge } from "../../design/Badge";
-import { Field, Input, Notice } from "../../design/Form";
+import { Field, Input, Notice, Select } from "../../design/Form";
 import { ConfirmDialog } from "../../design/ConfirmDialog";
 import { EmptyState } from "../../design/EmptyState";
 import { StatusDot } from "../../design/StatusDot";
@@ -18,9 +19,35 @@ import { AuditPolicyEditor } from "../audit/AuditPolicyEditor";
 
 const sourceLabel = { oidc: "GitLab", password: "密码", ldap: "LDAP" } as const;
 
-function QuotaEditor({ u, def }: { u: AdminUserRow; def: UserQuota }) {
+/** Quota: the user's own, for every cluster — or, in a console of several
+ *  clusters, their quota in one of them (which goes before their own). */
+function Quota({ u, def }: { u: AdminUserRow; def: UserQuota }) {
+  const clusters = useClusters().data?.items ?? [];
+  const [where, setWhere] = useState("");
+  return (
+    <>
+      {clusters.length > 1 && (
+        <div className="flex items-center gap-2 px-3 pt-3 text-xs">
+          <span className="text-muted">作用于</span>
+          <Select aria-label="配额作用于" value={where} onChange={(e) => setWhere(e.target.value)} className="!w-auto">
+            <option value="">所有集群</option>
+            {clusters.map((c) => (
+              <option key={c.name} value={c.name}>
+                {c.displayName || c.name}
+              </option>
+            ))}
+          </Select>
+          {where && <span className="text-[11px] text-faint">这里填的项优先于「所有集群」里的同一项</span>}
+        </div>
+      )}
+      <QuotaEditor key={where} u={u} def={def} cluster={where} />
+    </>
+  );
+}
+
+function QuotaEditor({ u, def, cluster }: { u: AdminUserRow; def: UserQuota; cluster: string }) {
   const qc = useQueryClient();
-  const q = u.quota;
+  const q = cluster ? u.quotas?.[cluster] : u.quota;
   const [f, setF] = useState({
     maxDevPods: q?.maxDevPods?.toString() ?? "",
     cpu: q?.compute?.cpu ?? "",
@@ -39,13 +66,15 @@ function QuotaEditor({ u, def }: { u: AdminUserRow; def: UserQuota }) {
   const save = async () => {
     setMsg(null);
     try {
-      await setUserQuota(u.name, {
+      const patch = {
         maxDevPods: f.maxDevPods ? Number(f.maxDevPods) : null,
         cpu: f.cpu || undefined,
         memory: f.memory || undefined,
         gpu: f.gpu || undefined,
         storage: f.storage || undefined,
-      });
+      };
+      if (cluster) await setUserClusterQuota(u.name, cluster, patch);
+      else await setUserQuota(u.name, patch);
       setMsg({ ok: true, text: "已保存" });
       void qc.invalidateQueries({ queryKey: qk.users });
     } catch (e) {
@@ -118,7 +147,7 @@ export function UserDrawer({ u, def, onClose }: { u?: AdminUserRow; def: UserQuo
           </div>
           {err && <Notice>{err}</Notice>}
           <Panel title="配额">
-            <QuotaEditor u={u} def={def} />
+            <Quota u={u} def={def} />
           </Panel>
           <Panel title={`DevPod（${mine.length}）`}>
             {mine.length === 0 ? (

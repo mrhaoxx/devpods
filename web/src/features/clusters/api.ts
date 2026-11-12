@@ -1,4 +1,4 @@
-import { req } from "../../data/api";
+import { ApiFailure, req } from "../../data/api";
 
 /** GET /api/clusters: what everyone may know of a cluster. */
 export interface Cluster {
@@ -27,7 +27,13 @@ export interface Joining {
   command: string;
 }
 
-export const listClusters = () => req<{ items: Cluster[] }>("GET", "/api/clusters");
+/** A console that does not know the route (an older replica during an
+ *  upgrade) is a console of one cluster. */
+export const listClusters = () =>
+  req<{ items: Cluster[] }>("GET", "/api/clusters").catch((e: unknown) => {
+    if (e instanceof ApiFailure && e.status === 404) return { items: [] as Cluster[] };
+    throw e;
+  });
 export const listAdminClusters = () => req<{ items: AdminCluster[] }>("GET", "/api/admin/clusters");
 export const createCluster = (name: string, displayName: string) => req<Joining>("POST", "/api/admin/clusters", { name, displayName });
 export const reissueClusterToken = (name: string) => req<Joining>("POST", `/api/admin/clusters/${name}/token`);

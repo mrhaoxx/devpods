@@ -18,19 +18,24 @@ export class ApiFailure extends Error {
   }
 }
 
-export type ReqOptions = { raw?: { body: BodyInit; contentType: string } };
+/** global: ask the plain path whatever cluster is in use (what covers every cluster). */
+export type ReqOptions = { raw?: { body: BodyInit; contentType: string }; global?: boolean };
 
 /** req calls the API; non-2xx answers throw ApiFailure (a body that is
  *  not JSON — a proxy error page — becomes code HTTP_<status>). */
 export async function req<T>(method: string, path: string, body?: unknown, opts: ReqOptions = {}): Promise<T> {
-  const url = apiPath(path);
+  const url = opts.global ? path : apiPath(path);
   const resp = await fetch(url, {
     method,
     headers: opts.raw ? { "Content-Type": opts.raw.contentType } : body !== undefined ? { "Content-Type": "application/json" } : undefined,
     body: opts.raw ? opts.raw.body : body !== undefined ? JSON.stringify(body) : undefined,
   });
   // an answer of the cluster in use says whether it is that cluster's last known state
-  if (url !== path) noteStale(resp.headers?.get?.("X-DevPod-Stale-Since") ?? null);
+  // (a refusal — the 503 of a change to a cluster that is away — says nothing either way)
+  if (url !== path) {
+    const since = resp.headers?.get?.("X-DevPod-Stale-Since") ?? null;
+    if (since || resp.ok) noteStale(since);
+  }
   if (resp.status === 401 && !path.startsWith("/api/auth/")) {
     window.location.href = "/login";
     throw new ApiFailure(401, { code: "UNAUTHORIZED", message: "not logged in" });
@@ -109,6 +114,9 @@ export const resetUserPassword = (name: string, password: string) =>
   req<void>("PATCH", `/api/admin/users/${name}`, { password });
 export const setUserQuota = (name: string, quota: QuotaPatch) =>
   req<void>("PATCH", `/api/admin/users/${name}`, { quota });
+/** setUserClusterQuota: the user's quota in one cluster (a console of several). */
+export const setUserClusterQuota = (name: string, cluster: string, quota: QuotaPatch) =>
+  req<void>("PATCH", `/api/admin/users/${name}`, { quotas: { [cluster]: quota } });
 export const deleteUser = (name: string) => req<void>("DELETE", `/api/admin/users/${name}`);
 export const listAllDevPods = () =>
   req<{ items: AdminDevPod[]; devpods: DevPod[]; pods: Record<string, PodInfo> }>("GET", "/api/admin/devpods");
@@ -462,9 +470,9 @@ export const httpTicket = (host: string, rd: string) => req<{ url: string }>("PO
 
 /* tokens.go: personal access tokens */
 export type TokenScope = { id: string; group: string; label: string; admin?: boolean };
-export type TokenView = { id: string; name: string; scopes: string[]; devpods: string[]; createdAt: string; expiresAt: string | null; expired: boolean };
+export type TokenView = { id: string; name: string; scopes: string[]; devpods: string[]; clusters?: string[]; createdAt: string; expiresAt: string | null; expired: boolean };
 export const listTokens = () => req<{ items: TokenView[]; scopes: TokenScope[] }>("GET", "/api/me/tokens");
-export const createToken = (body: { name: string; scopes: string[]; devpods: string[]; expiresInDays: number }) =>
+export const createToken = (body: { name: string; scopes: string[]; devpods: string[]; expiresInDays: number; clusters?: string[] }) =>
   req<{ token: string; info: TokenView }>("POST", "/api/me/tokens", body);
 export const deleteToken = (id: string) => req<void>("DELETE", `/api/me/tokens/${id}`);
 

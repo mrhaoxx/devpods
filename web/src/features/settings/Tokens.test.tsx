@@ -29,6 +29,32 @@ describe("Tokens", () => {
     expect(screen.getByText("dpt_abc_secret")).toBeTruthy();
   });
 
+  it("with several clusters a token can be held to some of them", async () => {
+    const calls = stubFetch({
+      "/api/me/tokens": { items: [{ id: "t1", name: "old", scopes: ["devpods:read"], devpods: [], clusters: ["st2"], createdAt: "2026-11-01T00:00:00Z", expiresAt: null, expired: false }], scopes },
+      "/api/devpods": { items: [], pods: {} },
+      "POST /api/me/tokens": { token: "dpt_abc_secret", info: {} },
+    });
+    renderWithProviders(<Tokens />, {
+      clusters: [
+        { name: "mulan", displayName: "木兰", connected: true },
+        { name: "st2", connected: true },
+      ],
+    });
+    // an existing token says where it reaches
+    expect(await screen.findByText("st2")).toBeTruthy();
+    fireEvent.click(await screen.findByRole("button", { name: "新建令牌" }));
+    fireEvent.change(screen.getByLabelText("名称"), { target: { value: "ci" } });
+    const create = screen.getByRole("button", { name: "创建令牌" }) as HTMLButtonElement;
+    fireEvent.click(screen.getByLabelText("只允许访问指定的集群"));
+    expect(create.disabled).toBe(true); // none picked yet
+    fireEvent.click(screen.getByLabelText("集群 mulan"));
+    fireEvent.click(create);
+    await waitFor(() =>
+      expect(calls.find((c) => c.method === "POST")?.body).toBe('{"name":"ci","scopes":["devpods:read"],"devpods":[],"expiresInDays":30,"clusters":["mulan"]}'),
+    );
+  });
+
   it("lists tokens without secrets and revokes after a confirmation", async () => {
     const calls = stubFetch({
       "/api/me/tokens": { items: [{ id: "abc", name: "ci", scopes: ["devpods:read"], devpods: ["alice-a"], createdAt: "2026-11-01T00:00:00Z", expiresAt: null, expired: false }], scopes },

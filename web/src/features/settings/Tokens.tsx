@@ -5,6 +5,7 @@ import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { createToken, deleteToken, listTokens, type TokenScope, type TokenView } from "../../data/api";
 import { useDevPods } from "../../data/queries";
+import { useClusters } from "../clusters/ClusterSwitcher";
 import { Badge } from "../../design/Badge";
 import { Button } from "../../design/Button";
 import { ConfirmDialog } from "../../design/ConfirmDialog";
@@ -32,6 +33,9 @@ function CreateForm({ scopes, onDone }: { scopes: TokenScope[]; onDone: (token: 
   const [picked, setPicked] = useState<Set<string>>(new Set(["devpods:read"]));
   const [limit, setLimit] = useState(false);
   const [devpods, setDevpods] = useState<Set<string>>(new Set());
+  const clusterList = useClusters().data?.items ?? [];
+  const [limitClusters, setLimitClusters] = useState(false);
+  const [clusters, setClusters] = useState<Set<string>>(new Set());
   const [days, setDays] = useState(30);
   const toggle = (set: Set<string>, id: string) => {
     const n = new Set(set);
@@ -39,14 +43,14 @@ function CreateForm({ scopes, onDone }: { scopes: TokenScope[]; onDone: (token: 
     return n;
   };
   const create = useMutation({
-    mutationFn: () => createToken({ name: name.trim(), scopes: [...picked], devpods: limit ? [...devpods] : [], expiresInDays: days }),
+    mutationFn: () => createToken({ name: name.trim(), scopes: [...picked], devpods: limit ? [...devpods] : [], expiresInDays: days, ...(limitClusters ? { clusters: [...clusters] } : {}) }),
     onSuccess: (r) => {
       void qc.invalidateQueries({ queryKey: ["tokens"] });
       onDone(r.token);
     },
   });
   const admin = [...picked].some((s) => s.startsWith("admin:"));
-  const ok = name.trim() !== "" && picked.size > 0 && (!limit || (devpods.size > 0 && !admin));
+  const ok = name.trim() !== "" && picked.size > 0 && (!limit || (devpods.size > 0 && !admin)) && (!limitClusters || clusters.size > 0);
   return (
     <form
       className="space-y-3 rounded-md border border-line p-3"
@@ -107,6 +111,24 @@ function CreateForm({ scopes, onDone }: { scopes: TokenScope[]; onDone: (token: 
         )}
         {limit && admin && <p className="pl-5 text-[11px] text-fail">限定 DevPod 的令牌不能带管理员权限。</p>}
         {limit && <p className="pl-5 text-[11px] text-muted">限定后，这个令牌不能新建 DevPod，也不能访问审计、公钥等不属于某个 DevPod 的接口。</p>}
+        {clusterList.length > 1 && (
+          <>
+            <label className="flex items-center gap-1.5 text-xs">
+              <input type="checkbox" checked={limitClusters} onChange={(e) => setLimitClusters(e.target.checked)} />
+              只允许访问指定的集群
+            </label>
+            {limitClusters && (
+              <div className="flex flex-wrap gap-x-4 gap-y-1 pl-5">
+                {clusterList.map((c) => (
+                  <label key={c.name} className="flex items-center gap-1.5 text-xs">
+                    <input type="checkbox" aria-label={`集群 ${c.name}`} checked={clusters.has(c.name)} onChange={() => setClusters(toggle(clusters, c.name))} />
+                    {c.displayName || c.name}
+                  </label>
+                ))}
+              </div>
+            )}
+          </>
+        )}
       </fieldset>
       {create.isError && <Notice>{create.error instanceof Error ? create.error.message : String(create.error)}</Notice>}
       <div className="flex justify-end">
@@ -171,7 +193,14 @@ export function Tokens() {
                     ))}
                   </div>
                 </td>
-                <td className="mono py-1.5 pr-3">{t.devpods.length ? t.devpods.join(", ") : <span className="font-sans text-muted">全部</span>}</td>
+                <td className="mono py-1.5 pr-3">
+                  {t.devpods.length ? t.devpods.join(", ") : <span className="font-sans text-muted">全部</span>}
+                  {!!t.clusters?.length && (
+                    <div className="font-sans text-[11px] text-muted">
+                      集群：<span className="mono">{t.clusters.join(", ")}</span>
+                    </div>
+                  )}
+                </td>
                 <td className="py-1.5 pr-3 whitespace-nowrap">{t.expired ? <Badge tone="fail">已过期</Badge> : t.expiresAt ? fmtDay(t.expiresAt) : "永不"}</td>
                 <td className="py-1.5 text-right">
                   <button type="button" onClick={() => setRevoke(t)} className="text-muted hover:text-fail" aria-label={`撤销 ${t.name}`}>

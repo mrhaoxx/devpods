@@ -197,6 +197,8 @@ export type AdminUserRow = {
   running: number;
   usage: { cpu?: string; memory?: string; gpu?: string; storage?: string };
   quota?: UserQuota;
+  /** per cluster, in a console of several */
+  quotas?: Record<string, UserQuota>;
   liveUsage?: { cpu: number; mem: number; gpu: number; devpodsRunning: number };
   lastSession?: string;
   source: "oidc" | "password" | "ldap";

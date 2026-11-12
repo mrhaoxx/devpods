@@ -81,6 +81,45 @@ describe("users page", () => {
     expect(within(dlg).getByText("配额")).toBeTruthy();
   });
 
+  it("with several clusters a quota can be set for one of them", async () => {
+    const calls = stubFetch({
+      "/api/admin/users": {
+        ...users,
+        items: [user("alice", "7", { quotas: { st2: { maxDevPods: 2 } } }), user("bob", "1")],
+      },
+      "/api/devpods": { items: [], pods: {} },
+      "/api/audit/sessions": { items: [], next: "" },
+      "/api/admin/users/alice/audit-policy": { default: {}, user: null, effective: {}, warnings: [] },
+      "PATCH /api/admin/users/alice": new Response(null, { status: 204 }),
+    });
+    renderWithProviders(<UsersPage />, {
+      me: stubMe({ admin: true, user: "root" }),
+      route: "/admin/users?user=alice",
+      clusters: [
+        { name: "mulan", connected: true },
+        { name: "st2", connected: true },
+      ],
+    });
+    const dlg = within(await screen.findByRole("dialog", { name: /alice/ }));
+    const where = (await dlg.findByLabelText("配额作用于")) as HTMLSelectElement;
+    expect(Array.from(where.options).map((o) => o.textContent)).toEqual(["所有集群", "mulan", "st2"]);
+    // the cluster's own entry is what the fields show
+    fireEvent.change(where, { target: { value: "st2" } });
+    expect((dlg.getByLabelText("配额 DevPod 数") as HTMLInputElement).value).toBe("2");
+    fireEvent.change(where, { target: { value: "mulan" } });
+    expect((dlg.getByLabelText("配额 DevPod 数") as HTMLInputElement).value).toBe("");
+    fireEvent.change(dlg.getByLabelText("配额 CPU"), { target: { value: "64" } });
+    fireEvent.click(dlg.getByRole("button", { name: "保存配额" }));
+    await waitFor(() => expect(calls.find((c) => c.method === "PATCH")?.body).toBe('{"quotas":{"mulan":{"maxDevPods":null,"cpu":"64"}}}'));
+  });
+
+  it("without clusters there is no choice of where a quota applies", async () => {
+    setup("/admin/users?user=alice");
+    const dlg = within(await screen.findByRole("dialog", { name: /alice/ }));
+    await dlg.findByText("配额");
+    expect(dlg.queryByLabelText("配额作用于")).toBeNull();
+  });
+
   it("delete user requires confirmation", async () => {
     const calls = setup("/admin/users?user=alice", { "DELETE /api/admin/users/alice": new Response(null, { status: 204 }) });
     const dlg = await screen.findByRole("dialog", { name: /alice/ });

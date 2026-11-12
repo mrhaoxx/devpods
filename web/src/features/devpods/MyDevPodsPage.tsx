@@ -1,3 +1,4 @@
+import { OtherClusters } from "../clusters/OtherClusters";
 import { useSearchParams } from "react-router-dom";
 import { DevPodTable } from "./DevPodTable";
 import { DevPodDrawer } from "./DevPodDrawer";
@@ -8,6 +9,7 @@ export function MyDevPodsPage() {
   return (
     <>
       <DevPodTable scope="mine" />
+      <OtherClusters />
       {open && (
         <DevPodDrawer
           mode="create"

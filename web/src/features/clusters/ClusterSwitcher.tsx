@@ -19,7 +19,8 @@ export function ClusterGate({ children }: { children: ReactNode }) {
   useEffect(() => {
     if (want !== undefined && want !== currentCluster()) rememberCluster(want);
   }, [want]);
-  if (q.isError) return <EmptyState tone="error" title="无法加载集群列表" hint={String(q.error)} />;
+  // only when nothing is known yet: a refresh that fails keeps the page as it is
+  if (q.isError && !q.data) return <EmptyState tone="error" title="无法加载集群列表" hint={String(q.error)} />;
   if (want === undefined || want !== cur) return null;
   return <>{children}</>;
 }
