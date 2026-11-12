@@ -11,6 +11,7 @@ import EditorWorker from "monaco-editor/esm/vs/editor/editor.worker?worker";
 import { configureMonacoYaml, type JSONSchema } from "monaco-yaml";
 import YamlWorker from "./yaml.worker?worker";
 import devpodSchema from "./devpod.schema.json";
+import { templatedMarkers } from "./templated";
 
 (self as unknown as { MonacoEnvironment: monaco.Environment }).MonacoEnvironment = {
   getWorker: (_id, label) => (label === "yaml" ? new YamlWorker() : new EditorWorker()),
@@ -79,6 +80,8 @@ export function createYamlEditor(
     readOnly?: boolean;
     ariaLabel: string;
     schema?: YamlSchema;
+    /** the text has ${...} where values go: what the schema says of those is not shown */
+    templated?: boolean;
     onChange(text: string): void;
     onSchemaProblems?(problems: SchemaProblem[]): void;
   },
@@ -121,11 +124,28 @@ export function createYamlEditor(
   const sub = model.onDidChangeContent(() => {
     if (!silent) opts.onChange(model.getValue());
   });
+  const line = (n: number) => (n >= 1 && n <= model.getLineCount() ? model.getLineContent(n) : "");
   const markers = monaco.editor.onDidChangeMarkers((uris) => {
-    if (!opts.onSchemaProblems || !uris.some((u) => u.toString() === model.uri.toString())) return;
+    if (!uris.some((u) => u.toString() === model.uri.toString())) return;
+    let all = monaco.editor.getModelMarkers({ resource: model.uri });
+    if (opts.templated) {
+      // set again without what is said of a ${...}, owner by owner (the
+      // second round finds nothing to drop, so this does not loop)
+      const kept = templatedMarkers(all, line);
+      if (kept.length < all.length) {
+        for (const owner of new Set(all.map((m) => m.owner))) {
+          monaco.editor.setModelMarkers(
+            model,
+            owner,
+            kept.filter((m) => m.owner === owner),
+          );
+        }
+      }
+      all = kept;
+    }
+    if (!opts.onSchemaProblems) return;
     opts.onSchemaProblems(
-      monaco.editor
-        .getModelMarkers({ resource: model.uri })
+      all
         .filter(fromSchema)
         .sort((a, b) => a.startLineNumber - b.startLineNumber || a.startColumn - b.startColumn)
         .map((m) => ({
@@ -157,6 +177,36 @@ export function createYamlEditor(
       sub.dispose();
       editor.dispose();
       model.dispose();
+    },
+  };
+}
+
+/** createYamlDiff: two YAML texts side by side, read only. */
+export function createYamlDiff(el: HTMLElement, original: string, modified: string): { dispose(): void } {
+  applyTheme();
+  const a = monaco.editor.createModel(original, "yaml");
+  const b = monaco.editor.createModel(modified, "yaml");
+  const diff = monaco.editor.createDiffEditor(el, {
+    readOnly: true,
+    originalEditable: false,
+    renderSideBySide: true,
+    automaticLayout: true,
+    minimap: { enabled: false },
+    scrollBeyondLastLine: false,
+    fontSize: 12,
+    lineHeight: 19,
+    renderOverviewRuler: false,
+    scrollbar: { alwaysConsumeMouseWheel: false },
+  });
+  diff.setModel({ original: a, modified: b });
+  const themeWatch = new MutationObserver(applyTheme);
+  themeWatch.observe(document.documentElement, { attributes: true, attributeFilter: ["data-theme"] });
+  return {
+    dispose() {
+      themeWatch.disconnect();
+      diff.dispose();
+      a.dispose();
+      b.dispose();
     },
   };
 }

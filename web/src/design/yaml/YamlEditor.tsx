@@ -13,7 +13,7 @@ import { problemText, yamlProblems, type YamlProblem } from "./lint";
 import type { SchemaProblem, YamlEditorHandle, YamlSchema } from "./monaco";
 
 /** Monaco draws on a canvas and parses in a worker: not in a test's DOM. */
-function canRunMonaco(): boolean {
+export function canRunMonaco(): boolean {
   if (typeof window === "undefined" || typeof Worker === "undefined") return false;
   try {
     return !!document.createElement("canvas").getContext("2d");
@@ -45,6 +45,7 @@ export function YamlEditor({
   maxLines = 40,
   check = true,
   schema,
+  templated = false,
 }: {
   value: string;
   onChange?: (text: string) => void;
@@ -56,6 +57,8 @@ export function YamlEditor({
   check?: boolean;
   /** what the text is: fields are completed, explained and checked against it */
   schema?: YamlSchema;
+  /** the text has ${...} where values go (a config): nothing is said of those */
+  templated?: boolean;
 }) {
   const host = useRef<HTMLDivElement>(null);
   const handle = useRef<YamlEditorHandle | null>(null);
@@ -86,6 +89,7 @@ export function YamlEditor({
           readOnly,
           ariaLabel,
           schema,
+          templated,
           onChange: (text) => latest.current.onChange?.(text),
           onSchemaProblems: (ps) => !gone && setSchemaProblems(ps),
         });
