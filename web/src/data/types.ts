@@ -29,6 +29,8 @@ export type LiveListFrame = { ts: string; items: LiveItem[] };
 
 export type CardLive = { index: number; uuid: string; devpod: string; owner: string; util: number };
 export type NodeLive = {
+  /** the cluster it is in, in a console of several (a name can be in two) */
+  cluster?: string;
   name: string;
   ready: boolean;
   labels?: Record<string, string>;

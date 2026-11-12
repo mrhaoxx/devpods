@@ -250,7 +250,10 @@ curl -H "$auth" -X POST $base/api/clusters/mulan/configs/me-sg/launch -d '{"vars
   `GET /api/devpods` (and its `?watch=true` stream, whose events carry
   `cluster`; and the admin list, live rows and search), `GET /api/nodes`,
   `GET /api/admin/nodes`, `GET /api/reservations` and `GET /api/snapshots`.
-  The `pods` of the DevPod list are keyed `<cluster>/<name>`. Narrowing to
+  The `pods` of the DevPod list are keyed `<cluster>/<name>`. The live
+  overview's nodes and attention items carry `cluster` too, and
+  `GET /api/clusters/<c>/admin/live/overview` answers that cluster's own
+  numbers (KPI, users, nodes, attention). Narrowing to
   one cluster is the caller's choice: name it in the path, or filter the
   items (the console does the latter, with its cluster filter).
 - A path naming a DevPod (`/api/devpods/{name}…`) without a cluster finds it

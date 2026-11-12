@@ -41,11 +41,12 @@ const schema = {
 
 const spec = overviewStream();
 
-function CpuUsed({ name }: { name: string }) {
-  const { row } = useLiveRow<NodeLive>(spec, `node:${name}`);
+function CpuUsed({ n }: { n: Ref }) {
+  const key = keyOf(n); // a node name can be in two clusters
+  const { row } = useLiveRow<NodeLive>(spec, `node:${key}`);
   const recent = useNodesRecent().data; // stored history: the curve is there on arrival
   if (!row) return <span className="text-faint">—</span>;
-  const hist = recent?.items[name] && { ts: recent.ts, v: recent.items[name].cpu };
+  const hist = recent?.items[key] && { ts: recent.ts, v: recent.items[key].cpu };
   return (
     <span className="inline-flex items-center gap-1.5">
       <Sparkline
@@ -139,7 +140,7 @@ const columns: ColumnDef<NodeView, unknown>[] = [
     meta: { priority: 2, width: 150 },
     cell: ({ row: { original: n } }) => <Meter used={n.cpu.allocated} limit={n.cpu.allocatable} label={`${fmtCores(n.cpu.allocated)}/${fmtCores(n.cpu.allocatable)}`} width={48} />,
   },
-  { id: "used", header: "DevPod 实际 CPU", enableSorting: false, meta: { priority: 3, width: 110 }, cell: ({ row }) => <CpuUsed name={row.original.name} /> },
+  { id: "used", header: "DevPod 实际 CPU", enableSorting: false, meta: { priority: 3, width: 110 }, cell: ({ row }) => <CpuUsed n={row.original} /> },
   {
     id: "mem",
     header: "内存已分配",

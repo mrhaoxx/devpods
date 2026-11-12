@@ -1,8 +1,10 @@
 // 集群总览 (UI spec §5.3), refreshed every second from the overview stream.
+import { useClusterFilter } from "../../data/clusterFilter";
+import { keyOf } from "../../data/cluster";
 import { devpodHref } from "../../data/cluster";
 import { Link, useNavigate } from "react-router-dom";
 import { useQueryClient } from "@tanstack/react-query";
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { ApiFailure, patchDevPod, type AttentionItem, type KPI, type NodeLive, type UserLive } from "../../data/api";
 import { useAuditSessions, useMe } from "../../data/queries";
 import { overviewStream } from "../../data/live/streams";
@@ -16,7 +18,6 @@ import { fmtAge, fmtBytes, fmtCores, fmtRate } from "../../lib/format";
 import { useNow } from "../../lib/useNow";
 import { attentionAction, attentionTitle } from "./attention";
 
-const spec = overviewStream();
 
 function KpiStrip({ k }: { k?: KPI }) {
   const v = (s: string) => (k ? s : "—");
@@ -41,9 +42,9 @@ function HeatStrip({ nodes }: { nodes: NodeLive[] }) {
         const pct = n.cpuAllocatable > 0 ? Math.min(100, Math.round((n.cpuUsed / n.cpuAllocatable) * 100)) : 0;
         return (
           <button
-            key={n.name}
+            key={keyOf(n)}
             type="button"
-            onClick={() => nav(`/admin/nodes?node=${encodeURIComponent(n.name)}`)}
+            onClick={() => nav(`/admin/nodes?node=${encodeURIComponent(keyOf(n))}`)}
             aria-label={`${n.name} ${n.ready ? `CPU ${pct}%` : "NotReady"}${n.gpuTotal ? ` GPU ${n.gpuUsed}/${n.gpuTotal}` : ""}`}
             title={`${n.name} · CPU ${pct}%${n.gpuTotal ? ` · GPU ${n.gpuUsed}/${n.gpuTotal}` : ""}`}
             className={`relative h-11 w-[72px] rounded border border-line text-left ${n.ready ? "" : "bg-idle-soft text-muted"}`}
@@ -169,6 +170,9 @@ function RecentAudit() {
 }
 
 export function OverviewPage() {
+  // the filtered cluster's numbers, or the console's
+  const { filter } = useClusterFilter();
+  const spec = useMemo(() => overviewStream(filter || undefined), [filter]);
   const kpi = useLiveRow<KPI>(spec, "kpi");
   const nodes = useLiveRow<NodeLive[]>(spec, "nodes");
   const users = useLiveRow<UserLive[]>(spec, "users");

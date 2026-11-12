@@ -13,11 +13,12 @@ export function devpodsStream(scope: "mine" | "all"): StreamSpec {
 }
 
 /** /api/admin/live/overview: kpi, attention, nodes, users, plus one row
- *  per node (node:<name>) and per user (user:<name>). */
-export function overviewStream(): StreamSpec {
+ *  per node (node:<cluster>/<name>, or node:<name> in a console of one)
+ *  and per user (user:<name>). With a cluster: that cluster's numbers. */
+export function overviewStream(cluster?: string): StreamSpec {
   return {
-    id: "overview",
-    url: "/api/admin/live/overview",
+    id: `overview${cluster ? `:${cluster}` : ""}`,
+    url: apiIn(cluster, "/api/admin/live/overview"),
     rows: (m) => {
       const f = m as OverviewFrame;
       if (!f || !f.kpi) return [];
@@ -28,7 +29,7 @@ export function overviewStream(): StreamSpec {
         ["attention", f.attention ?? []],
         ["nodes", nodes],
         ["users", users],
-        ...nodes.map((n) => [`node:${n.name}`, n] as [string, unknown]),
+        ...nodes.map((n) => [`node:${keyOf(n)}`, n] as [string, unknown]),
         ...users.map((u) => [`user:${u.user}`, u] as [string, unknown]),
       ];
     },
