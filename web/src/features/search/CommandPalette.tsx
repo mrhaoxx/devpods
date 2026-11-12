@@ -1,6 +1,7 @@
 // ⌘K global search (UI spec §5.9): users, DevPods, sessions, commands
 // (≤ 5 each, already filtered by the server for non-admins); Enter goes
 // to the result; DevPod rows offer 复制 SSH / 休眠·启动 / 打开监控.
+import { devpodHref, keyOf } from "../../data/cluster";
 import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
@@ -96,22 +97,22 @@ export function CommandPalette() {
                 f();
               };
               return (
-                <Command.Item key={d.name} value={`devpod:${d.name}`} onSelect={() => go(`/devpods/${d.name}`)} className={item}>
+                <Command.Item key={keyOf(d)} value={`devpod:${keyOf(d)}`} onSelect={() => go(devpodHref(d))} className={item}>
                   <StatusDot phase={d.phase} showLabel={false} />
                   <span className="mono min-w-0 flex-1 truncate">{d.name}</span>
                   {me?.admin && <span className="mono text-muted">{d.owner}</span>}
-                  <button type="button" aria-label={`${d.name} 复制 SSH`} className="rounded px-1 text-[11px] text-muted hover:bg-surface hover:text-ink" onClick={(e) => act(e, () => void copyText(sshCommand(me, d.owner, d.name)))}>
+                  <button type="button" aria-label={`${d.name} 复制 SSH`} className="rounded px-1 text-[11px] text-muted hover:bg-surface hover:text-ink" onClick={(e) => act(e, () => void copyText(sshCommand(me, d.owner, d.name, d.cluster)))}>
                     复制 SSH
                   </button>
                   <button
                     type="button"
                     aria-label={`${d.name} ${running ? "休眠" : "启动"}`}
                     className="rounded px-1 text-[11px] text-muted hover:bg-surface hover:text-ink"
-                    onClick={(e) => act(e, () => void patchDevPod(d.name, !running).finally(() => void qc.invalidateQueries({ queryKey: ["search"] })))}
+                    onClick={(e) => act(e, () => void patchDevPod(d, !running).finally(() => void qc.invalidateQueries({ queryKey: ["search"] })))}
                   >
                     {running ? "休眠" : "启动"}
                   </button>
-                  <button type="button" aria-label={`${d.name} 打开监控`} className="rounded px-1 text-[11px] text-muted hover:bg-surface hover:text-ink" onClick={(e) => act(e, () => go(`/devpods/${d.name}?tab=monitor`))}>
+                  <button type="button" aria-label={`${d.name} 打开监控`} className="rounded px-1 text-[11px] text-muted hover:bg-surface hover:text-ink" onClick={(e) => act(e, () => go(devpodHref(d, "monitor")))}>
                     打开监控
                   </button>
                 </Command.Item>

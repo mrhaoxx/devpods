@@ -71,7 +71,7 @@ describe("launch form", () => {
     const results = within(await screen.findByRole("list", { name: "结果" })).getAllByRole("listitem");
     expect(results).toHaveLength(2);
     expect(screen.getByRole("status").textContent).toMatch(/已创建 2 个/);
-    expect(screen.getByRole("link", { name: "alice-sg-0" }).getAttribute("href")).toBe("/devpods/alice-sg-0");
+    expect(screen.getByRole("link", { name: "alice-sg-0" }).getAttribute("href")).toBe("/devpods/-/alice-sg-0");
     expect(done).toHaveBeenCalledWith({ items: expect.any(Array), group: undefined });
   });
 

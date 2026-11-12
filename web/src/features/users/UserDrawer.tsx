@@ -1,7 +1,9 @@
 // One user (UI spec §5.5): quota with current usage beside each field
 // (blank = default), DevPods, recent sessions, policy override, SSH keys,
 // 设为管理员 / 删除用户 behind confirmation.
-import { useClusters } from "../clusters/ClusterSwitcher";
+import { devpodHref } from "../../data/cluster";
+import { refOf } from "../../data/api";
+import { useClusterList } from "../../data/clusterFilter";
 import { useState } from "react";
 import { Link } from "react-router-dom";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
@@ -22,7 +24,7 @@ const sourceLabel = { oidc: "GitLab", password: "密码", ldap: "LDAP" } as cons
 /** Quota: the user's own, for every cluster — or, in a console of several
  *  clusters, their quota in one of them (which goes before their own). */
 function Quota({ u, def }: { u: AdminUserRow; def: UserQuota }) {
-  const clusters = useClusters().data?.items ?? [];
+  const clusters = useClusterList().data?.items ?? [];
   const [where, setWhere] = useState("");
   return (
     <>
@@ -158,7 +160,7 @@ export function UserDrawer({ u, def, onClose }: { u?: AdminUserRow; def: UserQuo
                   <li key={d.metadata.name} className="flex items-center gap-2 px-3 py-1">
                     <StatusDot phase={d.status?.phase} />
                     <span className="mono min-w-0 flex-1 truncate">{d.metadata.name}</span>
-                    <Link to={`/devpods/${d.metadata.name}`} className="text-accent hover:underline">
+                    <Link to={devpodHref(refOf(d))} className="text-accent hover:underline">
                       打开
                     </Link>
                   </li>

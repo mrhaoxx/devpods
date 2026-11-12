@@ -53,7 +53,7 @@ describe("PodTab", () => {
 
   it("tells the Pod as kubectl describe would: summary, conditions, containers with their state, volumes", async () => {
     stubFetch({ "/api/devpods/alice-x/pod": { pod } });
-    renderWithProviders(<PodTab name="alice-x" />);
+    renderWithProviders(<PodTab r={{ name: "alice-x" }} />);
     const summary = await screen.findByRole("group", { name: "概要" });
     for (const [k, v] of [
       ["阶段", "Running"],
@@ -96,7 +96,7 @@ describe("PodTab", () => {
   it("a stopped DevPod has no Pod, and says so; 刷新 asks again", async () => {
     let n = 0;
     stubFetch({ "/api/devpods/alice-x/pod": () => new Response(JSON.stringify({ pod: n++ === 0 ? null : pod })) });
-    renderWithProviders(<PodTab name="alice-x" />);
+    renderWithProviders(<PodTab r={{ name: "alice-x" }} />);
     expect(await screen.findByText(/没有 Pod/)).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "刷新" }));
     await waitFor(() => expect(screen.getByRole("group", { name: "概要" })).toBeTruthy());
@@ -104,7 +104,7 @@ describe("PodTab", () => {
 
   it("a failure to load is shown with its reason", async () => {
     stubFetch({ "/api/devpods/alice-x/pod": new Response(JSON.stringify({ code: "INTERNAL", message: "the API server is away" }), { status: 500 }) });
-    renderWithProviders(<PodTab name="alice-x" />);
+    renderWithProviders(<PodTab r={{ name: "alice-x" }} />);
     expect((await screen.findByRole("alert")).textContent).toContain("the API server is away");
   });
 });

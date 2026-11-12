@@ -1,4 +1,5 @@
 // 集群总览 (UI spec §5.3), refreshed every second from the overview stream.
+import { devpodHref } from "../../data/cluster";
 import { Link, useNavigate } from "react-router-dom";
 import { useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
@@ -72,7 +73,7 @@ function Attention({ items }: { items: AttentionItem[] }) {
           <li key={key} className="flex flex-wrap items-center gap-2 px-3 py-1.5">
             <Badge tone={a.kind === "alert" ? "fail" : "warm"}>{attentionTitle[a.kind] ?? a.kind}</Badge>
             {a.devpod && (
-              <Link to={`/devpods/${a.devpod}`} className="mono hover:text-accent">
+              <Link to={devpodHref({ cluster: a.cluster, name: a.devpod })} className="mono hover:text-accent">
                 {a.devpod}
               </Link>
             )}
@@ -86,7 +87,7 @@ function Attention({ items }: { items: AttentionItem[] }) {
             ) : act?.op === "hibernate" && a.devpod ? (
               <Button
                 onClick={() =>
-                  patchDevPod(a.devpod!, false)
+                  patchDevPod({ cluster: a.cluster, name: a.devpod! }, false)
                     .then(() => setDone((d) => ({ ...d, [key]: "已休眠" })))
                     .catch((e) => setDone((d) => ({ ...d, [key]: e instanceof ApiFailure ? e.body.message : String(e) })))
                     .finally(() => void qc.invalidateQueries({ queryKey: ["devpods"] }))

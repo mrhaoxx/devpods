@@ -1,5 +1,6 @@
 // 容器 (UI spec §5.2): what the agent reported about the container, plus
 // the Kore CPU layout when the DevPod is bound.
+import type { Ref } from "../../../data/cluster";
 import { useQuery } from "@tanstack/react-query";
 import type { ReactNode } from "react";
 import { ApiFailure, devpodTopology, parseCpuList } from "../../../data/api";
@@ -25,13 +26,13 @@ function KV({ rows }: { rows: [string, ReactNode][] }) {
   );
 }
 
-export function ContainerTab({ name }: { name: string }) {
-  const info = useInfo(name);
-  const topo = useQuery({ queryKey: ["devpod-topo", name], queryFn: () => devpodTopology(name), refetchInterval: 10_000, retry: false });
+export function ContainerTab({ r }: { r: Ref }) {
+  const info = useInfo(r);
+  const topo = useQuery({ queryKey: ["devpod-topo", r.cluster ?? "", r.name], queryFn: () => devpodTopology(r), refetchInterval: 10_000, retry: false });
   const kore = topo.data?.node ? (
     <Panel title={`CPU 布局 · ${topo.data.node.node}`} actions={<TopologyLegend mine />}>
       <div className="p-3">
-        <NodeZones node={topo.data.node} reveal={false} mine={parseCpuList(topo.data.cpuset)} />
+        <NodeZones cluster={r.cluster} node={topo.data.node} reveal={false} mine={parseCpuList(topo.data.cpuset)} />
       </div>
     </Panel>
   ) : null;

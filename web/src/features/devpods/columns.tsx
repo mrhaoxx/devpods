@@ -1,6 +1,7 @@
 // The DevPod table's columns (UI spec §5.1). Metric cells subscribe to
 // their own row of the live stream, so a per-second update re-renders
 // only them.
+import { devpodHref } from "../../data/cluster";
 import { createContext, useContext } from "react";
 import { Link } from "react-router-dom";
 import type { ColumnDef } from "@tanstack/react-table";
@@ -17,6 +18,8 @@ import { provenance } from "./provenance";
 import type { UsageKey } from "./usage";
 
 export type Row = {
+  /** the cluster it is in (absent in a console of one) */
+  cluster?: string;
   dp: DevPod;
   pod?: PodInfo;
   name: string;
@@ -35,6 +38,7 @@ export function toRow(dp: DevPod, pod?: PodInfo): Row {
   const c = dp.spec.pod?.spec?.containers?.[0];
   const lim = c?.resources?.limits ?? {};
   return {
+    ...(dp.cluster ? { cluster: dp.cluster } : {}),
     dp,
     pod,
     name: dp.metadata.name,
@@ -201,7 +205,7 @@ export function devpodColumns(opts: {
           <span title={phaseLabel(r.phase)}>
             <StatusDot phase={r.phase} showLabel={false} />
           </span>
-          <Link to={`/devpods/${r.name}`} className="mono truncate hover:text-accent">
+          <Link to={devpodHref(r)} className="mono truncate hover:text-accent">
             {r.name}
           </Link>
           {r.phase !== "Running" && <span className="text-[11px] text-muted">{phaseLabel(r.phase)}</span>}

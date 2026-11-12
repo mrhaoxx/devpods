@@ -1,7 +1,7 @@
 import { useLocation } from "react-router-dom";
 import { logout, type Me } from "../data/api";
 import { useTheme, type ThemePref } from "./theme";
-import { ClusterSwitcher } from "../features/clusters/ClusterSwitcher";
+import { ClusterFilter } from "../features/clusters/ClusterFilter";
 
 const titles: [RegExp, string][] = [
   [/^\/$/, "我的 DevPod"],
@@ -49,7 +49,7 @@ export function Topbar({ me, onMenu }: { me: Me; onMenu: () => void }) {
         <span className="flex-1 text-left max-[700px]:hidden">搜索…</span>
         <kbd className="mono rounded border border-line px-1 text-[10px] max-[700px]:hidden">⌘K</kbd>
       </button>
-      <ClusterSwitcher />
+      <ClusterFilter />
       <select
         aria-label="配色"
         value={pref}

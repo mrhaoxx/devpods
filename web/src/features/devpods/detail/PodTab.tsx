@@ -1,6 +1,7 @@
 // The Pod behind a DevPod, the way `kubectl describe pod` tells it: where
 // it runs, the state of each container and why, what is mounted. For the
 // question "why does my DevPod not start".
+import type { Ref } from "../../../data/cluster";
 import type { ReactNode } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { ApiFailure, getDevPodPod, type PodContainer } from "../../../data/api";
@@ -75,8 +76,8 @@ function Chips({ label, items }: { label: string; items: string[] }) {
   );
 }
 
-export function PodTab({ name }: { name: string }) {
-  const q = useQuery({ queryKey: ["devpod-pod", name], queryFn: () => getDevPodPod(name), refetchInterval: 5000, retry: false });
+export function PodTab({ r }: { r: Ref }) {
+  const q = useQuery({ queryKey: ["devpod-pod", r.cluster ?? "", r.name], queryFn: () => getDevPodPod(r), refetchInterval: 5000, retry: false });
   const refresh = (
     <Button onClick={() => void q.refetch()} disabled={q.isFetching}>
       刷新

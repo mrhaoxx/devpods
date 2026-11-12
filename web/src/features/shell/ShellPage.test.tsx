@@ -63,9 +63,9 @@ class FakeSocket {
 const render = () =>
   renderWithProviders(
     <Routes>
-      <Route path="/devpods/:name/shell" element={<ShellPage />} />
+      <Route path="/devpods/:cluster/:name/shell" element={<ShellPage />} />
     </Routes>,
-    { route: "/devpods/alice-a/shell" },
+    { route: "/devpods/-/alice-a/shell" },
   );
 
 describe("ShellPage", () => {
@@ -78,8 +78,8 @@ describe("ShellPage", () => {
   afterEach(() => vi.unstubAllGlobals());
 
   it("builds the socket URL from the page's scheme", () => {
-    expect(shellSocketURL("a", 80, 24, { protocol: "https:", host: "ui.example" })).toBe("wss://ui.example/api/devpods/a/shell?cols=80&rows=24");
-    expect(shellSocketURL("a", 80, 24, { protocol: "http:", host: "localhost:5173" })).toBe("ws://localhost:5173/api/devpods/a/shell?cols=80&rows=24");
+    expect(shellSocketURL({ name: "a" }, 80, 24, { protocol: "https:", host: "ui.example" })).toBe("wss://ui.example/api/devpods/a/shell?cols=80&rows=24");
+    expect(shellSocketURL({ cluster: "c", name: "a" }, 80, 24, { protocol: "http:", host: "localhost:5173" })).toBe("ws://localhost:5173/api/clusters/c/devpods/a/shell?cols=80&rows=24");
   });
 
   it("bridges the terminal: output in, keys out as binary, resize as a control message", async () => {

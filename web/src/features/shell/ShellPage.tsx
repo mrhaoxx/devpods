@@ -4,6 +4,7 @@
 // is a control message ({"type":"resize"}).
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Link, Navigate, useParams } from "react-router-dom";
+import { devpodHref, segCluster } from "../../data/cluster";
 import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import "@xterm/xterm/css/xterm.css";
@@ -30,7 +31,8 @@ function reasonText(reason: string): string {
 }
 
 export function ShellPage() {
-  const { name = "" } = useParams();
+  const { cluster: seg, name = "" } = useParams();
+  const cluster = segCluster(seg);
   const me = useMe();
   const host = useRef<HTMLDivElement>(null);
   const term = useRef<Terminal | null>(null);
@@ -111,7 +113,7 @@ export function ShellPage() {
     const t = term.current;
     if (!t || !name) return;
     setState({ kind: "connecting" });
-    const ws = new WebSocket(shellSocketURL(name, t.cols, t.rows));
+    const ws = new WebSocket(shellSocketURL({ cluster, name }, t.cols, t.rows));
     ws.binaryType = "arraybuffer";
     sock.current = ws;
     let opened = false;
@@ -130,7 +132,7 @@ export function ShellPage() {
       sock.current = null;
       if (opened) return setState({ kind: "closed", reason: reasonText(e.reason) });
       // the handshake failed: ask the server why
-      probeShell(name).then(
+      probeShell({ cluster, name }).then(
         () => setState({ kind: "closed", reason: "无法连接：SSH 网关拒绝了连接，或同时打开的终端已达上限" }),
         (err: unknown) => setState({ kind: "closed", reason: err instanceof ApiFailure ? err.body.message : "无法连接" }),
       );
@@ -139,7 +141,7 @@ export function ShellPage() {
       sock.current = null;
       ws.close();
     };
-  }, [name, attempt]);
+  }, [cluster, name, attempt]);
 
   const reconnect = useCallback(() => {
     term.current?.reset();
@@ -150,7 +152,7 @@ export function ShellPage() {
   return (
     <div className="flex h-screen flex-col bg-surface">
       <header className="flex items-center gap-3 border-b border-line px-3 py-1.5 text-xs">
-        <Link to={`/devpods/${name}`} className="mono font-semibold text-ink hover:text-accent">
+        <Link to={devpodHref({ cluster, name })} className="mono font-semibold text-ink hover:text-accent">
           {name}
         </Link>
         <span className="text-muted">终端</span>

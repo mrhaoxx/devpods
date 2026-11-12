@@ -1,3 +1,4 @@
+import { devpodHref } from "../../data/cluster";
 import { Link } from "react-router-dom";
 import { KoreNode, KoreZone, parseCpuList } from "../../data/api";
 
@@ -23,7 +24,7 @@ export function coreMap(node: KoreNode): Map<number, CoreInfo> {
 // reveal=false anonymizes other tenants (owner view); mine = the
 // caller's own cores. "mine" adds an inset ring on top of the core's
 // base color, so pinned (accent) vs shared-pool (warm) stays visible.
-function Cell({ core, info, mine, reveal }: { core: number; info: CoreInfo; mine: Set<number>; reveal: boolean }) {
+function Cell({ cluster, core, info, mine, reveal }: { cluster?: string; core: number; info: CoreInfo; mine: Set<number>; reveal: boolean }) {
   const isMine = mine.has(core);
   let base: string;
   let label: string;
@@ -52,11 +53,11 @@ function Cell({ core, info, mine, reveal }: { core: number; info: CoreInfo; mine
   }
   const title = `cpu ${core} · ${label}`;
   const box = <span title={title} className={cx("block size-3.5 rounded-[3px]", base, isMine && "ring-2 ring-inset ring-ink/70")} />;
-  if (pod) return <Link to={`/devpods/${pod}`} title={title}>{box}</Link>;
+  if (pod) return <Link to={devpodHref({ cluster, name: pod })} title={title}>{box}</Link>;
   return box;
 }
 
-function Zone({ zone, cores, mine, reveal }: { zone: KoreZone; cores: Map<number, CoreInfo>; mine: Set<number>; reveal: boolean }) {
+function Zone({ cluster, zone, cores, mine, reveal }: { cluster?: string; zone: KoreZone; cores: Map<number, CoreInfo>; mine: Set<number>; reveal: boolean }) {
   const free = parseCpuList(zone.freeCpus);
   const all = [...parseCpuList(zone.cpus)].sort((a, b) => a - b);
   const info = (c: number): CoreInfo =>
@@ -78,7 +79,7 @@ function Zone({ zone, cores, mine, reveal }: { zone: KoreZone; cores: Map<number
         {groups.map((g, i) => (
           <div key={i} className="flex flex-col gap-[3px]">
             {g.map((c) => (
-              <Cell key={c} core={c} info={info(c)} mine={mine} reveal={reveal} />
+              <Cell key={c} cluster={cluster} core={c} info={info(c)} mine={mine} reveal={reveal} />
             ))}
           </div>
         ))}
@@ -87,13 +88,13 @@ function Zone({ zone, cores, mine, reveal }: { zone: KoreZone; cores: Map<number
   );
 }
 
-export function NodeZones({ node, mine, reveal }: { node: KoreNode; mine?: Set<number>; reveal: boolean }) {
+export function NodeZones({ cluster, node, mine, reveal }: { cluster?: string; node: KoreNode; mine?: Set<number>; reveal: boolean }) {
   const cores = coreMap(node);
   const mineSet = mine ?? new Set<number>();
   return (
     <div className="space-y-4">
       {node.zones.map((z) => (
-        <Zone key={z.id} zone={z} cores={cores} mine={mineSet} reveal={reveal} />
+        <Zone key={z.id} cluster={cluster} zone={z} cores={cores} mine={mineSet} reveal={reveal} />
       ))}
     </div>
   );

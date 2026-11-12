@@ -65,7 +65,7 @@ describe("snapshots", () => {
       "/api/snapshots/alice-a-abc123/progress": () => stream.response,
       "/api/snapshots": { items: [] },
     });
-    renderWithProviders(<SnapshotDialog devpod="alice-a" owner="alice" onClose={() => {}} />, { me: features() });
+    renderWithProviders(<SnapshotDialog devpod={{ name: "alice-a" }} owner="alice" onClose={() => {}} />, { me: features() });
     expect(((await screen.findByLabelText("名称")) as HTMLInputElement).value).toBe("a");
     expect(screen.getByText(/不含持久卷/)).toBeTruthy();
     expect((screen.getByRole("checkbox") as HTMLInputElement).checked).toBe(true); // pause by default
@@ -103,7 +103,7 @@ describe("snapshots", () => {
       "DELETE /api/snapshots/alice-a-abc123": new Response(null, { status: 204 }),
       "/api/snapshots": { items: [] },
     });
-    renderWithProviders(<SnapshotDialog devpod="alice-a" owner="alice" onClose={() => {}} />, { me: features() });
+    renderWithProviders(<SnapshotDialog devpod={{ name: "alice-a" }} owner="alice" onClose={() => {}} />, { me: features() });
     fireEvent.click(await screen.findByRole("radio", { name: "自定义地址" }));
     const start = screen.getByRole("button", { name: "开始保存" }) as HTMLButtonElement;
     fireEvent.change(screen.getByLabelText("镜像地址"), { target: { value: "other.test/team/a:v1" } });
@@ -141,7 +141,7 @@ describe("snapshots", () => {
       "/api/snapshots/alice-a-abc123/progress": () => progressStream().response,
       "/api/snapshots": { items: [] },
     });
-    const first = renderWithProviders(<SnapshotDialog devpod="alice-a" owner="alice" onClose={() => {}} />, { me: features() });
+    const first = renderWithProviders(<SnapshotDialog devpod={{ name: "alice-a" }} owner="alice" onClose={() => {}} />, { me: features() });
     fireEvent.click(await screen.findByRole("radio", { name: "自定义地址" }));
     expect(screen.getByRole("radio", { name: "保留标签" }).getAttribute("aria-checked")).toBe("true");
     fireEvent.click(screen.getByRole("radio", { name: "生成新标签" }));
@@ -156,7 +156,7 @@ describe("snapshots", () => {
     first.unmount();
 
     // the choice comes back next time
-    renderWithProviders(<SnapshotDialog devpod="alice-b" owner="alice" onClose={() => {}} />, { me: features() });
+    renderWithProviders(<SnapshotDialog devpod={{ name: "alice-b" }} owner="alice" onClose={() => {}} />, { me: features() });
     await waitFor(() => expect(screen.getByRole("radio", { name: "生成新标签" }).getAttribute("aria-checked")).toBe("true"));
   });
 
@@ -167,7 +167,7 @@ describe("snapshots", () => {
       "/api/snapshots/alice-a-abc123/progress": () => stream.response,
       "/api/snapshots": { items: [] },
     });
-    const first = renderWithProviders(<SnapshotDialog devpod="alice-a" owner="alice" onClose={() => {}} />, { me: features() });
+    const first = renderWithProviders(<SnapshotDialog devpod={{ name: "alice-a" }} owner="alice" onClose={() => {}} />, { me: features() });
     fireEvent.click(await screen.findByRole("radio", { name: "自定义地址" }));
     fireEvent.change(screen.getByLabelText("镜像地址"), { target: { value: "other.test/team/a:v1" } });
     fireEvent.change(screen.getByLabelText("用户名"), { target: { value: "robot" } });
@@ -179,7 +179,7 @@ describe("snapshots", () => {
     first.unmount();
 
     // the same DevPod opens on the custom address, prefilled
-    renderWithProviders(<SnapshotDialog devpod="alice-a" owner="alice" onClose={() => {}} />, { me: features() });
+    renderWithProviders(<SnapshotDialog devpod={{ name: "alice-a" }} owner="alice" onClose={() => {}} />, { me: features() });
     await waitFor(() => expect((screen.getByLabelText("镜像地址") as HTMLInputElement).value).toBe("other.test/team/a:v1"));
     expect(screen.getByRole("radio", { name: "自定义地址" }).getAttribute("aria-checked")).toBe("true");
     expect((screen.getByLabelText("密码") as HTMLInputElement).value).toBe("");
@@ -191,7 +191,7 @@ describe("snapshots", () => {
       "/api/snapshots/alice-a-abc123/progress": () => new Response(""),
       "/api/snapshots": { items: [] },
     });
-    renderWithProviders(<SnapshotDialog devpod="alice-a" owner="alice" onClose={() => {}} />, { me: features() });
+    renderWithProviders(<SnapshotDialog devpod={{ name: "alice-a" }} owner="alice" onClose={() => {}} />, { me: features() });
     fireEvent.click(await screen.findByRole("radio", { name: "自定义地址" }));
     fireEvent.change(screen.getByLabelText("镜像地址"), { target: { value: "10.0.0.8:32500/dh/a:v1" } });
     fireEvent.click(screen.getByRole("button", { name: "开始保存" }));
@@ -206,7 +206,7 @@ describe("snapshots", () => {
       "/api/snapshots/alice-a-abc123/progress": () => stream.response,
       "/api/snapshots": { items: [] },
     });
-    renderWithProviders(<SnapshotDialog devpod="alice-a" owner="alice" onClose={() => {}} />, { me: features() });
+    renderWithProviders(<SnapshotDialog devpod={{ name: "alice-a" }} owner="alice" onClose={() => {}} />, { me: features() });
     fireEvent.click(await screen.findByRole("radio", { name: "自定义地址" }));
     const start = screen.getByRole("button", { name: "开始保存" }) as HTMLButtonElement;
     // another registry: credentials are asked for as before
@@ -230,7 +230,7 @@ describe("snapshots", () => {
 
   it("without a default registry only the custom address is offered", async () => {
     stubFetch({ "/api/snapshots": { items: [] } });
-    renderWithProviders(<SnapshotDialog devpod="alice-a" owner="alice" onClose={() => {}} />, { me: features({ snapshotDefaultRegistry: false }) });
+    renderWithProviders(<SnapshotDialog devpod={{ name: "alice-a" }} owner="alice" onClose={() => {}} />, { me: features({ snapshotDefaultRegistry: false }) });
     expect(await screen.findByLabelText("镜像地址")).toBeTruthy();
     expect(screen.queryByRole("radiogroup", { name: "目标" })).toBeNull();
     expect(screen.queryByLabelText("名称")).toBeNull();

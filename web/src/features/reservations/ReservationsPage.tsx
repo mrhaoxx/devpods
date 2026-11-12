@@ -2,6 +2,8 @@
 // free time to reserve, click a block of your own to extend, move or
 // release it — plus the list of my reservations and a plain form (the
 // keyboard path; same checks as the drag).
+import { keyOf, refOfKey } from "../../data/cluster";
+import { useClusterFilter } from "../../data/clusterFilter";
 import { useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
@@ -42,7 +44,9 @@ function apiMessage(e: unknown): string {
   return String(e);
 }
 
+/** node: the node's key, <cluster>/<name> in a console of several clusters */
 type Draft = { node: string; start: number; end: number; edit?: Reservation };
+const nodeKey = (b: Reservation) => keyOf({ cluster: b.cluster, name: b.node });
 
 /** The form: new reservation, move (not started) or extend (started). */
 function ReserveDialog({ draft, nodes, rules, blocks, now, onClose }: { draft: Draft; nodes: NodeChoice[]; rules: ReservationRules; blocks: Reservation[]; now: number; onClose: () => void }) {
@@ -50,6 +54,8 @@ function ReserveDialog({ draft, nodes, rules, blocks, now, onClose }: { draft: D
   const edit = draft.edit;
   const active = edit?.phase === "Active";
   const [node, setNode] = useState(draft.node);
+  const ref = refOfKey(node);
+  const several = nodes.some((n) => n.cluster);
   const [start, setStart] = useState(toInput(draft.start));
   const [end, setEnd] = useState(toInput(draft.end));
   const [preview, setPreview] = useState<number | null>(null);
@@ -64,17 +70,17 @@ function ReserveDialog({ draft, nodes, rules, blocks, now, onClose }: { draft: D
         ? `结束时间要对齐到 ${fmtSpan(g)} 一档`
         : null
     : periodError(s, e, rules, now);
-  const clash = !ruleErr ? overlapping(blocks, node, active ? Date.parse(edit!.end) : s, e, edit?.id) : undefined;
+  const clash = !ruleErr ? overlapping(blocks.filter((b) => b.cluster === ref.cluster), ref.name, active ? Date.parse(edit!.end) : s, e, edit?.id) : undefined;
   const problem = ruleErr ?? (clash ? `和 ${clash.user} 的预约（${fmtTime(clash.start)} – ${fmtTime(clash.end)}）冲突` : null);
-  const period = { node, start: new Date(s).toISOString(), end: new Date(e).toISOString() };
+  const period = { node: ref.name, start: new Date(s).toISOString(), end: new Date(e).toISOString() };
   const done = () => {
     void qc.invalidateQueries({ queryKey: ["reservations"] });
     void qc.invalidateQueries({ queryKey: ["node-choices"] });
     onClose();
   };
-  const check = useMutation({ mutationFn: () => previewReservation(period), onSuccess: (r) => setPreview(r.willHibernate), onError: (err) => setError(apiMessage(err)) });
+  const check = useMutation({ mutationFn: () => previewReservation(ref.cluster, period), onSuccess: (r) => setPreview(r.willHibernate), onError: (err) => setError(apiMessage(err)) });
   const save = useMutation({
-    mutationFn: () => (edit ? patchReservation(edit.id, active ? { end: period.end } : { start: period.start, end: period.end }) : createReservation(period)),
+    mutationFn: () => (edit ? patchReservation(edit, active ? { end: period.end } : { start: period.start, end: period.end }) : createReservation(ref.cluster, period)),
     onSuccess: done,
     onError: (err) => setError(apiMessage(err)),
   });
@@ -101,7 +107,8 @@ function ReserveDialog({ draft, nodes, rules, blocks, now, onClose }: { draft: D
             <Field label="节点">
               <Select aria-label="节点" value={node} disabled={!!edit} onChange={(ev) => (setNode(ev.target.value), touch())}>
                 {nodes.map((n) => (
-                  <option key={n.name} value={n.name}>
+                  <option key={keyOf(n)} value={keyOf(n)}>
+                    {several && n.cluster ? `${n.cluster} · ` : ""}
                     {n.name}
                     {n.gpuTotal > 0 ? ` · ${n.gpuModel ?? "GPU"} ×${n.gpuTotal}` : ""}
                   </option>
@@ -182,6 +189,7 @@ function Row({
     <div className="flex items-stretch border-b border-line last:border-0">
       <div className="w-40 shrink-0 border-r border-line px-2 py-1.5">
         <div className="mono truncate text-xs font-medium" title={node.name}>
+          {node.cluster && <span className="mr-1 font-normal text-muted">{node.cluster}</span>}
           {node.name}
         </div>
         <div className="truncate text-[11px] text-muted">{node.gpuTotal > 0 ? `${node.gpuModel ?? "GPU"} ×${node.gpuTotal}` : `${Math.round(node.cpu.allocatable)} 核`}</div>
@@ -199,7 +207,7 @@ function Row({
         }}
         onPointerMove={(e) => drag && setDrag({ a: drag.a, b: at(e.clientX) })}
         onPointerUp={() => {
-          if (sel && !bad) onDraft({ node: node.name, start: sel[0], end: sel[1] });
+          if (sel && !bad) onDraft({ node: keyOf(node), start: sel[0], end: sel[1] });
           setDrag(null);
         }}
         onPointerCancel={() => setDrag(null)}
@@ -261,11 +269,12 @@ export function ReservationsPage() {
     refetchInterval: 30_000,
     enabled: !!rules.data,
   });
+  const { matches } = useClusterFilter();
   const [draft, setDraft] = useState<Draft | null>(null);
   const [picked, setPicked] = useState<Reservation | null>(null);
   const [cancel, setCancel] = useState<Reservation | null>(null);
   const del = useMutation({
-    mutationFn: (id: string) => deleteReservation(id),
+    mutationFn: (r: Reservation) => deleteReservation(r),
     onSettled: () => {
       void qc.invalidateQueries({ queryKey: ["reservations"] });
       void qc.invalidateQueries({ queryKey: ["node-choices"] });
@@ -275,11 +284,11 @@ export function ReservationsPage() {
   if (rules.isError) return <EmptyState tone="error" title="节点预约不可用" hint={apiMessage(rules.error)} />;
   if (!rules.data || !me) return <EmptyState title="加载中…" />;
   const g = rules.data.granularitySeconds * 1000;
-  const all = q.data?.items ?? [];
+  const all = (q.data?.items ?? []).filter(matches);
   const live = all.filter((b) => b.phase !== "Cancelled");
-  const nodes = (nodesQ.data?.items ?? []).filter((n) => n.reservable);
+  const nodes = (nodesQ.data?.items ?? []).filter((n) => n.reservable && matches(n));
   const mine = all.filter((b) => b.mine).sort((a, b) => Date.parse(b.start) - Date.parse(a.start));
-  const open = (b: Reservation) => setDraft({ node: b.node, start: Date.parse(b.start), end: Date.parse(b.end) + (b.phase === "Active" ? g : 0), edit: b });
+  const open = (b: Reservation) => setDraft({ node: nodeKey(b), start: Date.parse(b.start), end: Date.parse(b.end) + (b.phase === "Active" ? g : 0), edit: b });
   const first = slotStart(now, g) + g;
 
   return (
@@ -294,7 +303,7 @@ export function ReservationsPage() {
         </div>
         <span className="text-[11px] text-muted">在空闲时段上拖动来预约；整台节点在预约期间只给你的 DevPod 用。北京时间。</span>
         <span className="flex-1" />
-        <Button variant="primary" disabled={nodes.length === 0} onClick={() => setDraft({ node: nodes[0].name, start: first, end: first + 2 * g })}>
+        <Button variant="primary" disabled={nodes.length === 0} onClick={() => setDraft({ node: keyOf(nodes[0]), start: first, end: first + 2 * g })}>
           预约节点
         </Button>
       </div>
@@ -314,7 +323,7 @@ export function ReservationsPage() {
               </div>
             </div>
             {nodes.map((n) => (
-              <Row key={n.name} node={n} blocks={live.filter((b) => b.node === n.name)} from={from} to={to} now={now} gran={g} admin={me.admin} onDraft={setDraft} onPick={setPicked} />
+              <Row key={keyOf(n)} node={n} blocks={live.filter((b) => nodeKey(b) === keyOf(n))} from={from} to={to} now={now} gran={g} admin={me.admin} onDraft={setDraft} onPick={setPicked} />
             ))}
             <div className="flex flex-wrap gap-x-4 gap-y-1 px-2 py-1.5 text-[11px] text-muted">
               <span className="inline-flex items-center gap-1">
@@ -347,7 +356,7 @@ export function ReservationsPage() {
             <tbody>
               {mine.map((b) => (
                 <tr key={b.id} className="h-8 border-b border-line last:border-0">
-                  <td className="mono px-3">{b.node}</td>
+                  <td className="mono px-3">{b.cluster ? `${b.cluster} · ${b.node}` : b.node}</td>
                   <td className="mono">
                     {fmtTime(b.start)} – {fmtTime(b.end)}
                   </td>
@@ -406,7 +415,7 @@ export function ReservationsPage() {
         confirmLabel={cancel?.phase === "Active" ? "提前释放" : "取消预约"}
         danger
         onConfirm={() => {
-          if (cancel) del.mutate(cancel.id);
+          if (cancel) del.mutate(cancel);
           setCancel(null);
         }}
       >

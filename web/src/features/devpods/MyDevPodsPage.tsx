@@ -1,4 +1,3 @@
-import { OtherClusters } from "../clusters/OtherClusters";
 import { useSearchParams } from "react-router-dom";
 import { DevPodTable } from "./DevPodTable";
 import { NewDevPodDrawer } from "./NewDevPodDrawer";
@@ -9,16 +8,16 @@ export function MyDevPodsPage() {
   return (
     <>
       <DevPodTable scope="mine" />
-      <OtherClusters />
       {open && (
         <NewDevPodDrawer
           config={params.get("config") ?? undefined}
           image={params.get("image") ?? undefined}
+          in={params.get("in") ?? undefined}
           onClose={() =>
             setParams(
               (cur) => {
                 const next = new URLSearchParams(cur);
-                for (const k of ["new", "image", "config"]) next.delete(k);
+                for (const k of ["new", "image", "config", "in"]) next.delete(k);
                 return next;
               },
               { replace: true },

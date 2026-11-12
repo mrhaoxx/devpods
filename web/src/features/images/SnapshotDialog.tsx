@@ -1,6 +1,7 @@
 // 保存为镜像 (snapshot spec v2): a form, then the same dialog shows the
 // snapshot happening — the three steps, elapsed time, the Job's log tail
 // — with a cancel button. Closing the dialog cancels nothing.
+import type { Ref } from "../../data/cluster";
 import * as Dialog from "@radix-ui/react-dialog";
 import { useEffect, useRef, useState } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
@@ -22,7 +23,7 @@ const tone: Record<StepState, string> = { todo: "text-faint", active: "text-acce
 const word: Record<StepState, string> = { todo: "未开始", active: "进行中", done: "已完成", failed: "失败" };
 
 /** SnapshotProgressView follows one snapshot until it ends. */
-export function SnapshotProgressView({ snapshot, onClose }: { snapshot: Pick<SnapshotView, "id" | "image">; onClose: () => void }) {
+export function SnapshotProgressView({ snapshot, onClose }: { snapshot: Pick<SnapshotView, "id" | "image" | "cluster">; onClose: () => void }) {
   const qc = useQueryClient();
   const [p, setP] = useState<SnapshotProgress | null>(null);
   const [broken, setBroken] = useState(false);
@@ -34,7 +35,7 @@ export function SnapshotProgressView({ snapshot, onClose }: { snapshot: Pick<Sna
     setP(null);
     setBroken(false);
     return streamSnapshotProgress(
-      snapshot.id,
+      snapshot,
       (ev) => {
         if (ev.stage === "commit" || ev.stage === "push") lastStage.current = ev.stage;
         setP(ev);
@@ -49,7 +50,7 @@ export function SnapshotProgressView({ snapshot, onClose }: { snapshot: Pick<Sna
     if (log.current) log.current.scrollTop = log.current.scrollHeight;
   }, [p?.lines]);
 
-  const cancel = useMutation({ mutationFn: () => deleteSnapshot(snapshot.id), onSettled: () => void qc.invalidateQueries({ queryKey: ["snapshots"] }) });
+  const cancel = useMutation({ mutationFn: () => deleteSnapshot(snapshot), onSettled: () => void qc.invalidateQueries({ queryKey: ["snapshots"] }) });
   const stage = p?.stage ?? "pending";
   const running = stage !== "done" && stage !== "error";
   const states = stepStates(stage, lastStage.current);
@@ -140,7 +141,8 @@ export function SnapshotProgressView({ snapshot, onClose }: { snapshot: Pick<Sna
   );
 }
 
-function CreateForm({ devpod, owner, onCreated }: { devpod: string; owner: string; onCreated: (s: SnapshotView) => void }) {
+function CreateForm({ devpod: ref, owner, onCreated }: { devpod: Ref; owner: string; onCreated: (s: SnapshotView) => void }) {
+  const devpod = ref.name;
   const me = useMe().data;
   const hasDefault = !!me?.features.snapshotDefaultRegistry;
   // the address used last time (this DevPod's, else the user's last one)
@@ -185,11 +187,11 @@ function CreateForm({ devpod, owner, onCreated }: { devpod: string; owner: strin
   const [useOther, setUseOther] = useState(false);
   const saved = useOther ? undefined : savedRegistryFor(image, registries);
   const create = useMutation({
-    mutationFn: (body: SnapshotRequest) => createSnapshot(devpod, body),
+    mutationFn: (body: SnapshotRequest) => createSnapshot(ref, body),
     onSuccess: (s) => {
       setPassword(""); // used once; not kept in the page
       if (target === "custom") rememberImage(user, devpod, image);
-      onCreated(s);
+      onCreated(ref.cluster ? { ...s, cluster: ref.cluster } : s);
     },
   });
   const fresh = tagMode === "new";
@@ -328,16 +330,16 @@ function CreateForm({ devpod, owner, onCreated }: { devpod: string; owner: strin
 
 /** SnapshotDialog: `following` set = show that snapshot's progress;
  *  otherwise the form, which turns into the progress view on submit. */
-export function SnapshotDialog({ devpod, owner, following, onClose }: { devpod: string; owner: string; following?: Pick<SnapshotView, "id" | "image">; onClose: () => void }) {
+export function SnapshotDialog({ devpod, owner, following, onClose }: { devpod: Ref; owner: string; following?: Pick<SnapshotView, "id" | "image" | "cluster">; onClose: () => void }) {
   const qc = useQueryClient();
-  const [current, setCurrent] = useState<Pick<SnapshotView, "id" | "image"> | undefined>(following);
+  const [current, setCurrent] = useState<Pick<SnapshotView, "id" | "image" | "cluster"> | undefined>(following);
   return (
     <Dialog.Root open onOpenChange={(o) => !o && onClose()}>
       <Dialog.Portal>
         <Dialog.Overlay className="fixed inset-0 z-40 bg-black/30" />
         <Dialog.Content aria-describedby={undefined} className="fixed left-1/2 top-[12vh] z-50 max-h-[80vh] w-[min(94vw,560px)] -translate-x-1/2 space-y-3 overflow-y-auto rounded-lg border border-line bg-surface p-4 shadow-xl">
           <Dialog.Title className="text-sm font-semibold">
-            保存为镜像 · <span className="mono">{devpod}</span>
+            保存为镜像 · <span className="mono">{devpod.name}</span>
           </Dialog.Title>
           {current ? (
             <>

@@ -1,4 +1,4 @@
-import { apiPath } from "../../data/cluster";
+import { apiIn } from "../../data/cluster";
 // Saved configs (internal/webui/api_configs.go, config_launch.go): DevPod
 // YAML with variables, kept per user, shared or public, launched as one
 // DevPod or several.
@@ -62,8 +62,9 @@ export const deleteConfig = (name: string) => req<void>("DELETE", path(name));
 
 /** checkConfig: what is wrong with a config's text, before it is saved (nothing: an empty list). */
 export type CheckProblem = { line?: number; code: string; message: string };
-export const checkConfig = (body: { content: string; variables?: VarDecl[]; vars?: Record<string, string> }) =>
-  req<{ problems: CheckProblem[] }>("POST", "/api/configs:check", body);
+/** checkConfig checks against a cluster (its nodes, images): the one it would be launched in. */
+export const checkConfig = (cluster: string | undefined, body: { content: string; variables?: VarDecl[]; vars?: Record<string, string> }) =>
+  req<{ problems: CheckProblem[] }>("POST", apiIn(cluster, "/api/configs:check"), body);
 
 export type LaunchItem = { index: number; name: string; node?: string; ok: boolean; code?: string; message?: string; yaml?: string };
 export type LaunchBody = { vars: Record<string, string>; nodes?: string[]; count?: number; dryRun?: boolean };
@@ -73,8 +74,8 @@ export type LaunchResult = { status: 200 | 207 | 422; items: LaunchItem[]; group
 
 /** launchConfig creates DevPods from a config. The three answers that
  *  carry per-DevPod outcomes are returned; anything else throws. */
-export async function launchConfig(name: string, body: LaunchBody): Promise<LaunchResult> {
-  const resp = await fetch(apiPath(`${path(name)}/launch`), { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+export async function launchConfig(cluster: string | undefined, name: string, body: LaunchBody): Promise<LaunchResult> {
+  const resp = await fetch(apiIn(cluster, `${path(name)}/launch`), { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
   if (resp.status === 401) {
     window.location.href = "/login";
     throw new ApiFailure(401, { code: "UNAUTHORIZED", message: "not logged in" });

@@ -95,7 +95,7 @@ describe("new DevPod drawer", () => {
     expect(box.value).toContain("name: alice-dev");
     expect(box.value).toContain("image: ubuntu:24.04");
     fireEvent.click(screen.getByRole("button", { name: "创建" }));
-    await waitFor(() => expect(screen.getByTestId("where").textContent).toBe("/devpods/alice-dev"));
+    await waitFor(() => expect(screen.getByTestId("where").textContent).toBe("/devpods/-/alice-dev"));
     expect(JSON.parse(calls.find((c) => c.method === "POST")!.body!)).toEqual({ yaml: box.value });
   });
 

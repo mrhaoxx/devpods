@@ -5,7 +5,7 @@ import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { createToken, deleteToken, listTokens, type TokenScope, type TokenView } from "../../data/api";
 import { useDevPods } from "../../data/queries";
-import { useClusters } from "../clusters/ClusterSwitcher";
+import { useClusterList } from "../../data/clusterFilter";
 import { Badge } from "../../design/Badge";
 import { Button } from "../../design/Button";
 import { ConfirmDialog } from "../../design/ConfirmDialog";
@@ -33,7 +33,7 @@ function CreateForm({ scopes, onDone }: { scopes: TokenScope[]; onDone: (token: 
   const [picked, setPicked] = useState<Set<string>>(new Set(["devpods:read"]));
   const [limit, setLimit] = useState(false);
   const [devpods, setDevpods] = useState<Set<string>>(new Set());
-  const clusterList = useClusters().data?.items ?? [];
+  const clusterList = useClusterList().data?.items ?? [];
   const [limitClusters, setLimitClusters] = useState(false);
   const [clusters, setClusters] = useState<Set<string>>(new Set());
   const [days, setDays] = useState(30);

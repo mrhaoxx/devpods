@@ -2,6 +2,10 @@
 // a new one, my own to edit, or someone else's to read. The variables of
 // the YAML are listed as it is typed — the same reading as the server's —
 // each with a type and a description. A save is checked first.
+import { devpodHref } from "../../data/cluster";
+import { refOf } from "../../data/api";
+import { launchCluster } from "../../data/cluster";
+import { useClusterList } from "../../data/clusterFilter";
 import { useCallback, useEffect, useMemo, useState, type FormEvent } from "react";
 import { Link, useLocation, useNavigate, useParams } from "react-router-dom";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
@@ -46,7 +50,7 @@ function MadeFrom({ name }: { name: string }) {
           {made.map((dp) => (
             <li key={dp.metadata.name} className="flex items-center gap-1.5">
               <StatusDot phase={dp.status?.phase} showLabel={false} />
-              <Link to={`/devpods/${dp.metadata.name}`} className="mono hover:text-accent">
+              <Link to={devpodHref(refOf(dp))} className="mono hover:text-accent">
                 {dp.metadata.name}
               </Link>
               {me?.admin && dp.spec.owner !== me.user && <span className="text-faint">{dp.spec.owner}</span>}
@@ -64,6 +68,7 @@ export function ConfigEditor() {
   const me = useMe().data;
   const nav = useNavigate();
   const qc = useQueryClient();
+  const clusters = useClusterList().data?.items ?? [];
   const handed = (useLocation().state ?? {}) as NewConfigState;
   const q = useQuery({ queryKey: ["config", name], queryFn: () => getConfig(name!), enabled: !creating, retry: false });
   const loaded = q.data;
@@ -126,7 +131,7 @@ export function ConfigEditor() {
     try {
       if (!checked) {
         // what the check finds is said first; a check that cannot run stops nothing
-        const found = await checkConfig({ content, variables: keptDecls(content, decls) }).then(
+        const found = await checkConfig(launchCluster(clusters), { content, variables: keptDecls(content, decls) }).then(
           (r) => r.problems,
           () => [],
         );

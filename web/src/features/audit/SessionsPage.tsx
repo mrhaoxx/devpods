@@ -1,5 +1,6 @@
 // 会话列表 (UI spec §5.8): admins filter by user / DevPod / time; others
 // see their own sessions (the server enforces it).
+import { devpodHref } from "../../data/cluster";
 import { useState } from "react";
 import { Link } from "react-router-dom";
 import type { ColumnDef, SortingState } from "@tanstack/react-table";
@@ -44,7 +45,7 @@ export function SessionsPage({ mine }: { mine?: boolean }) {
       accessorKey: "devpod",
       meta: { priority: 2, width: 150, mono: true },
       cell: ({ row: { original: s } }) => (
-        <Link to={`/devpods/${s.devpod}`} className="hover:text-accent">
+        <Link to={devpodHref({ cluster: s.cluster, name: s.devpod })} className="hover:text-accent">
           {s.devpod}
           {s.cluster && <span className="ml-1.5 text-faint">· {s.cluster}</span>}
         </Link>

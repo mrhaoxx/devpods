@@ -1,4 +1,4 @@
-import { apiPath, currentCluster, noteStale } from "./cluster";
+import { apiIn, type Ref } from "./cluster";
 
 export interface ApiError {
   code: string;
@@ -18,24 +18,16 @@ export class ApiFailure extends Error {
   }
 }
 
-/** global: ask the plain path whatever cluster is in use (what covers every cluster). */
-export type ReqOptions = { raw?: { body: BodyInit; contentType: string }; global?: boolean };
+export type ReqOptions = { raw?: { body: BodyInit; contentType: string } };
 
 /** req calls the API; non-2xx answers throw ApiFailure (a body that is
  *  not JSON — a proxy error page — becomes code HTTP_<status>). */
 export async function req<T>(method: string, path: string, body?: unknown, opts: ReqOptions = {}): Promise<T> {
-  const url = opts.global ? path : apiPath(path);
-  const resp = await fetch(url, {
+  const resp = await fetch(path, {
     method,
     headers: opts.raw ? { "Content-Type": opts.raw.contentType } : body !== undefined ? { "Content-Type": "application/json" } : undefined,
     body: opts.raw ? opts.raw.body : body !== undefined ? JSON.stringify(body) : undefined,
   });
-  // an answer of the cluster in use says whether it is that cluster's last known state
-  // (a refusal — the 503 of a change to a cluster that is away — says nothing either way)
-  if (url !== path) {
-    const since = resp.headers?.get?.("X-DevPod-Stale-Since") ?? null;
-    if (since || resp.ok) noteStale(since);
-  }
   if (resp.status === 401 && !path.startsWith("/api/auth/")) {
     window.location.href = "/login";
     throw new ApiFailure(401, { code: "UNAUTHORIZED", message: "not logged in" });
@@ -69,8 +61,13 @@ export interface Me {
 
 // sshUser builds the login string: "<owner>+<pod>" plus an optional
 // deployment-configured suffix (e.g. "+hpc101" for a proxy route).
-export function sshUser(me: Me | undefined, owner: string, pod: string): string {
-  const suffix = me?.ssh?.loginSuffix;
+/** sshOf: the gateway serving a cluster (the console's own without one). */
+export const sshOf = (me: Me | undefined, cluster?: string) => (cluster && me?.clusters?.[cluster]?.ssh) || me?.ssh;
+/** meIn: my quota and usage in a cluster (all of them without one). */
+export const meIn = (me: Me | undefined, cluster?: string) => (cluster && me?.clusters?.[cluster]) || (me ? { quota: me.quota, usage: me.usage } : undefined);
+
+export function sshUser(me: Me | undefined, owner: string, pod: string, cluster?: string): string {
+  const suffix = sshOf(me, cluster)?.loginSuffix;
   return `${owner}+${pod}${suffix ? `+${suffix}` : ""}`;
 }
 
@@ -139,8 +136,8 @@ export type KoreNode = {
   pools: KorePool[];
 };
 export const koreTopology = () => req<{ nodes: KoreNode[] }>("GET", "/api/kore/topology");
-export const devpodTopology = (name: string) =>
-  req<{ node: KoreNode | null; cpuset?: string }>("GET", `/api/devpods/${name}/topology`);
+export const devpodTopology = (r: Ref) =>
+  req<{ node: KoreNode | null; cpuset?: string }>("GET", apiIn(r.cluster, `/api/devpods/${r.name}/topology`));
 
 // parseCpuList expands "8-15,40-47" into a set of core numbers.
 export function parseCpuList(s?: string): Set<number> {
@@ -156,20 +153,22 @@ export function parseCpuList(s?: string): Set<number> {
 
 // sshCommand renders the copy-pastable login line using the
 // deployment's advertised gateway address (-p only when non-22).
-export function sshCommand(me: Me | undefined, owner: string, pod: string): string {
-  const host = me?.ssh?.host || "<gateway>";
-  const port = me?.ssh?.port ?? 22;
+export function sshCommand(me: Me | undefined, owner: string, pod: string, cluster?: string): string {
+  const ssh = sshOf(me, cluster);
+  const host = ssh?.host || "<gateway>";
+  const port = ssh?.port ?? 22;
   const flag = host !== "<gateway>" && port !== 22 ? `-p ${port} ` : "";
-  return `ssh ${flag}${sshUser(me, owner, pod)}@${host}`;
+  return `ssh ${flag}${sshUser(me, owner, pod, cluster)}@${host}`;
 }
 
 // sshConfig renders a ~/.ssh/config block so the user can shortcut the
 // full login to `ssh <alias>`. The alias is the DevPod name.
-export function sshConfig(me: Me | undefined, owner: string, pod: string): string {
-  const host = me?.ssh?.host || "<gateway>";
-  const port = me?.ssh?.port ?? 22;
+export function sshConfig(me: Me | undefined, owner: string, pod: string, cluster?: string): string {
+  const ssh = sshOf(me, cluster);
+  const host = ssh?.host || "<gateway>";
+  const port = ssh?.port ?? 22;
   const alias = `${owner}-${pod}`;
-  return `Host ${alias}\n    HostName ${host}\n    Port ${port}\n    User ${sshUser(me, owner, pod)}`;
+  return `Host ${alias}\n    HostName ${host}\n    Port ${port}\n    User ${sshUser(me, owner, pod, cluster)}`;
 }
 
 export type K8sEvent = {
@@ -218,28 +217,25 @@ export type BindingInfo = {
   poolSize?: string;
 };
 
-/** me: who I am. In a console of several clusters, the quota and usage
- *  are those of the cluster in use. */
-export const me = async () => {
-  const m = await req<Me>("GET", "/api/me");
-  const mine = m.clusters?.[currentCluster()];
-  return mine ? { ...m, quota: mine.quota, usage: mine.usage, ssh: mine.ssh ?? m.ssh } : m;
-};
+/** me: who I am; in a console of several clusters, per cluster too (meIn, sshOf). */
+export const me = () => req<Me>("GET", "/api/me");
 export type DevPodList = { items: DevPod[]; pods: Record<string, PodInfo> };
 export const listDevPods = (scope: "mine" | "all" = "mine") =>
   req<DevPodList>("GET", scope === "all" ? "/api/devpods?scope=all" : "/api/devpods");
 export const auditPresence = (all = false) =>
   req<{ items: Record<string, Presence> }>("GET", `/api/audit/presence${all ? "?scope=all" : ""}`);
-export const getDevPod = (n: string) => req<DevPodDetail>("GET", `/api/devpods/${n}`);
-export const createDevPod = (body: unknown) => req<DevPod>("POST", "/api/devpods", body);
-export const patchDevPod = (n: string, running: boolean) => req<PatchResult>("PATCH", `/api/devpods/${n}`, { running });
-export const deleteDevPod = (n: string) => req<void>("DELETE", `/api/devpods/${n}`);
-export const getEvents = (n: string) => req<{ items: unknown[] }>("GET", `/api/devpods/${n}/events`);
+export const getDevPod = (r: Ref) => req<DevPodDetail>("GET", apiIn(r.cluster, `/api/devpods/${r.name}`));
+export const createDevPod = (cluster: string | undefined, body: unknown) => req<DevPod>("POST", apiIn(cluster, "/api/devpods"), body);
+export const patchDevPod = (r: Ref, running: boolean) => req<PatchResult>("PATCH", apiIn(r.cluster, `/api/devpods/${r.name}`), { running });
+export const deleteDevPod = (r: Ref) => req<void>("DELETE", apiIn(r.cluster, `/api/devpods/${r.name}`));
+export const getEvents = (r: Ref) => req<{ items: unknown[] }>("GET", apiIn(r.cluster, `/api/devpods/${r.name}/events`));
 export const getPubkeys = () => req<{ pubkeys: string[] | null }>("GET", "/api/me/pubkeys");
 export const putPubkeys = (pubkeys: string[]) => req<{ pubkeys: string[] }>("PUT", "/api/me/pubkeys", { pubkeys });
 
 export { watchDevPods, watchDevPod } from "./sse";
 /** configOutdated: the config it came from has changed since (only when I may see that config) */
+/** refOf: a DevPod as a Ref (its cluster and name). */
+export const refOf = (dp: DevPod): Ref => ({ cluster: dp.cluster, name: dp.metadata.name });
 /** podKey: where a list's pods map holds a DevPod's Pod — <cluster>/<name> in a console of several clusters. */
 export const podKey = (dp: DevPod): string => (dp.cluster ? `${dp.cluster}/${dp.metadata.name}` : dp.metadata.name);
 
@@ -385,24 +381,24 @@ import type {
   SpecPatch,
 } from "./types";
 
-export const patchDevPodSpec = (n: string, body: SpecPatch) => req<PatchResult>("PATCH", `/api/devpods/${n}`, body);
+export const patchDevPodSpec = (r: Ref, body: SpecPatch) => req<PatchResult>("PATCH", apiIn(r.cluster, `/api/devpods/${r.name}`), body);
 /** redeployDevPod recreates the Pod (sessions drop, the home volume stays). */
-export const redeployDevPod = (n: string) => req<void>("POST", `/api/devpods/${n}/redeploy`);
+export const redeployDevPod = (r: Ref) => req<void>("POST", apiIn(r.cluster, `/api/devpods/${r.name}/redeploy`));
 /** rebuildFromConfig: the DevPod from the config it came from, as that config is now. */
-export function rebuildFromConfig(n: string, dryRun: true): Promise<{ yaml: string; rebuild: boolean }>;
-export function rebuildFromConfig(n: string, dryRun?: false): Promise<PatchResult>;
-export function rebuildFromConfig(n: string, dryRun = false) {
-  return req("POST", `/api/devpods/${n}/rebuild-from-config`, dryRun ? { dryRun: true } : {});
+export function rebuildFromConfig(r: Ref, dryRun: true): Promise<{ yaml: string; rebuild: boolean }>;
+export function rebuildFromConfig(r: Ref, dryRun?: false): Promise<PatchResult>;
+export function rebuildFromConfig(r: Ref, dryRun = false) {
+  return req("POST", apiIn(r.cluster, `/api/devpods/${r.name}/rebuild-from-config`), dryRun ? { dryRun: true } : {});
 }
-export const getMetrics = (n: string, range: MetricRange) =>
-  req<MetricSeries>("GET", `/api/devpods/${n}/metrics?range=${range}`);
-export const getRecent = (p: { scope?: "mine" | "all"; name?: string }) =>
-  req<RecentFrame>("GET", `/api/live/devpods/recent?${p.name ? `name=${encodeURIComponent(p.name)}` : `scope=${p.scope ?? "mine"}`}`);
-export const getInfo = (n: string) => req<ContainerInfo>("GET", `/api/devpods/${n}/info`);
+export const getMetrics = (r: Ref, range: MetricRange) =>
+  req<MetricSeries>("GET", apiIn(r.cluster, `/api/devpods/${r.name}/metrics?range=${range}`));
+export const getRecent = (p: { scope?: "mine" | "all"; ref?: Ref }) =>
+  req<RecentFrame>("GET", apiIn(p.ref?.cluster, `/api/live/devpods/recent?${p.ref ? `name=${encodeURIComponent(p.ref.name)}` : `scope=${p.scope ?? "mine"}`}`));
+export const getInfo = (r: Ref) => req<ContainerInfo>("GET", apiIn(r.cluster, `/api/devpods/${r.name}/info`));
 export const listNodes = () => req<{ items: NodeView[]; live: boolean }>("GET", "/api/admin/nodes");
 /** Each node's CPU / memory use over the sparkline window, from ClickHouse. */
 export const getNodesRecent = () => req<RecentFrame>("GET", "/api/admin/nodes/recent");
-export const getNode = (n: string) => req<NodeDetail>("GET", `/api/admin/nodes/${n}`);
+export const getNode = (r: Ref) => req<NodeDetail>("GET", apiIn(r.cluster, `/api/admin/nodes/${r.name}`));
 export const listAdminUsers = () => req<{ items: AdminUserRow[]; defaultQuota: UserQuota }>("GET", "/api/admin/users");
 export const usersBatch = (body: BatchRequest) => req<{ results: BatchResult[] }>("POST", "/api/admin/users:batch", body);
 export const importUsers = (csv: string, dryRun: boolean) =>
@@ -413,17 +409,17 @@ export const setUserAdmin = (name: string, admin: boolean) => req<void>("PATCH",
 export const search = (q: string) => req<SearchResult>("GET", `/api/search?q=${encodeURIComponent(q)}`);
 
 /** shellPath: the web terminal page of a DevPod (opened in its own tab). */
-export const shellPath = (name: string) => `/devpods/${name}/shell`;
+export const shellPath = (r: Ref) => `/devpods/${r.cluster || "-"}/${r.name}/shell`;
 /** shellSocketURL: the terminal WebSocket (UI spec §5.12). */
-export const shellSocketURL = (name: string, cols: number, rows: number, loc: Pick<Location, "protocol" | "host"> = window.location) =>
-  `${loc.protocol === "https:" ? "wss" : "ws"}://${loc.host}${apiPath(`/api/devpods/${name}/shell`)}?cols=${cols}&rows=${rows}`;
+export const shellSocketURL = (r: Ref, cols: number, rows: number, loc: Pick<Location, "protocol" | "host"> = window.location) =>
+  `${loc.protocol === "https:" ? "wss" : "ws"}://${loc.host}${apiIn(r.cluster, `/api/devpods/${r.name}/shell`)}?cols=${cols}&rows=${rows}`;
 /** probeShell asks why a terminal cannot be opened (a failed WebSocket handshake hides its status). */
-export const probeShell = (name: string) => req<void>("GET", `/api/devpods/${name}/shell?probe=1`);
+export const probeShell = (r: Ref) => req<void>("GET", apiIn(r.cluster, `/api/devpods/${r.name}/shell?probe=1`));
 
 /* api_http.go: DevPod ports published through the gateway's HTTP proxy */
 /** publicPorts: anyone with the link; userPorts: anyone signed in to the console; the rest: owner, collaborators, admins. */
 export type HttpView = { id: string; urlTemplate: string; publicPorts: number[]; userPorts: number[] };
-export const getHttp = (n: string) => req<HttpView>("GET", `/api/devpods/${n}/http`);
+export const getHttp = (r: Ref) => req<HttpView>("GET", apiIn(r.cluster, `/api/devpods/${r.name}/http`));
 
 /** The Pod behind a DevPod, as `kubectl describe pod` tells it. */
 export type PodContainer = {
@@ -464,11 +460,11 @@ export type PodDetail = {
   nodeSelector: Record<string, string>;
   tolerations: string[];
 };
-export const getDevPodPod = (n: string) => req<{ pod: PodDetail | null }>("GET", `/api/devpods/${n}/pod`);
+export const getDevPodPod = (r: Ref) => req<{ pod: PodDetail | null }>("GET", apiIn(r.cluster, `/api/devpods/${r.name}/pod`));
 /** A DevPod's manifest as YAML, and saving it back (the spec is replaced). */
-export const getDevPodYaml = (n: string) => req<{ yaml: string; running: boolean }>("GET", `/api/devpods/${n}/yaml`);
-export const putDevPodYaml = (n: string, yaml: string) => req<{ devpod: DevPod; rebuild: boolean }>("PUT", `/api/devpods/${n}/yaml`, { yaml });
-export const putHttp = (n: string, body: { publicPorts?: number[]; userPorts?: number[]; reset?: boolean }) => req<HttpView>("PUT", `/api/devpods/${n}/http`, body);
+export const getDevPodYaml = (r: Ref) => req<{ yaml: string; running: boolean }>("GET", apiIn(r.cluster, `/api/devpods/${r.name}/yaml`));
+export const putDevPodYaml = (r: Ref, yaml: string) => req<{ devpod: DevPod; rebuild: boolean }>("PUT", apiIn(r.cluster, `/api/devpods/${r.name}/yaml`), { yaml });
+export const putHttp = (r: Ref, body: { publicPorts?: number[]; userPorts?: number[]; reset?: boolean }) => req<HttpView>("PUT", apiIn(r.cluster, `/api/devpods/${r.name}/http`), body);
 /** httpTicket: the URL that signs this browser in on a private port's hostname. */
 export const httpTicket = (host: string, rd: string) => req<{ url: string }>("POST", "/api/http/ticket", { host, rd });
 
@@ -482,6 +478,7 @@ export const deleteToken = (id: string) => req<void>("DELETE", `/api/me/tokens/$
 
 /* api_reservations.go: node choice and node reservations */
 export type NodeChoice = {
+  cluster?: string;
   name: string;
   ready: boolean;
   cpu: { allocatable: number; allocated: number };
@@ -499,6 +496,7 @@ export type NodeChoice = {
 };
 export const listNodeChoices = () => req<{ items: NodeChoice[] }>("GET", "/api/nodes");
 export type Reservation = {
+  cluster?: string;
   id: string;
   segments: string[];
   node: string;
@@ -513,15 +511,18 @@ export type ReservationRules = { granularitySeconds: number; maxDurationSeconds:
 export const getReservationRules = () => req<ReservationRules>("GET", "/api/reservations/rules");
 export const listReservations = (from: string, to: string) => req<{ items: Reservation[] }>("GET", `/api/reservations?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}`);
 type Period = { node: string; start: string; end: string };
-/** previewReservation checks a period without creating it. */
-export const previewReservation = (p: Period) => req<{ willHibernate: number }>("POST", "/api/reservations?dryRun=true", p);
-export const createReservation = (p: Period) => req<Reservation>("POST", "/api/reservations", p);
-export const patchReservation = (id: string, body: { start?: string; end?: string }) => req<Reservation>("PATCH", `/api/reservations/${id}`, body);
-export const deleteReservation = (id: string) => req<void>("DELETE", `/api/reservations/${id}`);
-export const setReservable = (node: string, reservable: boolean) => req<{ reservable: boolean; pending: number }>("PUT", `/api/admin/nodes/${node}/reservable`, { reservable });
+/** ResRef names a reservation: its id and cluster. */
+export type ResRef = { id: string; cluster?: string };
+/** previewReservation checks a period in a cluster without creating it. */
+export const previewReservation = (cluster: string | undefined, p: Period) => req<{ willHibernate: number }>("POST", apiIn(cluster, "/api/reservations?dryRun=true"), p);
+export const createReservation = (cluster: string | undefined, p: Period) => req<Reservation>("POST", apiIn(cluster, "/api/reservations"), p);
+export const patchReservation = (r: ResRef, body: { start?: string; end?: string }) => req<Reservation>("PATCH", apiIn(r.cluster, `/api/reservations/${r.id}`), body);
+export const deleteReservation = (r: ResRef) => req<void>("DELETE", apiIn(r.cluster, `/api/reservations/${r.id}`));
+export const setReservable = (r: Ref, reservable: boolean) => req<{ reservable: boolean; pending: number }>("PUT", apiIn(r.cluster, `/api/admin/nodes/${r.name}/reservable`), { reservable });
 
 /* api_snapshots.go: saving a DevPod as an image (snapshot spec v2) */
 export type SnapshotView = {
+  cluster?: string;
   id: string;
   devpod: string;
   owner: string;
@@ -550,21 +551,23 @@ export type SnapshotProgress = {
 /** Either the default registry ({name, tag?}) or an address of the user's
  *  own ({image, pushAuth}); the server decides which credentials apply. */
 export type SnapshotRequest = { name?: string; tag?: string; pause?: boolean; image?: string; pushAuth?: { username: string; password: string } };
-export const createSnapshot = (devpod: string, body: SnapshotRequest) => req<SnapshotView>("POST", `/api/devpods/${devpod}/snapshots`, body);
+export const createSnapshot = (r: Ref, body: SnapshotRequest) => req<SnapshotView>("POST", apiIn(r.cluster, `/api/devpods/${r.name}/snapshots`), body);
 export const listSnapshots = (p: { all?: boolean; devpod?: string } = {}) =>
   req<{ items: SnapshotView[] }>("GET", `/api/snapshots?${new URLSearchParams({ ...(p.all ? { scope: "all" } : {}), ...(p.devpod ? { devpod: p.devpod } : {}) })}`);
-export const deleteSnapshot = (id: string) => req<void>("DELETE", `/api/snapshots/${id}`);
+/** SnapRef names a snapshot: its id and cluster. */
+export type SnapRef = { id: string; cluster?: string };
+export const deleteSnapshot = (s: SnapRef) => req<void>("DELETE", apiIn(s.cluster, `/api/snapshots/${s.id}`));
 /** retrySnapshot starts a failed save again with its settings; the failed record stays. */
-export const retrySnapshot = (id: string) => req<SnapshotView>("POST", `/api/snapshots/${id}/retry`);
+export const retrySnapshot = (s: SnapRef) => req<SnapshotView>("POST", apiIn(s.cluster, `/api/snapshots/${s.id}/retry`));
 
 /** streamSnapshotProgress reads the progress stream until the server ends
  *  it (after the final event). It does not reconnect: a finished stream is
  *  finished, and a broken one is reported through onEnd(false). */
-export function streamSnapshotProgress(id: string, onEvent: (p: SnapshotProgress) => void, onEnd: (clean: boolean) => void, fetchFn: typeof fetch = fetch): () => void {
+export function streamSnapshotProgress(snap: SnapRef, onEvent: (p: SnapshotProgress) => void, onEnd: (clean: boolean) => void, fetchFn: typeof fetch = fetch): () => void {
   const ctl = new AbortController();
   void (async () => {
     try {
-      const resp = await fetchFn(apiPath(`/api/snapshots/${id}/progress`), { signal: ctl.signal, credentials: "same-origin" });
+      const resp = await fetchFn(apiIn(snap.cluster, `/api/snapshots/${snap.id}/progress`), { signal: ctl.signal, credentials: "same-origin" });
       if (!resp.ok || !resp.body) return onEnd(false);
       const reader = resp.body.getReader();
       const dec = new TextDecoder();

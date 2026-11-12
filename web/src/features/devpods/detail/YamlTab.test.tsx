@@ -12,7 +12,7 @@ describe("YamlTab", () => {
 
   it("shows the manifest; nothing to save until it is edited; 还原 puts it back", async () => {
     stubFetch({ "/api/devpods/alice-x/yaml": { yaml: text, running: true } });
-    renderWithProviders(<YamlTab name="alice-x" />);
+    renderWithProviders(<YamlTab r={{ name: "alice-x" }} />);
     await waitFor(() => expect(editor().value).toBe(text));
     expect(button("保存").disabled).toBe(true);
     expect(button("还原").disabled).toBe(true);
@@ -31,7 +31,7 @@ describe("YamlTab", () => {
       "PUT /api/devpods/alice-x/yaml": { devpod: { metadata: { name: "alice-x" }, spec: { owner: "alice", running: true } }, rebuild: true },
       "/api/devpods/alice-x/yaml": { yaml: text, running: true },
     });
-    renderWithProviders(<YamlTab name="alice-x" />);
+    renderWithProviders(<YamlTab r={{ name: "alice-x" }} />);
     await waitFor(() => expect(editor().value).toBe(text));
     fireEvent.change(editor(), { target: { value: edited } });
     fireEvent.click(button("保存"));
@@ -42,7 +42,7 @@ describe("YamlTab", () => {
 
   it("text that is not YAML cannot be saved, and the editor says where it breaks", async () => {
     stubFetch({ "/api/devpods/alice-x/yaml": { yaml: text, running: false } });
-    renderWithProviders(<YamlTab name="alice-x" />);
+    renderWithProviders(<YamlTab r={{ name: "alice-x" }} />);
     await waitFor(() => expect(editor().value).toBe(text));
     fireEvent.change(editor(), { target: { value: text + "  pod: [unclosed\n" } });
     expect(button("保存").disabled).toBe(true);
@@ -57,7 +57,7 @@ describe("YamlTab", () => {
       "PUT /api/devpods/alice-x/yaml": new Response(JSON.stringify({ code: "BAD_REQUEST", message: "update rejected: spec.pod.spec.containers must contain at least one container" }), { status: 400 }),
       "/api/devpods/alice-x/yaml": { yaml: text, running: false },
     });
-    renderWithProviders(<YamlTab name="alice-x" />);
+    renderWithProviders(<YamlTab r={{ name: "alice-x" }} />);
     await waitFor(() => expect(editor().value).toBe(text));
     const broken = text + "  pod: {spec: {containers: []}}\n";
     fireEvent.change(editor(), { target: { value: broken } });

@@ -1,6 +1,8 @@
 // 新建 DevPod (config-centric create spec §5.1): pick a config and fill
 // in its variables — or write a YAML by hand. ?config= opens on a
 // config, ?image= on a blank YAML with that image.
+import { devpodHref, launchCluster, rememberLaunchCluster } from "../../data/cluster";
+import { useClusterList } from "../../data/clusterFilter";
 import { useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
@@ -15,7 +17,7 @@ import { rememberConfig } from "./recentConfigs";
 
 type Step = { kind: "pick" } | { kind: "launch"; name: string } | { kind: "yaml"; text: string; from: "blank" | "launch" };
 
-function Launch({ name, onBack, onEditOnce }: { name: string; onBack: () => void; onEditOnce: (yaml: string) => void }) {
+function Launch({ cluster, name, onBack, onEditOnce }: { cluster?: string; name: string; onBack: () => void; onEditOnce: (yaml: string) => void }) {
   const nav = useNavigate();
   const user = useMe().data?.user ?? "";
   const q = useQuery({ queryKey: ["config", name], queryFn: () => getConfig(name), retry: false });
@@ -23,25 +25,29 @@ function Launch({ name, onBack, onEditOnce }: { name: string; onBack: () => void
   if (!q.data) return <p className="text-xs text-muted">加载中…</p>;
   return (
     <LaunchForm
+      cluster={cluster}
       config={q.data}
       onBack={onBack}
       onEditOnce={onEditOnce}
       onDone={(r) => {
         // something was made from it: it was used
         if (r.items.some((i) => i.ok) && user) rememberConfig(user, name);
+        if (r.items.some((i) => i.ok)) rememberLaunchCluster(cluster);
         // all made: go to what was made (leaving ?new=1 closes the
         // drawer); otherwise stay on the results
         if (r.items.length === 0 || !r.items.every((i) => i.ok)) return;
         if (r.group) nav(`/?group=${encodeURIComponent(r.group)}`);
-        else nav(`/devpods/${r.items[0].name}`);
+        else nav(devpodHref({ cluster, name: r.items[0].name }));
       }}
     />
   );
 }
 
-export function NewDevPodDrawer({ config, image, onClose }: { config?: string; image?: string; onClose: () => void }) {
+export function NewDevPodDrawer({ config, image, in: asked, onClose }: { config?: string; image?: string; in?: string; onClose: () => void }) {
   const user = useMe().data?.user ?? "me";
   const nav = useNavigate();
+  const clusters = useClusterList().data?.items ?? [];
+  const cluster = asked && clusters.some((c) => c.name === asked) ? asked : launchCluster(clusters);
   const [step, setStep] = useState<Step>(() =>
     image ? { kind: "yaml", text: minimalYaml(user, image), from: "blank" } : config ? { kind: "launch", name: config } : { kind: "pick" },
   );
@@ -53,6 +59,7 @@ export function NewDevPodDrawer({ config, image, onClose }: { config?: string; i
       {step.kind === "launch" && (
         <Launch
           key={step.name}
+          cluster={cluster}
           name={step.name}
           onBack={() => setStep({ kind: "pick" })}
           onEditOnce={(text) => setStep({ kind: "yaml", text, from: "launch" })}
@@ -60,9 +67,13 @@ export function NewDevPodDrawer({ config, image, onClose }: { config?: string; i
       )}
       {step.kind === "yaml" && (
         <BlankYaml
+          cluster={cluster}
           initial={step.text}
           onBack={() => setStep({ kind: "pick" })}
-          onCreated={(name) => nav(`/devpods/${name}`)}
+          onCreated={(r) => {
+            rememberLaunchCluster(r.cluster);
+            nav(devpodHref(r));
+          }}
         />
       )}
     </Drawer>

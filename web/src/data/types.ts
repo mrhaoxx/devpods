@@ -61,6 +61,7 @@ export type KPI = {
   rdma: number;
 };
 export type AttentionItem = {
+  cluster?: string;
   kind: string; // alert | idle_gpu | pending_long | quota_high (more arrive with reservations)
   uid?: string;
   devpod?: string;
@@ -160,6 +161,7 @@ export type MetricSeries = { step: number; ts: number[]; series: Record<string, 
 /* api_nodes.go */
 export type ResView = { allocatable: number; allocated: number; used?: number };
 export type NodeView = {
+  cluster?: string;
   name: string;
   ready: boolean;
   labels: Record<string, string>;
@@ -213,7 +215,7 @@ export type ImportResult = { line: number; username: string; displayName?: strin
 /* api_search.go */
 export type SearchResult = {
   users: { name: string; displayName?: string }[];
-  devpods: { name: string; owner: string; phase?: string }[];
+  devpods: { name: string; cluster?: string; owner: string; phase?: string }[];
   sessions: { id: string; user: string; devpod: string; openedAt: string }[];
   commands: { sessionId: string; ts: string; user: string; devpod: string; cmd: string }[];
   auditError?: string;

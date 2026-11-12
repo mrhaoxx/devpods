@@ -32,7 +32,7 @@ describe("PortsPanel", () => {
       "/api/devpods/alice-a/info": { info: { ts: "", cpu_limit: 1, mem_limit: 1 }, infoTs: "", snapshot: { ts: "", procs: 1, threads: 1, zombies: 0, listen: [{ port: 8080, proto: "tcp", addr: "0.0.0.0" }] } },
       "PUT /api/devpods/alice-a/http": { ...view, publicPorts: [8080] },
     });
-    renderWithProviders(<PortsPanel name="alice-a" />);
+    renderWithProviders(<PortsPanel r={{ name: "alice-a" }} />);
     const open = await screen.findByRole("link", { name: /打开/ });
     expect(open.getAttribute("href")).toBe("https://abcdefgh2345-8080-devpod.apps.test");
     expect(screen.getByText("仅本人和协作者")).toBeTruthy();

@@ -1,91 +1,64 @@
-// Which cluster the console is looking at.
+// Which cluster a thing is in.
 //
 // A console of several clusters keeps users, tokens and saved configs
-// itself; DevPods, nodes, reservations and snapshots are a
-// cluster's. One cluster is in use at a time (the switcher in the top
-// bar): every request for something that is a cluster's goes to
-// /api/clusters/<cluster>/…, so the pages need not know. In a console of
-// one cluster nothing is chosen and no path changes.
-import { useSyncExternalStore } from "react";
+// itself; DevPods, nodes, reservations and snapshots are a cluster's.
+// Nothing is "the cluster in use": a list covers every cluster (the
+// server answers for all of them when the path names none, each item
+// saying its cluster), and what is done to one object goes to the
+// object's own cluster. Which clusters a page shows is a filter
+// (clusterFilter.tsx), not a place requests are sent.
 
-const KEY = "devpod.cluster";
+/** Ref names an object: its cluster (absent in a console of one) and name. */
+export type Ref = { cluster?: string; name: string };
 
-function load(): string {
+/** apiIn is path in cluster c: /api/clusters/<c>/…, or path itself without a cluster. */
+export function apiIn(c: string | undefined, path: string): string {
+  if (!c) return path;
+  return "/api/clusters/" + encodeURIComponent(c) + path.slice("/api".length);
+}
+
+/** keyOf: an object's key in lists and caches — <cluster>/<name>, or the name. */
+export const keyOf = (r: { cluster?: string; name: string }) => (r.cluster ? `${r.cluster}/${r.name}` : r.name);
+
+/** refOfKey reads a key back (a name never holds "/"). */
+export function refOfKey(k: string): Ref {
+  const i = k.indexOf("/");
+  return i < 0 ? { name: k } : { cluster: k.slice(0, i), name: k.slice(i + 1) };
+}
+
+/** clusterSeg: a cluster as an address segment ("-": none). */
+export const clusterSeg = (c?: string) => c || "-";
+/** segCluster reads a segment back. */
+export const segCluster = (seg?: string) => (seg && seg !== "-" ? seg : undefined);
+
+/** devpodHref: a DevPod's page. */
+export const devpodHref = (r: Ref, tab?: string) => `/devpods/${clusterSeg(r.cluster)}/${r.name}${tab ? `?tab=${tab}` : ""}`;
+
+const LAUNCH = "devpod.lastLaunchCluster";
+/** launchCluster: where a new DevPod goes by default — the cluster last
+ *  launched in, else the first connected one (none in a console of one). */
+export function launchCluster(clusters: { name: string; connected: boolean }[]): string | undefined {
+  if (clusters.length === 0) return undefined;
+  let last = "";
   try {
-    return window.localStorage.getItem(KEY) ?? "";
+    last = window.localStorage.getItem(LAUNCH) ?? "";
   } catch {
-    return "";
+    /* no storage */
+  }
+  if (clusters.some((c) => c.name === last)) return last;
+  return (clusters.find((c) => c.connected) ?? clusters[0]).name;
+}
+export function rememberLaunchCluster(c: string | undefined) {
+  try {
+    if (c) window.localStorage.setItem(LAUNCH, c);
+  } catch {
+    /* not kept: no matter */
   }
 }
 
-let current = load();
-let stale: string | null = null;
-const listeners = new Set<() => void>();
-const emit = () => listeners.forEach((l) => l());
-const subscribe = (l: () => void) => {
-  listeners.add(l);
-  return () => void listeners.delete(l);
-};
-
-/** currentCluster: the cluster in use; "" in a console of one cluster. */
-export const currentCluster = () => current;
-
-/** rememberCluster makes name the cluster in use, here and after a reload. */
-export function rememberCluster(name: string) {
-  if (name === current) return;
-  current = name;
-  stale = null;
-  try {
-    if (name) window.localStorage.setItem(KEY, name);
-    else window.localStorage.removeItem(KEY);
-  } catch {
-    /* private mode: the choice lasts until the reload */
-  }
-  emit();
+// the cluster that was "in use" before clusters were all shown at once
+try {
+  window.localStorage.removeItem("devpod.cluster");
+} catch {
+  /* no storage: nothing to forget */
 }
-
-export const useCurrentCluster = () => useSyncExternalStore(subscribe, currentCluster);
-
-/** What is a cluster's. Everything else is the console's and is never prefixed. */
-const owned = [
-  "/api/devpods",
-  "/api/nodes",
-  "/api/reservations",
-  "/api/snapshots",
-  "/api/kore",
-  "/api/live",
-  "/api/admin/nodes",
-  "/api/admin/devpods",
-  "/api/admin/live",
-];
-const launch = /^\/api\/configs\/[^/?]+\/launch(?:[/?]|$)/;
-
-export function isClusterPath(path: string): boolean {
-  return launch.test(path) || owned.some((p) => path === p || path.startsWith(p + "/") || path.startsWith(p + "?"));
-}
-
-/** apiPath puts a path that is a cluster's under the cluster in use. */
-export function apiPath(path: string): string {
-  if (!current || !isClusterPath(path)) return path;
-  return "/api/clusters/" + encodeURIComponent(current) + path.slice("/api".length);
-}
-
-export type ClusterChoice = { name: string; connected: boolean };
-
-/** pickCluster: the remembered cluster if it still exists, else one that
- *  is connected, else the first; "" when there is nothing to choose. */
-export function pickCluster(list: ClusterChoice[], remembered: string): string {
-  if (list.length === 0) return "";
-  if (list.some((c) => c.name === remembered)) return remembered;
-  return (list.find((c) => c.connected) ?? list[0]).name;
-}
-
-/** noteStale records what the last answer of the cluster in use said:
- *  since when it is the last known state (its agent is away), or null. */
-export function noteStale(since: string | null) {
-  if (since === stale) return;
-  stale = since;
-  emit();
-}
-export const staleSince = () => stale;
-export const useStaleSince = () => useSyncExternalStore(subscribe, staleSince);

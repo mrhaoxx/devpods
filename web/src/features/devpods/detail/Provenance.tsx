@@ -5,7 +5,8 @@ import * as Dialog from "@radix-ui/react-dialog";
 import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { ApiFailure, getDevPodYaml, rebuildFromConfig, type DevPod } from "../../../data/api";
+import { ApiFailure, getDevPodYaml, rebuildFromConfig, refOf, type DevPod } from "../../../data/api";
+import { keyOf, type Ref } from "../../../data/cluster";
 import { useDevPods, useMe } from "../../../data/queries";
 import { Button } from "../../../design/Button";
 import { Notice } from "../../../design/Form";
@@ -18,11 +19,13 @@ const said = (e: unknown) => (e instanceof ApiFailure ? e.body.message : String(
 
 function RebuildDialog({ dp, onClose }: { dp: DevPod; onClose: () => void }) {
   const name = dp.metadata.name;
+  const ref = refOf(dp);
   const p = provenance(dp);
   const me = useMe().data;
   const qc = useQueryClient();
   const list = useDevPods(me?.user === dp.spec.owner ? "mine" : "all", !!p.group);
-  const members = p.group ? (list.data?.items ?? []).filter((x) => provenance(x).group === p.group).map((x) => x.metadata.name) : [name];
+  // a group lives in one cluster
+  const members: Ref[] = p.group ? (list.data?.items ?? []).filter((x) => x.cluster === dp.cluster && provenance(x).group === p.group).map(refOf) : [ref];
   const [plan, setPlan] = useState<{ now: string; next: string; rebuild: boolean } | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [whole, setWhole] = useState(false);
@@ -30,24 +33,25 @@ function RebuildDialog({ dp, onClose }: { dp: DevPod; onClose: () => void }) {
 
   useEffect(() => {
     let gone = false;
-    Promise.all([getDevPodYaml(name), rebuildFromConfig(name, true)])
+    Promise.all([getDevPodYaml(ref), rebuildFromConfig(ref, true)])
       .then(([now, next]) => !gone && setPlan({ now: now.yaml, next: next.yaml, rebuild: next.rebuild }))
       .catch((e) => !gone && setError(said(e)));
     return () => {
       gone = true;
     };
-  }, [name]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [keyOf(ref)]);
 
   const run = async () => {
     setBusy(true);
     setError(null);
-    const targets = whole && members.length > 1 ? members : [name];
-    const results = await runBulk(targets, (n) => rebuildFromConfig(n));
+    const targets = whole && members.length > 1 ? members : [ref];
+    const results = await runBulk(targets, (r) => rebuildFromConfig(r));
     setBusy(false);
     void qc.invalidateQueries({ queryKey: ["devpods"] });
-    void qc.invalidateQueries({ queryKey: ["devpod", name] });
+    void qc.invalidateQueries({ queryKey: ["devpod"] });
     const failed = results.filter((r) => !r.ok);
-    if (failed.length) setError(failed.map((f) => `${f.item}：${f.error}`).join("；"));
+    if (failed.length) setError(failed.map((f) => `${f.item.name}：${f.error}`).join("；"));
     else onClose();
   };
 

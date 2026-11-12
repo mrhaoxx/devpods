@@ -2,6 +2,7 @@
 // 告警) beside one player that is live for an open session and can be
 // scrubbed back (audit spec §16); shells, terminals and commands play,
 // file transfers and forwards do not.
+import { devpodHref } from "../../data/cluster";
 import { useCallback, useMemo, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
@@ -127,7 +128,7 @@ export function SessionPage() {
         <h2 className="mono text-base font-semibold text-ink">{s.user}</h2>
         <span>
           DevPod{" "}
-          <Link to={`/devpods/${s.devpod}`} className="mono text-ink hover:text-accent">
+          <Link to={devpodHref({ cluster: q.data.cluster || undefined, name: s.devpod })} className="mono text-ink hover:text-accent">
             {s.devpod}
           </Link>
         </span>

@@ -2,25 +2,33 @@
 // spec §5.2); opened, their own rows follow it, in their order.
 import type { Row } from "./columns";
 import { provenance } from "./provenance";
+import { keyOf } from "../../data/cluster";
+
+// a group is launched in one cluster: the same name in another is another group
+const groupKey = (r: Row) => {
+  const g = provenance(r.dp).group;
+  return g ? keyOf({ cluster: r.cluster, name: g }) : undefined;
+};
 
 /** groupRows: rows with every group of two or more folded into one. */
 export function groupRows(rows: Row[], open: ReadonlySet<string>): Row[] {
   const members = new Map<string, Row[]>();
   for (const r of rows) {
-    const g = provenance(r.dp).group;
-    if (g) members.set(g, [...(members.get(g) ?? []), r]);
+    const k = groupKey(r);
+    if (k) members.set(k, [...(members.get(k) ?? []), r]);
   }
   const out: Row[] = [];
   const done = new Set<string>();
   for (const r of rows) {
     const g = provenance(r.dp).group;
-    const ms = g ? members.get(g)! : [];
-    if (!g || ms.length < 2) {
+    const k = groupKey(r);
+    const ms = k ? members.get(k)! : [];
+    if (!g || !k || ms.length < 2) {
       out.push(r);
       continue;
     }
-    if (done.has(g)) continue;
-    done.add(g);
+    if (done.has(k)) continue;
+    done.add(k);
     const sorted = [...ms].sort((a, b) => (provenance(a.dp).index ?? 0) - (provenance(b.dp).index ?? 0) || a.name.localeCompare(b.name));
     const phases = new Set(sorted.map((m) => m.phase));
     out.push({

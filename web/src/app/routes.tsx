@@ -33,11 +33,11 @@ export function AppRoutes() {
     <Routes>
       <Route path="/login" element={<LoginPage />} />
       {/* the web terminal fills its own tab, outside the console shell */}
-      <Route path="/devpods/:name/shell" element={<ShellPage />} />
+      <Route path="/devpods/:cluster/:name/shell" element={<ShellPage />} />
       <Route element={<Shell />}>
         <Route index element={<MyDevPodsPage />} />
         <Route path="devpods/new" element={<Navigate to="/?new=1" replace />} />
-        <Route path="devpods/:name" element={<DetailPage />} />
+        <Route path="devpods/:cluster/:name" element={<DetailPage />} />
         <Route path="http-auth" element={<HttpAuthPage />} />
         <Route path="reservations" element={<ReservationsPage />} />
         <Route path="images" element={<ImagesPage />} />

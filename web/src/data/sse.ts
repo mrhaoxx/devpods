@@ -1,4 +1,4 @@
-import { apiPath } from "./cluster";
+import { apiIn, type Ref } from "./cluster";
 // Server-sent events with reconnect (UI spec §6.1: every stream sends a
 // full snapshot each second, so a reconnect needs no catch-up).
 import type { DevPod, DevPodDetail, K8sEvent, PodInfo } from "./api";
@@ -64,7 +64,7 @@ export function makeOpenSSE(ES: typeof EventSource): OpenSSE {
   };
 }
 
-export const openSSE: OpenSSE = (url, h) => makeOpenSSE(EventSource)(apiPath(url), h);
+export const openSSE: OpenSSE = (url, h) => makeOpenSSE(EventSource)(url, h);
 
 const quiet: Omit<SseHandlers, "onMessage"> = { onNamed() {}, onOpen() {}, onError() {} };
 
@@ -79,8 +79,9 @@ export function watchDevPods(
     ...quiet,
     onOpen: onResync,
     onMessage: (d) => {
-      const ev = d as { type: string; devpod: DevPod; pod?: PodInfo };
-      onEvent(ev.type, ev.devpod, ev.pod);
+      // every cluster's changes, each saying its cluster
+      const ev = d as { type: string; cluster?: string; devpod: DevPod; pod?: PodInfo };
+      onEvent(ev.type, ev.cluster ? { ...ev.devpod, cluster: ev.cluster } : ev.devpod, ev.pod);
     },
   });
 }
@@ -88,10 +89,10 @@ export function watchDevPods(
 /** watchDevPod: one connection carrying a DevPod's status and its k8s
  *  Events (the server replays both on connect). */
 export function watchDevPod(
-  name: string,
+  r: Ref,
   handlers: { onDetail: (d: DevPodDetail) => void; onEvent: (type: string, ev: K8sEvent) => void },
 ): () => void {
-  return openSSE(`/api/devpods/${name}/stream`, {
+  return openSSE(apiIn(r.cluster, `/api/devpods/${r.name}/stream`), {
     ...quiet,
     onMessage: (d) => {
       const m = d as { kind: string; type: string; detail?: DevPodDetail; event?: K8sEvent };

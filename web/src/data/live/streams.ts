@@ -1,13 +1,14 @@
 // The live streams of UI spec §6.1 and how each splits into row keys.
 import type { StreamSpec } from "./LiveHub";
 import type { LiveListFrame, OverviewFrame } from "../types";
+import { apiIn, keyOf, type Ref } from "../cluster";
 
-/** /api/live/devpods: rows keyed by DevPod name. */
+/** /api/live/devpods: every cluster's rows, keyed <cluster>/<name>. */
 export function devpodsStream(scope: "mine" | "all"): StreamSpec {
   return {
     id: `devpods:${scope}`,
     url: `/api/live/devpods?scope=${scope}`,
-    rows: (m) => ((m as LiveListFrame).items ?? []).map((it) => [it.name, it] as [string, unknown]),
+    rows: (m) => ((m as LiveListFrame).items ?? []).map((it) => [keyOf(it), it] as [string, unknown]),
   };
 }
 
@@ -36,10 +37,10 @@ export function overviewStream(): StreamSpec {
 
 /** /api/devpods/{name}/stream: rows "metrics" and "processes"; DevPod
  *  and event messages go to onOther. */
-export function devpodStream(name: string, allProcs: boolean, onOther?: (msg: unknown) => void): StreamSpec {
+export function devpodStream(r: Ref, allProcs: boolean, onOther?: (msg: unknown) => void): StreamSpec {
   return {
-    id: `devpod:${name}${allProcs ? ":all" : ""}`,
-    url: `/api/devpods/${name}/stream${allProcs ? "?procs=all" : ""}`,
+    id: `devpod:${keyOf(r)}${allProcs ? ":all" : ""}`,
+    url: apiIn(r.cluster, `/api/devpods/${r.name}/stream${allProcs ? "?procs=all" : ""}`),
     rows: (m) => {
       const msg = m as { kind?: string; metrics?: unknown; processes?: unknown };
       if (msg.kind === "metrics" && msg.metrics) return [["metrics", msg.metrics]];

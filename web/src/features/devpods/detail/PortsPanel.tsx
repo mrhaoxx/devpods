@@ -3,6 +3,7 @@
 // or its owner. Each port has one of three access levels: private (owner,
 // collaborators, admins), signed-in users (anyone logged in to the
 // console) or public (anyone with the link).
+import type { Ref } from "../../../data/cluster";
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { getHttp, putHttp, type HttpView } from "../../../data/api";
@@ -62,15 +63,15 @@ function CopyLink({ url }: { url: string }) {
   );
 }
 
-export function PortsPanel({ name, sshPort }: { name: string; /** the container's sshd port (from the DevPod's endpoint) */ sshPort?: number }) {
+export function PortsPanel({ r, sshPort }: { r: Ref; /** the container's sshd port (from the DevPod's endpoint) */ sshPort?: number }) {
   const qc = useQueryClient();
-  const key = ["http", name];
-  const http = useQuery({ queryKey: key, queryFn: () => getHttp(name), retry: false });
-  const info = useInfo(name);
+  const key = ["http", r.cluster ?? "", r.name];
+  const http = useQuery({ queryKey: key, queryFn: () => getHttp(r), retry: false });
+  const info = useInfo(r);
   const [other, setOther] = useState("");
   const [reset, setReset] = useState(false);
   const save = useMutation({
-    mutationFn: (body: { publicPorts?: number[]; userPorts?: number[]; reset?: boolean }) => putHttp(name, body),
+    mutationFn: (body: { publicPorts?: number[]; userPorts?: number[]; reset?: boolean }) => putHttp(r, body),
     onSuccess: (v: HttpView) => qc.setQueryData(key, v),
   });
   if (!http.data) return null;

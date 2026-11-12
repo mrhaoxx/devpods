@@ -3,6 +3,7 @@
 // pinned to a node takes one DevPod per picked node, in click order; any
 // other takes a count. The server checks the launch as a whole before
 // writing anything. Shown in the new-DevPod drawer.
+import { devpodHref } from "../../data/cluster";
 import { useEffect, useMemo, useState } from "react";
 import { parse } from "yaml";
 import { Link } from "react-router-dom";
@@ -49,7 +50,7 @@ export function requested(yamls: string[]): { cpu: number; memory: number; gpu: 
   return out;
 }
 
-function Items({ outcome, onEditOnce }: { outcome: Outcome; onEditOnce?: (yaml: string) => void }) {
+function Items({ cluster, outcome, onEditOnce }: { cluster?: string; outcome: Outcome; onEditOnce?: (yaml: string) => void }) {
   return (
     <ol aria-label="结果" className="max-h-56 space-y-1 overflow-y-auto rounded-md border border-line bg-sunk p-2 text-xs">
       {outcome.items.map((it) => (
@@ -59,7 +60,7 @@ function Items({ outcome, onEditOnce }: { outcome: Outcome; onEditOnce?: (yaml: 
               {it.ok ? "✓" : "✗"}
             </span>
             {it.ok && outcome.kind === "created" ? (
-              <Link to={`/devpods/${it.name}`} className="mono text-accent hover:underline">
+              <Link to={devpodHref({ cluster, name: it.name })} className="mono text-accent hover:underline">
                 {it.name}
               </Link>
             ) : (
@@ -91,11 +92,14 @@ function Items({ outcome, onEditOnce }: { outcome: Outcome; onEditOnce?: (yaml: 
 }
 
 export function LaunchForm({
+  cluster,
   config,
   onBack,
   onDone,
   onEditOnce,
 }: {
+  /** where the DevPods go (none in a console of one cluster) */
+  cluster?: string;
   config: Pick<ConfigSummary, "name" | "title" | "variables" | "owner">;
   onBack?: () => void;
   onDone: (r: { items: LaunchItem[]; group?: string }) => void;
@@ -142,7 +146,7 @@ export function LaunchForm({
     setError(null);
     setOutcome(null);
     try {
-      const r = await launchConfig(config.name, body(dryRun));
+      const r = await launchConfig(cluster, config.name, body(dryRun));
       setOutcome({ kind: r.status === 422 ? "rejected" : dryRun ? "preview" : "created", items: r.items, group: r.group });
       if (!dryRun && r.status !== 422) {
         void qc.invalidateQueries({ queryKey: ["devpods"] });
@@ -244,7 +248,7 @@ export function LaunchForm({
               )}
             </p>
           )}
-          {outcome && <Items outcome={outcome} onEditOnce={onEditOnce} />}
+          {outcome && <Items cluster={cluster} outcome={outcome} onEditOnce={onEditOnce} />}
           <div className="flex justify-end gap-2">
             {onBack && !done && <Button onClick={onBack}>上一步</Button>}
             {!done && (

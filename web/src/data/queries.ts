@@ -2,7 +2,8 @@
 // TanStack Query cache; live metrics never do (they live in LiveHub).
 import { useEffect } from "react";
 import { useMutation, useQuery, useQueryClient, type QueryClient } from "@tanstack/react-query";
-import { podKey,
+import { keyOf, type Ref } from "./cluster";
+import {
   auditPresence,
   deleteDevPod,
   getDevPod,
@@ -29,12 +30,12 @@ import { podKey,
 export const qk = {
   me: ["me"] as const,
   devpods: (scope: "mine" | "all") => ["devpods", scope] as const,
-  devpod: (name: string) => ["devpod", name] as const,
+  devpod: (r: Ref) => ["devpod", r.cluster ?? "", r.name] as const,
   users: ["admin", "users"] as const,
   nodes: ["admin", "nodes"] as const,
-  node: (name: string) => ["admin", "node", name] as const,
-  metrics: (name: string, range: MetricRange) => ["metrics", name, range] as const,
-  info: (name: string) => ["info", name] as const,
+  node: (r: Ref) => ["admin", "node", r.cluster ?? "", r.name] as const,
+  metrics: (r: Ref, range: MetricRange) => ["metrics", r.cluster ?? "", r.name, range] as const,
+  info: (r: Ref) => ["info", r.cluster ?? "", r.name] as const,
   auditSessions: (params: Record<string, string | undefined>) => ["audit", "sessions", params] as const,
   presence: (all: boolean) => ["presence", all] as const,
 };
@@ -45,15 +46,13 @@ export const useMe = () => useQuery({ queryKey: qk.me, queryFn: me, staleTime: 3
 export function applyWatchEvent(old: DevPodList | undefined, type: string, dp: DevPodList["items"][number], pod?: DevPodList["pods"][string]): DevPodList {
   const items = old?.items ?? [];
   const pods = { ...(old?.pods ?? {}) };
-  const name = dp.metadata.name;
-  const idx = items.findIndex((d) => d.metadata.name === name);
-  // a watch event does not say the cluster: it is the list's
-  const cur = { ...dp, cluster: dp.cluster ?? (idx >= 0 ? items[idx].cluster : items[0]?.cluster) };
-  if (!cur.cluster) delete cur.cluster;
-  const key = podKey(cur);
+  const key = keyOf({ cluster: dp.cluster, name: dp.metadata.name });
+  const at = (d: DevPodList["items"][number]) => keyOf({ cluster: d.cluster, name: d.metadata.name }) === key;
+  const idx = items.findIndex(at);
+  const cur = dp;
   if (type === "DELETED") {
     delete pods[key];
-    return { items: items.filter((d) => d.metadata.name !== name), pods };
+    return { items: items.filter((d) => !at(d)), pods };
   }
   if (pod) pods[key] = pod;
   else delete pods[key];
@@ -78,25 +77,25 @@ export function useDevPods(scope: "mine" | "all" = "mine", enabled = true) {
   return q;
 }
 
-export const useDevPod = (name: string) => useQuery({ queryKey: qk.devpod(name), queryFn: () => getDevPod(name) });
+export const useDevPod = (r: Ref) => useQuery({ queryKey: qk.devpod(r), queryFn: () => getDevPod(r) });
 export const useUsers = (enabled = true) =>
   useQuery({ queryKey: qk.users, queryFn: listAdminUsers, enabled, refetchInterval: 30_000 });
 export const useNodes = (enabled = true) => useQuery({ queryKey: qk.nodes, queryFn: listNodes, enabled, refetchInterval: 10_000 });
-export const useNode = (name: string | undefined) =>
-  useQuery({ queryKey: qk.node(name ?? ""), queryFn: () => getNode(name!), enabled: !!name, refetchInterval: 10_000 });
+export const useNode = (r: Ref | undefined) =>
+  useQuery({ queryKey: qk.node(r ?? { name: "" }), queryFn: () => getNode(r!), enabled: !!r?.name, refetchInterval: 10_000 });
 
 /** History refreshes faster for the short ranges. */
-export const useMetrics = (name: string, range: MetricRange | undefined) =>
+export const useMetrics = (r: Ref, range: MetricRange | undefined) =>
   useQuery({
-    queryKey: qk.metrics(name, range ?? "15m"),
-    queryFn: () => getMetrics(name, range!),
+    queryKey: qk.metrics(r, range ?? "15m"),
+    queryFn: () => getMetrics(r, range!),
     enabled: !!range,
     refetchInterval: range === "15m" || range === "1h" ? 10_000 : 60_000,
     retry: false,
   });
 /** useRecent: sparkline history (15 min) from ClickHouse, refreshed each minute. */
-export const useRecent = (p: { scope?: "mine" | "all"; name?: string }, enabled = true) =>
-  useQuery({ queryKey: ["recent", p.scope ?? "", p.name ?? ""], queryFn: () => getRecent(p), enabled, refetchInterval: 60_000, retry: false });
+export const useRecent = (p: { scope?: "mine" | "all"; ref?: Ref }, enabled = true) =>
+  useQuery({ queryKey: ["recent", p.scope ?? "", p.ref?.cluster ?? "", p.ref?.name ?? ""], queryFn: () => getRecent(p), enabled, refetchInterval: 60_000, retry: false });
 /** useNodesRecent: the nodes' sparkline history, shared by every cell. */
 export const useNodesRecent = () => useQuery({ queryKey: ["recent", "nodes"], queryFn: getNodesRecent, refetchInterval: 60_000, retry: false });
 /** useNodeChoices: the nodes a DevPod can be pinned to, with reservation state. */
@@ -110,16 +109,16 @@ export const useSnapshots = (p: { all?: boolean; devpod?: string } = {}, enabled
     retry: false,
     refetchInterval: (q) => (q.state.data?.items.some((s) => s.phase === "Pending" || s.phase === "Running") ? 3000 : 30_000),
   });
-export const useInfo = (name: string, enabled = true) =>
-  useQuery({ queryKey: qk.info(name), queryFn: () => getInfo(name), enabled, retry: false, staleTime: 30_000 });
+export const useInfo = (r: Ref, enabled = true) =>
+  useQuery({ queryKey: qk.info(r), queryFn: () => getInfo(r), enabled, retry: false, staleTime: 30_000 });
 export const useAuditSessions = (params: Record<string, string | undefined>, opts: { enabled?: boolean; refetchInterval?: number } = {}) =>
   useQuery({ queryKey: qk.auditSessions(params), queryFn: () => listAuditSessions(params), retry: false, ...opts });
 export const usePresence = (all: boolean, enabled: boolean) =>
   useQuery({ queryKey: qk.presence(all), queryFn: () => auditPresence(all), enabled, refetchInterval: 10_000 });
 
-function invalidateDevPods(qc: QueryClient, name?: string) {
+function invalidateDevPods(qc: QueryClient, r?: Ref) {
   void qc.invalidateQueries({ queryKey: ["devpods"] });
-  if (name) void qc.invalidateQueries({ queryKey: qk.devpod(name) });
+  if (r) void qc.invalidateQueries({ queryKey: qk.devpod(r) });
   void qc.invalidateQueries({ queryKey: qk.me });
 }
 
@@ -127,16 +126,16 @@ function invalidateDevPods(qc: QueryClient, name?: string) {
 export function useDevPodMutations() {
   const qc = useQueryClient();
   const setRunning = useMutation({
-    mutationFn: ({ name, running }: { name: string; running: boolean }) => patchDevPod(name, running),
-    onSettled: (_d, _e, v) => invalidateDevPods(qc, v.name),
+    mutationFn: ({ ref, running }: { ref: Ref; running: boolean }) => patchDevPod(ref, running),
+    onSettled: (_d, _e, v) => invalidateDevPods(qc, v.ref),
   });
   const patchSpec = useMutation({
-    mutationFn: ({ name, body }: { name: string; body: SpecPatch }) => patchDevPodSpec(name, body),
-    onSettled: (_d, _e, v) => invalidateDevPods(qc, v.name),
+    mutationFn: ({ ref, body }: { ref: Ref; body: SpecPatch }) => patchDevPodSpec(ref, body),
+    onSettled: (_d, _e, v) => invalidateDevPods(qc, v.ref),
   });
   const remove = useMutation({
-    mutationFn: (name: string) => deleteDevPod(name),
-    onSettled: (_d, _e, name) => invalidateDevPods(qc, name),
+    mutationFn: (ref: Ref) => deleteDevPod(ref),
+    onSettled: (_d, _e, ref) => invalidateDevPods(qc, ref),
   });
   return { setRunning, patchSpec, remove };
 }

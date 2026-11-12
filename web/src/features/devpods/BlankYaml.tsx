@@ -1,5 +1,6 @@
 // 新建 DevPod from a YAML written by hand: a small DevPod to start from,
 // or the YAML of one launch instance taken out to edit this one time.
+import type { Ref } from "../../data/cluster";
 import { useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useQueryClient } from "@tanstack/react-query";
@@ -29,7 +30,7 @@ spec:
 `;
 }
 
-export function BlankYaml({ initial, onBack, onCreated }: { initial: string; onBack?: () => void; onCreated: (name: string) => void }) {
+export function BlankYaml({ cluster, initial, onBack, onCreated }: { cluster?: string; initial: string; onBack?: () => void; onCreated: (r: Ref) => void }) {
   const [text, setText] = useState(initial);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -40,10 +41,10 @@ export function BlankYaml({ initial, onBack, onCreated }: { initial: string; onB
     setBusy(true);
     setError(null);
     try {
-      const dp = await createDevPod({ yaml: text });
+      const dp = await createDevPod(cluster, { yaml: text });
       void qc.invalidateQueries({ queryKey: ["devpods"] });
       void qc.invalidateQueries({ queryKey: ["me"] });
-      onCreated(dp.metadata.name);
+      onCreated({ cluster, name: dp.metadata.name });
     } catch (e) {
       setError(e instanceof ApiFailure ? e.body.message : String(e));
     } finally {

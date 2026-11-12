@@ -39,7 +39,7 @@ function setup(opts: { route?: string; admin?: boolean; live?: boolean } = {}) {
   renderWithProviders(
     <Routes>
       <Route
-        path="/devpods/:name"
+        path="/devpods/:cluster/:name"
         element={
           <>
             <DetailPage />
@@ -48,7 +48,7 @@ function setup(opts: { route?: string; admin?: boolean; live?: boolean } = {}) {
         }
       />
     </Routes>,
-    { route: opts.route ?? "/devpods/alice-x", me, hub, liveEnabled: opts.live !== false },
+    { route: opts.route ?? "/devpods/-/alice-x", me, hub, liveEnabled: opts.live !== false },
   );
   return conns;
 }
@@ -80,7 +80,7 @@ describe("DevPod detail", () => {
   });
 
   it("tab follows ?tab= and switching tab updates the URL", async () => {
-    setup({ route: "/devpods/alice-x?tab=events" });
+    setup({ route: "/devpods/-/alice-x?tab=events" });
     await screen.findByRole("heading", { name: "alice-x" });
     expect(screen.getByRole("tab", { name: "事件" }).getAttribute("aria-selected")).toBe("true");
     fireEvent.click(screen.getByRole("tab", { name: "会话" }));
@@ -88,7 +88,7 @@ describe("DevPod detail", () => {
   });
 
   it("编辑 opens the YAML tab", async () => {
-    setup({ route: "/devpods/alice-x" });
+    setup({ route: "/devpods/-/alice-x" });
     await screen.findByRole("heading", { name: "alice-x" });
     fireEvent.click(screen.getByRole("button", { name: "编辑" }));
     expect(screen.getByTestId("where").textContent).toBe("?tab=yaml");
@@ -152,5 +152,11 @@ describe("DevPod detail", () => {
     setup();
     fireEvent.click(await screen.findByRole("button", { name: "存为配置" }));
     await waitFor(() => expect(screen.queryByTestId("where")).toBeNull()); // the detail route is left
+  });
+
+  it("the address names the DevPod's cluster; its data comes from there", async () => {
+    setup({ route: "/devpods/a/alice-x", live: false });
+    await waitFor(() => expect(calls.some((c) => c.url.pathname === "/api/clusters/a/devpods/alice-x")).toBe(true));
+    expect(calls.some((c) => c.url.pathname === "/api/devpods/alice-x")).toBe(false);
   });
 });

@@ -1,6 +1,7 @@
 // 节点 (UI spec §5.4): one row per node; the drawer (?node=) lists the
 // node's DevPods, each GPU card's occupant and the Kore CPU layout.
 // Reservation columns arrive with the reservation backend (ruling R1).
+import { devpodHref, keyOf, refOfKey, type Ref } from "../../data/cluster";
 import { useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import { useQueryClient, useMutation } from "@tanstack/react-query";
@@ -65,12 +66,12 @@ function matchesLabel(labels: Record<string, string>, f: string): boolean {
 
 /** 可预约: admins open a node for reservation (the node label). Turning it
  *  off leaves reservations already made to run their course. */
-function ReservableSwitch({ name }: { name: string }) {
+function ReservableSwitch({ r }: { r: Ref }) {
   const qc = useQueryClient();
   const me = useMe().data;
-  const node = useNodeChoices(!!me?.features.reservations).data?.items.find((n) => n.name === name);
+  const node = useNodeChoices(!!me?.features.reservations).data?.items.find((n) => n.name === r.name && n.cluster === r.cluster);
   const set = useMutation({
-    mutationFn: (on: boolean) => setReservable(name, on),
+    mutationFn: (on: boolean) => setReservable(r, on),
     onSettled: () => void qc.invalidateQueries({ queryKey: ["node-choices"] }),
   });
   if (!me?.features.reservations) return <span className="text-faint">—</span>;
@@ -106,7 +107,7 @@ const columns: ColumnDef<NodeView, unknown>[] = [
     header: "可预约",
     enableSorting: false,
     meta: { priority: 3, width: 150 },
-    cell: ({ row: { original: n } }) => <ReservableSwitch name={n.name} />,
+    cell: ({ row: { original: n } }) => <ReservableSwitch r={n} />,
   },
   {
     id: "cpu",
@@ -160,8 +161,9 @@ const columns: ColumnDef<NodeView, unknown>[] = [
   },
 ];
 
-function NodeDrawerBody({ name }: { name: string }) {
-  const q = useNode(name);
+function NodeDrawerBody({ r }: { r: Ref }) {
+  const name = r.name;
+  const q = useNode(r);
   const qc = useQueryClient();
   const [sel, setSel] = useState<Set<string>>(new Set());
   const [msg, setMsg] = useState<string | null>(null);
@@ -170,11 +172,11 @@ function NodeDrawerBody({ name }: { name: string }) {
   const { node, devpods } = q.data;
   const running = devpods.filter((d) => d.phase === "Running");
   const hibernate = async () => {
-    const res = await runBulk([...sel], (n) => patchDevPod(n, false));
+    const res = await runBulk([...sel], (n) => patchDevPod({ cluster: r.cluster, name: n }, false));
     const failed = res.filter((r) => !r.ok);
     setMsg(`休眠：成功 ${res.length - failed.length}，失败 ${failed.length}${failed.length ? `（${failed.map((f) => `${f.item}：${f.error}`).join("；")}）` : ""}`);
     setSel(new Set());
-    void qc.invalidateQueries({ queryKey: ["admin", "node", name] });
+    void qc.invalidateQueries({ queryKey: ["admin", "node"] });
     void qc.invalidateQueries({ queryKey: ["devpods"] });
   };
   return (
@@ -226,7 +228,7 @@ function NodeDrawerBody({ name }: { name: string }) {
                   }}
                 />
                 <StatusDot phase={d.phase} showLabel={false} />
-                <Link to={`/devpods/${d.name}`} className="mono min-w-0 flex-1 truncate hover:text-accent">
+                <Link to={devpodHref({ cluster: r.cluster, name: d.name })} className="mono min-w-0 flex-1 truncate hover:text-accent">
                   {d.name}
                 </Link>
                 <span className="mono text-muted">{d.owner}</span>
@@ -247,7 +249,7 @@ function NodeDrawerBody({ name }: { name: string }) {
               <li key={c.uuid || c.index} className="flex items-center gap-2 px-3 py-1">
                 <span className="mono w-12">GPU{c.index}</span>
                 {c.devpod ? (
-                  <Link to={`/devpods/${c.devpod}`} className="mono min-w-0 flex-1 truncate hover:text-accent">
+                  <Link to={devpodHref({ cluster: r.cluster, name: c.devpod })} className="mono min-w-0 flex-1 truncate hover:text-accent">
                     {c.devpod}
                   </Link>
                 ) : (
@@ -263,7 +265,7 @@ function NodeDrawerBody({ name }: { name: string }) {
       {q.data.topology ? (
         <Panel title="CPU 拓扑（Kore）" actions={<TopologyLegend />}>
           <div className="p-3">
-            <NodeZones node={q.data.topology as KoreNode} reveal />
+            <NodeZones cluster={r.cluster} node={q.data.topology as KoreNode} reveal />
           </div>
         </Panel>
       ) : null}
@@ -304,16 +306,16 @@ export function NodesPage() {
           storageKey="nodes"
           data={shown}
           columns={columns}
-          getRowId={(n) => n.name}
+          getRowId={keyOf}
           sorting={sorting}
           onSortingChange={(s) => setUrl({ sort: s[0] ? `${s[0].desc ? "-" : ""}${s[0].id}` : "" })}
-          onRowClick={(n) => setUrl({ node: n.name })}
+          onRowClick={(n) => setUrl({ node: keyOf(n) })}
           empty={<EmptyState title={q.isLoading ? "加载中…" : "没有符合条件的节点"} />}
         />
       )}
       {url.node && (
-        <Drawer open onOpenChange={(o) => !o && setUrl({ node: "" })} title={`节点 ${url.node}`} width={620}>
-          <NodeDrawerBody name={url.node} />
+        <Drawer open onOpenChange={(o) => !o && setUrl({ node: "" })} title={`节点 ${refOfKey(url.node).name}`} width={620}>
+          <NodeDrawerBody r={refOfKey(url.node)} />
         </Drawer>
       )}
     </>

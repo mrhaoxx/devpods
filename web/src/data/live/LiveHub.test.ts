@@ -95,7 +95,7 @@ describe("LiveHub", () => {
     const { open, conns } = fakeOpen();
     const hub = new LiveHub({ open });
     const other = vi.fn();
-    hub.acquire(devpodStream("alice-x", false, other));
+    hub.acquire(devpodStream({ name: "alice-x" }, false, other));
     expect(conns[0].url).toBe("/api/devpods/alice-x/stream");
     conns[0].h.onMessage({ kind: "devpod", type: "MODIFIED", detail: {} });
     conns[0].h.onMessage({ kind: "event", type: "ADDED", event: {} });
@@ -104,7 +104,7 @@ describe("LiveHub", () => {
     expect(other).toHaveBeenCalledTimes(2);
     expect(hub.row("devpod:alice-x", "metrics")?.value).toEqual({ ts: "t" });
     expect(hub.status("devpod:alice-x")).toBe("reconnecting");
-    hub.acquire(devpodStream("alice-x", true));
+    hub.acquire(devpodStream({ name: "alice-x" }, true));
     expect(conns[1].url).toBe("/api/devpods/alice-x/stream?procs=all");
   });
 });

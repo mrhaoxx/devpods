@@ -1,6 +1,7 @@
 // A DevPod's manifest, to read and to edit as a whole. Saving replaces
 // the spec; the server applies the rules of creating from YAML. The name
 // and the owner are not the manifest's to change.
+import type { Ref } from "../../../data/cluster";
 import { useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ApiFailure, getDevPodYaml, putDevPodYaml } from "../../../data/api";
@@ -12,10 +13,10 @@ import { YamlEditor } from "../../../design/yaml/YamlEditor";
 import { yamlProblems } from "../../../design/yaml/lint";
 import { Panel } from "../../../design/Panel";
 
-export function YamlTab({ name }: { name: string }) {
+export function YamlTab({ r }: { r: Ref }) {
   const qc = useQueryClient();
-  const key = ["devpod-yaml", name];
-  const q = useQuery({ queryKey: key, queryFn: () => getDevPodYaml(name), retry: false });
+  const key = ["devpod-yaml", r.cluster ?? "", r.name];
+  const q = useQuery({ queryKey: key, queryFn: () => getDevPodYaml(r), retry: false });
   // base: what the server has; text: what is in the editor
   const [base, setBase] = useState<string | null>(null);
   const [text, setText] = useState("");
@@ -32,12 +33,12 @@ export function YamlTab({ name }: { name: string }) {
   }, [q.data]);
 
   const save = useMutation({
-    mutationFn: () => putDevPodYaml(name, text),
-    onSuccess: (r) => {
+    mutationFn: () => putDevPodYaml(r, text),
+    onSuccess: (res) => {
       setBase(text);
-      setSaved({ rebuild: r.rebuild });
+      setSaved({ rebuild: res.rebuild });
       void qc.invalidateQueries({ queryKey: key });
-      void qc.invalidateQueries({ queryKey: qk.devpod(name) });
+      void qc.invalidateQueries({ queryKey: qk.devpod(r) });
       void qc.invalidateQueries({ queryKey: ["devpods"] });
       void qc.invalidateQueries({ queryKey: ["me"] });
     },

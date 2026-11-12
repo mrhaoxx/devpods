@@ -5,6 +5,7 @@ import { Link } from "react-router-dom";
 import { useQueryClient } from "@tanstack/react-query";
 import * as Menu from "@radix-ui/react-dropdown-menu";
 import type { SortingState } from "@tanstack/react-table";
+import { keyOf } from "../../data/cluster";
 import { deleteDevPod, podKey, patchDevPod, patchDevPodSpec, rebuildFromConfig, redeployDevPod, sshCommand, type LiveItem, shellPath } from "../../data/api";
 import { useDevPodMutations, useDevPods, useMe, useRecent } from "../../data/queries";
 import { devpodsStream } from "../../data/live/streams";
@@ -52,17 +53,17 @@ function RowMenu({ r, onDelete }: { r: Row; onDelete: (r: Row) => void }) {
       </Menu.Trigger>
       <Menu.Portal>
         <Menu.Content align="end" className="z-50 min-w-36 rounded-md border border-line bg-surface p-1 text-xs shadow-lg">
-          <Menu.Item className="cursor-pointer rounded px-2 py-1 outline-none data-[highlighted]:bg-sunk" onSelect={() => void copyText(sshCommand(me, r.owner, r.name))}>
+          <Menu.Item className="cursor-pointer rounded px-2 py-1 outline-none data-[highlighted]:bg-sunk" onSelect={() => void copyText(sshCommand(me, r.owner, r.name, r.cluster))}>
             复制 SSH 命令
           </Menu.Item>
           {me?.features.webshell && r.phase === "Running" && (
-            <Menu.Item className="cursor-pointer rounded px-2 py-1 outline-none data-[highlighted]:bg-sunk" onSelect={() => window.open(shellPath(r.name), "_blank", "noopener")}>
+            <Menu.Item className="cursor-pointer rounded px-2 py-1 outline-none data-[highlighted]:bg-sunk" onSelect={() => window.open(shellPath(r), "_blank", "noopener")}>
               终端
             </Menu.Item>
           )}
           <Menu.Item
             className="cursor-pointer rounded px-2 py-1 outline-none data-[highlighted]:bg-sunk"
-            onSelect={() => setRunning.mutate({ name: r.name, running: !r.dp.spec.running })}
+            onSelect={() => setRunning.mutate({ ref: r, running: !r.dp.spec.running })}
           >
             {r.dp.spec.running ? "休眠" : "启动"}
           </Menu.Item>
@@ -86,10 +87,10 @@ function GroupMenu({ r, onRun, onAsk }: { r: Row; onRun: (action: string, fn: (m
       </Menu.Trigger>
       <Menu.Portal>
         <Menu.Content align="end" className="z-50 min-w-36 rounded-md border border-line bg-surface p-1 text-xs shadow-lg">
-          <Menu.Item className={item} onSelect={() => onRun("整组启动", (m) => patchDevPod(m.name, true))}>
+          <Menu.Item className={item} onSelect={() => onRun("整组启动", (m) => patchDevPod(m, true))}>
             整组启动
           </Menu.Item>
-          <Menu.Item className={item} onSelect={() => onRun("整组休眠", (m) => patchDevPod(m.name, false))}>
+          <Menu.Item className={item} onSelect={() => onRun("整组休眠", (m) => patchDevPod(m, false))}>
             整组休眠
           </Menu.Item>
           <Menu.Item className={item} onSelect={() => onAsk("rebuild")}>
@@ -139,7 +140,7 @@ export function DevPodTable({ scope }: { scope: "mine" | "all" }) {
   const idle = useLiveValues<LiveItem>(spec, admin && url.idle ? rows.map((r) => r.name) : [], 5000, admin && url.idle);
   // sorting by what DevPods use: their values, taken every 5 s so the rows do not jump every second
   const byUsage = usageKeys.includes(url.sort.replace(/^-/, "") as UsageKey);
-  const used = useLiveValues<LiveItem>(spec, byUsage ? rows.map((r) => r.name) : [], 5000, byUsage);
+  const used = useLiveValues<LiveItem>(spec, byUsage ? rows.map(keyOf) : [], 5000, byUsage);
 
   const filter = useMemo(() => parseFilter(url.q), [url.q]);
   const byQuery = useMemo(
@@ -166,7 +167,7 @@ export function DevPodTable({ scope }: { scope: "mine" | "all" }) {
         me,
         groups: { open, toggle },
         usage: (r, key) =>
-          r.group ? groupUsage(r.group.members.map((m) => (running(m) ? used.get(m.name) : undefined)), key) : running(r) ? usage(used.get(r.name), key) : undefined,
+          r.group ? groupUsage(r.group.members.map((m) => (running(m) ? used.get(keyOf(m)) : undefined)), key) : running(r) ? usage(used.get(keyOf(r)), key) : undefined,
         actions: (r) =>
           r.group ? (
             <GroupMenu
@@ -240,7 +241,7 @@ export function DevPodTable({ scope }: { scope: "mine" | "all" }) {
           storageKey="devpods"
           data={shown}
           columns={columns}
-          getRowId={(r) => (r.group ? `group:${r.name}` : r.name)}
+          getRowId={(r) => (r.group ? `group:${keyOf(r)}` : keyOf(r))}
           sorting={toSorting(url.sort)}
           onSortingChange={(s) => setUrl({ sort: fromSorting(s) })}
           selectable
@@ -251,8 +252,8 @@ export function DevPodTable({ scope }: { scope: "mine" | "all" }) {
             return (
             <>
               <Button onClick={() => setDialog({ kind: "migrate", rows: sel, clear })}>迁移…</Button>
-              <Button onClick={() => void bulk("休眠", sel, (r) => patchDevPod(r.name, false)).then(clear)}>休眠</Button>
-              <Button onClick={() => void bulk("启动", sel, (r) => patchDevPod(r.name, true)).then(clear)}>启动</Button>
+              <Button onClick={() => void bulk("休眠", sel, (r) => patchDevPod(r, false)).then(clear)}>休眠</Button>
+              <Button onClick={() => void bulk("启动", sel, (r) => patchDevPod(r, true)).then(clear)}>启动</Button>
               <Button onClick={() => setDialog({ kind: "collaborators", rows: sel, clear })}>协作者…</Button>
               <Button onClick={() => setDialog({ kind: "image", rows: sel, clear })}>设置镜像…</Button>
               <Button onClick={() => setDialog({ kind: "redeploy", rows: sel, clear })}>重新部署…</Button>
@@ -272,9 +273,9 @@ export function DevPodTable({ scope }: { scope: "mine" | "all" }) {
         onRun={(plan) => {
           const d = dialog!;
           setDialog(null);
-          const index = new Map(d.rows.map((r, i) => [r.name, i]));
+          const index = new Map(d.rows.map((r, i) => [keyOf(r), i]));
           void bulk(plan.action, d.rows, (r) =>
-            plan.redeploy ? redeployDevPod(r.name) : patchDevPodSpec(r.name, plan.patch!({ name: r.name, collaborators: r.dp.spec.collaborators ?? [] }, index.get(r.name)!)),
+            plan.redeploy ? redeployDevPod(r) : patchDevPodSpec(r, plan.patch!({ name: r.name, collaborators: r.dp.spec.collaborators ?? [] }, index.get(keyOf(r))!)),
           ).then(d.clear);
         }}
       />
@@ -288,8 +289,8 @@ export function DevPodTable({ scope }: { scope: "mine" | "all" }) {
         onConfirm={() => {
           const rs = confirm!.rows;
           setConfirm(null);
-          if (rs.length === 1 && !confirm!.bulk) remove.mutate(rs[0].name);
-          else void bulk("删除", rs, (r) => deleteDevPod(r.name));
+          if (rs.length === 1 && !confirm!.bulk) remove.mutate(rs[0]);
+          else void bulk("删除", rs, (r) => deleteDevPod(r));
         }}
       >
         删除后 Pod 和持久化数据都会被移除，不能恢复。
@@ -302,7 +303,7 @@ export function DevPodTable({ scope }: { scope: "mine" | "all" }) {
         onConfirm={() => {
           const g = rebuildAsk!;
           setRebuildAsk(null);
-          void bulk("按配置重建", g.group!.members, (m) => rebuildFromConfig(m.name));
+          void bulk("按配置重建", g.group!.members, (m) => rebuildFromConfig(m));
         }}
       >
         用来源配置现在的内容重建每个 DevPod。运行中的会重建 Pod，已有的会话会断开；home 卷不变。

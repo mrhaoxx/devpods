@@ -1,5 +1,6 @@
 // 我的镜像: the images saved from DevPods — copy the address, start a
 // DevPod from one, watch one still being saved, forget one.
+import { devpodHref } from "../../data/cluster";
 import { useState } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { Link } from "react-router-dom";
@@ -36,8 +37,8 @@ export function ImagesPage() {
   const q = useSnapshots({ all: all && !!me?.admin });
   const [follow, setFollow] = useState<SnapshotView | null>(null);
   const [forget, setForget] = useState<SnapshotView | null>(null);
-  const del = useMutation({ mutationFn: (id: string) => deleteSnapshot(id), onSettled: () => void qc.invalidateQueries({ queryKey: ["snapshots"] }) });
-  const retry = useMutation({ mutationFn: (id: string) => retrySnapshot(id), onSettled: () => void qc.invalidateQueries({ queryKey: ["snapshots"] }) });
+  const del = useMutation({ mutationFn: (s: SnapshotView) => deleteSnapshot(s), onSettled: () => void qc.invalidateQueries({ queryKey: ["snapshots"] }) });
+  const retry = useMutation({ mutationFn: (s: SnapshotView) => retrySnapshot(s), onSettled: () => void qc.invalidateQueries({ queryKey: ["snapshots"] }) });
   const items = q.data?.items ?? [];
   const busy = (s: SnapshotView) => s.phase === "Pending" || s.phase === "Running";
 
@@ -90,7 +91,7 @@ export function ImagesPage() {
                     </td>
                     {all && <td className="mono px-2 py-1.5">{s.owner}</td>}
                     <td className="px-2 py-1.5">
-                      <Link to={`/devpods/${s.devpod}`} className="mono text-ink hover:text-accent">
+                      <Link to={devpodHref({ cluster: s.cluster, name: s.devpod })} className="mono text-ink hover:text-accent">
                         {s.devpod}
                       </Link>
                     </td>
@@ -111,13 +112,13 @@ export function ImagesPage() {
                         {s.phase === "Succeeded" && (
                           <>
                             <CopyRef image={s.image} />
-                            <Link to={`/?new=1&image=${encodeURIComponent(s.image)}`} className="text-accent hover:underline">
+                            <Link to={`/?new=1&image=${encodeURIComponent(s.image)}${s.cluster ? `&in=${encodeURIComponent(s.cluster)}` : ""}`} className="text-accent hover:underline">
                               新建 DevPod
                             </Link>
                           </>
                         )}
                         {s.phase === "Failed" && (
-                          <button type="button" disabled={retry.isPending} onClick={() => retry.mutate(s.id)} className="text-accent hover:underline disabled:opacity-50" title="用同样的设置再保存一次">
+                          <button type="button" disabled={retry.isPending} onClick={() => retry.mutate(s)} className="text-accent hover:underline disabled:opacity-50" title="用同样的设置再保存一次">
                             重试
                           </button>
                         )}
@@ -135,7 +136,7 @@ export function ImagesPage() {
           </div>
         )}
       </Panel>
-      {follow && <SnapshotDialog devpod={follow.devpod} owner={follow.owner} following={follow} onClose={() => setFollow(null)} />}
+      {follow && <SnapshotDialog devpod={{ cluster: follow.cluster, name: follow.devpod }} owner={follow.owner} following={follow} onClose={() => setFollow(null)} />}
       <ConfirmDialog
         open={!!forget}
         onOpenChange={(o) => !o && setForget(null)}
@@ -143,7 +144,7 @@ export function ImagesPage() {
         confirmLabel="删除记录"
         danger
         onConfirm={() => {
-          if (forget) del.mutate(forget.id);
+          if (forget) del.mutate(forget);
           setForget(null);
         }}
       >

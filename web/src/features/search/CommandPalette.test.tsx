@@ -59,7 +59,7 @@ describe("command palette", () => {
     fireEvent.keyDown(input, { key: "ArrowDown" });
     fireEvent.keyDown(input, { key: "ArrowUp" });
     fireEvent.keyDown(input, { key: "Enter" });
-    await waitFor(() => expect(screen.getByTestId("where").textContent).toBe("/devpods/alice-train"));
+    await waitFor(() => expect(screen.getByTestId("where").textContent).toBe("/devpods/-/alice-train"));
   });
 
   it("DevPod action 打开监控 goes to ?tab=monitor", async () => {
@@ -67,7 +67,7 @@ describe("command palette", () => {
     open();
     fireEvent.change(screen.getByPlaceholderText(/搜索/), { target: { value: "train" } });
     fireEvent.click(await screen.findByRole("button", { name: "alice-train 打开监控" }));
-    expect(screen.getByTestId("where").textContent).toBe("/devpods/alice-train?tab=monitor");
+    expect(screen.getByTestId("where").textContent).toBe("/devpods/-/alice-train?tab=monitor");
   });
 
   it("auditError shows a note instead of the 会话/命令 groups", async () => {

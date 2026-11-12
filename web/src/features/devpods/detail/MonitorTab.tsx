@@ -1,5 +1,6 @@
 // 监控 (UI spec §5.2, feedback round 1): history from ClickHouse for 15m–7d,
 // the live tail appended on the ranges up to 1h; opens on 1h.
+import type { Ref } from "../../../data/cluster";
 import { useMemo, useState } from "react";
 import type { DevPodSample, MetricRange } from "../../../data/api";
 import { ApiFailure } from "../../../data/api";
@@ -185,11 +186,11 @@ function Charts({ c, live }: { c: ChartSet; live: boolean }) {
   );
 }
 
-export function MonitorTab({ name, history }: { name: string; history?: ReadonlyArray<{ ts: number; value: DevPodSample }> }) {
+export function MonitorTab({ r, history }: { r: Ref; history?: ReadonlyArray<{ ts: number; value: DevPodSample }> }) {
   const [url, setUrl] = useUrlState(schema);
   const range = RANGE_MS[url.range] ? url.range : RANGE_MS[lastRange()] ? lastRange() : "1h";
   const rangeMs = RANGE_MS[range];
-  const hist = useMetrics(name, range as MetricRange);
+  const hist = useMetrics(r, range as MetricRange);
   // the live tail extends the short ranges second by second
   const live = rangeMs <= 3600e3 && !!history?.length;
   const charts = useMemo(() => {

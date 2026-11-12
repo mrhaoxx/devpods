@@ -1,15 +1,17 @@
 // The DevPod detail page's entry to snapshots: the 保存为镜像 button and,
 // while one is being saved, a status that reopens its progress.
+import type { Ref } from "../../data/cluster";
 import { useState } from "react";
 import type { SnapshotView } from "../../data/api";
 import { useSnapshots } from "../../data/queries";
 import { Button } from "../../design/Button";
 import { SnapshotDialog } from "./SnapshotDialog";
 
-export function SnapshotControl({ devpod, owner, running }: { devpod: string; owner: string; running: boolean }) {
-  const q = useSnapshots({ devpod });
+export function SnapshotControl({ devpod, owner, running }: { devpod: Ref; owner: string; running: boolean }) {
+  const q = useSnapshots({ devpod: devpod.name });
   const [open, setOpen] = useState<"new" | SnapshotView | null>(null);
-  const busy = (q.data?.items ?? []).find((s) => s.phase === "Pending" || s.phase === "Running");
+  // the list names the DevPod; a same-named one in another cluster is not this one
+  const busy = (q.data?.items ?? []).find((s) => (s.cluster ?? undefined) === devpod.cluster && (s.phase === "Pending" || s.phase === "Running"));
   return (
     <>
       {busy && (

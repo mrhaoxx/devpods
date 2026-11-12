@@ -19,6 +19,8 @@ import {
   type K8sEvent,
   type ProcLive,
 } from "../../../data/api";
+import { segCluster } from "../../../data/cluster";
+import { useClusterList } from "../../../data/clusterFilter";
 import { qk, useAuditSessions, useDevPod, useDevPodMutations, useMe, useMetrics } from "../../../data/queries";
 import { devpodStream } from "../../../data/live/streams";
 import { useLiveEnabled, useLiveRow } from "../../../data/live/hooks";
@@ -60,14 +62,18 @@ function Meta({ k, children }: { k: string; children: ReactNode }) {
 }
 
 export function DetailPage() {
-  const { name = "" } = useParams();
+  const { cluster: seg, name = "" } = useParams();
+  const cluster = segCluster(seg);
+  // the DevPod: its cluster comes from the address, not from what it says
+  const r = useMemo(() => ({ cluster, name }), [cluster, name]);
   const me = useMe().data;
   const nav = useNavigate();
   const qc = useQueryClient();
   const live = useLiveEnabled();
   const [url, setUrl] = useUrlState(schema);
   const now = useNow(5000);
-  const q = useDevPod(name);
+  const q = useDevPod(r);
+  const clusterList = useClusterList();
   const [detail, setDetail] = useState<DevPodDetail | null>(null);
   const [deleted, setDeleted] = useState(false);
   const [events, setEvents] = useState<Record<string, K8sEvent>>({});
@@ -78,14 +84,14 @@ export function DetailPage() {
     setDetail(null);
     setDeleted(false);
     setEvents({});
-  }, [name]);
+  }, [r]);
 
   const onDetail = useCallback(
     (d: DevPodDetail) => {
       setDetail(d);
-      qc.setQueryData(qk.devpod(name), d);
+      qc.setQueryData(qk.devpod(r), d);
     },
-    [qc, name],
+    [qc, r],
   );
   const onEvent = useCallback(
     (type: string, ev: K8sEvent) =>
@@ -109,15 +115,15 @@ export function DetailPage() {
   );
 
   const allProcs = url.tab === "processes";
-  const spec = useMemo(() => devpodStream(name, allProcs, onOther), [name, allProcs, onOther]);
+  const spec = useMemo(() => devpodStream(r, allProcs, onOther), [r, allProcs, onOther]);
   const metrics = useLiveRow<DevPodSample>(spec, "metrics");
-  const recent = useMetrics(name, "15m"); // the cards' sparklines start from history
+  const recent = useMetrics(r, "15m"); // the cards' sparklines start from history
   const procs = useLiveRow<ProcLive[]>(spec, "processes");
   // without live data the detail stream still carries status and events
   useEffect(() => {
     if (live) return;
-    return watchDevPod(name, { onDetail, onEvent: (t, ev) => onEvent(t, ev) });
-  }, [live, name, onDetail, onEvent]);
+    return watchDevPod(r, { onDetail, onEvent: (t, ev) => onEvent(t, ev) });
+  }, [live, r, onDetail, onEvent]);
 
   const audit = !!me?.features.audit;
   const sessions = useAuditSessions({ devpod: name }, { enabled: audit && (url.tab === "overview" || url.tab === "sessions"), refetchInterval: 10_000 });
@@ -161,7 +167,10 @@ export function DetailPage() {
   ];
   // the container's sshd port: never proxied, so not listed among the ports
   const sshPort = Number(dp.status?.endpoint?.split(":").pop()) || undefined;
-  const ssh = me ? sshCommand(me, owner, suffix) : "";
+  const clusters = clusterList.data?.items ?? [];
+  const several = clusters.length >= 2;
+  const clusterName = clusters.find((c) => c.name === cluster)?.displayName || cluster;
+  const ssh = me ? sshCommand(me, owner, suffix, cluster) : "";
 
   return (
     <div className="space-y-3 p-3">
@@ -173,15 +182,20 @@ export function DetailPage() {
       ))}
       <header className="flex flex-wrap items-center gap-2">
         <h2 className="mono text-base font-semibold">{dp.metadata.name}</h2>
+        {cluster && several && (
+          <span title="所在集群" className="rounded border border-line px-1.5 text-[11px] text-muted">
+            {clusterName}
+          </span>
+        )}
         <StatusDot phase={dp.status?.phase} />
         {runningPhase && pod?.startedAt && <span className="mono text-xs text-muted">已运行 {fmtAge(pod.startedAt, now)}</span>}
         <span className="flex-1" />
         {me?.features.webshell && runningPhase && (
-          <Button onClick={() => window.open(shellPath(name), "_blank", "noopener")} title="在新标签页打开终端（经 SSH 网关，会话会被记录）">
+          <Button onClick={() => window.open(shellPath(r), "_blank", "noopener")} title="在新标签页打开终端（经 SSH 网关，会话会被记录）">
             终端
           </Button>
         )}
-        {me?.features.snapshots && <SnapshotControl devpod={name} owner={owner} running={runningPhase} />}
+        {me?.features.snapshots && <SnapshotControl devpod={r} owner={owner} running={runningPhase} />}
         {me && (
           <Button onClick={() => void copyText(ssh)} title={ssh}>
             复制 SSH
@@ -191,12 +205,12 @@ export function DetailPage() {
           存为配置
         </Button>
         <Button onClick={() => setUrl({ tab: "yaml" })}>编辑</Button>
-        <Button onClick={() => setRunning.mutate({ name, running: !dp.spec.running })}>{dp.spec.running ? "休眠" : "启动"}</Button>
+        <Button onClick={() => setRunning.mutate({ ref: r, running: !dp.spec.running })}>{dp.spec.running ? "休眠" : "启动"}</Button>
         <Button variant="danger" onClick={() => setConfirmDelete(true)}>
           删除
         </Button>
       </header>
-      <Provenance dp={dp} outdated={d.configOutdated} />
+      <Provenance dp={cluster ? { ...dp, cluster } : dp} outdated={d.configOutdated} />
       <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs">
         {me?.admin && <Meta k="Owner">{owner}</Meta>}
         <Meta k="节点">{pod?.node}</Meta>
@@ -233,7 +247,7 @@ export function DetailPage() {
           <Panel title="SSH">
             <div className="space-y-2 p-3">
               <CopyField value={ssh} />
-              {me && <CopyBlock value={sshConfig(me, owner, suffix)} />}
+              {me && <CopyBlock value={sshConfig(me, owner, suffix, cluster)} />}
             </div>
           </Panel>
           <Panel title="在线会话">
@@ -250,7 +264,7 @@ export function DetailPage() {
           </div>
         </div>
       )}
-      {url.tab === "monitor" && <MonitorTab name={name} history={live ? metrics.row?.history : undefined} />}
+      {url.tab === "monitor" && <MonitorTab r={r} history={live ? metrics.row?.history : undefined} />}
       {url.tab === "processes" && (
         <Panel title="全部进程（每秒刷新）">
           <ProcessTable procs={procs.row?.value} live={live} />
@@ -261,10 +275,10 @@ export function DetailPage() {
           <SessionList items={sessions.data?.items} error={sessions.error} now={now} />
         </Panel>
       )}
-      {url.tab === "ports" && me?.features.httpProxy && <PortsPanel name={name} sshPort={sshPort} />}
-      {url.tab === "container" && <ContainerTab name={name} />}
-      {url.tab === "pod" && <PodTab name={name} />}
-      {url.tab === "yaml" && <YamlTab name={name} />}
+      {url.tab === "ports" && me?.features.httpProxy && <PortsPanel r={r} sshPort={sshPort} />}
+      {url.tab === "container" && <ContainerTab r={r} />}
+      {url.tab === "pod" && <PodTab r={r} />}
+      {url.tab === "yaml" && <YamlTab r={r} />}
       {url.tab === "events" && (
         <Panel title="事件">
           <EventList events={events} />
@@ -279,7 +293,7 @@ export function DetailPage() {
         danger
         onConfirm={() => {
           setConfirmDelete(false);
-          remove.mutate(name, { onSuccess: () => nav("/") });
+          remove.mutate(r, { onSuccess: () => nav("/") });
         }}
       >
         Pod 和持久化数据都会被移除，不能恢复。
