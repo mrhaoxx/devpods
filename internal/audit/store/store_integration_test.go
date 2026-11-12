@@ -56,7 +56,7 @@ func openTestCH(t *testing.T, db string) *CH {
 	return c
 }
 
-var auditTables = []string{"sessions", "session_origin", "channels", "commands", "file_events", "policy_events", "raw_segments", "alerts", "access_log"}
+var auditTables = []string{"sessions", "channels", "commands", "file_events", "policy_events", "raw_segments", "alerts", "access_log"}
 
 func TestMigrate_Idempotent(t *testing.T) {
 	ctx := context.Background()
