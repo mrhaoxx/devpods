@@ -5,7 +5,7 @@ import { Link } from "react-router-dom";
 import { useQueryClient } from "@tanstack/react-query";
 import * as Menu from "@radix-ui/react-dropdown-menu";
 import type { SortingState } from "@tanstack/react-table";
-import { deleteDevPod, patchDevPod, patchDevPodSpec, rebuildFromConfig, redeployDevPod, sshCommand, type LiveItem, shellPath } from "../../data/api";
+import { deleteDevPod, podKey, patchDevPod, patchDevPodSpec, rebuildFromConfig, redeployDevPod, sshCommand, type LiveItem, shellPath } from "../../data/api";
 import { useDevPodMutations, useDevPods, useMe, useRecent } from "../../data/queries";
 import { devpodsStream } from "../../data/live/streams";
 import { useLiveEnabled, useLiveRow, useLiveValues } from "../../data/live/hooks";
@@ -135,7 +135,7 @@ export function DevPodTable({ scope }: { scope: "mine" | "all" }) {
   const [dialog, setDialog] = useState<{ kind: BulkKind; rows: Row[]; clear: () => void } | null>(null);
   const { remove } = useDevPodMutations();
 
-  const rows = useMemo(() => (list.data?.items ?? []).map((dp) => toRow(dp, list.data?.pods[dp.metadata.name])), [list.data]);
+  const rows = useMemo(() => (list.data?.items ?? []).map((dp) => toRow(dp, list.data?.pods[podKey(dp)])), [list.data]);
   const idle = useLiveValues<LiveItem>(spec, admin && url.idle ? rows.map((r) => r.name) : [], 5000, admin && url.idle);
   // sorting by what DevPods use: their values, taken every 5 s so the rows do not jump every second
   const byUsage = usageKeys.includes(url.sort.replace(/^-/, "") as UsageKey);

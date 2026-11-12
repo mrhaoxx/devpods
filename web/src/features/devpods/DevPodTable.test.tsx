@@ -203,4 +203,12 @@ describe("DevPodTable", () => {
     fireEvent.click(screen.getByRole("button", { name: /CPU/ }));
     await waitFor(() => expect(rowNames()).toEqual(["alice-a", "bob-c", "alice-b", "bob-d"]));
   }, 15000);
+
+  it("node and uptime of a console of several clusters (pods keyed by cluster/name)", async () => {
+    const a = { ...mk("alice-a", "alice", "Running"), cluster: "zjusct" };
+    stubFetch({ "/api/devpods": { items: [a], pods: { "zjusct/alice-a": { node: "g206", ip: "10.0.0.1", startedAt: "2026-11-10T10:00:00Z" } } } });
+    renderWithProviders(<DevPodTable scope="mine" />);
+    const row = (await screen.findByRole("link", { name: "alice-a" })).closest("tr")!;
+    expect(row.textContent).toContain("g206");
+  });
 });

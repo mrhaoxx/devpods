@@ -185,6 +185,8 @@ export type K8sEvent = {
 // reads a handful of paths and must tolerate schema growth.
 export type ContainerSpec = { name: string; image?: string; resources?: { limits?: Record<string, string> } };
 export type DevPod = {
+  /** the cluster it is in, in a console of several (lists say it; watch events do not) */
+  cluster?: string;
   metadata: { name: string; uid?: string; creationTimestamp?: string; labels?: Record<string, string>; annotations?: Record<string, string> };
   spec: {
     owner: string;
@@ -238,6 +240,9 @@ export const putPubkeys = (pubkeys: string[]) => req<{ pubkeys: string[] }>("PUT
 
 export { watchDevPods, watchDevPod } from "./sse";
 /** configOutdated: the config it came from has changed since (only when I may see that config) */
+/** podKey: where a list's pods map holds a DevPod's Pod — <cluster>/<name> in a console of several clusters. */
+export const podKey = (dp: DevPod): string => (dp.cluster ? `${dp.cluster}/${dp.metadata.name}` : dp.metadata.name);
+
 export type DevPodDetail = { devpod: DevPod; binding?: BindingInfo; pod?: PodInfo; configOutdated?: boolean };
 
 /* ─── Audit ───────────────────────────────────────────────────────── */

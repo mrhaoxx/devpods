@@ -2,7 +2,7 @@
 // TanStack Query cache; live metrics never do (they live in LiveHub).
 import { useEffect } from "react";
 import { useMutation, useQuery, useQueryClient, type QueryClient } from "@tanstack/react-query";
-import {
+import { podKey,
   auditPresence,
   deleteDevPod,
   getDevPod,
@@ -46,16 +46,20 @@ export function applyWatchEvent(old: DevPodList | undefined, type: string, dp: D
   const items = old?.items ?? [];
   const pods = { ...(old?.pods ?? {}) };
   const name = dp.metadata.name;
+  const idx = items.findIndex((d) => d.metadata.name === name);
+  // a watch event does not say the cluster: it is the list's
+  const cur = { ...dp, cluster: dp.cluster ?? (idx >= 0 ? items[idx].cluster : items[0]?.cluster) };
+  if (!cur.cluster) delete cur.cluster;
+  const key = podKey(cur);
   if (type === "DELETED") {
-    delete pods[name];
+    delete pods[key];
     return { items: items.filter((d) => d.metadata.name !== name), pods };
   }
-  if (pod) pods[name] = pod;
-  else delete pods[name];
-  const idx = items.findIndex((d) => d.metadata.name === name);
+  if (pod) pods[key] = pod;
+  else delete pods[key];
   const next = [...items];
-  if (idx >= 0) next[idx] = dp;
-  else next.push(dp);
+  if (idx >= 0) next[idx] = cur;
+  else next.push(cur);
   return { items: next, pods };
 }
 
