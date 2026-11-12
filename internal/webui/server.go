@@ -142,6 +142,7 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("POST /api/admin/gateways/{name}/token", s.handleGatewayToken)
 	// gateways of several clusters ask the console (signed, no session)
 	mux.HandleFunc("POST /gateway/join", s.handleGatewayJoin)
+	mux.HandleFunc("GET /gateway/connect", s.handleGatewayConnect)
 	mux.HandleFunc("POST /gateway/v1/lookup", s.handleGatewayLookup)
 	mux.HandleFunc("GET /gateway/v1/http", s.handleGatewayHTTP)
 	mux.HandleFunc("GET /gateway/v1/keys", s.handleGatewayKeys)

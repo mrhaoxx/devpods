@@ -252,9 +252,13 @@ func main() {
 		go auditRec.Run(ctx)
 		slog.Info("audit_recorder_ready", "spool", af.spoolDir)
 		if af.liveListen != "" {
-			if err := startLive(ctx, auditRec, af.liveListen, af.liveKeyFile); err != nil {
+			live, err := startLive(ctx, auditRec, af.liveListen, af.liveKeyFile)
+			if err != nil {
 				slog.Error("audit_live", "err", err)
 				os.Exit(1)
+			}
+			if theHub != nil { // the console reaches it here too, wherever this gateway runs
+				theHub.linkConsole(ctx, live)
 			}
 		}
 	}

@@ -265,3 +265,65 @@ func TestHTTPProxy_PublicPortAndGuards(t *testing.T) {
 		t.Fatalf("no key: %d", resp.StatusCode)
 	}
 }
+
+// oneDevPod is a directory of several clusters holding one DevPod.
+type oneDevPod struct {
+	cluster string
+	dp      *devpodv1alpha1.DevPod
+}
+
+func (d oneDevPod) Lookup(context.Context, string, string, string) ([]Found, error) { return nil, nil }
+func (d oneDevPod) ByHTTPID(_ context.Context, id string) (*Found, error) {
+	if d.dp.Annotations[httpauth.IDAnnotation] != id {
+		return nil, nil
+	}
+	return &Found{Cluster: d.cluster, DevPod: d.dp}, nil
+}
+
+// A gateway of several clusters has no route to a Pod: a port link goes
+// to the DevPod's cluster through that cluster's agent, said to be HTTP.
+func TestHTTPProxy_ThroughTheClustersAgent(t *testing.T) {
+	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { _, _ = io.WriteString(w, "hello from mulan") }))
+	defer backend.Close()
+	real := strings.TrimPrefix(backend.URL, "http://")
+	dp := &devpodv1alpha1.DevPod{
+		ObjectMeta: metav1.ObjectMeta{Name: "alice-dev", Namespace: "devpods", Annotations: map[string]string{
+			httpauth.IDAnnotation: idA, httpauth.PublicPortsAnnotation: "8080"}},
+		Spec:   devpodv1alpha1.DevPodSpec{Owner: "alice", Running: true},
+		Status: devpodv1alpha1.DevPodStatus{Phase: devpodv1alpha1.DevPodRunning, Endpoint: "10.9.9.9:22"}, // nowhere this test can reach
+	}
+	p := NewHTTPProxyWith(oneDevPod{cluster: "mulan", dp: dp}, "apps.test", "")
+	type asked struct{ cluster, addr, purpose string }
+	var got []asked
+	p.Net = func(ctx context.Context, cluster, addr, purpose string) (net.Conn, error) {
+		got = append(got, asked{cluster, addr, purpose})
+		return (&net.Dialer{}).DialContext(ctx, "tcp", real) // what the agent would connect to
+	}
+	srv := httptest.NewServer(p)
+	defer srv.Close()
+	get := func() string {
+		t.Helper()
+		req, _ := http.NewRequest("GET", srv.URL+"/", nil)
+		req.Host = idA + "-8080.apps.test"
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer resp.Body.Close()
+		b, _ := io.ReadAll(resp.Body)
+		if resp.StatusCode != http.StatusOK {
+			t.Fatalf("status %d: %s", resp.StatusCode, b)
+		}
+		return string(b)
+	}
+	if body := get(); body != "hello from mulan" {
+		t.Fatalf("body %q", body)
+	}
+	if len(got) != 1 || got[0] != (asked{"mulan", "10.9.9.9:8080", PurposeHTTP}) {
+		t.Fatalf("what the agent was asked for: %+v", got)
+	}
+	// the connection is kept for the next request, not dialled again
+	if body := get(); body != "hello from mulan" || len(got) != 1 {
+		t.Fatalf("second request: %q after %d dials", body, len(got))
+	}
+}

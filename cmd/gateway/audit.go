@@ -43,15 +43,17 @@ type auditFlags struct {
 // maxLiveViewers bounds concurrent live views per gateway (audit spec §16).
 const maxLiveViewers = 32
 
-// startLive serves the internal live-view endpoint for webui replicas.
-func startLive(ctx context.Context, rec *audit.Recorder, addr, keyFile string) error {
+// startLive serves the internal live-view endpoint for webui replicas,
+// and returns its handler (a gateway of several clusters also serves it
+// to the console over the connections it keeps there).
+func startLive(ctx context.Context, rec *audit.Recorder, addr, keyFile string) (http.Handler, error) {
 	b, err := os.ReadFile(keyFile)
 	if err != nil {
-		return fmt.Errorf("live key: %w", err)
+		return nil, fmt.Errorf("live key: %w", err)
 	}
 	key := strings.TrimSpace(string(b))
 	if key == "" {
-		return errors.New("live key file is empty")
+		return nil, errors.New("live key file is empty")
 	}
 	mux := http.NewServeMux()
 	mux.Handle(audit.LivePath, audit.LiveHandler(rec, key, maxLiveViewers))
@@ -69,7 +71,7 @@ func startLive(ctx context.Context, rec *audit.Recorder, addr, keyFile string) e
 		defer cancel()
 		_ = srv.Shutdown(sctx)
 	}()
-	return nil
+	return mux, nil
 }
 
 func auditEnabled(gc *devpodv1alpha1.GatewayConfig) bool {

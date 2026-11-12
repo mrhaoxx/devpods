@@ -8,6 +8,8 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
@@ -15,6 +17,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/coder/websocket"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 
@@ -22,6 +25,7 @@ import (
 	"github.com/mrhaoxx/devpod/internal/agent"
 	"github.com/mrhaoxx/devpod/internal/gwlink"
 	"github.com/mrhaoxx/devpod/internal/httpauth"
+	"github.com/mrhaoxx/devpod/internal/tunnel"
 	"github.com/mrhaoxx/devpod/internal/webui"
 )
 
@@ -165,6 +169,67 @@ func TestGateways(t *testing.T) {
 		cl, _ := g["clusters"].([]any)
 		return g["version"] == "v0.8.0" && len(cl) == 1 && g["joined"] == true && g["lastSeen"] != nil
 	})
+
+	// a replica of the gateway keeps a link to the console; over it the
+	// console reaches that replica's live-session endpoint, wherever it runs
+	w.s.GatewayLinks = webui.NewGatewayLinks(k8sManager.GetAPIReader(), "console-0", nil)
+	defer w.s.GatewayLinks.Close()
+	lctx, stopLink := context.WithCancel(ctx)
+	defer stopLink()
+	ln := tunnel.NewListener()
+	replica := &http.Server{Handler: http.HandlerFunc(func(rw http.ResponseWriter, r *http.Request) {
+		_, _ = rw.Write([]byte("live endpoint of gw-pod-1: " + r.Method + " " + r.URL.Path))
+	})}
+	go func() { _ = replica.Serve(ln) }()
+	defer replica.Close()
+	connect := func(name string, key *agent.Identity) *tunnel.Client {
+		c := tunnel.NewClient(tunnel.ClientOptions{
+			Hello: tunnel.Hello{Kind: gwlink.LinkKind, Name: name},
+			Sign:  func(nonce []byte) []byte { return key.SignFor(gwlink.LinkContext, nonce) },
+			Idle:  2, BackoffMin: 10 * time.Millisecond, BackoffMax: 100 * time.Millisecond,
+			Handle: func(_ context.Context, purpose []byte, conn net.Conn) {
+				if string(purpose) != string(gwlink.PurposeLive) {
+					_ = conn.Close()
+					return
+				}
+				ln.Offer(conn)
+			},
+			Dial: func(context.Context) (net.Conn, error) {
+				c, _, err := websocket.Dial(lctx, "ws"+strings.TrimPrefix(web.URL, "http")+"/gateway/connect", nil)
+				if err != nil {
+					return nil, err
+				}
+				c.SetReadLimit(-1)
+				return websocket.NetConn(lctx, c, websocket.MessageBinary), nil
+			},
+		})
+		go func() { _ = c.Run(lctx) }()
+		return c
+	}
+	connect("b300.gw-pod-1", id)
+	connect("b300.gw-imposter", other) // the name of a gateway, not its key
+	var addr string
+	w.until("the console holds a link to the replica", func() bool {
+		var ok bool
+		addr, ok = w.s.GatewayLinks.AddrOf("gw-pod-1")
+		return ok
+	})
+	hc := &http.Client{Transport: &http.Transport{DialContext: w.s.GatewayLinks.DialContext}, Timeout: 10 * time.Second}
+	lresp, err := hc.Get("http://" + addr + "/live/session-1")
+	if err != nil {
+		t.Fatalf("the replica's endpoint over its link: %v", err)
+	}
+	lbody, _ := io.ReadAll(lresp.Body)
+	_ = lresp.Body.Close()
+	if string(lbody) != "live endpoint of gw-pod-1: GET /live/session-1" {
+		t.Fatalf("over the link: %q", lbody)
+	}
+	if _, ok := w.s.GatewayLinks.AddrOf("gw-imposter"); ok {
+		t.Fatal("a replica with another key got a link")
+	}
+	if _, ok := w.s.GatewayLinks.AddrOf("gw-pod-2"); ok {
+		t.Fatal("a replica that never connected has an address")
+	}
 
 	// nobody else gets these answers
 	stranger := gwlink.NewClient(gwlink.Options{Console: web.URL, Gateway: "b300", Identity: other})

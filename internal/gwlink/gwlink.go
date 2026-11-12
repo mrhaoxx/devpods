@@ -83,6 +83,24 @@ func Verify(r *http.Request, body []byte, key func(name string) (string, error),
 	return name, nil
 }
 
+/* ---- the link a gateway replica keeps to the console ---- */
+
+// The console tells a gateway two things about a session it holds: let
+// an admin watch it, and end it. It cannot dial a gateway that runs
+// elsewhere, so every replica keeps connections to the console and the
+// console speaks to it over those.
+const (
+	// LinkKind is what a gateway calls itself in that handshake; its name
+	// there is "<gateway>.<replica>".
+	LinkKind = "gateway"
+	// LinkContext is what its proof there is made for.
+	LinkContext = "devpod gateway connect v1"
+)
+
+// PurposeLive: a stream that carries HTTP to the replica's live session
+// endpoint.
+var PurposeLive = []byte(`{"kind":"live"}`)
+
 /* ---- what is asked and answered ---- */
 
 // Found is a DevPod and the cluster it is in.

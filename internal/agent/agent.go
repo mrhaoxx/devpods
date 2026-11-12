@@ -80,7 +80,7 @@ type Options struct {
 type Agent struct {
 	o    Options
 	kube *http.Server
-	ln   *streamListener
+	ln   *tunnel.Listener
 
 	runCtx   context.Context
 	gmu      sync.Mutex
@@ -99,7 +99,7 @@ func New(o Options) (*Agent, error) {
 	if err != nil {
 		return nil, err
 	}
-	a := &Agent{o: o, ln: newStreamListener(), runCtx: context.Background(), gateways: map[string]*gatewayLink{}}
+	a := &Agent{o: o, ln: tunnel.NewListener(), runCtx: context.Background(), gateways: map[string]*gatewayLink{}}
 	a.kube = &http.Server{Handler: h, ReadHeaderTimeout: 30 * time.Second}
 	return a, nil
 }
@@ -133,7 +133,7 @@ func (a *Agent) handle(ctx context.Context, purpose []byte, conn net.Conn) {
 	}
 	switch p.Kind {
 	case "kube":
-		a.ln.offer(conn) // served as HTTP by a.kube
+		a.ln.Offer(conn) // served as HTTP by a.kube
 	case "info":
 		a.serveInfo(ctx, conn)
 	case "gateways":
@@ -145,46 +145,3 @@ func (a *Agent) handle(ctx context.Context, purpose []byte, conn net.Conn) {
 		_ = conn.Close() // not something this agent does
 	}
 }
-
-// streamListener hands streams to an http.Server as accepted connections.
-type streamListener struct {
-	conns chan net.Conn
-	done  chan struct{}
-}
-
-func newStreamListener() *streamListener {
-	return &streamListener{conns: make(chan net.Conn), done: make(chan struct{})}
-}
-
-func (l *streamListener) offer(c net.Conn) {
-	select {
-	case l.conns <- c:
-	case <-l.done:
-		_ = c.Close()
-	}
-}
-
-func (l *streamListener) Accept() (net.Conn, error) {
-	select {
-	case c := <-l.conns:
-		return c, nil
-	case <-l.done:
-		return nil, net.ErrClosed
-	}
-}
-
-func (l *streamListener) Close() error {
-	select {
-	case <-l.done:
-	default:
-		close(l.done)
-	}
-	return nil
-}
-
-func (l *streamListener) Addr() net.Addr { return streamAddr{} }
-
-type streamAddr struct{}
-
-func (streamAddr) Network() string { return "tunnel" }
-func (streamAddr) String() string  { return "tunnel" }

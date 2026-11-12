@@ -68,6 +68,9 @@ func (f *hubFlags) enabled() bool { return *f.console != "" }
 type hub struct {
 	link *gwlink.Client
 	srv  *tunnel.Server
+
+	id                      *agent.Identity
+	console, name, instance string
 }
 
 func (f *hubFlags) start(ctx context.Context, kc kubernetes.Interface) (*hub, error) {
@@ -95,7 +98,8 @@ func (f *hubFlags) start(ctx context.Context, kc kubernetes.Interface) (*hub, er
 			return nil, fmt.Errorf("join: %w", err)
 		}
 	}
-	h := &hub{link: gwlink.NewClient(gwlink.Options{Console: *f.console, Gateway: *f.name, Identity: id})}
+	h := &hub{link: gwlink.NewClient(gwlink.Options{Console: *f.console, Gateway: *f.name, Identity: id}),
+		id: id, console: *f.console, name: *f.name, instance: *f.instance}
 	instances := func() []string { return []string{*f.instance} }
 	if *f.instanceSelector != "" {
 		instances = podNames(kc, *f.namespace, *f.instanceSelector, *f.instance)
@@ -189,6 +193,44 @@ func (h *hub) report(ctx context.Context) {
 		}
 		soon.Stop()
 	}
+}
+
+// linkConsole keeps connections from this replica to every instance of
+// the console, over which the console reaches live (watching a session,
+// ending one): the console cannot dial a gateway that is elsewhere.
+func (h *hub) linkConsole(ctx context.Context, live http.Handler) {
+	ln := tunnel.NewListener()
+	server := &http.Server{Handler: live, ReadHeaderTimeout: 10 * time.Second}
+	go func() { _ = server.Serve(ln) }()
+	go func() {
+		<-ctx.Done()
+		_ = server.Close()
+	}()
+	endpoint := strings.Replace(strings.TrimRight(h.console, "/"), "http", "ws", 1) + "/gateway/connect"
+	c := tunnel.NewClient(tunnel.ClientOptions{
+		Hello: tunnel.Hello{Kind: gwlink.LinkKind, Name: h.name + "." + h.instance},
+		Sign:  func(nonce []byte) []byte { return h.id.SignFor(gwlink.LinkContext, nonce) },
+		Idle:  4,
+		Dial: func(context.Context) (net.Conn, error) {
+			dctx, cancel := context.WithTimeout(ctx, 20*time.Second)
+			defer cancel()
+			c, _, err := websocket.Dial(dctx, endpoint, nil)
+			if err != nil {
+				return nil, err
+			}
+			c.SetReadLimit(-1)
+			return websocket.NetConn(ctx, c, websocket.MessageBinary), nil
+		},
+		Handle: func(_ context.Context, purpose []byte, conn net.Conn) {
+			if string(purpose) != string(gwlink.PurposeLive) {
+				_ = conn.Close() // the console is given the live endpoint here, nothing else
+				return
+			}
+			ln.Offer(conn)
+		},
+		OnError: func(err error) { slog.Warn("gateway_console_link", "err", err.Error()) },
+	})
+	go func() { _ = c.Run(ctx) }()
 }
 
 // dial is the way to a DevPod's address: through its cluster's agent.

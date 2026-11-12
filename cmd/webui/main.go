@@ -271,6 +271,12 @@ func main() {
 	if srv.Clusters, err = clf.build(ctx, mgr.GetClient(), mgr.GetAPIReader(), scheme, devpodNamespace); err != nil {
 		fatal(err)
 	}
+	if srv.GatewayLinks, err = clf.gatewayLinks(ctx, mgr.GetAPIReader()); err != nil {
+		fatal(err)
+	}
+	if srv.GatewayLinks != nil && srv.LiveSessions != nil {
+		srv.LiveSessions.Via(srv.GatewayLinks) // a gateway that is elsewhere is reached over its own connection
+	}
 
 	waitTelemetry := func() {}
 	if tf.enabled() {

@@ -62,13 +62,9 @@ func (f *clusterFlags) build(ctx context.Context, hub client.Client, reader clie
 	if *f.instance == "" {
 		return nil, fmt.Errorf("--clusters: --instance is empty")
 	}
-	instances := func() []string { return []string{*f.instance} }
-	if *f.selector != "" {
-		sel, err := labels.Parse(*f.selector)
-		if err != nil {
-			return nil, fmt.Errorf("--instance-selector: %w", err)
-		}
-		instances = podNames(reader, *f.namespace, sel, *f.instance)
+	instances, err := f.instances(reader)
+	if err != nil {
+		return nil, err
 	}
 	warm, byObject := clusterCache(devpodNamespace)
 	r := clusters.New(clusters.Options{
@@ -77,6 +73,36 @@ func (f *clusterFlags) build(ctx context.Context, hub client.Client, reader clie
 	})
 	go r.Run(ctx)
 	return r, nil
+}
+
+// instances names the console's replicas, this one among them.
+func (f *clusterFlags) instances(reader client.Reader) (func() []string, error) {
+	if *f.selector == "" {
+		return func() []string { return []string{*f.instance} }, nil
+	}
+	sel, err := labels.Parse(*f.selector)
+	if err != nil {
+		return nil, fmt.Errorf("--instance-selector: %w", err)
+	}
+	return podNames(reader, *f.namespace, sel, *f.instance), nil
+}
+
+// gatewayLinks accepts the connections gateways of several clusters keep
+// to the console (nil when the console manages only its own cluster).
+func (f *clusterFlags) gatewayLinks(ctx context.Context, reader client.Reader) (*webui.GatewayLinks, error) {
+	if !*f.enabled {
+		return nil, nil
+	}
+	instances, err := f.instances(reader)
+	if err != nil {
+		return nil, err
+	}
+	g := webui.NewGatewayLinks(reader, *f.instance, instances)
+	go func() {
+		<-ctx.Done()
+		g.Close()
+	}()
+	return g, nil
 }
 
 // clusterCache is what the console keeps of a cluster: the kinds whose
