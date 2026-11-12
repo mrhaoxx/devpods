@@ -5,7 +5,7 @@ import { Link } from "react-router-dom";
 import { useQueryClient } from "@tanstack/react-query";
 import * as Menu from "@radix-ui/react-dropdown-menu";
 import type { SortingState } from "@tanstack/react-table";
-import { deleteDevPod, patchDevPod, patchDevPodSpec, redeployDevPod, sshCommand, type LiveItem, shellPath } from "../../data/api";
+import { deleteDevPod, patchDevPod, patchDevPodSpec, rebuildFromConfig, redeployDevPod, sshCommand, type LiveItem, shellPath } from "../../data/api";
 import { useDevPodMutations, useDevPods, useMe, useRecent } from "../../data/queries";
 import { devpodsStream } from "../../data/live/streams";
 import { useLiveEnabled, useLiveRow, useLiveValues } from "../../data/live/hooks";
@@ -22,6 +22,7 @@ import { runBulk, type BulkResult } from "../../lib/bulk";
 import { BulkDialog, type BulkKind } from "./BulkDialog";
 import { useNow } from "../../lib/useNow";
 import { TableCtx, devpodColumns, toRow, type Row } from "./columns";
+import { groupRows } from "./groups";
 
 const PHASES = ["Running", "Pending", "Stopped", "Failed"] as const;
 
@@ -31,6 +32,8 @@ const schema = {
   sort: { kind: "string", default: "name" },
   idle: { kind: "bool", default: false },
   gpu: { kind: "bool", default: false },
+  /** a group shown open (a launch of several lands here) */
+  group: { kind: "string", default: "" },
 } satisfies Schema;
 
 const toSorting = (s: string): SortingState => (s ? [{ id: s.replace(/^-/, ""), desc: s.startsWith("-") }] : []);
@@ -71,6 +74,41 @@ function RowMenu({ r, onDelete }: { r: Row; onDelete: (r: Row) => void }) {
   );
 }
 
+const item = "cursor-pointer rounded px-2 py-1 outline-none data-[highlighted]:bg-sunk";
+
+/** GroupMenu: what is done to every DevPod of a group at once. */
+function GroupMenu({ r, onRun, onAsk }: { r: Row; onRun: (action: string, fn: (m: Row) => Promise<unknown>) => void; onAsk: (what: "delete" | "rebuild") => void }) {
+  return (
+    <Menu.Root>
+      <Menu.Trigger aria-label={`${r.name} 操作`} className="rounded px-1.5 text-muted hover:bg-sunk hover:text-ink">
+        ⋯
+      </Menu.Trigger>
+      <Menu.Portal>
+        <Menu.Content align="end" className="z-50 min-w-36 rounded-md border border-line bg-surface p-1 text-xs shadow-lg">
+          <Menu.Item className={item} onSelect={() => onRun("整组启动", (m) => patchDevPod(m.name, true))}>
+            整组启动
+          </Menu.Item>
+          <Menu.Item className={item} onSelect={() => onRun("整组休眠", (m) => patchDevPod(m.name, false))}>
+            整组休眠
+          </Menu.Item>
+          <Menu.Item className={item} onSelect={() => onAsk("rebuild")}>
+            按配置重建整组…
+          </Menu.Item>
+          <Menu.Item className="cursor-pointer rounded px-2 py-1 text-fail outline-none data-[highlighted]:bg-fail-soft" onSelect={() => onAsk("delete")}>
+            删除整组…
+          </Menu.Item>
+        </Menu.Content>
+      </Menu.Portal>
+    </Menu.Root>
+  );
+}
+
+/** flat: a selection with each group row standing for its members */
+const flat = (rows: Row[]): Row[] => {
+  const seen = new Set<string>();
+  return rows.flatMap((r) => r.group?.members ?? [r]).filter((r) => !seen.has(r.name) && seen.add(r.name));
+};
+
 export function DevPodTable({ scope }: { scope: "mine" | "all" }) {
   const me = useMe().data;
   const admin = scope === "all" && !!me?.admin;
@@ -82,6 +120,14 @@ export function DevPodTable({ scope }: { scope: "mine" | "all" }) {
   const { status } = useLiveRow(spec, "");
   const recent = useRecent({ scope }, useLiveEnabled());
   const [confirm, setConfirm] = useState<{ rows: Row[]; bulk: boolean } | null>(null);
+  const [rebuildAsk, setRebuildAsk] = useState<Row | null>(null);
+  const [open, setOpen] = useState<ReadonlySet<string>>(() => new Set(url.group ? [url.group] : []));
+  const toggle = (id: string) =>
+    setOpen((cur) => {
+      const next = new Set(cur);
+      if (!next.delete(id)) next.add(id);
+      return next;
+    });
   const [outcome, setOutcome] = useState<Outcome | null>(null);
   const [dialog, setDialog] = useState<{ kind: BulkKind; rows: Row[]; clear: () => void } | null>(null);
   const { remove } = useDevPodMutations();
@@ -99,7 +145,8 @@ export function DevPodTable({ scope }: { scope: "mine" | "all" }) {
     [rows, filter, admin, url.gpu, url.idle, idle],
   );
   const counts = Object.fromEntries(PHASES.map((p) => [p, byQuery.filter((r) => r.phase === p).length]));
-  const shown = url.phase.length ? byQuery.filter((r) => url.phase.includes(r.phase)) : byQuery;
+  const filtered = url.phase.length ? byQuery.filter((r) => url.phase.includes(r.phase)) : byQuery;
+  const shown = useMemo(() => groupRows(filtered, open), [filtered, open]);
 
   const bulk = async (action: string, items: Row[], fn: (r: Row) => Promise<unknown>) => {
     const results = await runBulk(items, (r) => fn(r).then(() => undefined));
@@ -107,8 +154,24 @@ export function DevPodTable({ scope }: { scope: "mine" | "all" }) {
     void qc.invalidateQueries({ queryKey: ["devpods"] });
   };
   const columns = useMemo(
-    () => devpodColumns({ admin, me, actions: (r) => <RowMenu r={r} onDelete={(x) => setConfirm({ rows: [x], bulk: false })} /> }),
-    [admin, me],
+    () =>
+      devpodColumns({
+        admin,
+        me,
+        groups: { open, toggle },
+        actions: (r) =>
+          r.group ? (
+            <GroupMenu
+              r={r}
+              onRun={(action, fn) => void bulk(action, r.group!.members, fn)}
+              onAsk={(what) => (what === "delete" ? setConfirm({ rows: r.group!.members, bulk: true }) : setRebuildAsk(r))}
+            />
+          ) : (
+            <RowMenu r={r} onDelete={(x) => setConfirm({ rows: [x], bulk: false })} />
+          ),
+      }),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [admin, me, open],
   );
 
   const failed = outcome?.results.filter((r) => !r.ok) ?? [];
@@ -168,13 +231,15 @@ export function DevPodTable({ scope }: { scope: "mine" | "all" }) {
         <DataTable<Row>
           data={shown}
           columns={columns}
-          getRowId={(r) => r.name}
+          getRowId={(r) => (r.group ? `group:${r.name}` : r.name)}
           sorting={toSorting(url.sort)}
           onSortingChange={(s) => setUrl({ sort: fromSorting(s) })}
           selectable
           dim={status === "reconnecting"}
           empty={<EmptyState title={list.isLoading ? "加载中…" : rows.length ? "没有符合条件的 DevPod" : "还没有 DevPod"} />}
-          bulkBar={(sel, clear) => (
+          bulkBar={(picked, clear) => {
+            const sel = flat(picked);
+            return (
             <>
               <Button onClick={() => setDialog({ kind: "migrate", rows: sel, clear })}>迁移…</Button>
               <Button onClick={() => void bulk("休眠", sel, (r) => patchDevPod(r.name, false)).then(clear)}>休眠</Button>
@@ -186,7 +251,8 @@ export function DevPodTable({ scope }: { scope: "mine" | "all" }) {
                 删除…
               </Button>
             </>
-          )}
+            );
+          }}
         />
       )}
       <BulkDialog
@@ -218,6 +284,19 @@ export function DevPodTable({ scope }: { scope: "mine" | "all" }) {
         }}
       >
         删除后 Pod 和持久化数据都会被移除，不能恢复。
+      </ConfirmDialog>
+      <ConfirmDialog
+        open={!!rebuildAsk}
+        onOpenChange={(o) => !o && setRebuildAsk(null)}
+        title={`按配置重建 ${rebuildAsk?.name} 的 ${rebuildAsk?.group?.members.length ?? 0} 个 DevPod？`}
+        confirmLabel="重建"
+        onConfirm={() => {
+          const g = rebuildAsk!;
+          setRebuildAsk(null);
+          void bulk("按配置重建", g.group!.members, (m) => rebuildFromConfig(m.name));
+        }}
+      >
+        用来源配置现在的内容重建每个 DevPod。运行中的会重建 Pod，已有的会话会断开；home 卷不变。
       </ConfirmDialog>
     </TableCtx.Provider>
   );

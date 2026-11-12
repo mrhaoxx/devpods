@@ -185,7 +185,7 @@ export type K8sEvent = {
 // reads a handful of paths and must tolerate schema growth.
 export type ContainerSpec = { name: string; image?: string; resources?: { limits?: Record<string, string> } };
 export type DevPod = {
-  metadata: { name: string; uid?: string; creationTimestamp?: string; annotations?: Record<string, string> };
+  metadata: { name: string; uid?: string; creationTimestamp?: string; labels?: Record<string, string>; annotations?: Record<string, string> };
   spec: {
     owner: string;
     running: boolean;
@@ -382,6 +382,12 @@ import type {
 export const patchDevPodSpec = (n: string, body: SpecPatch) => req<PatchResult>("PATCH", `/api/devpods/${n}`, body);
 /** redeployDevPod recreates the Pod (sessions drop, the home volume stays). */
 export const redeployDevPod = (n: string) => req<void>("POST", `/api/devpods/${n}/redeploy`);
+/** rebuildFromConfig: the DevPod from the config it came from, as that config is now. */
+export function rebuildFromConfig(n: string, dryRun: true): Promise<{ yaml: string; rebuild: boolean }>;
+export function rebuildFromConfig(n: string, dryRun?: false): Promise<PatchResult>;
+export function rebuildFromConfig(n: string, dryRun = false) {
+  return req("POST", `/api/devpods/${n}/rebuild-from-config`, dryRun ? { dryRun: true } : {});
+}
 export const getMetrics = (n: string, range: MetricRange) =>
   req<MetricSeries>("GET", `/api/devpods/${n}/metrics?range=${range}`);
 export const getRecent = (p: { scope?: "mine" | "all"; name?: string }) =>

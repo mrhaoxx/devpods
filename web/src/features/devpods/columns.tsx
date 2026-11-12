@@ -13,6 +13,7 @@ import { Badge } from "../../design/Badge";
 import { fmtAge, fmtBytes, fmtCores, fmtRate, parseQuantity } from "../../lib/format";
 import { phaseSummary, reservationNotes } from "./status";
 import { sparkSeries } from "../../lib/spark";
+import { provenance } from "./provenance";
 
 export type Row = {
   dp: DevPod;
@@ -25,6 +26,8 @@ export type Row = {
   gpu: number;
   cpuLimit: number;
   memLimit: number;
+  /** a group of DevPods launched together, shown as this one row (groups.ts) */
+  group?: { id: string; members: Row[] };
 };
 
 export function toRow(dp: DevPod, pod?: PodInfo): Row {
@@ -153,15 +156,43 @@ function UptimeCell({ r }: { r: Row }) {
   return <span className="mono">{fmtAge(r.pod.startedAt, now)}</span>;
 }
 
-export function devpodColumns(opts: { admin: boolean; me?: Me; actions: (r: Row) => React.ReactNode }): ColumnDef<Row, unknown>[] {
+function GroupName({ r, open, onToggle }: { r: Row; open: boolean; onToggle: (id: string) => void }) {
+  const ms = r.group!.members;
+  const up = ms.filter((m) => m.phase === "Running").length;
+  return (
+    <span className="inline-flex min-w-0 items-center gap-1.5">
+      <button type="button" aria-label={`${open ? "收起" : "展开"} ${r.name}`} aria-expanded={open} onClick={() => onToggle(r.name)} className="w-3 text-muted hover:text-ink">
+        {open ? "▾" : "▸"}
+      </button>
+      <span title={phaseLabel(r.phase)}>
+        <StatusDot phase={r.phase} showLabel={false} />
+      </span>
+      <span className="mono truncate">{`${r.name} ×${ms.length}`}</span>
+      <span className="text-[11px] text-muted">{`${up}/${ms.length} 运行中`}</span>
+    </span>
+  );
+}
+
+/** a cell of a DevPod's own; a group row leaves it empty */
+const own = (cell: (r: Row) => React.ReactNode) => ({ row }: { row: { original: Row } }) => (row.original.group ? null : cell(row.original));
+
+export function devpodColumns(opts: {
+  admin: boolean;
+  me?: Me;
+  actions: (r: Row) => React.ReactNode;
+  groups?: { open: ReadonlySet<string>; toggle: (id: string) => void };
+}): ColumnDef<Row, unknown>[] {
   const cols: ColumnDef<Row, unknown>[] = [
     {
       id: "name",
       header: "名称",
       accessorFn: (r) => r.name,
       meta: { priority: 1, width: 190 },
-      cell: ({ row: { original: r } }) => (
-        <span className="inline-flex min-w-0 items-center gap-1.5">
+      cell: ({ row: { original: r } }) =>
+        r.group ? (
+          <GroupName r={r} open={!!opts.groups?.open.has(r.name)} onToggle={(id) => opts.groups?.toggle(id)} />
+        ) : (
+        <span className={`inline-flex min-w-0 items-center gap-1.5 ${provenance(r.dp).group && opts.groups?.open.has(provenance(r.dp).group!) ? "pl-4" : ""}`}>
           <span title={phaseLabel(r.phase)}>
             <StatusDot phase={r.phase} showLabel={false} />
           </span>
@@ -180,20 +211,26 @@ export function devpodColumns(opts: { admin: boolean; me?: Me; actions: (r: Row)
   ];
   if (opts.admin) cols.push({ id: "owner", header: "Owner", accessorFn: (r) => r.owner, meta: { priority: 2, width: 90, mono: true } });
   cols.push(
-    { id: "cpu", header: "CPU", enableSorting: false, meta: { priority: 2, width: 140 }, cell: ({ row }) => <CpuCell r={row.original} /> },
-    { id: "mem", header: "内存", enableSorting: false, meta: { priority: 3, width: 140 }, cell: ({ row }) => <MemCell r={row.original} /> },
-    { id: "gpu", header: "GPU", accessorFn: (r) => r.gpu, meta: { priority: 4, width: 110 }, cell: ({ row }) => <GpuCell r={row.original} /> },
-    { id: "sessions", header: "会话", enableSorting: false, meta: { priority: 5, width: 120 }, cell: ({ row }) => <SessionsCell r={row.original} /> },
+    { id: "cpu", header: "CPU", enableSorting: false, meta: { priority: 2, width: 140 }, cell: own((r) => <CpuCell r={r} />) },
+    { id: "mem", header: "内存", enableSorting: false, meta: { priority: 3, width: 140 }, cell: own((r) => <MemCell r={r} />) },
+    {
+      id: "gpu",
+      header: "GPU",
+      accessorFn: (r) => r.gpu,
+      meta: { priority: 4, width: 110 },
+      cell: ({ row }) => (row.original.group ? row.original.gpu > 0 ? <span className="mono">{row.original.gpu}</span> : null : <GpuCell r={row.original} />),
+    },
+    { id: "sessions", header: "会话", enableSorting: false, meta: { priority: 5, width: 120 }, cell: own((r) => <SessionsCell r={r} />) },
     {
       id: "uptime",
       header: "运行时长",
       accessorFn: (r) => (r.phase === "Running" && r.pod?.startedAt ? Date.parse(r.pod.startedAt) : Infinity),
       sortDescFirst: false,
       meta: { priority: 6, width: 80 },
-      cell: ({ row }) => <UptimeCell r={row.original} />,
+      cell: own((r) => <UptimeCell r={r} />),
     },
-    { id: "net", header: "网络 ↓/↑", enableSorting: false, meta: { priority: 7, width: 150 }, cell: ({ row }) => <NetCell r={row.original} /> },
-    { id: "rdma", header: "RDMA ↓/↑", enableSorting: false, meta: { priority: 8, width: 150 }, cell: ({ row }) => <RdmaCell r={row.original} /> },
+    { id: "net", header: "网络 ↓/↑", enableSorting: false, meta: { priority: 7, width: 150 }, cell: own((r) => <NetCell r={r} />) },
+    { id: "rdma", header: "RDMA ↓/↑", enableSorting: false, meta: { priority: 8, width: 150 }, cell: own((r) => <RdmaCell r={r} />) },
     { id: "node", header: "节点", accessorFn: (r) => r.node, meta: { priority: 9, width: 90, mono: true } },
     { id: "image", header: "镜像", accessorFn: (r) => r.image, meta: { priority: 10, width: 170, mono: true }, cell: ({ getValue }) => <span title={String(getValue())}>{String(getValue())}</span> },
     { id: "actions", header: "", enableSorting: false, meta: { priority: 1, width: 36, align: "right" }, cell: ({ row }) => opts.actions(row.original) },
