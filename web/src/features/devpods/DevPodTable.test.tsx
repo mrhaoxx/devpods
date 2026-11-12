@@ -238,6 +238,23 @@ describe("DevPodTable", () => {
     expect(screen.getAllByRole("link", { name: "alice-x" })).toHaveLength(1);
   });
 
+  it("migration is for DevPods of one cluster: a selection across clusters cannot be migrated", async () => {
+    const x = (cluster: string) => ({ ...mk("alice-x", "alice", "Running"), cluster });
+    stubFetch({ "/api/devpods": { items: [x("a"), x("b")], pods: {} } });
+    const clusters = [
+      { name: "a", connected: true },
+      { name: "b", connected: true },
+    ];
+    renderWithProviders(<DevPodTable scope="mine" />, { clusters });
+    await waitFor(() => expect(screen.getAllByRole("link", { name: "alice-x" })).toHaveLength(2));
+    fireEvent.click(screen.getByLabelText("选择 a/alice-x"));
+    expect((screen.getByRole("button", { name: "迁移…" }) as HTMLButtonElement).disabled).toBe(false);
+    fireEvent.click(screen.getByLabelText("选择 b/alice-x"));
+    const migrate = screen.getByRole("button", { name: "迁移…" }) as HTMLButtonElement;
+    expect(migrate.disabled).toBe(true);
+    expect(migrate.title).toMatch(/不同集群/);
+  });
+
   it("live numbers of same-named DevPods in two clusters: each row its own", async () => {
     const x = (cluster: string) => ({ ...mk("alice-x", "alice", "Running"), cluster });
     stubFetch({ "/api/devpods": { items: [x("a"), x("b")], pods: { "a/alice-x": { node: "na" }, "b/alice-x": { node: "nb" } } } });

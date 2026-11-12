@@ -111,7 +111,8 @@ const running = (r: Row) => r.phase === "Running";
 /** flat: a selection with each group row standing for its members */
 const flat = (rows: Row[]): Row[] => {
   const seen = new Set<string>();
-  return rows.flatMap((r) => r.group?.members ?? [r]).filter((r) => !seen.has(r.name) && seen.add(r.name));
+  // each DevPod once — by cluster and name: same-named ones of two clusters are two
+  return rows.flatMap((r) => r.group?.members ?? [r]).filter((r) => !seen.has(keyOf(r)) && seen.add(keyOf(r)));
 };
 
 export function DevPodTable({ scope }: { scope: "mine" | "all" }) {
@@ -255,9 +256,17 @@ export function DevPodTable({ scope }: { scope: "mine" | "all" }) {
           empty={<EmptyState title={list.isLoading ? "加载中…" : rows.length ? "没有符合条件的 DevPod" : "还没有 DevPod"} />}
           bulkBar={(picked, clear) => {
             const sel = flat(picked);
+            // nodes are a cluster's: DevPods of two clusters cannot move to the same ones
+            const acrossClusters = new Set(sel.map((r) => r.cluster ?? "")).size > 1;
             return (
             <>
-              <Button onClick={() => setDialog({ kind: "migrate", rows: sel, clear })}>迁移…</Button>
+              <Button
+                disabled={acrossClusters}
+                title={acrossClusters ? "所选 DevPod 分属不同集群，不能一起迁移：只选同一个集群的" : undefined}
+                onClick={() => setDialog({ kind: "migrate", rows: sel, clear })}
+              >
+                迁移…
+              </Button>
               <Button onClick={() => void bulk("休眠", sel, (r) => patchDevPod(r, false)).then(clear)}>休眠</Button>
               <Button onClick={() => void bulk("启动", sel, (r) => patchDevPod(r, true)).then(clear)}>启动</Button>
               <Button onClick={() => setDialog({ kind: "collaborators", rows: sel, clear })}>协作者…</Button>
