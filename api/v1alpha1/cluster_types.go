@@ -25,6 +25,12 @@ type ClusterSpec struct {
 	// +optional
 	AgentPublicKey string `json:"agentPublicKey,omitempty"`
 
+	// Gateway names the Gateway whose SSH address and port-link domain
+	// are shown for this cluster's DevPods. Empty: the console's own.
+	//
+	// +optional
+	Gateway string `json:"gateway,omitempty"`
+
 	// DefaultQuota applies in this cluster to users without an entry of
 	// their own for it.
 	//
@@ -49,6 +55,11 @@ type ClusterStatus struct {
 	ControllerVersion string `json:"controllerVersion,omitempty"`
 	// +optional
 	KubernetesVersion string `json:"kubernetesVersion,omitempty"`
+	// Gateways the cluster's agent is connected to.
+	//
+	// +optional
+	// +listType=set
+	Gateways []string `json:"gateways,omitempty"`
 	// Capabilities the cluster offers: snapshots, reservations, telemetry…
 	//
 	// +optional

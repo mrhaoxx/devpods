@@ -16,6 +16,8 @@ import (
 	"time"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/types"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	devpodv1alpha1 "github.com/mrhaoxx/devpod/api/v1alpha1"
 	"github.com/mrhaoxx/devpod/internal/agent"
@@ -54,13 +56,24 @@ func hashToken(token string) string {
 // the cluster joined with before is cleared: a new token is how an agent
 // is replaced.
 func IssueToken(c *devpodv1alpha1.Cluster, now time.Time) string {
+	return issue(c, &c.Spec.AgentPublicKey, now)
+}
+
+// IssueGatewayToken is IssueToken for a gateway.
+func IssueGatewayToken(g *devpodv1alpha1.Gateway, now time.Time) string {
+	return issue(g, &g.Spec.PublicKey, now)
+}
+
+func issue(obj client.Object, key *string, now time.Time) string {
 	token, hash := NewToken()
-	if c.Annotations == nil {
-		c.Annotations = map[string]string{}
+	ann := obj.GetAnnotations()
+	if ann == nil {
+		ann = map[string]string{}
 	}
-	c.Annotations[TokenHashAnnotation] = hash
-	c.Annotations[TokenExpiresAnnotation] = now.Add(TokenLifetime).UTC().Format(time.RFC3339)
-	c.Spec.AgentPublicKey = ""
+	ann[TokenHashAnnotation] = hash
+	ann[TokenExpiresAnnotation] = now.Add(TokenLifetime).UTC().Format(time.RFC3339)
+	obj.SetAnnotations(ann)
+	*key = ""
 	return token
 }
 
@@ -68,35 +81,49 @@ func IssueToken(c *devpodv1alpha1.Cluster, now time.Time) string {
 // cluster was issued and still good. Joining again with the key already
 // recorded is fine (an agent restarted with its token file still there).
 func (r *Registry) Join(ctx context.Context, cluster, token, publicKey string) error {
+	var c devpodv1alpha1.Cluster
+	return r.join(ctx, cluster, &c, &c.Spec.AgentPublicKey, token, publicKey)
+}
+
+// JoinGateway is Join for a gateway.
+func (r *Registry) JoinGateway(ctx context.Context, gateway, token, publicKey string) error {
+	var g devpodv1alpha1.Gateway
+	return r.join(ctx, gateway, &g, &g.Spec.PublicKey, token, publicKey)
+}
+
+// join reads the object name into obj and records publicKey in *key (a
+// field of obj).
+func (r *Registry) join(ctx context.Context, name string, obj client.Object, key *string, token, publicKey string) error {
 	publicKey = strings.TrimSpace(publicKey)
 	if err := agent.Verify(publicKey, nil, nil); err != nil && !strings.Contains(err.Error(), "proof") {
 		return ErrJoinRefused // not an Ed25519 key
 	}
-	c, err := r.cluster(ctx, cluster)
-	if err != nil {
-		if errors.Is(err, ErrUnknownCluster) {
+	if err := r.o.Reader.Get(ctx, types.NamespacedName{Name: name}, obj); err != nil {
+		if apierrors.IsNotFound(err) {
 			return ErrJoinRefused
 		}
 		return err
 	}
-	if c.Spec.AgentPublicKey != "" {
-		if c.Spec.AgentPublicKey == publicKey {
+	if *key != "" {
+		if *key == publicKey {
 			return nil
 		}
 		return ErrJoinRefused
 	}
-	want := c.Annotations[TokenHashAnnotation]
-	expires, perr := time.Parse(time.RFC3339, c.Annotations[TokenExpiresAnnotation])
+	ann := obj.GetAnnotations()
+	want := ann[TokenHashAnnotation]
+	expires, perr := time.Parse(time.RFC3339, ann[TokenExpiresAnnotation])
 	if want == "" || perr != nil || time.Now().After(expires) ||
 		subtle.ConstantTimeCompare([]byte(hashToken(token)), []byte(want)) != 1 {
 		return ErrJoinRefused
 	}
-	c.Spec.AgentPublicKey = publicKey
-	delete(c.Annotations, TokenHashAnnotation)
-	delete(c.Annotations, TokenExpiresAnnotation)
+	*key = publicKey
+	delete(ann, TokenHashAnnotation)
+	delete(ann, TokenExpiresAnnotation)
+	obj.SetAnnotations(ann)
 	// the update carries the version read above: of two joins with one
 	// token, the second finds the object changed and is refused
-	if err := r.o.Hub.Update(ctx, c); err != nil {
+	if err := r.o.Hub.Update(ctx, obj); err != nil {
 		if apierrors.IsConflict(err) {
 			return ErrJoinRefused
 		}

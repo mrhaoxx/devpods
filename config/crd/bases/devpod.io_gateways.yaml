@@ -1,0 +1,115 @@
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.16.5
+  name: gateways.devpod.io
+spec:
+  group: devpod.io
+  names:
+    kind: Gateway
+    listKind: GatewayList
+    plural: gateways
+    shortNames:
+    - dpgw
+    singular: gateway
+  scope: Cluster
+  versions:
+  - additionalPrinterColumns:
+    - jsonPath: .spec.sshAddress
+      name: SSH
+      type: string
+    - jsonPath: .status.lastSeen
+      name: Last seen
+      type: date
+    - jsonPath: .metadata.creationTimestamp
+      name: Age
+      type: date
+    name: v1alpha1
+    schema:
+      openAPIV3Schema:
+        description: Gateway is an SSH and port-link gateway known to this console.
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: |-
+              GatewaySpec registers an SSH and port-link gateway with the console.
+              A gateway dials out to the console and asks it who may log in where;
+              the agents of the clusters dial out to the gateway, which reaches
+              DevPods over those connections. Nobody dials a cluster.
+            properties:
+              agentAddress:
+                description: |-
+                  AgentAddress is where the clusters' agents connect to this gateway,
+                  e.g. https://gw.example.com (they dial <AgentAddress>/agent/connect).
+                type: string
+              displayName:
+                description: DisplayName shown in the console.
+                maxLength: 80
+                type: string
+              httpBaseDomain:
+                description: |-
+                  HTTPBaseDomain: port links of DevPods served by this gateway are
+                  https://{id}-{port}{HTTPSuffix}.<HTTPBaseDomain>[:HTTPPort].
+                type: string
+              httpPort:
+                format: int32
+                maximum: 65535
+                minimum: 0
+                type: integer
+              httpSuffix:
+                type: string
+              paused:
+                description: 'Paused: the gateway is refused by the console and by
+                  the agents.'
+                type: boolean
+              publicKey:
+                description: |-
+                  PublicKey is the gateway's identity, an authorized_keys line,
+                  recorded when it joins with a one-time token.
+                type: string
+              sshAddress:
+                description: 'SSHAddress is what users connect to: host or host:port.'
+                type: string
+            type: object
+          status:
+            description: GatewayStatus is what the console last heard of the gateway.
+            properties:
+              clusters:
+                description: Clusters whose agents are connected to this gateway.
+                items:
+                  type: string
+                type: array
+                x-kubernetes-list-type: set
+              lastSeen:
+                description: 'LastSeen: the gateway''s latest question to the console.'
+                format: date-time
+                type: string
+              version:
+                type: string
+            type: object
+        type: object
+        x-kubernetes-validations:
+        - message: a gateway name is at most 32 characters
+          rule: size(self.metadata.name) <= 32
+    served: true
+    storage: true
+    subresources:
+      status: {}

@@ -102,6 +102,11 @@ spec:
                 description: DisplayName shown in the console.
                 maxLength: 80
                 type: string
+              gateway:
+                description: |-
+                  Gateway names the Gateway whose SSH address and port-link domain
+                  are shown for this cluster's DevPods. Empty: the console's own.
+                type: string
               paused:
                 description: 'Paused: the agent''s connections are refused and dropped.'
                 type: boolean
@@ -123,6 +128,12 @@ spec:
                 type: boolean
               controllerVersion:
                 type: string
+              gateways:
+                description: Gateways the cluster's agent is connected to.
+                items:
+                  type: string
+                type: array
+                x-kubernetes-list-type: set
               kubernetesVersion:
                 type: string
               lastSeen:
