@@ -87,6 +87,13 @@ describe("DevPod detail", () => {
     expect(screen.getByTestId("where").textContent).toBe("?tab=sessions");
   });
 
+  it("编辑 opens the YAML tab", async () => {
+    setup({ route: "/devpods/alice-x" });
+    await screen.findByRole("heading", { name: "alice-x" });
+    fireEvent.click(screen.getByRole("button", { name: "编辑" }));
+    expect(screen.getByTestId("where").textContent).toBe("?tab=yaml");
+  });
+
   it("processes tab reconnects with procs=all", async () => {
     const conns = setup();
     await screen.findByRole("heading", { name: "alice-x" });

@@ -30,7 +30,6 @@ import { ConfirmDialog } from "../../../design/ConfirmDialog";
 import { useUrlState, type Schema } from "../../../lib/urlState";
 import { useNow } from "../../../lib/useNow";
 import { fmtAge } from "../../../lib/format";
-import { DevPodDrawer } from "../DevPodDrawer";
 import { LiveCards } from "./LiveCards";
 import { ProcessTable } from "./ProcessesTab";
 import { SessionList } from "./SessionsTab";
@@ -45,7 +44,6 @@ import { devpodToConfig } from "../../configs/exportConfig";
 
 const schema = {
   tab: { kind: "string", default: "monitor" },
-  edit: { kind: "bool", default: false },
 } satisfies Schema;
 
 type Msg = { kind: string; type?: string; detail?: DevPodDetail; event?: K8sEvent };
@@ -191,7 +189,7 @@ export function DetailPage() {
         <Button onClick={() => nav("/configs/new", { state: { content: devpodToConfig(dp), title: dp.metadata.name } })} title="把这个 DevPod 的定义存成可复用、可分享的配置">
           存为配置
         </Button>
-        <Button onClick={() => setUrl({ edit: true })}>编辑</Button>
+        <Button onClick={() => setUrl({ tab: "yaml" })}>编辑</Button>
         <Button onClick={() => setRunning.mutate({ name, running: !dp.spec.running })}>{dp.spec.running ? "休眠" : "启动"}</Button>
         <Button variant="danger" onClick={() => setConfirmDelete(true)}>
           删除
@@ -271,7 +269,6 @@ export function DetailPage() {
         </Panel>
       )}
 
-      {url.edit && <DevPodDrawer mode="edit" devpod={dp} open onClose={() => setUrl({ edit: false })} />}
       <ConfirmDialog
         open={confirmDelete}
         onOpenChange={setConfirmDelete}

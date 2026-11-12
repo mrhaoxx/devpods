@@ -1,0 +1,131 @@
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { fireEvent, screen, waitFor, within } from "@testing-library/react";
+import { useLocation } from "react-router-dom";
+import { MyDevPodsPage } from "./MyDevPodsPage";
+import { renderWithProviders, stubFetch } from "../../test/render";
+import type { Config, ConfigSummary, ConfigVar } from "../configs/api";
+
+function Where() {
+  const l = useLocation();
+  return <div data-testid="where">{l.pathname + l.search}</div>;
+}
+
+const v = (name: string, o: Partial<ConfigVar> = {}): ConfigVar => ({ name, builtin: name === "NAME", required: true, type: "string", ...o });
+const summary = (o: Partial<ConfigSummary>): ConfigSummary => ({
+  name: "x",
+  owner: "bob",
+  title: "x",
+  description: "",
+  sharedWith: [],
+  public: false,
+  official: false,
+  variables: [],
+  mine: false,
+  updatedAt: new Date().toISOString(),
+  ...o,
+});
+const configs = [
+  summary({ name: "alice-mine", owner: "alice", title: "我的调试", mine: true, variables: [v("NAME")] }),
+  summary({ name: "bob-shared", owner: "bob", title: "共享环境", sharedWith: ["alice"] }),
+  summary({ name: "root-train", owner: "root", title: "GPU 训练", public: true, official: true, description: "八卡", variables: [v("NAME"), v("GPU")] }),
+  summary({ name: "eve-pub", owner: "eve", title: "公开环境", public: true }),
+];
+const json = (status: number, body: unknown) => new Response(JSON.stringify(body), { status, headers: { "Content-Type": "application/json" } });
+const base = { "/api/devpods": { items: [], pods: {} }, "/api/nodes": { items: [] }, "GET /api/configs": { items: configs } };
+const page = (route: string) =>
+  renderWithProviders(
+    <>
+      <MyDevPodsPage />
+      <Where />
+    </>,
+    { route },
+  );
+
+describe("new DevPod drawer", () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  it("opens on the configs: official first, then mine, shared with me, public; a search narrows them", async () => {
+    stubFetch(base);
+    page("/?new=1");
+    const drawer = await screen.findByRole("dialog", { name: "新建 DevPod" });
+    await within(drawer).findByText("GPU 训练");
+    const groups = within(within(drawer).getByRole("region", { name: "配置列表" })).getAllByRole("heading").map((h) => h.textContent);
+    expect(groups).toEqual(["官方", "我的", "分享给我的", "公开"]);
+    expect(within(drawer).getByText("八卡")).toBeTruthy();
+    fireEvent.change(within(drawer).getByLabelText("搜索配置"), { target: { value: "训练" } });
+    expect(within(drawer).queryByText("我的调试")).toBeNull();
+    expect(within(drawer).getByText("GPU 训练")).toBeTruthy();
+  });
+
+  it("picking a config shows its form; back returns to the list", async () => {
+    stubFetch({ ...base, "GET /api/configs/root-train": { ...configs[2], content: "" } satisfies Config });
+    page("/?new=1");
+    fireEvent.click(await screen.findByRole("button", { name: /GPU 训练/ }));
+    expect(await screen.findByLabelText("短名")).toBeTruthy();
+    expect(screen.getByLabelText("GPU")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "上一步" }));
+    expect(await screen.findByLabelText("搜索配置")).toBeTruthy();
+  });
+
+  it("?config= opens straight on that config's form", async () => {
+    stubFetch({ ...base, "GET /api/configs/root-train": { ...configs[2], content: "" } });
+    page("/?new=1&config=root-train");
+    expect(await screen.findByLabelText("短名")).toBeTruthy();
+    expect(screen.getByText("GPU 训练")).toBeTruthy();
+  });
+
+  it("a group launched goes to the list with the group open; one goes to its page", async () => {
+    stubFetch({
+      ...base,
+      "GET /api/configs/alice-mine": { ...configs[0], content: "" },
+      "POST /api/configs/alice-mine/launch": json(200, { group: "alice-t", items: [0, 1].map((i) => ({ index: i, name: `alice-t-${i}`, ok: true })) }),
+    });
+    page("/?new=1&config=alice-mine");
+    fireEvent.change(await screen.findByLabelText("短名"), { target: { value: "t" } });
+    fireEvent.change(screen.getByLabelText("数量"), { target: { value: "2" } });
+    fireEvent.click(screen.getByRole("button", { name: "创建" }));
+    await waitFor(() => expect(screen.getByTestId("where").textContent).toBe("/?group=alice-t"));
+  });
+
+  it("a blank YAML starts from a small DevPod, and creates from it", async () => {
+    const calls = stubFetch({ ...base, "POST /api/devpods": json(201, { metadata: { name: "alice-dev" }, spec: {} }) });
+    page("/?new=1");
+    fireEvent.click(await screen.findByRole("button", { name: "空白 YAML" }));
+    const box = (await screen.findByLabelText("DevPod YAML")) as HTMLTextAreaElement;
+    expect(box.value).toContain("name: alice-dev");
+    expect(box.value).toContain("image: ubuntu:24.04");
+    fireEvent.click(screen.getByRole("button", { name: "创建" }));
+    await waitFor(() => expect(screen.getByTestId("where").textContent).toBe("/devpods/alice-dev"));
+    expect(JSON.parse(calls.find((c) => c.method === "POST")!.body!)).toEqual({ yaml: box.value });
+  });
+
+  it("?image= opens a blank YAML with that image", async () => {
+    stubFetch(base);
+    page("/?new=1&image=reg.test%2Fx%3A1");
+    const box = (await screen.findByLabelText("DevPod YAML")) as HTMLTextAreaElement;
+    expect(box.value).toContain("image: reg.test/x:1");
+  });
+
+  it("the server's refusal of a YAML is said under it", async () => {
+    stubFetch({ ...base, "POST /api/devpods": json(400, { code: "BAD_REQUEST", message: "invalid YAML: unknown field" }) });
+    page("/?new=1");
+    fireEvent.click(await screen.findByRole("button", { name: "空白 YAML" }));
+    fireEvent.click(await screen.findByRole("button", { name: "创建" }));
+    expect((await screen.findByText(/invalid YAML: unknown field/)).textContent).toBeTruthy();
+  });
+
+  it("no config to use: says where to get one, the blank YAML still there", async () => {
+    stubFetch({ ...base, "GET /api/configs": { items: [] } });
+    page("/?new=1");
+    expect(await screen.findByText(/还没有可用的配置/)).toBeTruthy();
+    expect(screen.getByRole("button", { name: "空白 YAML" })).toBeTruthy();
+  });
+
+  it("closing clears the URL", async () => {
+    stubFetch(base);
+    page("/?new=1&config=root-train");
+    fireEvent.click(await screen.findByRole("button", { name: "关闭" }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    expect(screen.getByTestId("where").textContent).toBe("/");
+  });
+});
