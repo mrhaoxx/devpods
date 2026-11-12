@@ -8,6 +8,8 @@ export interface Cluster {
   paused?: boolean;
   lastSeen?: string;
   capabilities?: string[];
+  /** the gateway whose SSH address and port-link domain serve this cluster */
+  gateway?: string;
 }
 
 /** GET /api/admin/clusters adds what an admin manages. */
@@ -40,6 +42,37 @@ export const reissueClusterToken = (name: string) => req<Joining>("POST", `/api/
 export const patchCluster = (name: string, body: { displayName?: string; paused?: boolean }) =>
   req<AdminCluster>("PATCH", `/api/admin/clusters/${name}`, body);
 export const deleteCluster = (name: string) => req<void>("DELETE", `/api/admin/clusters/${name}`);
+
+/** GET /api/admin/gateways: a gateway of several clusters. */
+export interface AdminGateway {
+  name: string;
+  displayName?: string;
+  sshAddress?: string;
+  httpBaseDomain?: string;
+  httpSuffix?: string;
+  httpPort?: number;
+  agentAddress?: string;
+  paused?: boolean;
+  joined: boolean;
+  tokenExpires?: string;
+  lastSeen?: string;
+  version?: string;
+  clusters?: string[];
+  createdAt: string;
+}
+export interface GatewayJoining {
+  gateway: AdminGateway;
+  joinToken: string;
+  command: string;
+}
+export type GatewayFields = Partial<Pick<AdminGateway, "displayName" | "sshAddress" | "httpBaseDomain" | "httpSuffix" | "httpPort" | "agentAddress" | "paused">>;
+
+export const listAdminGateways = () => req<{ items: AdminGateway[] }>("GET", "/api/admin/gateways");
+export const createGateway = (name: string, fields: GatewayFields) => req<GatewayJoining>("POST", "/api/admin/gateways", { name, ...fields });
+export const patchGateway = (name: string, fields: GatewayFields) => req<AdminGateway>("PATCH", `/api/admin/gateways/${name}`, fields);
+export const reissueGatewayToken = (name: string) => req<GatewayJoining>("POST", `/api/admin/gateways/${name}/token`);
+export const deleteGateway = (name: string) => req<void>("DELETE", `/api/admin/gateways/${name}`);
+export const setClusterGateway = (cluster: string, gateway: string) => req<AdminCluster>("PATCH", `/api/admin/clusters/${cluster}`, { gateway });
 
 /** The rule the server holds a cluster's name to. */
 export const validClusterName = (n: string) => n !== "devpod" && n.length <= 32 && /^[a-z0-9]([-a-z0-9]*[a-z0-9])?$/.test(n);

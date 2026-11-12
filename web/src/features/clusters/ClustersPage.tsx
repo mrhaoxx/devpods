@@ -9,13 +9,15 @@ import { Button } from "../../design/Button";
 import { ConfirmDialog } from "../../design/ConfirmDialog";
 import { CopyBlock } from "../../design/Copy";
 import { EmptyState } from "../../design/EmptyState";
-import { Field, Input, Notice } from "../../design/Form";
+import { Field, Input, Notice, Select } from "../../design/Form";
+import { GatewaysPanel, useAdminGateways } from "./GatewaysPanel";
 import {
   createCluster,
   deleteCluster,
   listAdminClusters,
   patchCluster,
   reissueClusterToken,
+  setClusterGateway,
   validClusterName,
   type AdminCluster,
   type Joining,
@@ -69,6 +71,12 @@ export function ClustersPage() {
     onSettled: refresh,
   });
 
+  const gateways = useAdminGateways().data?.items ?? [];
+  const gateway = useMutation({
+    mutationFn: (v: { cluster: string; gateway: string }) => setClusterGateway(v.cluster, v.gateway),
+    onError: (e) => setError(errText(e)),
+    onSettled: refresh,
+  });
   if (q.isError) return <EmptyState tone="error" title="无法加载集群" hint={errText(q.error)} />;
   const items = q.data?.items ?? [];
   return (
@@ -87,7 +95,7 @@ export function ClustersPage() {
           <table className="w-full text-left text-xs">
             <thead className="border-b border-line text-muted">
               <tr>
-                {["名称", "显示名", "状态", "最近联系", "版本", "能力", ""].map((h) => (
+                {["名称", "显示名", "状态", "最近联系", "版本", "能力", "网关", ""].map((h) => (
                   <th key={h} className="px-3 py-2 font-medium">
                     {h}
                   </th>
@@ -118,6 +126,21 @@ export function ClustersPage() {
                     </span>
                   </td>
                   <td className="px-3 py-2">
+                    <Select
+                      aria-label={`${c.name} 的网关`}
+                      value={c.gateway ?? ""}
+                      onChange={(e) => gateway.mutate({ cluster: c.name, gateway: e.target.value })}
+                      className="!w-auto"
+                    >
+                      <option value="">{gateways.length === 1 ? `默认（${gateways[0].name}）` : "默认"}</option>
+                      {gateways.map((g) => (
+                        <option key={g.name} value={g.name}>
+                          {g.displayName || g.name}
+                        </option>
+                      ))}
+                    </Select>
+                  </td>
+                  <td className="px-3 py-2">
                     <span className="flex justify-end gap-1">
                       <Button variant="ghost" onClick={() => setAsk({ kind: c.paused ? "resume" : "pause", cluster: c })}>
                         {c.paused ? "恢复" : "暂停"}
@@ -136,6 +159,8 @@ export function ClustersPage() {
           </table>
         </div>
       )}
+
+      <GatewaysPanel />
 
       <CreateDialog
         open={creating}

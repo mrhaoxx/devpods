@@ -87,6 +87,22 @@ describe("集群 page", () => {
     await waitFor(() => expect(calls.some((c) => c.method === "DELETE")).toBe(true));
   });
 
+  it("a cluster can be pointed at a gateway", async () => {
+    const calls = stubFetch({
+      "GET /api/admin/clusters": { items: [{ ...mulan, gateway: "b300" }, { ...mulan, name: "st2", displayName: "" }] },
+      "GET /api/admin/gateways": { items: [{ name: "b300", joined: true, createdAt: new Date().toISOString() }, { name: "mulan-gw", joined: true, createdAt: new Date().toISOString() }] },
+      "PATCH /api/admin/clusters/st2": { ...mulan, name: "st2", gateway: "mulan-gw" },
+    });
+    renderWithProviders(<ClustersPage />);
+    await screen.findByText("st2");
+    const sel = (await within(row("mulan")).findByLabelText("mulan 的网关")) as HTMLSelectElement;
+    await waitFor(() => expect(sel.value).toBe("b300"));
+    const other = within(row("st2")).getByLabelText("st2 的网关") as HTMLSelectElement;
+    expect(other.value).toBe("");
+    fireEvent.change(other, { target: { value: "mulan-gw" } });
+    await waitFor(() => expect(calls.find((c) => c.method === "PATCH")?.body).toBe(JSON.stringify({ gateway: "mulan-gw" })));
+  });
+
   it("a new token is shown once and warns that the agent is withdrawn", async () => {
     stubFetch({
       "GET /api/admin/clusters": { items: [mulan] },
