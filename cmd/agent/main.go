@@ -20,12 +20,15 @@ import (
 	"time"
 
 	"github.com/coder/websocket"
-	corev1 "k8s.io/api/core/v1"
-	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
+	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	"k8s.io/client-go/kubernetes"
+	"sigs.k8s.io/controller-runtime/pkg/cache"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/config"
 
+	devpodv1alpha1 "github.com/mrhaoxx/devpod/api/v1alpha1"
 	"github.com/mrhaoxx/devpod/internal/agent"
 	"github.com/mrhaoxx/devpod/internal/tunnel"
 )
@@ -35,18 +38,21 @@ var version = "dev"
 
 func main() {
 	var (
-		cluster, console, namespace, identitySecret, identityFile, tokenFile, capabilities, controller string
-		idle                                                                                           int
+		cluster, console, namespace, devpodNamespace string
+		identitySecret, identityFile, tokenFile      string
+		capabilities, controller                     string
+		idle                                         int
 	)
 	flag.StringVar(&cluster, "cluster", "", "this cluster's name, as registered at the console (required)")
 	flag.StringVar(&console, "console", "", "the console's address for agents, e.g. https://devpod.example.com (required)")
 	flag.StringVar(&namespace, "namespace", "devpod-system", "namespace the agent runs in: its identity Secret and the controller Deployment are here")
+	flag.StringVar(&devpodNamespace, "devpod-namespace", "devpods", "namespace of the DevPods: gateways are connected to DevPods of this namespace and to nothing else")
 	flag.StringVar(&identitySecret, "identity-secret", "devpod-agent-identity", "Secret holding the agent's own key; made on the first start")
 	flag.StringVar(&identityFile, "identity-file", "", "keep the key in this file instead of a Secret (outside a cluster)")
 	flag.StringVar(&tokenFile, "join-token-file", "", "file with the one-time token from the console; used once, on the first start")
 	flag.StringVar(&capabilities, "capabilities", "", "what this cluster offers, comma separated: snapshots, reservations, telemetry")
 	flag.StringVar(&controller, "controller-deployment", "devpod-controller", "the controller's Deployment, whose image tag is reported as its version")
-	flag.IntVar(&idle, "idle-connections", 8, "unused data connections kept on each console instance")
+	flag.IntVar(&idle, "idle-connections", 8, "unused data connections kept on each instance of the console and of each gateway")
 	flag.Parse()
 	slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stderr, nil)))
 	if cluster == "" || console == "" {
@@ -65,7 +71,7 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	var store agent.Store = secretStore{kc: kc, ns: namespace, name: identitySecret}
+	var store agent.Store = agent.SecretStore(kc, namespace, identitySecret)
 	if identityFile != "" {
 		store = agent.FileStore(identityFile)
 	}
@@ -81,9 +87,42 @@ func main() {
 		}
 	}
 
+	// the DevPods of this cluster, kept in memory: what a gateway asks to
+	// be connected to is checked against them
+	scheme := runtime.NewScheme()
+	utilruntime.Must(devpodv1alpha1.AddToScheme(scheme))
+	devpods, err := cache.New(cfg, cache.Options{Scheme: scheme, ByObject: map[client.Object]cache.ByObject{
+		&devpodv1alpha1.DevPod{}: {Namespaces: map[string]cache.Config{devpodNamespace: {}}},
+	}})
+	if err != nil {
+		fatal(err)
+	}
+	go func() {
+		if err := devpods.Start(ctx); err != nil {
+			fatal(fmt.Errorf("devpod cache: %w", err))
+		}
+	}()
+
+	// one new connection to the console, or to a gateway: a WebSocket
+	ws := func(address string) (net.Conn, error) {
+		endpoint := strings.Replace(strings.TrimRight(address, "/"), "http", "ws", 1) + "/agent/connect"
+		dctx, cancel := context.WithTimeout(ctx, 20*time.Second)
+		defer cancel()
+		c, _, err := websocket.Dial(dctx, endpoint, nil)
+		if err != nil {
+			return nil, err
+		}
+		c.SetReadLimit(-1) // streams carry whatever their two ends say
+		// the connection lives as long as the agent, not as long as the dial
+		return websocket.NetConn(ctx, c, websocket.MessageBinary), nil
+	}
+
 	caps := splitList(capabilities)
 	a, err := agent.New(agent.Options{
 		Cluster: cluster, Identity: id, API: cfg,
+		Namespace: devpodNamespace, DevPods: devpods,
+		DialGateway:   func(_ context.Context, address string) (net.Conn, error) { return ws(address) },
+		GatewayTunnel: tunnel.ClientOptions{Idle: idle},
 		Info: func(ctx context.Context) agent.Info {
 			in := agent.Info{AgentVersion: version, Capabilities: caps}
 			if v, err := kc.Discovery().ServerVersion(); err == nil {
@@ -101,21 +140,10 @@ func main() {
 	if err != nil {
 		fatal(err)
 	}
-	endpoint := strings.Replace(strings.TrimRight(console, "/"), "http", "ws", 1) + "/agent/connect"
-	slog.Info("agent_start", "cluster", cluster, "console", endpoint, "version", version)
+	slog.Info("agent_start", "cluster", cluster, "console", console, "version", version)
 	err = a.Run(ctx, tunnel.ClientOptions{
 		Idle: idle,
-		Dial: func(context.Context) (net.Conn, error) {
-			dctx, cancel := context.WithTimeout(ctx, 20*time.Second)
-			defer cancel()
-			c, _, err := websocket.Dial(dctx, endpoint, nil)
-			if err != nil {
-				return nil, err
-			}
-			c.SetReadLimit(-1) // streams carry whatever their two ends say
-			// the connection lives as long as the agent, not as long as the dial
-			return websocket.NetConn(ctx, c, websocket.MessageBinary), nil
-		},
+		Dial: func(context.Context) (net.Conn, error) { return ws(console) },
 	})
 	if err != nil && !errors.Is(err, context.Canceled) {
 		fatal(err)
@@ -135,29 +163,4 @@ func splitList(v string) []string {
 		}
 	}
 	return out
-}
-
-// secretStore keeps the agent's key in a Secret of its own namespace.
-type secretStore struct {
-	kc       kubernetes.Interface
-	ns, name string
-}
-
-func (s secretStore) Load() ([]byte, error) {
-	sec, err := s.kc.CoreV1().Secrets(s.ns).Get(context.Background(), s.name, metav1.GetOptions{})
-	if apierrors.IsNotFound(err) {
-		return nil, nil
-	}
-	if err != nil {
-		return nil, err
-	}
-	return sec.Data["key"], nil
-}
-
-func (s secretStore) Save(b []byte) error {
-	_, err := s.kc.CoreV1().Secrets(s.ns).Create(context.Background(), &corev1.Secret{
-		ObjectMeta: metav1.ObjectMeta{Name: s.name, Namespace: s.ns},
-		Data:       map[string][]byte{"key": b},
-	}, metav1.CreateOptions{})
-	return err
 }

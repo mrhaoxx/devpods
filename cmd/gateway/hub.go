@@ -1,0 +1,251 @@
+// Copyright 2026 The DevPod Authors.
+//
+// SPDX-License-Identifier: Apache-2.0
+
+package main
+
+import (
+	"context"
+	"errors"
+	"flag"
+	"fmt"
+	"log/slog"
+	"net"
+	"net/http"
+	"os"
+	"slices"
+	"strings"
+	"sync"
+	"time"
+
+	"github.com/coder/websocket"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/client-go/kubernetes"
+
+	"github.com/mrhaoxx/devpod/internal/agent"
+	"github.com/mrhaoxx/devpod/internal/gateway"
+	"github.com/mrhaoxx/devpod/internal/gwlink"
+	"github.com/mrhaoxx/devpod/internal/tunnel"
+)
+
+// A gateway of several clusters (--console): it asks the console which
+// DevPod a login means and for users' keys, and reaches DevPods over
+// connections the clusters' agents make to it. It needs no route to any
+// cluster, and nothing of a cluster's API.
+
+type hubFlags struct {
+	console, name, identityFile, identitySecret, namespace, joinTokenFile, agentListen, instance, instanceSelector *string
+}
+
+func addHubFlags(fs *flag.FlagSet) *hubFlags {
+	host, _ := os.Hostname()
+	return &hubFlags{
+		console: fs.String("console", "", "the console's address, e.g. https://devpod.example.com: serve the clusters that console manages instead of the cluster this gateway runs in"),
+		name:    fs.String("gateway-name", "", "this gateway's name, as registered at the console (with --console)"),
+		identityFile: fs.String("gateway-identity-file", "",
+			"keep the gateway's own key in this file instead of a Secret"),
+		identitySecret: fs.String("gateway-identity-secret", "devpod-gateway-identity", "Secret holding the gateway's own key; made on the first start"),
+		namespace:      fs.String("gateway-namespace", envOr("POD_NAMESPACE", "devpod-system"), "namespace the gateway runs in (default: $POD_NAMESPACE)"),
+		joinTokenFile:  fs.String("join-token-file", "", "file with the one-time token from the console; used once, on the first start"),
+		agentListen:    fs.String("agent-listen", ":8443", "HTTP address the clusters' agents connect to (/agent/connect, a WebSocket; TLS is the route's in front)"),
+		instance:       fs.String("instance", envOr("POD_NAME", host), "this replica's name among the gateway's replicas"),
+		instanceSelector: fs.String("instance-selector", "",
+			"label selector of the gateway's Pods; agents connect to every one of them. Empty: this replica alone"),
+	}
+}
+
+func envOr(name, fallback string) string {
+	if v := os.Getenv(name); v != "" {
+		return v
+	}
+	return fallback
+}
+
+func (f *hubFlags) enabled() bool { return *f.console != "" }
+
+// hub is a gateway's connections: to the console (questions) and from
+// the agents (the way to DevPods).
+type hub struct {
+	link *gwlink.Client
+	srv  *tunnel.Server
+}
+
+func (f *hubFlags) start(ctx context.Context, kc kubernetes.Interface) (*hub, error) {
+	if *f.name == "" {
+		return nil, errors.New("--console needs --gateway-name")
+	}
+	var store agent.Store = agent.SecretStore(kc, *f.namespace, *f.identitySecret)
+	if *f.identityFile != "" {
+		store = agent.FileStore(*f.identityFile)
+	}
+	id, err := agent.LoadOrCreateIdentity(store)
+	if err != nil {
+		return nil, err
+	}
+	slog.Info("gateway_identity", "gateway", *f.name, "publicKey", id.PublicKey())
+	if *f.joinTokenFile != "" {
+		token, err := os.ReadFile(*f.joinTokenFile)
+		if err != nil {
+			return nil, err
+		}
+		jctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+		err = gwlink.Join(jctx, nil, *f.console, *f.name, strings.TrimSpace(string(token)), id)
+		cancel()
+		if err != nil {
+			return nil, fmt.Errorf("join: %w", err)
+		}
+	}
+	h := &hub{link: gwlink.NewClient(gwlink.Options{Console: *f.console, Gateway: *f.name, Identity: id})}
+	instances := func() []string { return []string{*f.instance} }
+	if *f.instanceSelector != "" {
+		instances = podNames(kc, *f.namespace, *f.instanceSelector, *f.instance)
+	}
+	h.srv = tunnel.NewServer(tunnel.ServerOptions{
+		Instance: *f.instance, Instances: instances,
+		// an agent is who it says when its proof matches the key the
+		// console holds for that cluster
+		Authorize: func(ctx context.Context, hello tunnel.Hello, nonce, proof []byte) (string, error) {
+			if hello.Kind != agent.Kind {
+				return "", fmt.Errorf("%q does not connect here", hello.Kind)
+			}
+			known, _, err := h.link.Clusters(ctx)
+			if err != nil {
+				return "", errors.New("the gateway cannot ask the console which clusters there are")
+			}
+			for _, c := range known {
+				if c.Name == hello.Name {
+					return c.Name, agent.Verify(c.AgentPublicKey, nonce, proof)
+				}
+			}
+			return "", errors.New("no such cluster")
+		},
+		Sign: func(nonce []byte) []byte { return id.SignFor(agent.GatewayProofContext, nonce) },
+	})
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write([]byte("ok")) })
+	mux.HandleFunc("GET /agent/connect", func(w http.ResponseWriter, r *http.Request) {
+		c, err := websocket.Accept(w, r, nil)
+		if err != nil {
+			return
+		}
+		c.SetReadLimit(-1)
+		h.srv.Accept(r.Context(), websocket.NetConn(r.Context(), c, websocket.MessageBinary))
+	})
+	server := &http.Server{Addr: *f.agentListen, Handler: mux, ReadHeaderTimeout: 10 * time.Second}
+	ln, err := net.Listen("tcp", *f.agentListen)
+	if err != nil {
+		return nil, fmt.Errorf("--agent-listen: %w", err)
+	}
+	go func() {
+		slog.Info("agents_listening", "addr", *f.agentListen)
+		if err := server.Serve(ln); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			slog.Error("agents_server", "err", err)
+		}
+	}()
+	go func() {
+		<-ctx.Done()
+		h.srv.Close()
+		_ = server.Close()
+	}()
+	go h.report(ctx)
+	return h, nil
+}
+
+// report tells the console, now and every half minute, which clusters'
+// agents this gateway holds connections from.
+func (h *hub) report(ctx context.Context) {
+	tick := time.NewTicker(30 * time.Second)
+	defer tick.Stop()
+	var last []string
+	for {
+		peers := h.srv.Peers()
+		names := make([]string, 0, len(peers))
+		for name := range peers {
+			names = append(names, name)
+		}
+		slices.Sort(names)
+		rctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+		if err := h.link.Report(rctx, gwlink.Report{Version: version, Clusters: names}); err != nil && !slices.Equal(names, last) {
+			slog.Warn("gateway_report", "err", err)
+		}
+		cancel()
+		last = names
+		// a change is said soon, not at the next half minute
+		soon := time.NewTimer(2 * time.Second)
+	wait:
+		for {
+			select {
+			case <-ctx.Done():
+				soon.Stop()
+				return
+			case <-tick.C:
+				break wait
+			case <-soon.C:
+				if len(h.srv.Peers()) != len(last) {
+					break wait
+				}
+				soon.Reset(2 * time.Second)
+			}
+		}
+		soon.Stop()
+	}
+}
+
+// dial is the way to a DevPod's address: through its cluster's agent.
+func (h *hub) dial(ctx context.Context, cluster, addr, purpose string) (net.Conn, error) {
+	conn, err := h.srv.Dial(ctx, cluster, agent.DialPurpose(addr, purpose))
+	if errors.Is(err, tunnel.ErrPeerOffline) {
+		return nil, fmt.Errorf("cluster %q is not connected to this gateway", cluster)
+	}
+	if err != nil {
+		return nil, err
+	}
+	if err := agent.AwaitDial(conn); err != nil {
+		_ = conn.Close()
+		return nil, err
+	}
+	return conn, nil
+}
+
+// sources swaps the cluster's User objects for the keys the console holds.
+func (h *hub) sources(srcs []gateway.IdentitySource) []gateway.IdentitySource {
+	out := []gateway.IdentitySource{gateway.NewConsoleSource(h.link)}
+	for _, s := range srcs {
+		if s.Name() != "crd" {
+			out = append(out, s)
+		}
+	}
+	return out
+}
+
+// podNames lists the gateway's running Pods, asked at most every few
+// seconds; this replica is always among them.
+func podNames(kc kubernetes.Interface, ns, selector, self string) func() []string {
+	var (
+		mu   sync.Mutex
+		last = []string{self}
+		at   time.Time
+	)
+	return func() []string {
+		mu.Lock()
+		defer mu.Unlock()
+		if time.Since(at) < 5*time.Second {
+			return last
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		pods, err := kc.CoreV1().Pods(ns).List(ctx, metav1.ListOptions{LabelSelector: selector})
+		if err != nil {
+			return last
+		}
+		names := []string{self}
+		for _, p := range pods.Items {
+			if p.Name != self && p.DeletionTimestamp == nil && p.Status.Phase == "Running" {
+				names = append(names, p.Name)
+			}
+		}
+		slices.Sort(names)
+		last, at = names, time.Now()
+		return last
+	}
+}

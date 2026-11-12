@@ -29,6 +29,7 @@ import (
 	"testing"
 	"time"
 
+	"golang.org/x/crypto/ssh"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -192,7 +193,7 @@ func TestMultiCluster(t *testing.T) {
 	ctx := context.Background()
 
 	// the programs, from this tree
-	for _, prog := range []string{"webui", "agent"} {
+	for _, prog := range []string{"webui", "agent", "gateway"} {
 		build := exec.Command("go", "build", "-o", filepath.Join(dir, prog), "./cmd/"+prog)
 		build.Dir = filepath.Join("..", "..")
 		if out, err := build.CombinedOutput(); err != nil {
@@ -383,11 +384,140 @@ func TestMultiCluster(t *testing.T) {
 		t.Fatalf("a name both clusters have: %d %v", code, out)
 	}
 
+	// ---- one gateway for both clusters ----
+	// It runs where the console is and has no way into either cluster: the
+	// agents come to it. A user logs in to it for a DevPod of any cluster.
+	hostDir := filepath.Join(dir, "gw-keys")
+	writeKey(t, filepath.Join(hostDir, "ssh_host_ed25519_key"))
+	internal := writeKey(t, filepath.Join(hostDir, "internal", "ssh_host_ed25519_key"))
+	userKey := writeKey(t, filepath.Join(dir, "user-key"))
+	strangerKey := writeKey(t, filepath.Join(dir, "stranger-key"))
+	if err := a.c.Create(ctx, &devpodv1alpha1.GatewayConfig{ObjectMeta: metav1.ObjectMeta{Name: "default"}, Spec: devpodv1alpha1.GatewayConfigSpec{SupervisorImage: "x"}}); err != nil {
+		t.Fatal(err)
+	}
+	// root's key, registered at the console
+	for i := 0; ; i++ {
+		var u devpodv1alpha1.User
+		if err := a.c.Get(ctx, types.NamespacedName{Name: "root"}, &u); err != nil {
+			t.Fatal(err)
+		}
+		u.Spec.Pubkeys = []string{strings.TrimSpace(string(ssh.MarshalAuthorizedKey(userKey.PublicKey())))}
+		if err := a.c.Update(ctx, &u); err == nil {
+			break
+		} else if !apierrors.IsConflict(err) || i > 20 {
+			t.Fatal(err)
+		}
+	}
+	// each cluster's DevPod has an sshd; the controller would have said where
+	for name, srv := range map[string]*apiServer{"a": a, "b": b} {
+		addr := fakeSSHD(t, internal.PublicKey(), "root-x in cluster "+name)
+		for i := 0; ; i++ {
+			var dp devpodv1alpha1.DevPod
+			if err := srv.c.Get(ctx, types.NamespacedName{Name: "root-x", Namespace: "devpods"}, &dp); err != nil {
+				t.Fatal(err)
+			}
+			dp.Status.Phase, dp.Status.Endpoint = devpodv1alpha1.DevPodRunning, addr
+			if err := srv.c.Status().Update(ctx, &dp); err == nil {
+				break
+			} else if !apierrors.IsConflict(err) || i > 20 {
+				t.Fatal(err)
+			}
+		}
+	}
+	if code, out, _ := call("POST", "/api/clusters/b/devpods", `{"name":"onlyb","image":"ubuntu:24.04"}`); code != http.StatusCreated {
+		t.Fatalf("create: %d %v", code, out)
+	}
+	onlyB := fakeSSHD(t, internal.PublicKey(), "root-onlyb in cluster b")
+	for i := 0; ; i++ {
+		var dp devpodv1alpha1.DevPod
+		if err := b.c.Get(ctx, types.NamespacedName{Name: "root-onlyb", Namespace: "devpods"}, &dp); err != nil {
+			t.Fatal(err)
+		}
+		dp.Status.Phase, dp.Status.Endpoint = devpodv1alpha1.DevPodRunning, onlyB
+		if err := b.c.Status().Update(ctx, &dp); err == nil {
+			break
+		} else if !apierrors.IsConflict(err) || i > 20 {
+			t.Fatal(err)
+		}
+	}
+
+	sshAddr, agentAddr := freeAddr(t), freeAddr(t)
+	code, out, _ := call("POST", "/api/admin/gateways", `{"name":"hub","sshAddress":"`+sshAddr+`","agentAddress":"http://`+agentAddr+`"}`)
+	gwToken, _ := out["joinToken"].(string)
+	if code != http.StatusCreated || gwToken == "" {
+		t.Fatalf("register the gateway: %d %v", code, out)
+	}
+	gwTokenFile := filepath.Join(dir, "gw.token")
+	if err := os.WriteFile(gwTokenFile, []byte(gwToken+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	start(t, "gateway", filepath.Join(dir, "gateway"), []string{"KUBECONFIG=" + a.kubeconfig},
+		"--listen="+sshAddr, "--host-key-dir="+hostDir, "--metrics-bind-address="+freeAddr(t), "--devpod-namespace=devpods",
+		"--console="+base, "--gateway-name=hub", "--gateway-identity-file="+filepath.Join(dir, "gw.identity"),
+		"--join-token-file="+gwTokenFile, "--agent-listen="+agentAddr, "--instance=gw-0")
+	gatewayServes := func() []any {
+		_, out, _ := call("GET", "/api/admin/gateways", "")
+		list, _ := out["items"].([]any)
+		if len(list) != 1 {
+			return nil
+		}
+		g, _ := list[0].(map[string]any)
+		cl, _ := g["clusters"].([]any)
+		return cl
+	}
+	until("both clusters' agents reached the gateway", 90*time.Second, func() bool { return len(gatewayServes()) == 2 })
+
+	// a DevPod only b has: no cluster needs saying
+	var got, errOut string
+	until("SSH to a DevPod of cluster b through the one gateway", 60*time.Second, func() bool {
+		got, errOut, err = sshRun(sshAddr, "root+onlyb", userKey)
+		return err == nil
+	})
+	if got != "this is root-onlyb in cluster b" {
+		t.Fatalf("the session landed on %q (%s)", got, errOut)
+	}
+	// a name both have: with the cluster it is one or the other
+	for _, name := range []string{"a", "b"} {
+		got, errOut, err := sshRun(sshAddr, "root+x+"+name, userKey)
+		if err != nil || got != "this is root-x in cluster "+name {
+			t.Fatalf("root+x+%s: %q %q %v", name, got, errOut, err)
+		}
+	}
+	// without it, someone with the key is told how to write it
+	got, errOut, err = sshRun(sshAddr, "root+x", userKey)
+	if err == nil || got != "" || !strings.Contains(errOut, "root+x+a") || !strings.Contains(errOut, "root+x+b") {
+		t.Fatalf("root+x: out=%q err=%q %v", got, errOut, err)
+	}
+	// someone without the key is told nothing, whatever they write
+	for _, login := range []string{"root+x", "root+x+a", "root+onlyb", "root+nothing"} {
+		if _, errOut, err := sshRun(sshAddr, login, strangerKey); err == nil || strings.Contains(errOut, "root+x+") {
+			t.Fatalf("%s with a key that is not root's: %q %v", login, errOut, err)
+		}
+	}
+	// a key the console no longer holds stops working within the gateway's memory of it
+	for i := 0; ; i++ {
+		var u devpodv1alpha1.User
+		if err := a.c.Get(ctx, types.NamespacedName{Name: "root"}, &u); err != nil {
+			t.Fatal(err)
+		}
+		u.Spec.Pubkeys = nil
+		if err := a.c.Update(ctx, &u); err == nil {
+			break
+		} else if !apierrors.IsConflict(err) || i > 20 {
+			t.Fatal(err)
+		}
+	}
+	until("a withdrawn key is refused", 30*time.Second, func() bool {
+		_, _, err := sshRun(sshAddr, "root+onlyb", userKey)
+		return err != nil
+	})
+
 	// agent b stops: last known state, marked; no changes
 	agentB.stop()
 	until("b is shown as away", 60*time.Second, func() bool { return !connected("b") })
-	code, out, hdr := call("GET", "/api/clusters/b/devpods", "")
-	if list, _ := out["items"].([]any); code != http.StatusOK || len(list) != 1 || hdr.Get("X-DevPod-Stale-Since") == "" {
+	var hdr http.Header
+	code, out, hdr = call("GET", "/api/clusters/b/devpods", "")
+	if list, _ := out["items"].([]any); code != http.StatusOK || len(list) != 2 || hdr.Get("X-DevPod-Stale-Since") == "" {
 		t.Fatalf("b's DevPods while its agent is away: %d %v stale=%q", code, out, hdr.Get("X-DevPod-Stale-Since"))
 	}
 	if code, out, _ := call("PATCH", "/api/clusters/b/devpods/root-x", `{"running":false}`); code != http.StatusServiceUnavailable || out["code"] != "CLUSTER_OFFLINE" {
@@ -417,7 +547,7 @@ func TestMultiCluster(t *testing.T) {
 	until("and the list is whole again", 60*time.Second, func() bool {
 		_, out, _ := call("GET", "/api/devpods", "")
 		list, _ := out["items"].([]any)
-		return len(list) == 2
+		return len(list) == 3
 	})
 
 	// pausing a cluster drops its agent and keeps it out

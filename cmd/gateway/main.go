@@ -51,6 +51,9 @@ func init() {
 	utilruntime.Must(devpodv1alpha1.AddToScheme(scheme))
 }
 
+// version is set at build time.
+var version = "dev"
+
 func main() {
 	var (
 		listenAddr          string
@@ -87,6 +90,7 @@ func main() {
 	flag.StringVar(&httpLoginURL, "http-login-url", "",
 		"webui URL a browser is sent to for access to a private port, e.g. https://devpod.example.com/http-auth")
 	cf := addCLIFlags(flag.CommandLine)
+	hf := addHubFlags(flag.CommandLine)
 	flag.StringVar(&gcName, "gateway-config-name", "default", "name of the cluster-scoped GatewayConfig this gateway reads")
 	flag.DurationVar(&sessionGrace, "shutdown-session-grace", 60*time.Second,
 		"on SIGTERM, how long open sessions may continue before they are closed")
@@ -176,6 +180,18 @@ func main() {
 		WithProxyKeys(proxyKeys).
 		WithSources(srcs)
 	dialer := gateway.NewDialer(internalSigner)
+	// a gateway of several clusters: DevPods and keys from the console,
+	// the way to a DevPod through its cluster's agent
+	var theHub *hub
+	if hf.enabled() {
+		if theHub, err = hf.start(ctx, clientset); err != nil {
+			slog.Error("hub", "err", err)
+			os.Exit(1)
+		}
+		authn.WithDirectory(gateway.NewConsoleDirectory(theHub.link)).WithSources(theHub.sources(srcs))
+		dialer.Net = theHub.dial
+		slog.Info("gateway_of_several_clusters", "console", *hf.console, "name", *hf.name)
+	}
 
 	bannerTmpl, err := parseBanner(gw.Spec.Banner)
 	if err != nil {
@@ -185,6 +201,10 @@ func main() {
 
 	if httpListenAddr != "" && httpBaseDomain != "" {
 		hp := gateway.NewHTTPProxy(c, devpodNamespace, httpBaseDomain, httpSubdomainSuffix)
+		if theHub != nil {
+			hp = gateway.NewHTTPProxyWith(gateway.NewConsoleDirectory(theHub.link), httpBaseDomain, httpSubdomainSuffix)
+			hp.Net = theHub.dial
+		}
 		hp.LoginURL = httpLoginURL
 		if httpAuthKeyFile != "" {
 			key, err := os.ReadFile(httpAuthKeyFile)
