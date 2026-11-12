@@ -4,7 +4,8 @@
 import type { DevPod, UserQuota } from "./api";
 
 /* live/snapshot.go */
-export type GPULive = { index: number; uuid: string; name: string; util: number; memUsed: number; memTotal: number };
+/** memUsed, memTotal: MiB; power: W */
+export type GPULive = { index: number; uuid: string; name: string; util: number; memUsed: number; memTotal: number; power?: number };
 export type SessionLive = { user: string };
 export type DevPodLive = {
   cpu: number | null;

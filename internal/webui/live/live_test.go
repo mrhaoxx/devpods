@@ -40,7 +40,7 @@ func TestState_StaleSampleIsNoData(t *testing.T) {
 func TestRollup_NodeAndUser(t *testing.T) {
 	now := time.Unix(1000, 0)
 	s := NewState(clock(&now))
-	s.Apply("a", []wire.Record{container(2.0, 1<<30), {K: wire.KGPU, G: &wire.GPU{Index: 0, UUID: "GPU-0", Util: 90}}})
+	s.Apply("a", []wire.Record{container(2.0, 1<<30), {K: wire.KGPU, G: &wire.GPU{Index: 0, UUID: "GPU-0", Util: 90, MemUsed: 1000, MemTotal: 81920, Power: 312}}})
 	s.Apply("b", []wire.Record{container(3.5, 2<<30), {K: wire.KGPU, G: &wire.GPU{Index: 1, UUID: "GPU-1", Util: 50}},
 		{K: wire.KGPU, G: &wire.GPU{Index: 2, UUID: "GPU-2", Util: 40}}})
 	in := Inputs{
@@ -53,6 +53,10 @@ func TestRollup_NodeAndUser(t *testing.T) {
 	snap := s.Snapshot(in)
 	if len(snap.Nodes) != 1 {
 		t.Fatalf("%+v", snap.Nodes)
+	}
+	// a card's memory and power reach the live view
+	if g := snap.DevPods["a"].GPU; len(g) != 1 || g[0].MemUsed != 1000 || g[0].MemTotal != 81920 || g[0].Power != 312 {
+		t.Fatalf("a's card %+v", g)
 	}
 	n := snap.Nodes[0]
 	if n.CPUUsed != 5.5 || n.CPUAllocated != 12 || n.GPUUsed != 3 || n.GPUTotal != 4 || n.DevPods != 2 || len(n.Cards) != 3 {

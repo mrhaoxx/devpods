@@ -15,8 +15,9 @@ type GPULive struct {
 	UUID     string  `json:"uuid"`
 	Name     string  `json:"name"`
 	Util     float64 `json:"util"`
-	MemUsed  float64 `json:"memUsed"`
-	MemTotal float64 `json:"memTotal"`
+	MemUsed  float64 `json:"memUsed"`  // MiB
+	MemTotal float64 `json:"memTotal"` // MiB
+	Power    float64 `json:"power"`    // W
 }
 
 // SessionLive is one user connected to a DevPod.

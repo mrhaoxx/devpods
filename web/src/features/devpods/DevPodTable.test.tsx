@@ -256,4 +256,20 @@ describe("DevPodTable", () => {
     await waitFor(() => expect(rowOf("na").textContent).toContain("1/4"));
     expect(rowOf("nb").textContent).toContain("3/4");
   });
+
+  it("GPU memory: its own column, used of total over the cards; power in the GPU column's hint", async () => {
+    stubFetch({ "/api/devpods": { items: [list.items[0]], pods: list.pods } });
+    const conns: { url: string; h: SseHandlers }[] = [];
+    const hub = new LiveHub({ open: (url, h) => (conns.push({ url, h }), () => {}) });
+    renderWithProviders(<DevPodTable scope="mine" />, { hub, liveEnabled: true });
+    await screen.findByRole("link", { name: "alice-a" });
+    const card = (index: number, memUsed: number, power: number) => ({ index, uuid: `GPU-${index}`, name: "A100", util: 50, memUsed, memTotal: 40960, power });
+    const item = { name: "alice-a", owner: "alice", cpu: 1, cpuLimit: 4, mem: null, memLimit: 0, gpu: [card(0, 10240, 250), card(1, 20480, 300)], netRx: null, netTx: null, netKind: "", rdmaRx: null, rdmaTx: null, rdmaKind: "", ioR: null, ioW: null, sessions: [], idle: false };
+    await waitFor(() => expect(conns.length).toBeGreaterThan(0));
+    act(() => conns.forEach((c) => c.h.onMessage({ ts: new Date().toISOString(), items: [item] })));
+    expect(screen.getByRole("columnheader", { name: /显存/ })).toBeTruthy();
+    const row = (await screen.findByRole("link", { name: "alice-a" })).closest("tr")!;
+    await waitFor(() => expect(row.textContent).toContain("30.0G/80.0G"));
+    expect(within(row).getByTitle(/GPU0 50% · 10240\/40960 MiB · 250 W/)).toBeTruthy();
+  });
 });

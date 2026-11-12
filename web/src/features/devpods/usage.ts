@@ -1,11 +1,12 @@
 // What a DevPod uses now, as the list sorts by it: cores, bytes of
-// memory, GPU use (the average, then how many cards), network and RDMA
+// memory, GPU use (the average, then how many cards), GPU memory in use
+// (MiB over every card), network and RDMA
 // traffic (both ways added). undefined: nothing known (stopped, no
 // telemetry) — such rows sort last either way.
 import type { DevPodLive } from "../../data/types";
 
-export type UsageKey = "cpu" | "mem" | "gpu" | "net" | "rdma";
-export const usageKeys: readonly UsageKey[] = ["cpu", "mem", "gpu", "net", "rdma"];
+export type UsageKey = "cpu" | "mem" | "gpu" | "gpumem" | "net" | "rdma";
+export const usageKeys: readonly UsageKey[] = ["cpu", "mem", "gpu", "gpumem", "net", "rdma"];
 
 const sum = (a: number | null, b: number | null) => (a == null && b == null ? undefined : (a ?? 0) + (b ?? 0));
 
@@ -20,6 +21,8 @@ export function usage(v: DevPodLive | undefined, key: UsageKey): number | undefi
       return sum(v.netRx, v.netTx);
     case "rdma":
       return sum(v.rdmaRx, v.rdmaTx);
+    case "gpumem":
+      return v.gpu.length ? v.gpu.reduce((a, c) => a + c.memUsed, 0) : undefined;
     case "gpu": {
       if (!v.gpu.length) return undefined;
       const avg = v.gpu.reduce((a, c) => a + c.util, 0) / v.gpu.length;

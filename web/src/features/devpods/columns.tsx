@@ -99,6 +99,19 @@ function MemCell({ r }: { r: Row }) {
   return <MetricCell value={v} meter={v == null ? undefined : { used: v, limit }} text={v == null ? undefined : `${fmtBytes(v)}/${fmtBytes(limit)}`} />;
 }
 
+const MiB = 1024 * 1024;
+
+/** GpuMemCell: GPU memory in use over every card, of their total. */
+function GpuMemCell({ r }: { r: Row }) {
+  const live = useLive(keyOf(r));
+  if (!running(r)) return null;
+  const cards = live?.value.gpu ?? [];
+  if (cards.length === 0) return r.gpu > 0 ? <MetricCell value={null} /> : null;
+  const used = cards.reduce((a, c) => a + c.memUsed, 0) * MiB;
+  const total = cards.reduce((a, c) => a + c.memTotal, 0) * MiB;
+  return <MetricCell value={used} meter={{ used, limit: total }} text={`${fmtBytes(used)}/${fmtBytes(total)}`} />;
+}
+
 function GpuCell({ r }: { r: Row }) {
   const live = useLive(keyOf(r));
   if (!running(r)) return null;
@@ -110,7 +123,7 @@ function GpuCell({ r }: { r: Row }) {
       {cards.map((c) => (
         <span
           key={c.uuid || c.index}
-          title={`GPU${c.index} ${Math.round(c.util)}% · ${Math.round(c.memUsed)}/${Math.round(c.memTotal)} MiB`}
+          title={`GPU${c.index} ${Math.round(c.util)}% · ${Math.round(c.memUsed)}/${Math.round(c.memTotal)} MiB${c.power != null ? ` · ${Math.round(c.power)} W` : ""}`}
           className="inline-block h-2.5 w-2.5 rounded-sm border border-line"
           style={{ background: `color-mix(in srgb, var(--color-run) ${Math.round(c.util)}%, transparent)` }}
         />
@@ -251,6 +264,7 @@ export function devpodColumns(opts: {
       meta: { priority: 4, width: 110 },
       cell: ({ row }) => (row.original.group ? row.original.gpu > 0 ? <span className="mono">{row.original.gpu}</span> : null : <GpuCell r={row.original} />),
     },
+    { id: "gpumem", header: "显存", ...by("gpumem"), meta: { priority: 4, width: 130 }, cell: own((r) => <GpuMemCell r={r} />) },
     { id: "sessions", header: "会话", enableSorting: false, meta: { priority: 5, width: 120 }, cell: own((r) => <SessionsCell r={r} />) },
     {
       id: "uptime",

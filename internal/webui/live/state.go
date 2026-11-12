@@ -168,7 +168,7 @@ func (s *State) devpodLive(ref DevPodRef, now time.Time) DevPodLive {
 	d.NetRx, d.NetTx, d.NetKind = f64(c.NetRx), f64(c.NetTx), c.NetKind
 	d.IOR, d.IOW = f64(c.IOReadBps), f64(c.IOWriteBps)
 	for _, g := range p.gpus {
-		d.GPU = append(d.GPU, GPULive{Index: g.Index, UUID: g.UUID, Name: g.Name, Util: g.Util, MemUsed: g.MemUsed, MemTotal: g.MemTotal})
+		d.GPU = append(d.GPU, GPULive{Index: g.Index, UUID: g.UUID, Name: g.Name, Util: g.Util, MemUsed: g.MemUsed, MemTotal: g.MemTotal, Power: g.Power})
 	}
 	sort.Slice(d.GPU, func(i, j int) bool { return d.GPU[i].Index < d.GPU[j].Index })
 	if len(p.rdma) > 0 {
