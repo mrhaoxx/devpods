@@ -96,8 +96,8 @@ func normalizeNodeName(dp *devpodv1alpha1.DevPod) *serverErr {
 
 // replaceDevPodSpec is a save from the YAML tab: dp with the spec of the
 // manifest in text. The name and the owner are not the manifest's to
-// change.
-func (s *Server) replaceDevPodSpec(r *http.Request, sess Session, dp *devpodv1alpha1.DevPod, text string) (PatchResponse, *serverErr) {
+// change. annotations, if any, are set on dp in the same write.
+func (s *Server) replaceDevPodSpec(r *http.Request, sess Session, dp *devpodv1alpha1.DevPod, text string, annotations map[string]string) (PatchResponse, *serverErr) {
 	var in devpodv1alpha1.DevPod
 	if err := yaml.UnmarshalStrict([]byte(text), &in); err != nil {
 		return PatchResponse{}, &serverErr{http.StatusBadRequest, "BAD_REQUEST", "invalid YAML: " + err.Error(), nil}
@@ -115,6 +115,10 @@ func (s *Server) replaceDevPodSpec(r *http.Request, sess Session, dp *devpodv1al
 	dp = dp.DeepCopy()
 	dp.Spec = in.Spec
 	dp.Spec.Owner = before.Spec.Owner
+	if len(annotations) > 0 && dp.Annotations == nil {
+		dp.Annotations = map[string]string{}
+	}
+	maps.Copy(dp.Annotations, annotations)
 
 	if !sess.Admin {
 		if dp.Spec.VM != nil {
@@ -143,7 +147,7 @@ func (s *Server) replaceDevPodSpec(r *http.Request, sess Session, dp *devpodv1al
 	if apiErr := normalizeNodeName(dp); apiErr != nil {
 		return PatchResponse{}, apiErr
 	}
-	if equality.Semantic.DeepEqual(before.Spec, dp.Spec) {
+	if equality.Semantic.DeepEqual(before.Spec, dp.Spec) && maps.Equal(before.Annotations, dp.Annotations) {
 		return PatchResponse{DevPod: dp}, nil // nothing changed
 	}
 	// a new node, or starting on the one it has: it has to be there, and
@@ -200,7 +204,7 @@ func (s *Server) handlePutDevPodYAML(w http.ResponseWriter, r *http.Request) {
 	if err := s.k(r).Reader.Get(r.Context(), types.NamespacedName{Name: dp.Name, Namespace: dp.Namespace}, fresh); err == nil {
 		dp = fresh
 	}
-	resp, apiErr := s.replaceDevPodSpec(r, sess, dp, req.YAML)
+	resp, apiErr := s.replaceDevPodSpec(r, sess, dp, req.YAML, nil)
 	if apiErr != nil {
 		s.writeServerErr(w, apiErr)
 		return

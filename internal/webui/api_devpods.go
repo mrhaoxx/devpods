@@ -338,6 +338,9 @@ type DevPodDetail struct {
 	Cluster string                `json:"cluster,omitempty"`
 	Binding *BindingInfo          `json:"binding,omitempty"`
 	Pod     *PodInfo              `json:"pod,omitempty"`
+	// ConfigOutdated: the config it came from has changed since (only
+	// when the caller may see that config).
+	ConfigOutdated *bool `json:"configOutdated,omitempty"`
 }
 
 func (s *Server) bindingInfo(r *http.Request, dp *devpodv1alpha1.DevPod) *BindingInfo {
@@ -371,7 +374,8 @@ func (s *Server) handleGetDevPod(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	s.writeJSON(w, http.StatusOK, DevPodDetail{DevPod: *dp, Cluster: s.k(r).Name, Binding: s.bindingInfo(r, dp), Pod: s.podInfo(r.Context(), dp)})
+	s.writeJSON(w, http.StatusOK, DevPodDetail{DevPod: *dp, Cluster: s.k(r).Name, Binding: s.bindingInfo(r, dp), Pod: s.podInfo(r.Context(), dp),
+		ConfigOutdated: s.configOutdated(r.Context(), sess, dp)})
 }
 
 func (s *Server) handleCreateDevPod(w http.ResponseWriter, r *http.Request) {

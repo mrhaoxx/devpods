@@ -87,7 +87,7 @@ func (s *Server) handleDevPodStream(w http.ResponseWriter, r *http.Request) {
 		if !ok || got.Namespace != s.NS || got.Name != name {
 			return
 		}
-		d := &DevPodDetail{DevPod: *got, Binding: s.bindingInfo(r, got)}
+		d := &DevPodDetail{DevPod: *got, Binding: s.bindingInfo(r, got), ConfigOutdated: s.configOutdated(r.Context(), sess, got)}
 		if typ != "DELETED" {
 			d.Pod = s.podInfo(r.Context(), got)
 		}
@@ -103,7 +103,7 @@ func (s *Server) handleDevPodStream(w http.ResponseWriter, r *http.Request) {
 		if err := s.k(r).Client.Get(r.Context(), types.NamespacedName{Namespace: s.NS, Name: name}, &cur); err != nil {
 			return
 		}
-		d := &DevPodDetail{DevPod: cur, Binding: s.bindingInfo(r, &cur)}
+		d := &DevPodDetail{DevPod: cur, Binding: s.bindingInfo(r, &cur), ConfigOutdated: s.configOutdated(r.Context(), sess, &cur)}
 		if !deleted {
 			d.Pod = PodInfoFor(&cur, pod)
 		}

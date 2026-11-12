@@ -116,6 +116,7 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("GET /api/devpods/{name}/pod", s.handleDevPodPod)
 	mux.HandleFunc("GET /api/devpods/{name}/yaml", s.handleGetDevPodYAML)
 	mux.HandleFunc("PUT /api/devpods/{name}/yaml", s.handlePutDevPodYAML)
+	mux.HandleFunc("POST /api/devpods/{name}/rebuild-from-config", s.handleRebuildFromConfig)
 	mux.HandleFunc("GET /api/devpods/{name}/topology", s.handleDevPodTopology)
 	s.registerAuditRoutes(mux)
 	mux.HandleFunc("GET /api/live/devpods", s.handleLiveDevPods)

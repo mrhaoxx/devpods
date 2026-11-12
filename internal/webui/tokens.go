@@ -106,6 +106,7 @@ var apiRoutes = []apiRoute{
 	{"GET /api/devpods/{name}/pod", "devpods:read", "The Pod behind a DevPod: conditions, container states, volumes ({pod: null} when stopped)"},
 	{"GET /api/devpods/{name}/yaml", "devpods:read", "A DevPod's manifest as YAML: {yaml}"},
 	{"PUT /api/devpods/{name}/yaml", "devpods:update", "Replace a DevPod's spec from YAML: {yaml}; name and owner cannot change"},
+	{"POST /api/devpods/{name}/rebuild-from-config", "devpods:update", "Rebuild a DevPod from the config it came from (also needs configs:read): {dryRun?} → {yaml, rebuild} or the save"},
 	{"POST /api/devpods", "devpods:create", "Create a DevPod: {name, image, cpu, memory, gpu?, …} or {name, yaml}"},
 	{"PATCH /api/devpods/{name}", scopePatch, "Edit a DevPod: {running} (devpods:power) or {image, cpu, memory, gpu, shell, collaborators, node} (devpods:update)"},
 	{"POST /api/devpods/{name}/redeploy", "devpods:power", "Recreate the Pod"},
