@@ -1,6 +1,7 @@
 // DevPod 详情 (UI spec §5.2). One SSE connection carries status, events,
 // metrics and processes; with live data off, status and events come
 // from the plain detail stream instead.
+import { preloadYamlEditor } from "../../../design/yaml/YamlEditor";
 import { Notice } from "../../../design/Form";
 import { reservationNotes } from "../status";
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
@@ -217,6 +218,9 @@ export function DetailPage() {
             type="button"
             aria-selected={url.tab === id}
             onClick={() => setUrl({ tab: id })}
+            // Monaco is large: start fetching it when the YAML tab is about to be opened
+            onPointerEnter={id === "yaml" ? () => void preloadYamlEditor()?.catch(() => {}) : undefined}
+            onFocus={id === "yaml" ? () => void preloadYamlEditor()?.catch(() => {}) : undefined}
             className={`-mb-px border-b-2 px-3 py-1.5 ${url.tab === id ? "border-accent font-semibold text-accent" : "border-transparent text-muted hover:text-ink"}`}
           >
             {label}

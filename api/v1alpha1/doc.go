@@ -11,3 +11,4 @@ package v1alpha1
 //go:generate go run sigs.k8s.io/controller-tools/cmd/controller-gen@v0.16.5 object:headerFile=../../hack/boilerplate.go.txt paths=./...
 //go:generate go run sigs.k8s.io/controller-tools/cmd/controller-gen@v0.16.5 crd paths=./... output:crd:dir=../../config/crd/bases
 //go:generate bash ../../hack/sync-crd-chart.sh
+//go:generate go run ../../hack/webschema ../..

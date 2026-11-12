@@ -208,6 +208,14 @@ const server = http.createServer((req, res) => {
         return out;
       });
     }
+    if ((m = /^\/api\/devpods\/([^/]+)\/yaml$/.exec(p))) {
+      const d = devpods.find((x) => x.metadata.name === m[1]);
+      if (!d) return json(res, 404, { code: "NOT_FOUND", message: "not found" });
+      if (req.method === "PUT") return json(res, 200, { devpod: d, rebuild: false });
+      const yaml = `apiVersion: devpod.io/v1alpha1\nkind: DevPod\nmetadata:\n  name: ${d.metadata.name}\nspec:\n  owner: ${d.spec.owner}\n  running: true\n  pod:\n    spec:\n      containers:\n        - name: dev\n          image: ubuntu:24.04\n`;
+      return json(res, 200, { yaml, running: true });
+    }
+    if ((m = /^\/api\/devpods\/([^/]+)\/pod$/.exec(p))) return json(res, 200, { pod: null });
     if ((m = /^\/api\/devpods\/([^/]+)\/metrics$/.exec(p))) {
       const n = 180;
       const ts = Array.from({ length: n }, (_, k) => Math.floor(t()) - (n - k) * 5);

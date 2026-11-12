@@ -88,6 +88,7 @@ export function YamlTab({ name }: { name: string }) {
           }}
           minLines={16}
           maxLines={40}
+          schema="devpod"
         />
         {save.isError && <Notice>保存失败：{save.error instanceof ApiFailure ? save.error.body.message : String(save.error)}</Notice>}
         {saved && !dirty && (

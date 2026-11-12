@@ -189,7 +189,7 @@ export function ConfigEditor() {
             <Input aria-label="说明" value={description} onChange={(e) => setDescription(e.target.value)} maxLength={500} readOnly={!mine} />
           </Field>
           <Group label="YAML" hint="完整的 DevPod YAML，可以含变量" error={tooBig ? "内容超过 64 KiB" : undefined}>
-            <YamlEditor ariaLabel="YAML" value={content} onChange={setContent} readOnly={!mine} minLines={24} maxLines={44} />
+            <YamlEditor ariaLabel="YAML" value={content} onChange={setContent} readOnly={!mine} minLines={24} maxLines={44} schema="devpod" />
           </Group>
         </div>
         <div className="space-y-3">

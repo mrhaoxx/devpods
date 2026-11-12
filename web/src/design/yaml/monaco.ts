@@ -1,13 +1,41 @@
 // Monaco, trimmed to what the YAML editor needs: the editor core with its
-// contributions (find, folding, hover on a problem…) and the YAML grammar.
+// contributions (find, folding, hover, suggestions…), the YAML grammar,
+// and monaco-yaml — a YAML language server in a worker — which checks a
+// DevPod manifest against the DevPod schema (generated from the CRD by
+// hack/webschema), completes its fields and shows what each one is.
 // Loaded on demand — it is large — by YamlEditor.
 import * as monaco from "monaco-editor/esm/vs/editor/editor.api";
 import "monaco-editor/esm/vs/editor/edcore.main";
 import "monaco-editor/esm/vs/basic-languages/yaml/yaml.contribution";
 import EditorWorker from "monaco-editor/esm/vs/editor/editor.worker?worker";
-import type { YamlProblem } from "./lint";
+import { configureMonacoYaml, type JSONSchema } from "monaco-yaml";
+import YamlWorker from "./yaml.worker?worker";
+import devpodSchema from "./devpod.schema.json";
 
-(self as unknown as { MonacoEnvironment: monaco.Environment }).MonacoEnvironment = { getWorker: () => new EditorWorker() };
+(self as unknown as { MonacoEnvironment: monaco.Environment }).MonacoEnvironment = {
+  getWorker: (_id, label) => (label === "yaml" ? new YamlWorker() : new EditorWorker()),
+};
+
+/** What a model is: its URI says which schema it is checked against. */
+export type YamlSchema = "devpod";
+const schemaDir: Record<YamlSchema, string> = { devpod: "devpod" };
+
+configureMonacoYaml(monaco, {
+  enableSchemaRequest: false,
+  hoverSchemaSource: false,
+  completion: true,
+  hover: true,
+  validate: true,
+  format: { enable: false }, // the text is the user's: never rewritten
+  isKubernetes: true,
+  schemas: [{ uri: "devpod.io/devpod.json", fileMatch: ["**/devpod/*.yaml"], schema: devpodSchema as JSONSchema }],
+});
+
+let models = 0;
+const uriFor = (schema?: YamlSchema) => monaco.Uri.parse(`file:///${schema ? schemaDir[schema] : "plain"}/${++models}.yaml`);
+
+/** monaco-yaml labels what the schema says with this; what the parser says with "YAML". */
+const fromSchema = (m: monaco.editor.IMarker) => (m.source ?? "").startsWith("yaml-schema");
 
 const css = (name: string, fallback: string) => {
   const v = getComputedStyle(document.documentElement).getPropertyValue(name).trim();
@@ -34,14 +62,28 @@ export function applyTheme(): void {
 
 export type YamlEditorHandle = {
   setValue(text: string): void;
-  setProblems(problems: YamlProblem[]): void;
   setReadOnly(readOnly: boolean): void;
   dispose(): void;
 };
 
-export function createYamlEditor(el: HTMLElement, opts: { value: string; readOnly?: boolean; ariaLabel: string; minLines: number; maxLines: number; onChange(text: string): void }): YamlEditorHandle {
+/** What the schema says of the text: a field that does not exist, a value of the wrong type… */
+export type SchemaProblem = { line: number; column: number; message: string; severity: "error" | "warning" };
+
+export function createYamlEditor(
+  el: HTMLElement,
+  opts: {
+    value: string;
+    readOnly?: boolean;
+    ariaLabel: string;
+    schema?: YamlSchema;
+    onChange(text: string): void;
+    onSchemaProblems?(problems: SchemaProblem[]): void;
+  },
+): YamlEditorHandle {
   applyTheme();
-  const model = monaco.editor.createModel(opts.value, "yaml");
+  // (the language server underlines what is wrong — syntax and schema
+  // alike — and YamlEditor says it below in words)
+  const model = monaco.editor.createModel(opts.value, "yaml", uriFor(opts.schema));
   const editor = monaco.editor.create(el, {
     model,
     readOnly: opts.readOnly,
@@ -64,16 +106,25 @@ export function createYamlEditor(el: HTMLElement, opts: { value: string; readOnl
     overviewRulerLanes: 0,
     fixedOverflowWidgets: true,
   });
-  // as tall as its text, within bounds
-  const fit = () => {
-    const lines = Math.min(opts.maxLines, Math.max(opts.minLines, model.getLineCount() + 1));
-    el.style.height = `${lines * 19 + 12}px`;
-  };
-  fit();
   let silent = false;
+  // (as tall as its box: YamlEditor sizes the box to the text)
   const sub = model.onDidChangeContent(() => {
-    fit();
     if (!silent) opts.onChange(model.getValue());
+  });
+  const markers = monaco.editor.onDidChangeMarkers((uris) => {
+    if (!opts.onSchemaProblems || !uris.some((u) => u.toString() === model.uri.toString())) return;
+    opts.onSchemaProblems(
+      monaco.editor
+        .getModelMarkers({ resource: model.uri })
+        .filter(fromSchema)
+        .sort((a, b) => a.startLineNumber - b.startLineNumber || a.startColumn - b.startColumn)
+        .map((m) => ({
+          line: m.startLineNumber,
+          column: m.startColumn,
+          message: m.message,
+          severity: m.severity === monaco.MarkerSeverity.Error ? "error" : "warning",
+        })),
+    );
   });
   // the page's theme switch flips data-theme on <html>
   const themeWatch = new MutationObserver(applyTheme);
@@ -87,26 +138,12 @@ export function createYamlEditor(el: HTMLElement, opts: { value: string; readOnl
       editor.pushUndoStop();
       silent = false;
     },
-    setProblems(problems) {
-      monaco.editor.setModelMarkers(
-        model,
-        "yaml-syntax",
-        problems.map((p) => ({
-          severity: p.severity === "error" ? monaco.MarkerSeverity.Error : monaco.MarkerSeverity.Warning,
-          startLineNumber: p.line,
-          startColumn: p.column,
-          endLineNumber: p.endLine,
-          endColumn: p.endColumn,
-          message: p.message,
-          source: "YAML",
-        })),
-      );
-    },
     setReadOnly(readOnly) {
       editor.updateOptions({ readOnly });
     },
     dispose() {
       themeWatch.disconnect();
+      markers.dispose();
       sub.dispose();
       editor.dispose();
       model.dispose();

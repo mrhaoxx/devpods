@@ -161,7 +161,7 @@ export function DevPodDrawer(p: Props) {
               </Button>
             </div>
             <Group label="DevPod YAML" hint="配置里的变量（${NAME} 等）要先替换成实际值；要填变量并批量创建，请到「配置」页">
-              <YamlEditor ariaLabel="DevPod YAML" value={yaml} onChange={setYaml} minLines={14} maxLines={30} />
+              <YamlEditor ariaLabel="DevPod YAML" value={yaml} onChange={setYaml} minLines={14} maxLines={30} schema="devpod" />
             </Group>
           </>
         ) : (
