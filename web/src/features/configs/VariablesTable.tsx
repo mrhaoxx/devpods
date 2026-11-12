@@ -1,8 +1,10 @@
 // What a config says of its variables (config-centric create spec §5.4):
 // a row per variable its text has; the built-in ones say what fills
 // them, my own take a type (and a choice its options) and a description.
-// Defaults stay in the text: ${X:-default}.
-import { useEffect, useMemo, useState } from "react";
+// Defaults stay in the text: ${X:-default}. What is said of a variable
+// the text no longer has is kept while editing (a half-typed ${GPU:-1
+// is not the end of GPU) and left out when saved (keptDecls).
+import { useMemo, useState } from "react";
 import type { ParsedVar, VarDecl, VarType } from "./api";
 import { COUNT, INDEX, LEADER, NAME, NODE, OWNER, parseVars } from "./vars";
 
@@ -32,6 +34,14 @@ export function cleanDecl(d: VarDecl): VarDecl | null {
   return Object.keys(out).length > 1 ? out : null;
 }
 
+/** keptDecls: what is said of the variables the text has, in its order — what is saved. */
+export function keptDecls(content: string, decls: VarDecl[]): VarDecl[] {
+  return parseVars(content)
+    .filter((v) => !v.builtin)
+    .map((v) => decls.find((d) => d.name === v.name))
+    .filter((d): d is VarDecl => d !== undefined);
+}
+
 const need = (v: ParsedVar) => (v.builtin ? builtinNote[v.name] : v.default !== undefined ? `默认 ${v.default}` : v.required ? "必填" : "可留空");
 
 export function VariablesTable({ content, decls, onChange, readOnly = false }: { content: string; decls: VarDecl[]; onChange: (d: VarDecl[]) => void; readOnly?: boolean }) {
@@ -39,18 +49,11 @@ export function VariablesTable({ content, decls, onChange, readOnly = false }: {
   const own = useMemo(() => vars.filter((v) => !v.builtin).map((v) => v.name), [vars]);
   const [optionText, setOptionText] = useState<Record<string, string>>({});
 
-  // a variable gone from the text takes what was said of it along
-  useEffect(() => {
-    const kept = decls.filter((d) => own.includes(d.name));
-    if (kept.length !== decls.length) onChange(kept);
-  }, [own, decls, onChange]);
-
   const declOf = (name: string): VarDecl => decls.find((d) => d.name === name) ?? { name };
   const update = (name: string, patch: Partial<VarDecl>) => {
-    const next = own
-      .map((n) => (n === name ? cleanDecl({ ...declOf(n), ...patch }) : decls.find((d) => d.name === n) ?? null))
-      .filter((d): d is VarDecl => d !== null);
-    onChange(next);
+    const others = decls.filter((d) => d.name !== name);
+    const changed = cleanDecl({ ...declOf(name), ...patch });
+    onChange(changed ? [...others, changed] : others);
   };
 
   return (

@@ -26,10 +26,12 @@ describe("VariablesTable", () => {
     expect(onChange).toHaveBeenLastCalledWith([{ name: "GPU", type: "choice", description: "每个的 GPU 数" }]);
   });
 
-  it("a variable gone from the text takes what was said of it along", () => {
+  it("a variable gone from the text for a moment (half typed) keeps what was said of it", () => {
     const onChange = vi.fn();
-    render(<VariablesTable content={"a: b"} decls={[{ name: "GPU", type: "int" }]} onChange={onChange} />);
-    expect(onChange).toHaveBeenLastCalledWith([]);
+    const { rerender } = render(<VariablesTable content={"a: ${GPU:-1"} decls={[{ name: "GPU", type: "int", description: "卡数" }]} onChange={onChange} />);
     expect(screen.getByText("还没有变量")).toBeTruthy();
+    expect(onChange).not.toHaveBeenCalled();
+    rerender(<VariablesTable content={"a: ${GPU:-1}"} decls={[{ name: "GPU", type: "int", description: "卡数" }]} onChange={onChange} />);
+    expect((screen.getByLabelText("GPU 的说明") as HTMLInputElement).value).toBe("卡数");
   });
 });

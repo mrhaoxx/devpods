@@ -189,4 +189,14 @@ describe("config editor", () => {
     expect(made.queryByRole("link", { name: "alice-b" })).toBeNull();
     expect(made.queryByRole("link", { name: "alice-c" })).toBeNull();
   });
+
+  it("what is said of a variable no longer in the text is not saved", async () => {
+    const calls = stubFetch({ "GET /api/configs/alice-sg": cfg(), "POST /api/configs:check": { problems: [] }, "PATCH /api/configs/alice-sg": cfg() });
+    renderWithProviders(app, { route: "/configs/alice-sg" });
+    await screen.findByLabelText("标识");
+    fireEvent.change(screen.getByLabelText("IMAGE 的说明"), { target: { value: "基础镜像" } });
+    type("YAML", "name: ${NAME}\n");
+    fireEvent.click(screen.getByRole("button", { name: "保存" }));
+    await waitFor(() => expect(JSON.parse(calls.find((c) => c.method === "PATCH")?.body ?? "{}")).toEqual({ content: "name: ${NAME}\n" }));
+  });
 });

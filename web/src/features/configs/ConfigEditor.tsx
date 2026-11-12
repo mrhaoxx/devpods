@@ -14,7 +14,7 @@ import { EmptyState } from "../../design/EmptyState";
 import { Field, Group, Input, Notice } from "../../design/Form";
 import { YamlEditor } from "../../design/yaml/YamlEditor";
 import { checkConfig, createConfig, getConfig, patchConfig, type CheckProblem, type Config, type ConfigPatch, type VarDecl } from "./api";
-import { cleanDecl, VariablesTable } from "./VariablesTable";
+import { cleanDecl, keptDecls, VariablesTable } from "./VariablesTable";
 
 /** What a page hands over to start a new config from. */
 export type NewConfigState = { content?: string; title?: string; description?: string };
@@ -126,7 +126,7 @@ export function ConfigEditor() {
     try {
       if (!checked) {
         // what the check finds is said first; a check that cannot run stops nothing
-        const found = await checkConfig({ content, variables: decls }).then(
+        const found = await checkConfig({ content, variables: keptDecls(content, decls) }).then(
           (r) => r.problems,
           () => [],
         );
@@ -136,7 +136,7 @@ export function ConfigEditor() {
         }
       }
       if (creating) {
-        await createConfig({ id, title: title.trim(), description, content, sharedWith: list, public: pub, ...(decls.length ? { variables: decls } : {}) });
+        await createConfig({ id, title: title.trim(), description, content, sharedWith: list, public: pub, ...(keptDecls(content, decls).length ? { variables: keptDecls(content, decls) } : {}) });
         void qc.invalidateQueries({ queryKey: ["configs"] });
         nav("/configs");
       } else {
@@ -147,7 +147,8 @@ export function ConfigEditor() {
         if (content !== was.content) body.content = content;
         if (list.join(",") !== was.sharedWith.join(",")) body.sharedWith = list;
         if (pub !== was.public) body.public = pub;
-        if (JSON.stringify(decls) !== JSON.stringify(savedDecls)) body.variables = decls;
+        const kept = keptDecls(content, decls);
+        if (JSON.stringify(kept) !== JSON.stringify(savedDecls)) body.variables = kept;
         const next = await patchConfig(was.name, body);
         qc.setQueryData(["config", name], next);
         void qc.invalidateQueries({ queryKey: ["configs"] });
