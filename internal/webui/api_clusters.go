@@ -40,6 +40,8 @@ type clusterView struct {
 	Paused       bool       `json:"paused,omitempty"`
 	LastSeen     *time.Time `json:"lastSeen,omitempty"`
 	Capabilities []string   `json:"capabilities,omitempty"`
+	// Gateway whose SSH address and port-link domain serve this cluster.
+	Gateway string `json:"gateway,omitempty"`
 }
 
 // adminClusterView adds what an admin manages.
@@ -56,7 +58,7 @@ type adminClusterView struct {
 
 func (s *Server) clusterView(c *devpodv1alpha1.Cluster) clusterView {
 	v := clusterView{
-		Name: c.Name, DisplayName: c.Spec.DisplayName, Paused: c.Spec.Paused,
+		Name: c.Name, DisplayName: c.Spec.DisplayName, Paused: c.Spec.Paused, Gateway: c.Spec.Gateway,
 		Connected: c.Status.Connected && !c.Spec.Paused, Capabilities: c.Status.Capabilities,
 	}
 	if c.Status.LastSeen != nil {
@@ -244,6 +246,7 @@ func (s *Server) handlePatchCluster(w http.ResponseWriter, r *http.Request) {
 		DisplayName  *string     `json:"displayName,omitempty"`
 		Paused       *bool       `json:"paused,omitempty"`
 		DefaultQuota *quotaPatch `json:"defaultQuota,omitempty"`
+		Gateway      *string     `json:"gateway,omitempty"`
 	}
 	if apiErr := decodeStrict(r, &req); apiErr != nil {
 		s.writeServerErr(w, apiErr)
@@ -258,7 +261,17 @@ func (s *Server) handlePatchCluster(w http.ResponseWriter, r *http.Request) {
 		}
 		quota = q
 	}
+	if req.Gateway != nil && *req.Gateway != "" {
+		var g devpodv1alpha1.Gateway
+		if err := s.Reader.Get(r.Context(), types.NamespacedName{Name: *req.Gateway}, &g); err != nil {
+			s.writeServerErr(w, badRequest("no gateway named %q", *req.Gateway))
+			return
+		}
+	}
 	c, ok := s.editCluster(w, r, func(c *devpodv1alpha1.Cluster) {
+		if req.Gateway != nil {
+			c.Spec.Gateway = *req.Gateway
+		}
 		if req.DisplayName != nil {
 			c.Spec.DisplayName = *req.DisplayName
 		}

@@ -45,6 +45,8 @@ type Server struct {
 	// Clusters, when set, makes this the console of other clusters: their
 	// agents connect here. Nil: the console of the cluster it runs in.
 	Clusters *clusters.Registry
+	// gatewaysSeen: when each gateway's status was last written.
+	gatewaysSeen map[string]time.Time
 	// CLIKey lets the SSH gateway act for a user it authenticated (the
 	// CLI over SSH); empty = off.
 	CLIKey []byte
