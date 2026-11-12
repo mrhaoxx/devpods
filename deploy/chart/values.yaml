@@ -173,6 +173,11 @@ webui:
     hostnames: []
     httpsListener: ""            # Gateway listener (sectionName) for HTTPS
     httpListener: ""             # Gateway listener for plain HTTP; "" = no redirect route
+    # Where the Gateway's proxy Pods run ("" = gateway.namespace). With
+    # webui.clusters and telemetry on, the route also takes the other
+    # clusters' telemetry (<baseURL>/ingest/v1/batch, passed on by their
+    # agents) to the leader's receiver, which admits this namespace.
+    proxyNamespace: ""
   # External URL of the UI; the OAuth redirect URL becomes
   # baseURL + /auth/callback. An http:// baseURL disables the Secure
   # cookie attribute (dev/e2e only — use https in production).

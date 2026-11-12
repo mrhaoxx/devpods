@@ -43,3 +43,17 @@ http://devpod-webui-ingest.{{ .Values.namespaces.system }}.svc:8081/ingest/v1/ba
   secret:
     secretName: devpod-ingest-key
 {{- end -}}
+
+{{/* devpod.ingest.public: the console of several clusters takes their
+     telemetry at <baseURL>/ingest/v1/batch through its HTTPRoute. */}}
+{{- define "devpod.ingest.public" -}}
+{{- if and (include "devpod.telemetry.on" .) (not (include "devpod.telemetry.forward" .)) .Values.webui.enabled (dig "clusters" "enabled" false .Values.webui) (dig "httpRoute" "enabled" false .Values.webui) -}}
+true
+{{- end -}}
+{{- end }}
+
+{{/* devpod.ingest.proxyNamespace: where the route's proxy Pods run. */}}
+{{- define "devpod.ingest.proxyNamespace" -}}
+{{- $r := .Values.webui.httpRoute -}}
+{{- $r.proxyNamespace | default $r.gateway.namespace | default .Values.namespaces.system -}}
+{{- end }}

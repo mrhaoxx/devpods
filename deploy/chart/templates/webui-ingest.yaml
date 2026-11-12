@@ -33,6 +33,12 @@ spec:
     - podSelector:
         matchLabels:
           app.kubernetes.io/name: devpod-webui
+    {{- if include "devpod.ingest.public" . }}
+    # the console's route: other clusters' telemetry, through their agents
+    - namespaceSelector:
+        matchLabels:
+          kubernetes.io/metadata.name: {{ include "devpod.ingest.proxyNamespace" . }}
+    {{- end }}
     {{- range (dig "ingestFromCIDRs" (list) (.Values.telemetry | default dict)) }}
     - ipBlock: {cidr: {{ . }}}
     {{- end }}

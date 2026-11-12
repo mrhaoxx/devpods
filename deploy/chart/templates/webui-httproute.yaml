@@ -25,6 +25,15 @@ spec:
   hostnames:
   - {{ $host }}
   rules:
+  {{- if include "devpod.ingest.public" . }}
+  # the other clusters' telemetry, passed on by their agents, to the
+  # leader's receiver (it checks each batch's DevPod and signature)
+  - matches:
+    - path: {type: Exact, value: /ingest/v1/batch}
+    backendRefs:
+    - name: devpod-webui-ingest
+      port: 8081
+  {{- end }}
   - backendRefs:
     - name: devpod-webui
       port: {{ .Values.webui.service.port }}
