@@ -16,7 +16,6 @@ import (
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
-	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/utils/ptr"
@@ -298,22 +297,5 @@ spec:
 		call("POST", "/api/devpods", alice, yamlFor("rg-alice-plain", "rg-alice", ""), http.StatusCreated)
 		// admins are not restricted
 		call("POST", "/api/devpods", root, yamlFor("rg-root-sec", "rg-root", secretVol), http.StatusCreated)
-
-		// a preset an admin wrote may carry a Secret; a user creating from it is fine
-		tpl := &devpodv1alpha1.DevPodTemplate{ObjectMeta: metav1.ObjectMeta{Name: "rg-preset-secret"}}
-		tpl.Spec = devpodv1alpha1.DevPodTemplateSpec{DisplayName: "with a secret", PodPreset: &devpodv1alpha1.PodPresetSpec{Pod: devpodv1alpha1.PodWorkloadSpec{Spec: corev1.PodSpec{
-			Containers: []corev1.Container{{Name: "dev", Image: "ubuntu:24.04", Resources: corev1.ResourceRequirements{Limits: corev1.ResourceList{
-				corev1.ResourceCPU: resource.MustParse("1"), corev1.ResourceMemory: resource.MustParse("1Gi")}}}},
-			Volumes: []corev1.Volume{{Name: "lic", VolumeSource: corev1.VolumeSource{Secret: &corev1.SecretVolumeSource{SecretName: "site-license"}}}},
-		}}}}
-		if err := k8sClient.Create(ctx, tpl); err != nil {
-			t.Fatal(err)
-		}
-		t.Cleanup(func() { _ = k8sClient.Delete(ctx, tpl) })
-		call("POST", "/api/devpods", alice, `{"name":"frompreset","templateRef":"rg-preset-secret"}`, http.StatusCreated)
-		var dp devpodv1alpha1.DevPod
-		if err := s.Reader.Get(ctx, types.NamespacedName{Name: "rg-alice-frompreset", Namespace: "devpods"}, &dp); err != nil || len(dp.Spec.Pod.Spec.Volumes) != 1 {
-			t.Fatalf("preset devpod: %v %+v", err, dp.Spec.Pod)
-		}
 	})
 }

@@ -261,13 +261,13 @@ func TestClusterScope(t *testing.T) {
 		t.Fatalf("my usage over both clusters: %v", out["usage"])
 	}
 	// what is a cluster's has to say which
-	if code, out, _ := w.call("gl-alice", "GET", "/api/templates", ""); code != http.StatusBadRequest || out["code"] != "CLUSTER_REQUIRED" {
-		t.Fatalf("templates without a cluster: %d %v", code, out)
+	if code, out, _ := w.call("gl-alice", "GET", "/api/nodes", ""); code != http.StatusBadRequest || out["code"] != "CLUSTER_REQUIRED" {
+		t.Fatalf("nodes without a cluster: %d %v", code, out)
 	} else if names, _ := out["detail"].([]any); len(names) != 2 {
 		t.Fatalf("CLUSTER_REQUIRED names the clusters: %v", out)
 	}
-	if code, out, _ := w.call("gl-alice", "GET", "/api/clusters/b/templates", ""); code != http.StatusOK {
-		t.Fatalf("templates of b: %d %v", code, out)
+	if code, out, _ := w.call("gl-alice", "GET", "/api/clusters/b/nodes", ""); code != http.StatusOK {
+		t.Fatalf("nodes of b: %d %v", code, out)
 	}
 
 	// a config is launched into a cluster: its names are checked there

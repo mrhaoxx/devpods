@@ -123,7 +123,6 @@ func TestCommands(t *testing.T) {
 	f.routes["GET /api/admin/nodes"] = map[string]any{"items": []any{map[string]any{"name": "g206", "ready": true, "cpu": map[string]any{"allocatable": 64, "allocated": 4},
 		"mem": map[string]any{"allocatable": 256 << 30, "allocated": 8 << 30}, "gpu": map[string]any{"model": "A100", "total": 8, "used": 1}, "devpods": 1}}}
 	f.routes["GET /api/admin/users"] = map[string]any{"items": []any{map[string]any{"name": "alice", "admin": false, "devpods": 2, "running": 1, "source": "password", "pubkeys": 1}}}
-	f.routes["GET /api/templates"] = map[string]any{"items": []any{map[string]any{"metadata": map[string]any{"name": "gpu-small"}}}}
 	last := func() string { return f.calls[len(f.calls)-1] }
 
 	// list: a sorted table; --json is the API's answer untouched
@@ -243,8 +242,9 @@ func TestCommands(t *testing.T) {
 	if code, out, _ = f.run("users"); code != 0 || !strings.Contains(out, "alice  false  2        1        password  1") {
 		t.Fatalf("users: %d %s", code, out)
 	}
-	if code, out, _ = f.run("templates"); code != 0 || out != "gpu-small\n" {
-		t.Fatalf("templates: %d %q", code, out)
+	// templates are gone
+	if code, _, _ = f.run("templates"); code != ExitUsage {
+		t.Fatalf("templates: %d", code)
 	}
 
 	// usage errors never reach the API

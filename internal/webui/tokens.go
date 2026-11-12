@@ -95,7 +95,6 @@ const (
 
 var apiRoutes = []apiRoute{
 	{"GET /api/me", scopeAny, "Who am I: user, admin, quota, usage, features"},
-	{"GET /api/templates", scopeAny, "DevPod templates"},
 	{"GET /api/openapi.json", scopeAny, "This API as OpenAPI 3"},
 
 	{"GET /api/devpods", "devpods:read", "List my DevPods (?scope=all: everyone's, admins)"},
@@ -312,7 +311,7 @@ func (s *Server) bearerSession(w http.ResponseWriter, r *http.Request, bearer st
 	if len(g.DevPods) > 0 {
 		name := r.PathValue("name")
 		onDevPod := strings.HasPrefix(r.Pattern, "GET /api/devpods/{name}") || strings.Contains(r.Pattern, " /api/devpods/{name}")
-		open := r.Pattern == "GET /api/me" || r.Pattern == "GET /api/devpods" || r.Pattern == "GET /api/templates" || r.Pattern == "GET /api/openapi.json"
+		open := r.Pattern == "GET /api/me" || r.Pattern == "GET /api/devpods" || r.Pattern == "GET /api/openapi.json"
 		// snapshots name their DevPod in the object, not the path: the
 		// handlers filter the list and check each one (AllowsDevPod)
 		open = open || r.Pattern == "GET /api/snapshots" || strings.Contains(r.Pattern, " /api/snapshots/{id}")

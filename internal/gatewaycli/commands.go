@@ -88,10 +88,10 @@ func init() {
 		{name: "whoami", short: "who you are, your quota and usage", run: runWhoami},
 		{name: "list", aliases: []string{"ls"}, args: "[--all]", short: "list your DevPods (--all: everyone's, admin)", bools: []string{"all"}, run: runList},
 		{name: "show", aliases: []string{"status", "get"}, args: "<name>", short: "one DevPod in detail", run: runShow},
-		{name: "create", args: "<name> --image IMG [--cpu N] [--memory SIZE] [--gpu N] [--template T] [--shell S] [--collab a,b]",
+		{name: "create", args: "<name> --image IMG [--cpu N] [--memory SIZE] [--gpu N] [--shell S] [--collab a,b]",
 			short: "create a DevPod",
-			long:  "<name> is the part after your user name: `create dev1` makes <you>-dev1.\nNon-admins must give --cpu and --memory (or a template that sets them).",
-			vals:  append([]string{"template", "collab"}, edit...), run: runCreate},
+			long:  "<name> is the part after your user name: `create dev1` makes <you>-dev1.\nNon-admins must give --cpu and --memory. To start from a saved config: config launch.",
+			vals:  append([]string{"collab"}, edit...), run: runCreate},
 		{name: "start", args: "<name>…", short: "start (wake) DevPods", run: runRunning(true)},
 		{name: "stop", args: "<name>…", short: "stop (hibernate) DevPods; the home volume stays", run: runRunning(false)},
 		{name: "redeploy", args: "<name>…", short: "recreate the Pod (sessions drop, the home volume stays)", run: runRedeploy},
@@ -102,7 +102,6 @@ func init() {
 			long: "Without a subcommand: the address pattern and the public ports.\nurl prints one port's address; public / private open or close a port to\npeople who are not signed in; reset draws a new random address (old links die).",
 			run:  runPorts},
 		{name: "ssh", args: "<name>", short: "print the ssh command for a DevPod", run: runSSH},
-		{name: "templates", short: "list DevPod templates", run: runTemplates},
 		{name: "nodes", short: "list nodes", admin: true, run: runNodes},
 		{name: "users", short: "list users", admin: true, run: runUsers},
 		{name: "migrate", args: "<name> <node|->", short: "pin a DevPod to a node (- lets the scheduler choose)", admin: true, run: runMigrate},
@@ -504,11 +503,11 @@ func runCreate(e *Env, a *parsed) int {
 	if len(a.pos) != 1 {
 		return usage(e, c, "create takes exactly one name")
 	}
-	if a.val["image"] == "" && a.val["template"] == "" {
-		return usage(e, c, "give --image (or --template)")
+	if a.val["image"] == "" {
+		return usage(e, c, "give --image")
 	}
 	body := map[string]any{"name": a.pos[0]}
-	for flag, field := range map[string]string{"image": "image", "cpu": "cpu", "memory": "memory", "gpu": "gpu", "shell": "shell", "template": "templateRef"} {
+	for flag, field := range map[string]string{"image": "image", "cpu": "cpu", "memory": "memory", "gpu": "gpu", "shell": "shell"} {
 		if v, ok := a.val[flag]; ok {
 			body[field] = v
 		}
@@ -836,28 +835,6 @@ func runSSH(e *Env, a *parsed) int {
 		printJSON(e, b)
 	} else {
 		fmt.Fprintln(e.Out, cmd)
-	}
-	return ExitOK
-}
-
-func runTemplates(e *Env, a *parsed) int {
-	var list struct {
-		Items []devpodv1alpha1.DevPodTemplate `json:"items"`
-	}
-	raw, err := call(e, "GET", "/api/templates", nil, &list)
-	if err != nil {
-		return fail(e, err)
-	}
-	if a.json {
-		printJSON(e, raw)
-		return ExitOK
-	}
-	if len(list.Items) == 0 {
-		fmt.Fprintln(e.Out, "no templates")
-		return ExitOK
-	}
-	for _, t := range list.Items {
-		fmt.Fprintln(e.Out, t.Name)
 	}
 	return ExitOK
 }

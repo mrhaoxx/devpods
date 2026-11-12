@@ -27,7 +27,7 @@ The login name `devpod` is configurable (`--cli-user`, chart value `gateway.cli.
 | `whoami` | Your user, admin flag, usage and quota. |
 | `list` (`ls`) `[--all]` | Your DevPods; `--all` lists everyone's (admin). |
 | `show <name>` (`status`, `get`) | One DevPod in detail. |
-| `create <name> --image IMG [--cpu N] [--memory SIZE] [--gpu N] [--template T] [--shell S] [--collab a,b]` | Create `<you>-<name>`. Non-admins must set `--cpu` and `--memory` (or use a template that does). |
+| `create <name> --image IMG [--cpu N] [--memory SIZE] [--gpu N] [--shell S] [--collab a,b]` | Create `<you>-<name>`. Non-admins must set `--cpu` and `--memory`. To start from a saved config: `config launch`. |
 | `start <name>…` / `stop <name>…` | Wake / hibernate. The home volume stays. |
 | `redeploy <name>…` | Recreate the Pod (sessions drop, the home volume stays). |
 | `delete <name>… --yes` (`rm`) | Delete DevPods and their data. `--yes` is required. |
@@ -39,7 +39,6 @@ The login name `devpod` is configurable (`--cli-user`, chart value `gateway.cli.
 | `ports <name> public <port>…` / `private <port>…` | Open a port to anyone with the link, or back to owner, collaborators and admins only. |
 | `ports <name> reset` | Draw a new random address; every old link stops working. |
 | `ssh <name>` | Print the `ssh` command that logs into the DevPod. |
-| `templates` | List DevPod templates. |
 | `nodes`, `users` | List nodes / users (admin). |
 | `migrate <name> <node\|->` | Pin a DevPod to a node; `-` lets the scheduler choose again (admin). |
 | `snapshot <devpod> [--name N] [--tag T] [--no-pause] [--detach]` | Save the DevPod's container as an image and follow the progress. **Ctrl-C or disconnecting cancels it**; `--detach` starts it and returns. See [Snapshots](#snapshots). |

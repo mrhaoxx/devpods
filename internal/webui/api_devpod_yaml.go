@@ -127,14 +127,14 @@ func (s *Server) replaceDevPodSpec(r *http.Request, sess Session, dp *devpodv1al
 		if dp.Spec.Pod == nil {
 			return PatchResponse{}, badRequest("spec.pod is required")
 		}
-		// what a template stamped stays as it was: not added to, changed or dropped
+		// what an admin set stays as it was: not added to, changed or dropped
 		if !maps.Equal(koreAnnotations(before.Spec.Pod), koreAnnotations(dp.Spec.Pod)) {
 			return PatchResponse{}, &serverErr{http.StatusForbidden, "KORE_ANNOTATIONS_FORBIDDEN",
-				"CPU-binding annotations come from a template and cannot be edited", nil}
+				"CPU-binding annotations are set by an admin and cannot be edited", nil}
 		}
 		if len(KoreAnnotationKeys(in.Annotations)) > 0 {
 			return PatchResponse{}, &serverErr{http.StatusForbidden, "KORE_ANNOTATIONS_FORBIDDEN",
-				"CPU-binding annotations come from a template and cannot be edited", nil}
+				"CPU-binding annotations are set by an admin and cannot be edited", nil}
 		}
 		// a pod definition that is being changed is the user's own writing
 		// now, whoever wrote it first: it may not reach Secrets

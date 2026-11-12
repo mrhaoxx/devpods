@@ -255,7 +255,6 @@ func (s *Server) quotaErrFor(r *http.Request, sess Session, proposed *devpodv1al
 // with both (preset templates require no pod, overlays require one).
 type CreateRequest struct {
 	Name          string                          `json:"name,omitempty"` // suffix; full name = "<owner>-<name>"
-	TemplateRef   string                          `json:"templateRef,omitempty"`
 	YAML          string                          `json:"yaml,omitempty"`
 	Image         string                          `json:"image,omitempty"`
 	CPU           string                          `json:"cpu,omitempty"`
@@ -414,41 +413,8 @@ func (s *Server) prepareDevPod(r *http.Request, sess Session, req CreateRequest,
 	if apiErr != nil {
 		return nil, apiErr
 	}
-	if req.TemplateRef == "" {
-		if apiErr := s.checkWriting(sess, dp); apiErr != nil {
-			return nil, apiErr
-		}
-	} else {
-		if apiErr := koreErr(sess, dp); apiErr != nil {
-			return nil, apiErr
-		}
-		if !sess.Admin && dp.Spec.Pod != nil {
-			if apiErr := guardUserPodSpec(&dp.Spec.Pod.Spec, sess.User); apiErr != nil {
-				return nil, apiErr
-			}
-		}
-	}
-
-	if req.TemplateRef != "" {
-		var tpl devpodv1alpha1.DevPodTemplate
-		if err := s.k(r).Client.Get(r.Context(), types.NamespacedName{Name: req.TemplateRef}, &tpl); err != nil {
-			return nil, &serverErr{http.StatusBadRequest, "BAD_REQUEST", fmt.Sprintf("template %q not found", req.TemplateRef), nil}
-		}
-		if !s.KoreEnabled && tpl.Spec.Binding != nil {
-			return nil, &serverErr{http.StatusBadRequest, "BAD_REQUEST", "binding templates are unavailable: Kore is not installed", nil}
-		}
-		if err := ApplyTemplate(dp, &tpl); err != nil {
-			return nil, &serverErr{http.StatusBadRequest, "BAD_REQUEST", err.Error(), nil}
-		}
-	}
-
-	if !sess.Admin {
-		if dp.Spec.VM != nil {
-			return nil, &serverErr{http.StatusBadRequest, "BAD_REQUEST", "vm workloads cannot be metered for quota; admins only", nil}
-		}
-		if dp.Spec.Pod == nil {
-			return nil, &serverErr{http.StatusBadRequest, "BAD_REQUEST", "spec.pod is required (or pick a preset template)", nil}
-		}
+	if apiErr := s.checkWriting(sess, dp); apiErr != nil {
+		return nil, apiErr
 	}
 	if apiErr := s.quotaErrFor(r, sess, dp, "", pending...); apiErr != nil {
 		return nil, apiErr

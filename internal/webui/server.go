@@ -60,7 +60,6 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("POST /api/admin/users:import", s.handleImportUsers)
 	mux.HandleFunc("GET /api/admin/devpods", s.handleAdminListDevPods)
 	mux.HandleFunc("GET /api/kore/topology", s.handleKoreTopology)
-	mux.HandleFunc("GET /api/templates", s.handleListTemplates)
 	mux.HandleFunc("GET /api/devpods", func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Query().Get("watch") == "true" {
 			// the watch stream is not filtered per DevPod

@@ -116,21 +116,6 @@ func waitDevPod(t *testing.T, name string) devpodv1alpha1.DevPod {
 	return dp
 }
 
-// waitTemplate polls the cached client until the informer has the
-// template — the create handler resolves templateRef through the cache.
-func waitTemplate(t *testing.T, name string) {
-	t.Helper()
-	deadline := time.Now().Add(10 * time.Second)
-	for time.Now().Before(deadline) {
-		var tpl devpodv1alpha1.DevPodTemplate
-		if err := k8sClient.Get(context.Background(), types.NamespacedName{Name: name}, &tpl); err == nil {
-			return
-		}
-		time.Sleep(100 * time.Millisecond)
-	}
-	t.Fatalf("template %s never appeared in cache", name)
-}
-
 // waitRunning polls until the cached object reports the wanted
 // running state (post-PATCH visibility for subsequent quota reads).
 func waitRunning(t *testing.T, name string, want bool) {
@@ -190,67 +175,6 @@ spec:
 		}
 		if !strings.Contains(rec.Body.String(), "KORE_ANNOTATIONS_FORBIDDEN") {
 			t.Fatalf("wrong code: %s", rec.Body)
-		}
-	})
-
-	t.Run("overlay template stamps annotations", func(t *testing.T) {
-		t.Cleanup(func() { cleanupDevPods(t) })
-		tpl := pinTemplate()
-		tpl.Name = "pin8"
-		if err := k8sClient.Create(context.Background(), tpl); err != nil {
-			t.Fatal(err)
-		}
-		t.Cleanup(func() { _ = k8sClient.Delete(context.Background(), tpl) })
-		waitTemplate(t, "pin8")
-
-		body := `{"name":"pinned","image":"ubuntu:24.04","cpu":"2","memory":"4Gi","templateRef":"pin8"}`
-		rec := doJSON(t, s.HandleCreateDevPodForTest(), "POST", "/api/devpods", nil, alice, body)
-		if rec.Code != http.StatusCreated {
-			t.Fatalf("status = %d body=%s", rec.Code, rec.Body)
-		}
-		dp := waitDevPod(t, "gl-alice-pinned")
-		if dp.Spec.Pod.Metadata.Annotations["kore.zjusct.io/pin"] != "true" {
-			t.Fatalf("annotations = %v", dp.Spec.Pod.Metadata.Annotations)
-		}
-		if dp.Spec.Pod.Spec.Containers[0].Resources.Limits.Cpu().String() != "8" {
-			t.Fatal("binding resources not applied")
-		}
-	})
-
-	t.Run("preset template builds pod", func(t *testing.T) {
-		t.Cleanup(func() { cleanupDevPods(t) })
-		tpl := &devpodv1alpha1.DevPodTemplate{}
-		tpl.Name = "preset1"
-		tpl.Spec = devpodv1alpha1.DevPodTemplateSpec{
-			DisplayName: "Plain Ubuntu 4C8G",
-			PodPreset: &devpodv1alpha1.PodPresetSpec{
-				Pod: devpodv1alpha1.PodWorkloadSpec{Spec: corev1.PodSpec{Containers: []corev1.Container{{
-					Name:  "dev",
-					Image: "ubuntu:24.04",
-					Resources: corev1.ResourceRequirements{
-						Limits: corev1.ResourceList{
-							corev1.ResourceCPU:    resource.MustParse("4"),
-							corev1.ResourceMemory: resource.MustParse("8Gi"),
-						},
-					},
-				}}}},
-				Shell: "zsh",
-			},
-		}
-		if err := k8sClient.Create(context.Background(), tpl); err != nil {
-			t.Fatal(err)
-		}
-		t.Cleanup(func() { _ = k8sClient.Delete(context.Background(), tpl) })
-		waitTemplate(t, "preset1")
-
-		rec := doJSON(t, s.HandleCreateDevPodForTest(), "POST", "/api/devpods", nil, alice,
-			`{"name":"fromtpl","templateRef":"preset1"}`)
-		if rec.Code != http.StatusCreated {
-			t.Fatalf("status = %d body=%s", rec.Code, rec.Body)
-		}
-		dp := waitDevPod(t, "gl-alice-fromtpl")
-		if dp.Spec.Pod == nil || dp.Spec.Pod.Spec.Containers[0].Image != "ubuntu:24.04" || dp.Spec.Shell != "zsh" {
-			t.Fatalf("preset not applied: %+v", dp.Spec)
 		}
 	})
 
@@ -462,4 +386,15 @@ func TestRejectionsCarryTheReason(t *testing.T) {
 	if msg := message(rec); rec.Code != http.StatusBadRequest || !strings.Contains(msg, "update rejected: ") || !strings.Contains(msg, "shell") {
 		t.Fatalf("update: %d %q", rec.Code, msg)
 	}
+}
+
+// Templates are gone: configs take their place.
+func TestCreateRejectsTemplateRef(t *testing.T) {
+	setupSuite(t)
+	s, sm := newServer(t)
+	alice := forge(sm, "nt-alice", false)
+	srv := httptest.NewServer(s.Routes())
+	t.Cleanup(srv.Close)
+	apiCall(t, srv, "POST", "/api/devpods", alice, jsonBody(map[string]any{"name": "x", "image": "i", "cpu": "1", "memory": "1Gi", "templateRef": "t"}), http.StatusBadRequest)
+	apiCall(t, srv, "GET", "/api/templates", alice, "", http.StatusNotFound)
 }

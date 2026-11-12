@@ -206,8 +206,8 @@ node, ok, code, message}]}` with:
 
 A console can manage several clusters (`GET /api/clusters` lists them: name,
 whether its agent is connected, what it offers). Users, tokens and saved
-configs belong to the console; DevPods, nodes, reservations, snapshots and
-templates belong to a cluster, and a request says which:
+configs belong to the console; DevPods, nodes, reservations and snapshots
+belong to a cluster, and a request says which:
 
 ```sh
 # any path, in one cluster — or the plain path with ?cluster=

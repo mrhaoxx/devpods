@@ -218,24 +218,11 @@ What users and admins get:
   values in `deploy/chart/values.yaml`); a DevPod reports once its Pod is
   next recreated, and shows "—" until then.
 
-CPU-binding (Kore) is template-mediated: ordinary users can only pick
-admin-curated `DevPodTemplate` CRs — raw `kore.zjusct.io/*` annotations
-are rejected. Seed templates with kubectl (admin UI comes in M2):
-
-```yaml
-apiVersion: devpod.io/v1alpha1
-kind: DevPodTemplate
-metadata: {name: pin8}
-spec:
-  displayName: "Exclusive 8 cores, single NUMA"
-  binding:
-    annotations:
-      kore.zjusct.io/pin: "true"
-      kore.zjusct.io/numa-policy: single
-    resources:
-      requests: {cpu: "8"}
-      limits:   {cpu: "8", memory: "16Gi"}
-```
+CPU-binding (Kore) is for admins: an admin writes the
+`kore.zjusct.io/*` annotations in a DevPod's YAML (on `spec.pod.metadata`);
+anyone else's DevPod carrying them is refused, and they cannot be changed
+from the YAML tab. To give users a ready-made environment, save it as a
+config and mark it official (配置 page).
 
 Per-user quotas live on `User.spec.quota` (defaults from
 `webui.defaultQuota`). Quota is webui-layer policy — anyone holding a

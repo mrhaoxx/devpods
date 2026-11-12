@@ -12,10 +12,8 @@ import (
 	"net/http"
 	"strings"
 	"testing"
-	"time"
 
 	"golang.org/x/crypto/ssh"
-	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 
@@ -125,55 +123,4 @@ func TestMeAndPubkeys(t *testing.T) {
 			t.Fatalf("status = %d", rec.Code)
 		}
 	})
-}
-
-func TestTemplateList(t *testing.T) {
-	setupSuite(t)
-	s, sm := newServer(t)
-	alice := forge(sm, "gl-alice", false)
-
-	binding := pinTemplate()
-	binding.Name = "pin8-list"
-	preset := &devpodv1alpha1.DevPodTemplate{
-		ObjectMeta: metav1.ObjectMeta{Name: "plain-preset"},
-		Spec: devpodv1alpha1.DevPodTemplateSpec{
-			DisplayName: "Plain Ubuntu",
-			PodPreset:   &devpodv1alpha1.PodPresetSpec{Pod: devpodv1alpha1.PodWorkloadSpec{Spec: corev1.PodSpec{Containers: []corev1.Container{{Name: "dev", Image: "ubuntu:24.04"}}}}},
-		},
-	}
-	ctx := context.Background()
-	for _, tpl := range []*devpodv1alpha1.DevPodTemplate{binding, preset} {
-		tpl := tpl
-		if err := k8sClient.Create(ctx, tpl); err != nil {
-			t.Fatal(err)
-		}
-		t.Cleanup(func() { _ = k8sClient.Delete(ctx, tpl) })
-	}
-
-	// Wait for both templates to land in the cache.
-	deadline := time.Now().Add(10 * time.Second)
-	for time.Now().Before(deadline) {
-		var list devpodv1alpha1.DevPodTemplateList
-		if err := k8sClient.List(ctx, &list); err == nil && len(list.Items) >= 2 {
-			break
-		}
-		time.Sleep(100 * time.Millisecond)
-	}
-
-	rec := doJSON(t, s.HandleListTemplatesForTest(), "GET", "/api/templates", nil, alice, "")
-	if rec.Code != http.StatusOK {
-		t.Fatalf("status = %d", rec.Code)
-	}
-	both := rec.Body.String()
-	if !strings.Contains(both, "pin8-list") || !strings.Contains(both, "plain-preset") {
-		t.Fatalf("missing templates: %s", both)
-	}
-
-	s.KoreEnabled = false
-	rec = doJSON(t, s.HandleListTemplatesForTest(), "GET", "/api/templates", nil, alice, "")
-	filtered := rec.Body.String()
-	if strings.Contains(filtered, "pin8-list") || !strings.Contains(filtered, "plain-preset") {
-		t.Fatalf("kore-off filtering broken: %s", filtered)
-	}
-	s.KoreEnabled = true
 }
