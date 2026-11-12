@@ -88,7 +88,7 @@ describe("DevPodTable", () => {
     const ok = { devpod: list.items[0], rebuild: true };
     const calls = stubFetch({
       "/api/devpods": list,
-      "/api/nodes": { items: ["g206", "g207", "g208"].map((name) => ({ name, ready: true, selectable: true, held: null, next: null })).concat([{ name: "g209", ready: true, selectable: false, held: { user: "bob", until: "2026-11-12T09:00:00Z" } as never, next: null }]) },
+      "/api/nodes": { items: ["g206", "g207", "g208"].map((name) => ({ name, ready: true, selectable: true, held: null, next: null, cpu: { allocatable: 64, allocated: 0 }, mem: { allocatable: 1 << 30, allocated: 0 }, gpuTotal: 0, gpuUsed: 0 })).concat([{ name: "g209", ready: true, selectable: false, cpu: { allocatable: 64, allocated: 0 }, mem: { allocatable: 1 << 30, allocated: 0 }, gpuTotal: 0, gpuUsed: 0, held: { user: "bob", until: "2026-11-12T09:00:00Z" } as never, next: null }]) },
       "PATCH /api/devpods/alice-a": ok,
       "PATCH /api/devpods/bob-c": ok,
     });
@@ -110,13 +110,13 @@ describe("DevPodTable", () => {
     const apply2 = () => screen.getByRole("button", { name: "应用" }) as HTMLButtonElement;
     expect(apply2().disabled).toBe(true);
     // a node someone else holds cannot be picked
-    expect(((await screen.findByRole("button", { name: /g209/ })) as HTMLButtonElement).disabled).toBe(true);
-    fireEvent.click(await screen.findByRole("button", { name: "g207" }));
-    fireEvent.click(screen.getByRole("button", { name: "g206" }));
-    fireEvent.click(screen.getByRole("button", { name: "g208" }));
+    expect(((await screen.findByRole("checkbox", { name: "g209" })) as HTMLInputElement).disabled).toBe(true);
+    fireEvent.click(await screen.findByRole("checkbox", { name: "g207" }));
+    fireEvent.click(screen.getByRole("checkbox", { name: "g206" }));
+    fireEvent.click(screen.getByRole("checkbox", { name: "g208" }));
     expect(screen.getByRole("alert").textContent).toMatch(/3 个节点、2 个 DevPod/);
     expect(apply2().disabled).toBe(true);
-    fireEvent.click(screen.getByRole("button", { name: /g208/ }));
+    fireEvent.click(screen.getByRole("checkbox", { name: "g208" }));
     expect(screen.getByRole("list", { name: "迁移计划" }).textContent).toBe("bob-c → g207alice-a → g206");
     fireEvent.click(apply2());
     await waitFor(() =>

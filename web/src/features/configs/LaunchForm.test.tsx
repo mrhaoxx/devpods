@@ -60,10 +60,10 @@ describe("launch form", () => {
     expect(button("创建").disabled).toBe(true); // no name, no node
     type("短名", "sg");
     // each node says its GPUs
-    expect((await screen.findByRole("button", { name: /m602/ })).textContent).toContain("A100 1/2");
-    fireEvent.click(screen.getByRole("button", { name: /m602/ }));
-    fireEvent.click(screen.getByRole("button", { name: /m601/ }));
-    expect((screen.getByRole("button", { name: /m603/ }) as HTMLButtonElement).disabled).toBe(true);
+    expect((await screen.findByRole("checkbox", { name: "m602" })).closest("label")!.textContent).toContain("A100 空闲 1/2");
+    fireEvent.click(screen.getByRole("checkbox", { name: "m602" }));
+    fireEvent.click(screen.getByRole("checkbox", { name: "m601" }));
+    expect((screen.getByRole("checkbox", { name: "m603" }) as HTMLInputElement).disabled).toBe(true);
     const preview = within(screen.getByRole("list", { name: "将创建" })).getAllByRole("listitem");
     expect(preview.map((li) => li.textContent)).toEqual(["alice-sg-0 → m602", "alice-sg-1 → m601"]);
     fireEvent.click(button("创建"));

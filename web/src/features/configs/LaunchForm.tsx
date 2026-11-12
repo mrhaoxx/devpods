@@ -12,7 +12,7 @@ import { useMe } from "../../data/queries";
 import { Button } from "../../design/Button";
 import { Field, Input, Notice } from "../../design/Form";
 import { fmtBytes, fmtCores, parseQuantity } from "../../lib/format";
-import { OrderedNodes } from "../devpods/BulkDialog";
+import { NodeList } from "../devpods/NodeList";
 import { launchConfig, type ConfigSummary, type LaunchBody, type LaunchItem } from "./api";
 import { COUNT, INDEX, LEADER, NAME, NODE, OWNER } from "./vars";
 import { VarInput } from "./VarInput";
@@ -193,7 +193,7 @@ export function LaunchForm({
               </Field>
             )}
             {usesNode ? (
-              <OrderedNodes picked={nodes} setPicked={setNodes} legend="节点（每个节点创建一个，按点击顺序）" />
+              <NodeList picked={nodes} setPicked={setNodes} max={MAX_LAUNCH} legend="节点（每个节点建一个，按勾选顺序编号）" />
             ) : (
               <Field label="数量" hint={`1 到 ${MAX_LAUNCH}`} error={countOK ? undefined : `数量要在 1 到 ${MAX_LAUNCH} 之间`}>
                 <Input aria-label="数量" type="number" min={1} max={MAX_LAUNCH} value={count} onChange={(e) => setCount(e.target.value)} className="mono w-24" />

@@ -1,27 +1,12 @@
 // One variable of a config in the launch form: a control by its type
 // (config-centric create spec §5.1), its description beside it.
-import { useNodeChoices } from "../../data/queries";
 import { Field, Input, Select } from "../../design/Form";
 import { MY_IMAGES_LIST, MyImagesList } from "../images/MyImages";
-import { nodeLabel } from "../devpods/NodePicker";
+import { NodeList } from "../devpods/NodeList";
 import type { ConfigVar } from "./api";
 
 function hintOf(v: ConfigVar): string {
   return v.required ? "必填" : v.default ? `默认 ${v.default}` : "可留空";
-}
-
-function NodeSelect({ v, value, onChange }: { v: ConfigVar; value: string; onChange: (s: string) => void }) {
-  const nodes = useNodeChoices().data?.items ?? [];
-  return (
-    <Select aria-label={v.name} value={value} onChange={(e) => onChange(e.target.value)} className="mono">
-      <option value="">{v.required ? "选择节点…" : "不指定"}</option>
-      {nodes.map((n) => (
-        <option key={n.name} value={n.name} disabled={!n.selectable}>
-          {nodeLabel(n)}
-        </option>
-      ))}
-    </Select>
-  );
 }
 
 export function VarInput({ v, value, onChange }: { v: ConfigVar; value: string; onChange: (s: string) => void }) {
@@ -43,7 +28,7 @@ export function VarInput({ v, value, onChange }: { v: ConfigVar; value: string; 
       );
       break;
     case "node":
-      control = <NodeSelect v={v} value={value} onChange={onChange} />;
+      control = <NodeList single picked={value ? [value] : []} setPicked={(ns) => onChange(ns[0] ?? "")} legend={v.required ? "选一个节点" : "选一个节点（可不选）"} />;
       break;
     case "image":
       control = (
