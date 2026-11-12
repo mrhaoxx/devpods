@@ -62,10 +62,13 @@ type ctrlMsg struct {
 	T string `json:"t"` // "ping", "pong"
 }
 
-// useMsg is the one frame a data connection carries before it becomes
-// the stream it was taken for.
+// useMsg is what a data connection carries before it becomes a stream:
+// while it is idle, a word now and then that it is still there (Idle), so
+// that neither end, nor anything in between, takes it for dead; then, once,
+// what it is taken for.
 type useMsg struct {
-	Purpose []byte `json:"purpose"`
+	Idle    bool   `json:"idle,omitempty"`
+	Purpose []byte `json:"purpose,omitempty"`
 }
 
 func writeFrame(w io.Writer, v any) error {

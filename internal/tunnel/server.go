@@ -9,6 +9,7 @@ import (
 	"crypto/rand"
 	"errors"
 	"net"
+	"slices"
 	"sync"
 	"time"
 )
@@ -65,6 +66,10 @@ type conn struct {
 	net.Conn
 	once sync.Once
 	done chan struct{}
+	// wmu orders the idle words and the one use frame; after taken, the
+	// connection is the stream's and nothing else is written to it.
+	wmu   sync.Mutex
+	taken bool
 }
 
 func (c *conn) Close() error {
@@ -265,7 +270,37 @@ func (s *Server) data(ctx context.Context, name string, nc net.Conn) {
 	case p.arrive <- struct{}{}:
 	default:
 	}
-	select {
+	// while idle: a word every heartbeat. One that cannot be written is
+	// taken out of the pool, so that no stream is opened on it.
+	tick := time.NewTicker(s.o.Heartbeat)
+	defer tick.Stop()
+	for {
+		select {
+		case <-c.done:
+			return
+		case <-ctx.Done():
+			return
+		case <-tick.C:
+		}
+		c.wmu.Lock()
+		if c.taken {
+			c.wmu.Unlock()
+			break
+		}
+		_ = c.SetWriteDeadline(time.Now().Add(s.o.Dead))
+		err := writeFrame(c, useMsg{Idle: true})
+		_ = c.SetWriteDeadline(time.Time{})
+		c.wmu.Unlock()
+		if err != nil {
+			s.mu.Lock()
+			if i := slices.Index(p.idle, c); i >= 0 {
+				p.idle = slices.Delete(p.idle, i, i+1)
+			}
+			s.mu.Unlock()
+			return // the deferred Close in Accept ends it
+		}
+	}
+	select { // a stream now: until whoever took it closes it
 	case <-c.done:
 	case <-ctx.Done():
 	}
@@ -306,12 +341,16 @@ func (s *Server) Dial(ctx context.Context, name string, purpose []byte) (net.Con
 			default:
 			}
 		}
+		c.wmu.Lock()
+		c.taken = true
 		_ = c.SetWriteDeadline(time.Now().Add(handshakeTimeout))
-		if err := writeFrame(c, useMsg{Purpose: purpose}); err != nil {
+		err := writeFrame(c, useMsg{Purpose: purpose})
+		_ = c.SetWriteDeadline(time.Time{})
+		c.wmu.Unlock()
+		if err != nil {
 			_ = c.Close() // it died while idle: take the next
 			continue
 		}
-		_ = c.SetWriteDeadline(time.Time{})
 		return c, nil
 	}
 }

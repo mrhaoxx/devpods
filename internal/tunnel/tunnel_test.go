@@ -27,6 +27,24 @@ type site struct {
 	next      int
 	dials     atomic.Int64
 	ctx       context.Context
+	wires     []*wire // the client's end of every connection made, in order
+}
+
+// wire is the client's end of a connection; once deaf, nothing the server
+// sends arrives (as behind a middlebox that dropped the connection
+// without telling either side).
+type wire struct {
+	net.Conn
+	deaf atomic.Bool
+}
+
+func (w *wire) Read(p []byte) (int, error) {
+	for {
+		n, err := w.Conn.Read(p)
+		if err != nil || !w.deaf.Load() {
+			return n, err
+		}
+	}
 }
 
 func (s *site) list() []string {
@@ -79,10 +97,12 @@ func (s *site) dial(context.Context) (net.Conn, error) {
 	}
 	srv := s.instances[s.next%len(s.instances)]
 	s.next++
-	s.mu.Unlock()
 	a, b := net.Pipe()
+	w := &wire{Conn: a}
+	s.wires = append(s.wires, w)
+	s.mu.Unlock()
 	go srv.Accept(s.ctx, b)
-	return a, nil
+	return w, nil
 }
 
 type stream struct {
@@ -249,6 +269,53 @@ func TestIdlePool_RefillsAndGrows(t *testing.T) {
 	start := time.Now()
 	if _, err := srv.Dial(ctx, "st2", []byte("s")); !errors.Is(err, tunnel.ErrPeerOffline) || time.Since(start) > 50*time.Millisecond {
 		t.Fatalf("unknown peer: %v after %v", err, time.Since(start))
+	}
+}
+
+// An idle data connection carries a word from the server now and then:
+// one that has gone silent is given up by the client and replaced, and
+// the server stops offering one it can no longer write to. The control
+// connection is not disturbed.
+func TestIdleConnections_SilentOnesAreReplaced(t *testing.T) {
+	ctx, s := setup(t)
+	var ups atomic.Int64
+	srv := s.add(t, "i0", nil, func(_ string, up bool) {
+		if up {
+			ups.Add(1)
+		}
+	})
+	c, got := newClient(t, ctx, s, "mulan", 2)
+	eventually(t, "connected", func() bool { return settled(c, []string{"i0"}, 2) })
+	// idle for several heartbeats: nothing is given up while the server keeps talking
+	before := s.dials.Load()
+	time.Sleep(250 * time.Millisecond)
+	if after := s.dials.Load(); after != before {
+		t.Fatalf("healthy idle connections were replaced: %d → %d dials", before, after)
+	}
+	// the first connection is the control one; the two after it are the idle data ones
+	s.mu.Lock()
+	for _, w := range s.wires[1:] {
+		w.deaf.Store(true)
+	}
+	s.mu.Unlock()
+	eventually(t, "the silent ones are replaced", func() bool {
+		return s.dials.Load() >= before+2 && settled(c, []string{"i0"}, 2) && srv.Peers()["mulan"].Idle == 2
+	})
+	if ups.Load() != 1 {
+		t.Fatalf("the control connection was dropped %d times", ups.Load()-1)
+	}
+	conn, err := srv.Dial(ctx, "mulan", []byte("after"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	select {
+	case st := <-got:
+		if st.purpose != "after" {
+			t.Fatalf("purpose %q", st.purpose)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("a stream opened after the replacement never reached the client")
 	}
 }
 

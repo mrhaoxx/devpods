@@ -321,8 +321,18 @@ loop:
 // dataWait holds an idle data connection until the server puts it to
 // use, or it breaks; either way the pool is one short and is refilled.
 func (c *Client) dataWait(ctx context.Context, name string, nc net.Conn) {
+	// idle: the server says so every heartbeat. Silence for Dead means the
+	// connection is gone, whatever the socket says.
 	var use useMsg
-	err := readFrame(nc, &use)
+	var err error
+	for {
+		_ = nc.SetReadDeadline(time.Now().Add(c.o.Dead))
+		use = useMsg{}
+		if err = readFrame(nc, &use); err != nil || !use.Idle {
+			break
+		}
+	}
+	_ = nc.SetReadDeadline(time.Time{})
 	c.mu.Lock()
 	if in := c.inst[name]; in != nil {
 		delete(in.idle, nc)
