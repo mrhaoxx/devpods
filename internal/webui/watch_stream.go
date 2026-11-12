@@ -62,12 +62,12 @@ func (s *Server) handleDevPodStream(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	dpInformer, err := s.Cache.GetInformer(r.Context(), &devpodv1alpha1.DevPod{})
+	dpInformer, err := s.k(r).Cache.GetInformer(r.Context(), &devpodv1alpha1.DevPod{})
 	if err != nil {
 		s.writeErr(w, http.StatusInternalServerError, "INTERNAL", err.Error(), nil)
 		return
 	}
-	evInformer, err := s.Cache.GetInformer(r.Context(), &corev1.Event{})
+	evInformer, err := s.k(r).Cache.GetInformer(r.Context(), &corev1.Event{})
 	if err != nil {
 		s.writeErr(w, http.StatusInternalServerError, "INTERNAL", err.Error(), nil)
 		return
@@ -100,7 +100,7 @@ func (s *Server) handleDevPodStream(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		var cur devpodv1alpha1.DevPod
-		if err := s.Client.Get(r.Context(), types.NamespacedName{Namespace: s.NS, Name: name}, &cur); err != nil {
+		if err := s.k(r).Client.Get(r.Context(), types.NamespacedName{Namespace: s.NS, Name: name}, &cur); err != nil {
 			return
 		}
 		d := &DevPodDetail{DevPod: cur, Binding: s.bindingInfo(r, &cur)}
@@ -140,7 +140,7 @@ func (s *Server) handleDevPodStream(w http.ResponseWriter, r *http.Request) {
 	}
 	defer func() { _ = evInformer.RemoveEventHandler(evReg) }()
 
-	podInformer, err := s.Cache.GetInformer(r.Context(), &corev1.Pod{})
+	podInformer, err := s.k(r).Cache.GetInformer(r.Context(), &corev1.Pod{})
 	if err != nil {
 		s.writeErr(w, http.StatusInternalServerError, "INTERNAL", err.Error(), nil)
 		return

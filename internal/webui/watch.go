@@ -43,13 +43,13 @@ func (s *Server) handleWatchDevPods(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	informer, err := s.Cache.GetInformer(r.Context(), &devpodv1alpha1.DevPod{})
+	informer, err := s.k(r).Cache.GetInformer(r.Context(), &devpodv1alpha1.DevPod{})
 	if err != nil {
 		s.writeErr(w, http.StatusInternalServerError, "INTERNAL", err.Error(), nil)
 		return
 	}
 
-	podInformer, err := s.Cache.GetInformer(r.Context(), &corev1.Pod{})
+	podInformer, err := s.k(r).Cache.GetInformer(r.Context(), &corev1.Pod{})
 	if err != nil {
 		s.writeErr(w, http.StatusInternalServerError, "INTERNAL", err.Error(), nil)
 		return
@@ -85,7 +85,7 @@ func (s *Server) handleWatchDevPods(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		var dp devpodv1alpha1.DevPod
-		if err := s.Client.Get(r.Context(), types.NamespacedName{Namespace: s.NS, Name: name}, &dp); err != nil || !visible(&dp) {
+		if err := s.k(r).Client.Get(r.Context(), types.NamespacedName{Namespace: s.NS, Name: name}, &dp); err != nil || !visible(&dp) {
 			return
 		}
 		ev := watchEvent{Type: "MODIFIED", DevPod: &dp}

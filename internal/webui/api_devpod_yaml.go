@@ -150,7 +150,7 @@ func (s *Server) replaceDevPodSpec(r *http.Request, sess Session, dp *devpodv1al
 	// not held by someone else now
 	if node := pinnedNode(dp); node != "" && (node != pinnedNode(before) || (dp.Spec.Running && !before.Spec.Running)) {
 		var n corev1.Node
-		if err := s.Client.Get(r.Context(), types.NamespacedName{Name: node}, &n); err != nil {
+		if err := s.k(r).Client.Get(r.Context(), types.NamespacedName{Name: node}, &n); err != nil {
 			return PatchResponse{}, badRequest("node %q not found", node)
 		}
 		if apiErr := s.pinErr(r.Context(), dp.Spec.Owner, node); apiErr != nil {
@@ -165,7 +165,7 @@ func (s *Server) replaceDevPodSpec(r *http.Request, sess Session, dp *devpodv1al
 	// the Pod is recreated when its rendered spec changes while running
 	rebuild := before.Spec.Running && dp.Spec.Running &&
 		(!equality.Semantic.DeepEqual(before.Spec.Pod, dp.Spec.Pod) || before.Spec.Shell != dp.Spec.Shell)
-	if err := s.Client.Update(r.Context(), dp); err != nil {
+	if err := s.k(r).Client.Update(r.Context(), dp); err != nil {
 		if apierrors.IsConflict(err) {
 			return PatchResponse{}, &serverErr{http.StatusConflict, "CONFLICT", "the DevPod changed meanwhile: reload and try again", err.Error()}
 		}
@@ -197,7 +197,7 @@ func (s *Server) handlePutDevPodYAML(w http.ResponseWriter, r *http.Request) {
 	}
 	// like every edit, on the object as the API server has it now
 	fresh := &devpodv1alpha1.DevPod{ObjectMeta: metav1.ObjectMeta{Name: dp.Name, Namespace: dp.Namespace}}
-	if err := s.Reader.Get(r.Context(), types.NamespacedName{Name: dp.Name, Namespace: dp.Namespace}, fresh); err == nil {
+	if err := s.k(r).Reader.Get(r.Context(), types.NamespacedName{Name: dp.Name, Namespace: dp.Namespace}, fresh); err == nil {
 		dp = fresh
 	}
 	resp, apiErr := s.replaceDevPodSpec(r, sess, dp, req.YAML)

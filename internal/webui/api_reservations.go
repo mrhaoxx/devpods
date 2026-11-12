@@ -92,7 +92,7 @@ func (s *Server) reservationRules(w http.ResponseWriter) (*ReservationRules, boo
 // the node rule must not act on a stale cache.
 func (s *Server) allReservations(ctx context.Context) ([]devpodv1alpha1.Reservation, error) {
 	var list devpodv1alpha1.ReservationList
-	if err := s.Reader.List(ctx, &list); err != nil {
+	if err := s.kc(ctx).Reader.List(ctx, &list); err != nil {
 		return nil, err
 	}
 	// one being deleted (it can linger on the controller's finalizer) is gone
@@ -324,7 +324,7 @@ func (s *Server) handleListReservations(w http.ResponseWriter, r *http.Request) 
 
 func (s *Server) reservableNode(ctx context.Context, name string) *serverErr {
 	var n corev1.Node
-	if err := s.Client.Get(ctx, types.NamespacedName{Name: name}, &n); err != nil {
+	if err := s.kc(ctx).Client.Get(ctx, types.NamespacedName{Name: name}, &n); err != nil {
 		return &serverErr{http.StatusBadRequest, "BAD_REQUEST", fmt.Sprintf("node %q not found", name), nil}
 	}
 	if n.Labels[devpodv1alpha1.ReservableNodeLabel] != "true" {
@@ -395,7 +395,7 @@ func (s *Server) reserve(ctx context.Context, user, node string, start, end time
 		ObjectMeta: metav1.ObjectMeta{Name: fmt.Sprintf("%s-%s-%s", node, user, randSuffix(6))},
 		Spec:       devpodv1alpha1.ReservationSpec{Node: node, User: user, Start: metav1.NewTime(start.UTC()), End: metav1.NewTime(end.UTC()), Extends: extends},
 	}
-	if err := s.Client.Create(ctx, res); err != nil {
+	if err := s.kc(ctx).Client.Create(ctx, res); err != nil {
 		return nil, &serverErr{http.StatusBadRequest, "BAD_REQUEST", "reservation rejected", err.Error()}
 	}
 	if all, err = s.allReservations(ctx); err != nil {
@@ -416,7 +416,7 @@ func (s *Server) reserve(ctx context.Context, user, node string, start, end time
 	}
 	skipSelf[res.Name] = true
 	if c := conflictWith(all, node, start, end, skipSelf); c != nil && reservationBefore(c, self) {
-		if err := s.Client.Delete(ctx, res); err != nil && !apierrors.IsNotFound(err) {
+		if err := s.kc(ctx).Client.Delete(ctx, res); err != nil && !apierrors.IsNotFound(err) {
 			return nil, internal(err)
 		}
 		return nil, conflictErr(c)
@@ -495,14 +495,14 @@ func (s *Server) cancelSegments(ctx context.Context, names []string, by string, 
 	for _, name := range names {
 		err := retry.RetryOnConflict(retry.DefaultRetry, func() error {
 			var res devpodv1alpha1.Reservation
-			if err := s.Reader.Get(ctx, types.NamespacedName{Name: name}, &res); err != nil {
+			if err := s.kc(ctx).Reader.Get(ctx, types.NamespacedName{Name: name}, &res); err != nil {
 				return client.IgnoreNotFound(err)
 			}
 			if res.Spec.Cancelled != nil || !at.Before(res.Spec.End.Time) {
 				return nil // already over
 			}
 			res.Spec.Cancelled = &devpodv1alpha1.ReservationCancel{By: by, At: metav1.NewTime(at.UTC().Truncate(time.Second))}
-			return s.Client.Update(ctx, &res)
+			return s.kc(ctx).Client.Update(ctx, &res)
 		})
 		if err != nil {
 			return err
@@ -674,7 +674,7 @@ func (s *Server) handleSetReservable(w http.ResponseWriter, r *http.Request) {
 	}
 	patch, _ := json.Marshal(map[string]any{"metadata": map[string]any{"labels": map[string]any{devpodv1alpha1.ReservableNodeLabel: value}}})
 	node := &corev1.Node{ObjectMeta: metav1.ObjectMeta{Name: name}}
-	if err := s.Client.Patch(r.Context(), node, client.RawPatch(types.MergePatchType, patch)); err != nil {
+	if err := s.k(r).Client.Patch(r.Context(), node, client.RawPatch(types.MergePatchType, patch)); err != nil {
 		if apierrors.IsNotFound(err) {
 			s.writeErr(w, http.StatusNotFound, "NOT_FOUND", "node not found", nil)
 			return

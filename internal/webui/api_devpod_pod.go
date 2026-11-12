@@ -291,7 +291,7 @@ func (s *Server) handleDevPodPod(w http.ResponseWriter, r *http.Request) {
 	}
 	var pod corev1.Pod
 	// the API server, not the cache: this is looked at while things change
-	err := s.Reader.Get(r.Context(), types.NamespacedName{Namespace: s.NS, Name: render.PodName(dp)}, &pod)
+	err := s.k(r).Reader.Get(r.Context(), types.NamespacedName{Namespace: s.NS, Name: render.PodName(dp)}, &pod)
 	switch {
 	case apierrors.IsNotFound(err):
 		s.writeJSON(w, http.StatusOK, map[string]any{"pod": nil})

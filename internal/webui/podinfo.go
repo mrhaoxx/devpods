@@ -6,6 +6,7 @@ package webui
 
 import (
 	"context"
+	"github.com/mrhaoxx/devpod/internal/webui/clusters"
 
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -55,18 +56,31 @@ func PodInfoFor(dp *devpodv1alpha1.DevPod, pod *corev1.Pod) *PodInfo {
 // podInfo reads dp's Pod from the cache.
 func (s *Server) podInfo(ctx context.Context, dp *devpodv1alpha1.DevPod) *PodInfo {
 	var pod corev1.Pod
-	if err := s.Client.Get(ctx, types.NamespacedName{Namespace: s.NS, Name: render.PodName(dp)}, &pod); err != nil {
+	if err := s.kc(ctx).Client.Get(ctx, types.NamespacedName{Namespace: s.NS, Name: render.PodName(dp)}, &pod); err != nil {
 		return nil
 	}
 	return PodInfoFor(dp, &pod)
 }
 
-// podInfos maps DevPod name → PodInfo for the DevPods that have a Pod.
-func (s *Server) podInfos(ctx context.Context, dps []devpodv1alpha1.DevPod) map[string]PodInfo {
+// podInfos maps DevPod name → PodInfo for the DevPods that have a Pod. In
+// a console of several clusters the key is "<cluster>/<name>".
+func (s *Server) podInfos(ctx context.Context, dps []InCluster) map[string]PodInfo {
 	out := map[string]PodInfo{}
+	byName := map[string]*clusters.ClusterClients{}
+	for _, cc := range s.ksc(ctx) {
+		byName[cc.Name] = cc
+	}
 	for i := range dps {
-		if info := s.podInfo(ctx, &dps[i]); info != nil {
-			out[dps[i].Name] = *info
+		cc := byName[dps[i].Cluster]
+		if cc == nil {
+			continue
+		}
+		if info := s.podInfo(s.in(ctx, cc), &dps[i].DevPod); info != nil {
+			key := dps[i].Name
+			if dps[i].Cluster != "" {
+				key = dps[i].Cluster + "/" + key
+			}
+			out[key] = *info
 		}
 	}
 	return out

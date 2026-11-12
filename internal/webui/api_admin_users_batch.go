@@ -177,8 +177,21 @@ func (s *Server) handleUsersBatch(w http.ResponseWriter, r *http.Request) {
 // hibernateAll stops every running DevPod the user owns. Users without a
 // User object (LDAP) can own DevPods too, so none is required.
 func (s *Server) hibernateAll(ctx context.Context, owner string) BatchResult {
+	res := BatchResult{Name: owner, OK: true}
+	for _, cc := range s.ksc(ctx) { // in every cluster
+		one := s.hibernateIn(s.in(ctx, cc), owner)
+		res.Hibernated += one.Hibernated
+		if !one.OK {
+			res.OK, res.Error = false, clusterPrefix(cc.Name)+one.Error
+		}
+	}
+	return res
+}
+
+// hibernateIn is hibernateAll in the cluster of ctx.
+func (s *Server) hibernateIn(ctx context.Context, owner string) BatchResult {
 	var list devpodv1alpha1.DevPodList
-	if err := s.Client.List(ctx, &list, client.InNamespace(s.NS)); err != nil {
+	if err := s.kc(ctx).Client.List(ctx, &list, client.InNamespace(s.NS)); err != nil {
 		return result(owner, err)
 	}
 	res := BatchResult{Name: owner, OK: true}
@@ -189,14 +202,14 @@ func (s *Server) hibernateAll(ctx context.Context, owner string) BatchResult {
 		}
 		err := retry.RetryOnConflict(retry.DefaultRetry, func() error {
 			var cur devpodv1alpha1.DevPod
-			if err := s.Reader.Get(ctx, client.ObjectKeyFromObject(dp), &cur); err != nil {
+			if err := s.kc(ctx).Reader.Get(ctx, client.ObjectKeyFromObject(dp), &cur); err != nil {
 				return err
 			}
 			if !cur.Spec.Running {
 				return nil
 			}
 			cur.Spec.Running = false
-			return s.Client.Update(ctx, &cur)
+			return s.kc(ctx).Client.Update(ctx, &cur)
 		})
 		if err != nil {
 			res.OK, res.Error = false, dp.Name+": "+err.Error()

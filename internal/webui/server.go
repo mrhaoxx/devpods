@@ -155,5 +155,5 @@ func (s *Server) Routes() http.Handler {
 		http.ServeFileFS(w, r, dist, "index.html")
 	})
 
-	return s.originGuard(mux)
+	return s.originGuard(s.withCluster(mux))
 }

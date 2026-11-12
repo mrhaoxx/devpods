@@ -131,7 +131,7 @@ func (s *Server) handleKoreTopology(w http.ResponseWriter, r *http.Request) {
 	list.SetGroupVersionKind(schema.GroupVersionKind{
 		Group: "kore.zjusct.io", Version: "v1alpha1", Kind: "KoreNodeTopologyList",
 	})
-	if err := s.Reader.List(r.Context(), &list); err != nil {
+	if err := s.k(r).Reader.List(r.Context(), &list); err != nil {
 		s.writeErr(w, http.StatusInternalServerError, "INTERNAL", err.Error(), nil)
 		return
 	}
@@ -144,7 +144,7 @@ func (s *Server) handleKoreTopology(w http.ResponseWriter, r *http.Request) {
 // (= DevPod names in our namespace). Unresolvable UIDs stay as-is.
 func (s *Server) resolvePoolMembers(ctx context.Context, nodes []nodeTopology) {
 	var pods corev1.PodList
-	if err := s.Reader.List(ctx, &pods, client.InNamespace(s.NS)); err != nil {
+	if err := s.kc(ctx).Reader.List(ctx, &pods, client.InNamespace(s.NS)); err != nil {
 		return
 	}
 	uid2name := make(map[string]string, len(pods.Items))
@@ -181,13 +181,13 @@ func (s *Server) handleDevPodTopology(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var pod corev1.Pod
-	if err := s.Reader.Get(r.Context(), types.NamespacedName{Name: dp.Status.WorkloadRef.Name, Namespace: s.NS}, &pod); err != nil || pod.Spec.NodeName == "" {
+	if err := s.k(r).Reader.Get(r.Context(), types.NamespacedName{Name: dp.Status.WorkloadRef.Name, Namespace: s.NS}, &pod); err != nil || pod.Spec.NodeName == "" {
 		s.writeJSON(w, http.StatusOK, empty)
 		return
 	}
 	var obj unstructured.Unstructured
 	obj.SetGroupVersionKind(schema.GroupVersionKind{Group: "kore.zjusct.io", Version: "v1alpha1", Kind: "KoreNodeTopology"})
-	if err := s.Reader.Get(r.Context(), types.NamespacedName{Name: pod.Spec.NodeName}, &obj); err != nil {
+	if err := s.k(r).Reader.Get(r.Context(), types.NamespacedName{Name: pod.Spec.NodeName}, &obj); err != nil {
 		s.writeJSON(w, http.StatusOK, empty)
 		return
 	}

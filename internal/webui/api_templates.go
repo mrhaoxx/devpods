@@ -19,7 +19,7 @@ func (s *Server) handleListTemplates(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var list devpodv1alpha1.DevPodTemplateList
-	if err := s.Client.List(r.Context(), &list); err != nil {
+	if err := s.k(r).Client.List(r.Context(), &list); err != nil {
 		s.writeErr(w, http.StatusInternalServerError, "INTERNAL", err.Error(), nil)
 		return
 	}

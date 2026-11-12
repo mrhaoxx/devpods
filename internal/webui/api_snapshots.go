@@ -196,7 +196,7 @@ func (s *Server) ownedSnapshots(ctx context.Context, owner string) ([]devpodv1al
 	}
 	// read from the API server: a snapshot created a moment ago must
 	// count for the duplicate and quota checks
-	if err := s.Reader.List(ctx, &list, opts...); err != nil {
+	if err := s.kc(ctx).Reader.List(ctx, &list, opts...); err != nil {
 		return nil, err
 	}
 	return list.Items, nil
@@ -206,7 +206,7 @@ func (s *Server) ownedSnapshots(ctx context.Context, owner string) ([]devpodv1al
 // for an admin; a token limited to DevPods only those DevPods'.
 func (s *Server) getSnapshot(w http.ResponseWriter, r *http.Request, sess Session, id string) (*devpodv1alpha1.DevPodSnapshot, bool) {
 	var sn devpodv1alpha1.DevPodSnapshot
-	err := s.Reader.Get(r.Context(), types.NamespacedName{Name: id, Namespace: s.NS}, &sn)
+	err := s.k(r).Reader.Get(r.Context(), types.NamespacedName{Name: id, Namespace: s.NS}, &sn)
 	if apierrors.IsNotFound(err) || (err == nil && ((sn.Labels[render.LabelOwner] != sess.User && !sess.Admin) || !sess.AllowsDevPod(sn.Spec.DevPodName))) {
 		s.writeErr(w, http.StatusNotFound, "NOT_FOUND", "snapshot not found", nil)
 		return nil, false
@@ -354,7 +354,7 @@ func (s *Server) handleCreateSnapshot(w http.ResponseWriter, r *http.Request) {
 	case cfg.PushSecret != "":
 		sn.Spec.PushSecretRef = &devpodv1alpha1.LocalObjectRef{Name: cfg.PushSecret}
 	}
-	if err := s.Client.Create(r.Context(), sn); err != nil {
+	if err := s.k(r).Client.Create(r.Context(), sn); err != nil {
 		detail := any(err.Error())
 		if auth != nil {
 			detail = nil // an apiserver message may echo the object
@@ -428,7 +428,7 @@ func (s *Server) handleDeleteSnapshot(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// background: the Job and its Pod are removed after the object
-	if err := s.Client.Delete(r.Context(), sn, client.PropagationPolicy(metav1.DeletePropagationBackground)); err != nil && !apierrors.IsNotFound(err) {
+	if err := s.k(r).Client.Delete(r.Context(), sn, client.PropagationPolicy(metav1.DeletePropagationBackground)); err != nil && !apierrors.IsNotFound(err) {
 		s.writeErr(w, http.StatusInternalServerError, "INTERNAL", err.Error(), nil)
 		return
 	}
@@ -676,7 +676,7 @@ func (s *Server) handleSnapshotProgress(w http.ResponseWriter, r *http.Request) 
 		case <-tick.C:
 		}
 		var cur devpodv1alpha1.DevPodSnapshot
-		err := s.Reader.Get(ctx, types.NamespacedName{Name: sn.Name, Namespace: s.NS}, &cur)
+		err := s.kc(ctx).Reader.Get(ctx, types.NamespacedName{Name: sn.Name, Namespace: s.NS}, &cur)
 		switch {
 		case apierrors.IsNotFound(err) || (err == nil && cur.UID != sn.UID) || (err == nil && cur.DeletionTimestamp != nil):
 			p := snapshot()

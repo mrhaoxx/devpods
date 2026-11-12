@@ -135,37 +135,47 @@ func (s *Server) sessionFrom(w http.ResponseWriter, r *http.Request) (Session, b
 	return sess, true
 }
 
-// ownedDevPods lists the namespace and filters by owner in-process
-// (no field index needed at this scale).
-func (s *Server) ownedDevPods(r *http.Request, owner string) ([]devpodv1alpha1.DevPod, error) {
-	var list devpodv1alpha1.DevPodList
-	if err := s.Client.List(r.Context(), &list, client.InNamespace(s.NS)); err != nil {
-		return nil, err
-	}
-	var out []devpodv1alpha1.DevPod
-	for _, dp := range list.Items {
-		if dp.Spec.Owner == owner {
-			out = append(out, dp)
+// devPods lists DevPods of the request's clusters — its one cluster, or
+// every cluster when it named none: owner's, or everyone's when owner is
+// empty. By cluster, then name.
+func (s *Server) devPods(r *http.Request, owner string) ([]InCluster, error) {
+	var out []InCluster
+	for _, cc := range s.ks(r) {
+		var list devpodv1alpha1.DevPodList
+		if err := cc.Client.List(r.Context(), &list, client.InNamespace(s.NS)); err != nil {
+			return nil, err
+		}
+		sort.Slice(list.Items, func(i, j int) bool { return list.Items[i].Name < list.Items[j].Name })
+		for _, dp := range list.Items {
+			if owner == "" || dp.Spec.Owner == owner {
+				out = append(out, InCluster{DevPod: dp, Cluster: cc.Name})
+			}
 		}
 	}
-	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
 	return out, nil
 }
 
-// getOwned fetches one DevPod and enforces ownership. Non-owners get
-// 404 (not 403) to avoid existence leaks.
-func (s *Server) getOwned(w http.ResponseWriter, r *http.Request, sess Session, name string) (*devpodv1alpha1.DevPod, bool) {
-	var dp devpodv1alpha1.DevPod
-	err := s.Client.Get(r.Context(), types.NamespacedName{Name: name, Namespace: s.NS}, &dp)
-	if apierrors.IsNotFound(err) || (err == nil && dp.Spec.Owner != sess.User && !sess.Admin) || !sess.AllowsDevPod(name) {
-		s.writeErr(w, http.StatusNotFound, "NOT_FOUND", "devpod not found", nil)
-		return nil, false
-	}
+func plainDevPods(in []InCluster, err error) ([]devpodv1alpha1.DevPod, error) {
 	if err != nil {
-		s.writeErr(w, http.StatusInternalServerError, "INTERNAL", err.Error(), nil)
-		return nil, false
+		return nil, err
 	}
-	return &dp, true
+	var out []devpodv1alpha1.DevPod
+	for i := range in {
+		out = append(out, in[i].DevPod)
+	}
+	return out, nil
+}
+
+// ownedDevPods lists owner's DevPods in the request's clusters.
+func (s *Server) ownedDevPods(r *http.Request, owner string) ([]devpodv1alpha1.DevPod, error) {
+	return plainDevPods(s.devPods(r, owner))
+}
+
+// getOwned fetches one DevPod and enforces ownership. Non-owners get
+// 404 (not 403) to avoid existence leaks. In a console of several
+// clusters it also settles which cluster the request is about.
+func (s *Server) getOwned(w http.ResponseWriter, r *http.Request, sess Session, name string) (*devpodv1alpha1.DevPod, bool) {
+	return s.findDevPod(w, r, sess, name)
 }
 
 // koreErr enforces the stamping invariant for non-admins: no
@@ -210,6 +220,7 @@ func (s *Server) quotaErrFor(r *http.Request, sess Session, proposed *devpodv1al
 	if sess.Admin {
 		return nil
 	}
+	cc := s.k(r) // a quota is a cluster's: the DevPods counted are that cluster's
 	var u devpodv1alpha1.User
 	userPtr := &u
 	if err := s.Client.Get(r.Context(), types.NamespacedName{Name: sess.User}, &u); err != nil {
@@ -228,7 +239,7 @@ func (s *Server) quotaErrFor(r *http.Request, sess Session, proposed *devpodv1al
 	for _, dp := range pending {
 		existing = append(existing, *dp)
 	}
-	if qErr := CheckQuota(EffectiveQuota(userPtr, s.DefaultQuota), existing, proposed); qErr != nil {
+	if qErr := CheckQuota(EffectiveQuota(userPtr, s.clusterQuota(r.Context(), cc)), existing, proposed); qErr != nil {
 		return &serverErr{http.StatusConflict, "QUOTA_EXCEEDED", qErr.Error(), qErr.Violations}
 	}
 	return nil
@@ -271,14 +282,9 @@ func (s *Server) listScope(w http.ResponseWriter, r *http.Request, sess Session)
 	}
 }
 
-// allDevPods lists every DevPod in the namespace, by name.
+// allDevPods lists every DevPod of the request's clusters.
 func (s *Server) allDevPods(r *http.Request) ([]devpodv1alpha1.DevPod, error) {
-	var list devpodv1alpha1.DevPodList
-	if err := s.Client.List(r.Context(), &list, client.InNamespace(s.NS)); err != nil {
-		return nil, err
-	}
-	sort.Slice(list.Items, func(i, j int) bool { return list.Items[i].Name < list.Items[j].Name })
-	return list.Items, nil
+	return plainDevPods(s.devPods(r, ""))
 }
 
 func (s *Server) handleListDevPods(w http.ResponseWriter, r *http.Request) {
@@ -290,24 +296,26 @@ func (s *Server) handleListDevPods(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	var items []devpodv1alpha1.DevPod
-	var err error
+	owner := sess.User
 	if all {
-		items, err = s.allDevPods(r)
-	} else {
-		items, err = s.ownedDevPods(r, sess.User)
+		owner = ""
 	}
+	items, err := s.devPods(r, owner)
 	if err != nil {
 		s.writeErr(w, http.StatusInternalServerError, "INTERNAL", err.Error(), nil)
 		return
 	}
 	if sess.Token != nil && len(sess.Token.DevPods) > 0 { // a token limited to some DevPods sees only those
-		items = slices.DeleteFunc(items, func(dp devpodv1alpha1.DevPod) bool { return !sess.AllowsDevPod(dp.Name) })
+		items = slices.DeleteFunc(items, func(dp InCluster) bool { return !sess.AllowsDevPod(dp.Name) })
 	}
 	if items == nil {
-		items = []devpodv1alpha1.DevPod{}
+		items = []InCluster{}
 	}
-	s.writeJSON(w, http.StatusOK, map[string]any{"items": items, "pods": s.podInfos(r.Context(), items)})
+	out := map[string]any{"items": items, "pods": s.podInfos(r.Context(), items)}
+	if stale := s.staleOf(w, s.ks(r)); stale != nil {
+		out["stale"] = stale // cluster → since when its rows are the last known state
+	}
+	s.writeJSON(w, http.StatusOK, out)
 }
 
 // BindingInfo is the Kore readback shown on the detail page: desired
@@ -322,6 +330,7 @@ type BindingInfo struct {
 
 type DevPodDetail struct {
 	DevPod  devpodv1alpha1.DevPod `json:"devpod"`
+	Cluster string                `json:"cluster,omitempty"`
 	Binding *BindingInfo          `json:"binding,omitempty"`
 	Pod     *PodInfo              `json:"pod,omitempty"`
 }
@@ -340,7 +349,7 @@ func (s *Server) bindingInfo(r *http.Request, dp *devpodv1alpha1.DevPod) *Bindin
 	}
 	if ref := dp.Status.WorkloadRef; ref != nil && ref.Kind == "Pod" {
 		var pod corev1.Pod
-		if err := s.Reader.Get(r.Context(), types.NamespacedName{Name: ref.Name, Namespace: s.NS}, &pod); err == nil {
+		if err := s.k(r).Reader.Get(r.Context(), types.NamespacedName{Name: ref.Name, Namespace: s.NS}, &pod); err == nil {
 			info.AllocatedCpuset = pod.Annotations[KorePrefix+"allocated-cpuset"]
 			info.ReservedNUMA = pod.Annotations[KorePrefix+"reserved-numa"]
 		}
@@ -357,7 +366,7 @@ func (s *Server) handleGetDevPod(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	s.writeJSON(w, http.StatusOK, DevPodDetail{DevPod: *dp, Binding: s.bindingInfo(r, dp), Pod: s.podInfo(r.Context(), dp)})
+	s.writeJSON(w, http.StatusOK, DevPodDetail{DevPod: *dp, Cluster: s.k(r).Name, Binding: s.bindingInfo(r, dp), Pod: s.podInfo(r.Context(), dp)})
 }
 
 func (s *Server) handleCreateDevPod(w http.ResponseWriter, r *http.Request) {
@@ -378,7 +387,7 @@ func (s *Server) handleCreateDevPod(w http.ResponseWriter, r *http.Request) {
 		s.writeErr(w, apiErr.status, apiErr.Code, apiErr.Message, apiErr.Detail)
 		return
 	}
-	if err := s.Client.Create(r.Context(), dp); err != nil {
+	if err := s.k(r).Client.Create(r.Context(), dp); err != nil {
 		// k8s Status errors (CEL rejections etc.) pass through verbatim.
 		s.writeErr(w, http.StatusBadRequest, "BAD_REQUEST", rejected("create", err), err.Error())
 		return
@@ -410,7 +419,7 @@ func (s *Server) prepareDevPod(r *http.Request, sess Session, req CreateRequest,
 
 	if req.TemplateRef != "" {
 		var tpl devpodv1alpha1.DevPodTemplate
-		if err := s.Client.Get(r.Context(), types.NamespacedName{Name: req.TemplateRef}, &tpl); err != nil {
+		if err := s.k(r).Client.Get(r.Context(), types.NamespacedName{Name: req.TemplateRef}, &tpl); err != nil {
 			return nil, &serverErr{http.StatusBadRequest, "BAD_REQUEST", fmt.Sprintf("template %q not found", req.TemplateRef), nil}
 		}
 		if !s.KoreEnabled && tpl.Spec.Binding != nil {
@@ -456,7 +465,7 @@ func (s *Server) prepareDevPod(r *http.Request, sess Session, req CreateRequest,
 	}
 	if node := pinnedNode(dp); node != "" {
 		var n corev1.Node
-		if err := s.Client.Get(r.Context(), types.NamespacedName{Name: node}, &n); err != nil {
+		if err := s.k(r).Client.Get(r.Context(), types.NamespacedName{Name: node}, &n); err != nil {
 			return nil, &serverErr{http.StatusBadRequest, "BAD_REQUEST", fmt.Sprintf("node %q not found", node), nil}
 		}
 		if apiErr := s.pinErr(r.Context(), dp.Spec.Owner, node); apiErr != nil {
@@ -691,7 +700,7 @@ func (s *Server) handlePatchDevPod(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		fresh := &devpodv1alpha1.DevPod{}
-		if err := s.Reader.Get(r.Context(), client.ObjectKeyFromObject(dp), fresh); err != nil {
+		if err := s.k(r).Reader.Get(r.Context(), client.ObjectKeyFromObject(dp), fresh); err != nil {
 			s.writeErr(w, http.StatusInternalServerError, "INTERNAL", err.Error(), nil)
 			return
 		}
@@ -739,7 +748,7 @@ func (s *Server) patchDevPod(r *http.Request, sess Session, dp *devpodv1alpha1.D
 	// the Pod is recreated when its rendered spec changes while running
 	rebuild := before.Spec.Running && dp.Spec.Running &&
 		(!equality.Semantic.DeepEqual(before.Spec.Pod, dp.Spec.Pod) || before.Spec.Shell != dp.Spec.Shell)
-	if err := s.Client.Update(r.Context(), dp); err != nil {
+	if err := s.k(r).Client.Update(r.Context(), dp); err != nil {
 		if apierrors.IsConflict(err) {
 			return PatchResponse{}, &serverErr{http.StatusConflict, "CONFLICT", "the DevPod changed meanwhile", err.Error()}
 		}
@@ -764,7 +773,7 @@ func (s *Server) applyNode(r *http.Request, sess Session, dp *devpodv1alpha1.Dev
 		return nil
 	}
 	var n corev1.Node
-	if err := s.Client.Get(r.Context(), types.NamespacedName{Name: node}, &n); err != nil {
+	if err := s.k(r).Client.Get(r.Context(), types.NamespacedName{Name: node}, &n); err != nil {
 		return &serverErr{http.StatusBadRequest, "BAD_REQUEST", fmt.Sprintf("node %q not found", node), nil}
 	}
 	if sel == nil {
@@ -794,7 +803,7 @@ func (s *Server) handleRedeployDevPod(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: ref.Name, Namespace: s.NS}}
-	if err := s.Client.Delete(r.Context(), pod); err != nil && !apierrors.IsNotFound(err) {
+	if err := s.k(r).Client.Delete(r.Context(), pod); err != nil && !apierrors.IsNotFound(err) {
 		s.writeErr(w, http.StatusInternalServerError, "INTERNAL", err.Error(), nil)
 		return
 	}
@@ -810,7 +819,7 @@ func (s *Server) handleDeleteDevPod(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	if err := s.Client.Delete(r.Context(), dp); err != nil && !apierrors.IsNotFound(err) {
+	if err := s.k(r).Client.Delete(r.Context(), dp); err != nil && !apierrors.IsNotFound(err) {
 		s.writeErr(w, http.StatusInternalServerError, "INTERNAL", err.Error(), nil)
 		return
 	}
@@ -827,7 +836,7 @@ func (s *Server) handleDevPodEvents(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var events corev1.EventList
-	if err := s.Reader.List(r.Context(), &events,
+	if err := s.k(r).Reader.List(r.Context(), &events,
 		client.InNamespace(s.NS),
 		client.MatchingFields{"involvedObject.name": dp.Name}); err != nil {
 		s.writeErr(w, http.StatusInternalServerError, "INTERNAL", err.Error(), nil)

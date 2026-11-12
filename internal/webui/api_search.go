@@ -10,8 +10,6 @@ import (
 	"strings"
 	"time"
 
-	"sigs.k8s.io/controller-runtime/pkg/client"
-
 	devpodv1alpha1 "github.com/mrhaoxx/devpod/api/v1alpha1"
 	"github.com/mrhaoxx/devpod/internal/audit/store"
 )
@@ -31,9 +29,10 @@ type searchUser struct {
 }
 
 type searchDevPod struct {
-	Name  string `json:"name"`
-	Owner string `json:"owner"`
-	Phase string `json:"phase,omitempty"`
+	Name    string `json:"name"`
+	Cluster string `json:"cluster,omitempty"`
+	Owner   string `json:"owner"`
+	Phase   string `json:"phase,omitempty"`
 }
 
 type searchSession struct {
@@ -95,20 +94,20 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	var dps devpodv1alpha1.DevPodList
-	if err := s.Client.List(r.Context(), &dps, client.InNamespace(s.NS)); err != nil {
+	dps, err := s.devPods(r, "")
+	if err != nil {
 		s.writeErr(w, http.StatusInternalServerError, "INTERNAL", err.Error(), nil)
 		return
 	}
-	sort.Slice(dps.Items, func(i, j int) bool { return dps.Items[i].Name < dps.Items[j].Name })
+	sort.SliceStable(dps, func(i, j int) bool { return dps[i].Name < dps[j].Name })
 	names := map[string]string{} // uid → name, for the commands group
-	for _, dp := range dps.Items {
+	for _, dp := range dps {
 		names[string(dp.UID)] = dp.Name
 		if !sess.Admin && dp.Spec.Owner != sess.User {
 			continue
 		}
 		if len(out.DevPods) < searchPerGroup && (containsFold(dp.Name, lq) || (sess.Admin && containsFold(dp.Spec.Owner, lq))) {
-			out.DevPods = append(out.DevPods, searchDevPod{Name: dp.Name, Owner: dp.Spec.Owner, Phase: string(dp.Status.Phase)})
+			out.DevPods = append(out.DevPods, searchDevPod{Name: dp.Name, Cluster: dp.Cluster, Owner: dp.Spec.Owner, Phase: string(dp.Status.Phase)})
 		}
 	}
 

@@ -80,7 +80,7 @@ func (s *Server) nodeViews(ctx context.Context) ([]NodeView, live.Snapshot, live
 	snap, in, ok := s.liveSnapshot(ctx)
 	rdma := map[string][]rdmaView{}
 	var nodes corev1.NodeList
-	if err := s.Client.List(ctx, &nodes, client.UnsafeDisableDeepCopy); err == nil {
+	if err := s.kc(ctx).Client.List(ctx, &nodes, client.UnsafeDisableDeepCopy); err == nil {
 		for i := range nodes.Items {
 			for name, q := range nodes.Items[i].Status.Allocatable {
 				if isRDMAResource(name) {
@@ -158,7 +158,7 @@ func (s *Server) handleAdminNode(w http.ResponseWriter, r *http.Request) {
 	if s.KoreEnabled {
 		var obj unstructured.Unstructured
 		obj.SetGroupVersionKind(schema.GroupVersionKind{Group: "kore.zjusct.io", Version: "v1alpha1", Kind: "KoreNodeTopology"})
-		if err := s.Reader.Get(r.Context(), types.NamespacedName{Name: name}, &obj); err == nil {
+		if err := s.k(r).Reader.Get(r.Context(), types.NamespacedName{Name: name}, &obj); err == nil {
 			list := unstructured.UnstructuredList{Items: []unstructured.Unstructured{obj}}
 			if topo := koreTopologyFromList(&list, s.NS); len(topo) == 1 {
 				s.resolvePoolMembers(r.Context(), topo)

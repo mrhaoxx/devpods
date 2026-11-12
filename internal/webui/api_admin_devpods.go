@@ -7,14 +7,11 @@ package webui
 import (
 	"net/http"
 	"sort"
-
-	"sigs.k8s.io/controller-runtime/pkg/client"
-
-	devpodv1alpha1 "github.com/mrhaoxx/devpod/api/v1alpha1"
 )
 
 type adminDevPod struct {
 	Name    string `json:"name"`
+	Cluster string `json:"cluster,omitempty"`
 	Owner   string `json:"owner"`
 	Phase   string `json:"phase"`
 	Running bool   `json:"running"`
@@ -30,16 +27,18 @@ func (s *Server) handleAdminListDevPods(w http.ResponseWriter, r *http.Request) 
 	if _, ok := s.requireAdmin(w, r); !ok {
 		return
 	}
-	var list devpodv1alpha1.DevPodList
-	if err := s.Client.List(r.Context(), &list, client.InNamespace(s.NS)); err != nil {
+	list, err := s.devPods(r, "")
+	if err != nil {
 		s.writeErr(w, http.StatusInternalServerError, "INTERNAL", err.Error(), nil)
 		return
 	}
-	items := make([]adminDevPod, 0, len(list.Items))
-	for i := range list.Items {
-		dp := &list.Items[i]
+	s.staleOf(w, s.ks(r))
+	items := make([]adminDevPod, 0, len(list))
+	for i := range list {
+		dp := &list[i]
 		item := adminDevPod{
 			Name:    dp.Name,
+			Cluster: dp.Cluster,
 			Owner:   dp.Spec.Owner,
 			Phase:   string(dp.Status.Phase),
 			Running: dp.Spec.Running,
@@ -66,7 +65,7 @@ func (s *Server) handleAdminListDevPods(w http.ResponseWriter, r *http.Request) 
 	})
 	s.writeJSON(w, http.StatusOK, map[string]any{
 		"items":   items,
-		"devpods": list.Items,
-		"pods":    s.podInfos(r.Context(), list.Items),
+		"devpods": list,
+		"pods":    s.podInfos(r.Context(), list),
 	})
 }

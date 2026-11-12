@@ -131,7 +131,7 @@ func (s *Server) annotate(r *http.Request, dp *devpodv1alpha1.DevPod, fn func(a 
 			cp.Annotations = map[string]string{}
 		}
 		fn(cp.Annotations)
-		err := s.Client.Update(r.Context(), cp)
+		err := s.k(r).Client.Update(r.Context(), cp)
 		if err == nil {
 			return cp, nil
 		}
@@ -139,7 +139,7 @@ func (s *Server) annotate(r *http.Request, dp *devpodv1alpha1.DevPod, fn func(a 
 			return nil, err
 		}
 		fresh := &devpodv1alpha1.DevPod{}
-		if err := s.Reader.Get(r.Context(), client.ObjectKeyFromObject(dp), fresh); err != nil {
+		if err := s.k(r).Reader.Get(r.Context(), client.ObjectKeyFromObject(dp), fresh); err != nil {
 			return nil, err
 		}
 		dp = fresh
@@ -271,7 +271,7 @@ func (s *Server) handleHTTPTicket(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var list devpodv1alpha1.DevPodList
-	if err := s.Client.List(r.Context(), &list, client.InNamespace(s.NS)); err != nil {
+	if err := s.k(r).Client.List(r.Context(), &list, client.InNamespace(s.NS)); err != nil {
 		s.writeErr(w, http.StatusInternalServerError, "INTERNAL", err.Error(), nil)
 		return
 	}

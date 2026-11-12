@@ -182,7 +182,7 @@ func (s *Server) handleDevPodShell(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var dp devpodv1alpha1.DevPod
-	err := s.Client.Get(r.Context(), types.NamespacedName{Name: r.PathValue("name"), Namespace: s.NS}, &dp)
+	err := s.k(r).Client.Get(r.Context(), types.NamespacedName{Name: r.PathValue("name"), Namespace: s.NS}, &dp)
 	// the gateway's rule: the owner and collaborators, admins included
 	allowed := err == nil && (dp.Spec.Owner == sess.User || contains(dp.Spec.Collaborators, sess.User))
 	switch {

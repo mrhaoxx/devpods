@@ -212,7 +212,7 @@ func (s *Server) planLaunch(r *http.Request, sess Session, c *devpodv1alpha1.Dev
 			continue
 		}
 		var have devpodv1alpha1.DevPod
-		err := s.Reader.Get(r.Context(), types.NamespacedName{Name: it.Name, Namespace: s.NS}, &have)
+		err := s.k(r).Reader.Get(r.Context(), types.NamespacedName{Name: it.Name, Namespace: s.NS}, &have)
 		switch {
 		case err == nil:
 			it.fail("NAME_TAKEN", fmt.Sprintf("a DevPod named %q already exists", it.Name))
@@ -233,7 +233,7 @@ func (s *Server) runLaunch(r *http.Request, plan *LaunchPlan) ([]LaunchItem, int
 	status := http.StatusOK
 	for i, it := range plan.Items {
 		it.YAML = ""
-		if err := s.Client.Create(r.Context(), plan.devpods[i]); err != nil {
+		if err := s.k(r).Client.Create(r.Context(), plan.devpods[i]); err != nil {
 			if apierrors.IsAlreadyExists(err) {
 				it.fail("NAME_TAKEN", fmt.Sprintf("a DevPod named %q already exists", it.Name))
 			} else {

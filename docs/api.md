@@ -186,6 +186,43 @@ node, ok, code, message}]}` with:
 | `207` | the check passed but a write failed meanwhile; the others were created and are not undone |
 | `400` `BAD_VARIABLES` | a variable is missing or unknown (`detail` names them), or a value is not single-line text |
 
+## Several clusters
+
+A console can manage several clusters (`GET /api/clusters` lists them: name,
+whether its agent is connected, what it offers). Users, tokens and saved
+configs belong to the console; DevPods, nodes, reservations, snapshots and
+templates belong to a cluster, and a request says which:
+
+```sh
+# any path, in one cluster — or the plain path with ?cluster=
+curl -H "$auth" $base/api/clusters/mulan/devpods
+curl -H "$auth" "$base/api/nodes?cluster=mulan"
+curl -H "$auth" -X POST $base/api/clusters/mulan/devpods -d '{"name":"x","image":"ubuntu:24.04"}'
+curl -H "$auth" -X POST $base/api/clusters/mulan/configs/me-sg/launch -d '{"vars":{"NAME":"sg"}}'
+```
+
+- `GET /api/devpods` (and the admin list, and search) without a cluster covers
+  every cluster; each item carries `cluster`, and `pods` is keyed
+  `<cluster>/<name>`.
+- A path naming a DevPod (`/api/devpods/{name}…`) without a cluster finds it
+  among your DevPods of every cluster. The same name in two clusters is
+  `409 AMBIGUOUS_CLUSTER`, with `detail: [{cluster, name}, …]`.
+- Anything else that is a cluster's and was not told one is
+  `400 CLUSTER_REQUIRED`, with the cluster names in `detail`.
+- Quotas are counted per cluster.
+- While a cluster's agent is away, reads answer its last known state with the
+  header `X-DevPod-Stale-Since` (the list also has `stale: {cluster: since}`),
+  and changes are `503 CLUSTER_OFFLINE`.
+
+With one cluster registered, or a console that manages only the cluster it
+runs in, none of this is needed: the plain paths mean that cluster.
+
+Admins register a cluster with `POST /api/admin/clusters {name, displayName?}`,
+which answers a join token once (and the command to run in the new cluster);
+`POST /api/admin/clusters/{name}/token` issues a new one and withdraws the
+agent that had joined; `PATCH` takes `displayName`, `paused`, `defaultQuota`;
+`DELETE` stops managing it (its DevPods stay).
+
 ## Without a token: the CLI over SSH
 
 `ssh <user>+devpod@<gateway> <command>` runs the same operations authenticated by

@@ -105,7 +105,7 @@ func (s *Server) devpodUID(r *http.Request) (uid string, ok bool) {
 		return "", true
 	}
 	var dp devpodv1alpha1.DevPod
-	if err := s.Client.Get(r.Context(), types.NamespacedName{Namespace: s.NS, Name: name}, &dp); err != nil {
+	if err := s.k(r).Client.Get(r.Context(), types.NamespacedName{Namespace: s.NS, Name: name}, &dp); err != nil {
 		return "", false
 	}
 	return string(dp.UID), true
@@ -431,7 +431,7 @@ func (s *Server) handleAuditPresence(w http.ResponseWriter, r *http.Request) {
 	var dps []devpodv1alpha1.DevPod
 	if sess.Admin && r.URL.Query().Get("scope") == "all" {
 		var list devpodv1alpha1.DevPodList
-		if err := s.Client.List(r.Context(), &list, client.InNamespace(s.NS)); err != nil {
+		if err := s.k(r).Client.List(r.Context(), &list, client.InNamespace(s.NS)); err != nil {
 			s.writeErr(w, http.StatusInternalServerError, "INTERNAL", err.Error(), nil)
 			return
 		}
