@@ -554,6 +554,8 @@ export const createSnapshot = (devpod: string, body: SnapshotRequest) => req<Sna
 export const listSnapshots = (p: { all?: boolean; devpod?: string } = {}) =>
   req<{ items: SnapshotView[] }>("GET", `/api/snapshots?${new URLSearchParams({ ...(p.all ? { scope: "all" } : {}), ...(p.devpod ? { devpod: p.devpod } : {}) })}`);
 export const deleteSnapshot = (id: string) => req<void>("DELETE", `/api/snapshots/${id}`);
+/** retrySnapshot starts a failed save again with its settings; the failed record stays. */
+export const retrySnapshot = (id: string) => req<SnapshotView>("POST", `/api/snapshots/${id}/retry`);
 
 /** streamSnapshotProgress reads the progress stream until the server ends
  *  it (after the final event). It does not reconnect: a finished stream is

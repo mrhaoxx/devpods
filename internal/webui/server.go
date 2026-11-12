@@ -87,6 +87,7 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("GET /api/snapshots/{id}", s.handleGetSnapshot)
 	mux.HandleFunc("GET /api/snapshots/{id}/progress", s.handleSnapshotProgress)
 	mux.HandleFunc("DELETE /api/snapshots/{id}", s.handleDeleteSnapshot)
+	mux.HandleFunc("POST /api/snapshots/{id}/retry", s.handleRetrySnapshot)
 	mux.HandleFunc("GET /api/me/tokens", s.handleListTokens)
 	mux.HandleFunc("POST /api/me/tokens", s.handleCreateToken)
 	mux.HandleFunc("DELETE /api/me/tokens/{id}", s.handleDeleteToken)

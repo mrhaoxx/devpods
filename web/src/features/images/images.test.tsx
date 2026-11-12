@@ -263,6 +263,28 @@ describe("snapshots", () => {
     await waitFor(() => expect(calls.some((c) => c.method === "DELETE" && c.url.pathname === "/api/snapshots/s-ok")).toBe(true));
   });
 
+  it("a failed save is tried again with 重试; the failed one stays", async () => {
+    const calls = stubFetch({
+      "/api/snapshots": { items: [view({ id: "s-bad", phase: "Failed", image: "reg.test/users/alice/c:v3", message: "push denied" })] },
+      "POST /api/snapshots/s-bad/retry": new Response(JSON.stringify(view({ id: "s-again", phase: "Pending", image: "reg.test/users/alice/c:v3" })), { status: 201 }),
+    });
+    renderWithProviders(<ImagesPage />, { me: features() });
+    const bad = (await screen.findByText("reg.test/users/alice/c:v3")).closest("tr")!;
+    fireEvent.click(within(bad).getByRole("button", { name: "重试" }));
+    await waitFor(() => expect(calls.some((c) => c.method === "POST" && c.url.pathname === "/api/snapshots/s-bad/retry")).toBe(true));
+    expect(calls.some((c) => c.method === "DELETE")).toBe(false);
+  });
+
+  it("a retry the server refuses says why", async () => {
+    stubFetch({
+      "/api/snapshots": { items: [view({ id: "s-bad", phase: "Failed", image: "reg.test/users/alice/c:v3" })] },
+      "POST /api/snapshots/s-bad/retry": new Response(JSON.stringify({ code: "NOT_RUNNING", message: "only a running DevPod can be saved as an image" }), { status: 409 }),
+    });
+    renderWithProviders(<ImagesPage />, { me: features() });
+    fireEvent.click(within((await screen.findByText("reg.test/users/alice/c:v3")).closest("tr")!).getByRole("button", { name: "重试" }));
+    expect((await screen.findByText(/only a running DevPod/)).textContent).toBeTruthy();
+  });
+
   it("image inputs are offered the saved images", async () => {
     stubFetch({ "/api/snapshots": { items: [view({ phase: "Succeeded" }), view({ id: "x", phase: "Failed", image: "reg.test/users/alice/bad:v1" })] } });
     renderWithProviders(<MyImagesList />, { me: features() });

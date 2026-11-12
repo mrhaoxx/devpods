@@ -218,6 +218,102 @@ func (s *Server) getSnapshot(w http.ResponseWriter, r *http.Request, sess Sessio
 	return &sn, true
 }
 
+// mayStartSave: dp may be saved to image now — it is running, no save
+// to that address is in progress, and the owner has room in the quota.
+// Saving to an address again overwrites that tag: the registry gets the
+// new image, and the controller drops the older records of the address
+// once this one succeeds. Only two saves to one address at the same time
+// are refused. An overwrite takes no new place in the quota.
+func (s *Server) mayStartSave(r *http.Request, cfg *Snapshots, dp *devpodv1alpha1.DevPod, image string) *serverErr {
+	if dp.Status.Phase != devpodv1alpha1.DevPodRunning {
+		return &serverErr{http.StatusConflict, "NOT_RUNNING", "only a running DevPod can be saved as an image", nil}
+	}
+	mine, err := s.ownedSnapshots(r.Context(), dp.Spec.Owner)
+	if err != nil {
+		return &serverErr{http.StatusInternalServerError, "INTERNAL", err.Error(), nil}
+	}
+	kept := 0
+	for i := range mine {
+		sn := &mine[i]
+		terminal := sn.Status.Phase == devpodv1alpha1.SnapshotSucceeded || sn.Status.Phase == devpodv1alpha1.SnapshotFailed
+		if sn.Spec.Image == image {
+			if !terminal {
+				return &serverErr{http.StatusConflict, "IMAGE_BUSY", fmt.Sprintf("%s is being saved right now; wait for it or cancel it", image), map[string]string{"id": sn.Name}}
+			}
+			continue
+		}
+		if sn.Status.Phase == devpodv1alpha1.SnapshotSucceeded {
+			kept++
+		}
+	}
+	if cfg.MaxPerUser > 0 && kept >= cfg.MaxPerUser {
+		return &serverErr{http.StatusConflict, "SNAPSHOT_QUOTA", fmt.Sprintf("you keep %d saved images, the most allowed; delete one first", kept), nil}
+	}
+	return nil
+}
+
+// newSnapshot is a save of dp to image, its credentials yet to be set.
+func newSnapshot(ns string, dp *devpodv1alpha1.DevPod, image string, pause *bool) *devpodv1alpha1.DevPodSnapshot {
+	prefix := dp.Name
+	if len(prefix) > snapshotObjPrefixMx {
+		prefix = strings.TrimRight(prefix[:snapshotObjPrefixMx], "-.")
+	}
+	return &devpodv1alpha1.DevPodSnapshot{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      prefix + "-" + randString(6),
+			Namespace: ns,
+			Labels:    map[string]string{render.LabelOwner: dp.Spec.Owner, render.LabelDevPod: dp.Name},
+		},
+		Spec: devpodv1alpha1.DevPodSnapshotSpec{DevPodName: dp.Name, Image: image, Push: true, Pause: pause},
+	}
+}
+
+// handleRetrySnapshot serves POST /api/snapshots/{id}/retry: a failed
+// save is started again as it was — the same DevPod, address, pause and
+// credentials (inline ones were turned into a Secret the failed record
+// still holds). The failed record stays.
+func (s *Server) handleRetrySnapshot(w http.ResponseWriter, r *http.Request) {
+	sess, ok := s.sessionFrom(w, r)
+	if !ok {
+		return
+	}
+	cfg, ok := s.snapshots(w)
+	if !ok {
+		return
+	}
+	old, ok := s.getSnapshot(w, r, sess, r.PathValue("id"))
+	if !ok {
+		return
+	}
+	if old.Status.Phase != devpodv1alpha1.SnapshotFailed {
+		s.writeErr(w, http.StatusConflict, "NOT_FAILED", "only a failed save is tried again", nil)
+		return
+	}
+	var dp devpodv1alpha1.DevPod
+	if err := s.k(r).Reader.Get(r.Context(), types.NamespacedName{Name: old.Spec.DevPodName, Namespace: s.NS}, &dp); err != nil {
+		s.writeErr(w, http.StatusConflict, "NOT_RUNNING", fmt.Sprintf("the DevPod %s is gone", old.Spec.DevPodName), nil)
+		return
+	}
+	if apiErr := s.mayStartSave(r, cfg, &dp, old.Spec.Image); apiErr != nil {
+		s.writeServerErr(w, apiErr)
+		return
+	}
+	sn := newSnapshot(s.NS, &dp, old.Spec.Image, old.Spec.Pause)
+	sn.Spec.Push = old.Spec.Push
+	if old.Spec.PushSecretRef != nil {
+		ref := *old.Spec.PushSecretRef
+		sn.Spec.PushSecretRef = &ref
+	}
+	if v, ok := old.Annotations[customRegistryAnnotation]; ok {
+		sn.Annotations = map[string]string{customRegistryAnnotation: v}
+	}
+	if err := s.k(r).Client.Create(r.Context(), sn); err != nil {
+		s.writeErr(w, http.StatusBadRequest, "BAD_REQUEST", "snapshot rejected", err.Error())
+		return
+	}
+	s.writeJSON(w, http.StatusCreated, viewSnapshot(sn))
+}
+
 // handleCreateSnapshot serves POST /api/devpods/{name}/snapshots.
 func (s *Server) handleCreateSnapshot(w http.ResponseWriter, r *http.Request) {
 	sess, ok := s.sessionFrom(w, r)
@@ -295,50 +391,11 @@ func (s *Server) handleCreateSnapshot(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
-	if dp.Status.Phase != devpodv1alpha1.DevPodRunning {
-		s.writeErr(w, http.StatusConflict, "NOT_RUNNING", "only a running DevPod can be saved as an image", nil)
+	if apiErr := s.mayStartSave(r, cfg, dp, image); apiErr != nil {
+		s.writeServerErr(w, apiErr)
 		return
 	}
-	mine, err := s.ownedSnapshots(r.Context(), owner)
-	if err != nil {
-		s.writeErr(w, http.StatusInternalServerError, "INTERNAL", err.Error(), nil)
-		return
-	}
-	// Saving to an address again overwrites that tag: the registry gets
-	// the new image, and the controller drops the older records of the
-	// address once this one succeeds. Only two saves to one address at the
-	// same time are refused. An overwrite takes no new place in the quota.
-	kept := 0
-	for i := range mine {
-		sn := &mine[i]
-		terminal := sn.Status.Phase == devpodv1alpha1.SnapshotSucceeded || sn.Status.Phase == devpodv1alpha1.SnapshotFailed
-		if sn.Spec.Image == image {
-			if !terminal {
-				s.writeErr(w, http.StatusConflict, "IMAGE_BUSY", fmt.Sprintf("%s is being saved right now; wait for it or cancel it", image), map[string]string{"id": sn.Name})
-				return
-			}
-			continue
-		}
-		if sn.Status.Phase == devpodv1alpha1.SnapshotSucceeded {
-			kept++
-		}
-	}
-	if cfg.MaxPerUser > 0 && kept >= cfg.MaxPerUser {
-		s.writeErr(w, http.StatusConflict, "SNAPSHOT_QUOTA", fmt.Sprintf("you keep %d saved images, the most allowed; delete one first", kept), nil)
-		return
-	}
-	prefix := dp.Name
-	if len(prefix) > snapshotObjPrefixMx {
-		prefix = strings.TrimRight(prefix[:snapshotObjPrefixMx], "-.")
-	}
-	sn := &devpodv1alpha1.DevPodSnapshot{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      prefix + "-" + randString(6),
-			Namespace: s.NS,
-			Labels:    map[string]string{render.LabelOwner: owner, render.LabelDevPod: dp.Name},
-		},
-		Spec: devpodv1alpha1.DevPodSnapshotSpec{DevPodName: dp.Name, Image: image, Push: true, Pause: req.Pause},
-	}
+	sn := newSnapshot(s.NS, dp, image, req.Pause)
 	switch {
 	case auth != nil:
 		// the controller turns this into a Secret and clears it at once

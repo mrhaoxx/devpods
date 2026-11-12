@@ -116,6 +116,7 @@ var apiRoutes = []apiRoute{
 	{"GET /api/snapshots", "snapshots:read", "My saved images (?scope=all: everyone's, admins; ?devpod=)"},
 	{"GET /api/snapshots/{id}", "snapshots:read", "One snapshot"},
 	{"GET /api/snapshots/{id}/progress", "snapshots:read", "Server-sent events: {phase, stage, elapsedSeconds, sizeBytes, digest, message, lines} until it ends"},
+	{"POST /api/snapshots/{id}/retry", "snapshots:write", "Try a failed save again with its settings; the failed one stays"},
 	{"DELETE /api/snapshots/{id}", "snapshots:write", "Cancel a running snapshot, or forget a finished one (the image stays in the registry)"},
 
 	{"GET /api/reservations", "reservations:read", "Node reservation timeline (?from=&to=&node=)"},

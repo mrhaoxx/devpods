@@ -3,7 +3,7 @@
 import { useState } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { Link } from "react-router-dom";
-import { deleteSnapshot, type SnapshotView } from "../../data/api";
+import { ApiFailure, deleteSnapshot, retrySnapshot, type SnapshotView } from "../../data/api";
 import { useMe, useSnapshots } from "../../data/queries";
 import { Badge } from "../../design/Badge";
 import { ConfirmDialog } from "../../design/ConfirmDialog";
@@ -37,6 +37,7 @@ export function ImagesPage() {
   const [follow, setFollow] = useState<SnapshotView | null>(null);
   const [forget, setForget] = useState<SnapshotView | null>(null);
   const del = useMutation({ mutationFn: (id: string) => deleteSnapshot(id), onSettled: () => void qc.invalidateQueries({ queryKey: ["snapshots"] }) });
+  const retry = useMutation({ mutationFn: (id: string) => retrySnapshot(id), onSettled: () => void qc.invalidateQueries({ queryKey: ["snapshots"] }) });
   const items = q.data?.items ?? [];
   const busy = (s: SnapshotView) => s.phase === "Pending" || s.phase === "Running";
 
@@ -53,6 +54,11 @@ export function ImagesPage() {
           )
         }
       >
+        {retry.isError && (
+          <p role="alert" className="border-b border-line bg-fail-soft px-3 py-1.5 text-xs text-fail">
+            重试失败：{retry.error instanceof ApiFailure ? retry.error.body.message : String(retry.error)}
+          </p>
+        )}
         <p className="border-b border-line px-3 py-2 text-xs text-muted">
           在 DevPod 详情页点「保存为镜像」，把装好环境的容器存成镜像；之后新建 DevPod 时可以直接选它。镜像不包含持久卷（home 目录）。
         </p>
@@ -109,6 +115,11 @@ export function ImagesPage() {
                               新建 DevPod
                             </Link>
                           </>
+                        )}
+                        {s.phase === "Failed" && (
+                          <button type="button" disabled={retry.isPending} onClick={() => retry.mutate(s.id)} className="text-accent hover:underline disabled:opacity-50" title="用同样的设置再保存一次">
+                            重试
+                          </button>
                         )}
                         {!busy(s) && (
                           <button type="button" onClick={() => setForget(s)} className="text-muted hover:text-fail" aria-label={`删除 ${s.image}`}>

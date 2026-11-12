@@ -510,4 +510,40 @@ func TestSnapshotAPI(t *testing.T) {
 			t.Fatalf("the caller's registry used for the owner's DevPod: %+v", sn.Spec)
 		}
 	})
+
+	t.Run("a failed snapshot is tried again with its settings; the failed one stays", func(t *testing.T) {
+		setPhase("sn-alice-dev1", devpodv1alpha1.DevPodRunning)
+		v := call("POST", "/api/devpods/sn-alice-dev1/snapshots", alice, `{"name":"retry","tag":"t","pause":false}`, http.StatusCreated)
+		id := v["id"].(string)
+		// only a failed one
+		if r := call("POST", "/api/snapshots/"+id+"/retry", alice, "", http.StatusConflict); r["code"] != "NOT_FAILED" {
+			t.Fatalf("retry of one in progress: %v", r)
+		}
+		finish(id, devpodv1alpha1.SnapshotFailed)
+		call("POST", "/api/snapshots/"+id+"/retry", bob, "", http.StatusNotFound)
+		r := call("POST", "/api/snapshots/"+id+"/retry", alice, "", http.StatusCreated)
+		if r["id"] == id || r["image"] != v["image"] || r["devpod"] != "sn-alice-dev1" || r["phase"] != "Pending" {
+			t.Fatalf("retry %v", r)
+		}
+		old, again := getSnap(id), getSnap(r["id"].(string))
+		if again.Spec.DevPodName != old.Spec.DevPodName || again.Spec.Image != old.Spec.Image || again.Spec.Push != old.Spec.Push ||
+			again.Spec.Pause == nil || *again.Spec.Pause || again.Spec.PushSecretRef == nil || again.Spec.PushSecretRef.Name != old.Spec.PushSecretRef.Name ||
+			again.Labels["devpod.io/owner"] != "sn-alice" || again.Labels["devpod.io/devpod"] != "sn-alice-dev1" {
+			t.Fatalf("the retry is not the same save: %+v %v", again.Spec, again.Labels)
+		}
+		if old.Status.Phase != devpodv1alpha1.SnapshotFailed {
+			t.Fatalf("the failed one changed: %v", old.Status.Phase)
+		}
+		// while the retry runs, the address is busy
+		if busy := call("POST", "/api/snapshots/"+id+"/retry", alice, "", http.StatusConflict); busy["code"] != "IMAGE_BUSY" {
+			t.Fatalf("second retry: %v", busy)
+		}
+		// a DevPod that no longer runs cannot be saved
+		finish(r["id"].(string), devpodv1alpha1.SnapshotFailed)
+		setPhase("sn-alice-dev1", devpodv1alpha1.DevPodStopped)
+		if nr := call("POST", "/api/snapshots/"+id+"/retry", alice, "", http.StatusConflict); nr["code"] != "NOT_RUNNING" {
+			t.Fatalf("stopped DevPod: %v", nr)
+		}
+		setPhase("sn-alice-dev1", devpodv1alpha1.DevPodRunning)
+	})
 }
