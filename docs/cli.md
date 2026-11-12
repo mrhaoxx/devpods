@@ -121,7 +121,7 @@ $ printf '%s\n' "$REGISTRY_PASSWORD" | ssh alice+devpod@gateway registry add har
 
 ## Saved configs
 
-A config is a DevPod manifest saved as text, with variables — `${NAME}`, `${NODE}`, `${OWNER}`, `${INDEX}` and any `${VAR}` or `${VAR:-default}` of your own (the full rules are in [the API notes](api.md#saved-configs)). You save it once and create DevPods from it; you can share it with named users or make it public. Whoever launches a config creates DevPods **as themselves**: their quota, their node rules.
+A config is a DevPod manifest saved as text, with variables — `${NAME}`, `${NODE}`, `${OWNER}`, `${INDEX}` (from 0), `${COUNT}`, `${LEADER}` and any `${VAR}` or `${VAR:-default}` of your own (the full rules are in [the API notes](api.md#saved-configs)). You save it once and create DevPods from it; you can share it with named users or make it public. Whoever launches a config creates DevPods **as themselves**: their quota, their node rules.
 
 ```console
 $ ssh alice+devpod@gateway config save sglang --title "SGLang 8 GPUs" < sglang.yaml
@@ -135,15 +135,16 @@ NAME          OWNER  ACCESS    VARIABLES        TITLE
 alice-sglang  alice  shared:2  NAME,NODE,IMAGE  SGLang 8 GPUs
 bob-k3s       bob    public    NAME             k3s
 
-# one DevPod per node, named alice-sg-1 and alice-sg-2
+# one DevPod per node, named alice-sg-0 and alice-sg-1
 $ ssh alice+devpod@gateway config launch sglang --set NAME=sg --node m602 --node m603
-ok   alice-sg-1  m602
-ok   alice-sg-2  m603
+ok   alice-sg-0  m602
+ok   alice-sg-1  m603
+group: alice-sg
 ```
 
 - `<name>` is the config's full name as `list` shows it (`bob-k3s`); your own may be given without your user name (`sglang`).
-- `--set NAME=…` is the part of the DevPod's name after your user name. `OWNER` and `INDEX` are filled in for you; nodes are given with `--node`, not `--set NODE=`.
-- A config with `${NODE}` creates one DevPod per `--node`, in the order given. One without takes `--count N` (default 1, at most 32). Several get `-1`, `-2`, … after the name, unless the config places `${INDEX}` itself.
+- `--set NAME=…` is the part of the DevPod's name after your user name. `OWNER`, `INDEX`, `COUNT` and `LEADER` are filled in for you; nodes are given with `--node`, not `--set NODE=`.
+- A config with `${NODE}` creates one DevPod per `--node`, in the order given. One without takes `--count N` (default 1, at most 32). Several get `-0`, `-1`, … after the name, unless the config places `${INDEX}` itself, and form a group.
 - The launch is checked as a whole first. If any DevPod cannot be created — quota, a name already taken, a reserved node, a value that breaks the YAML — **none is**: each line says `pass` or `FAIL … CODE: message`, and the exit status is `1`.
 - If the check passed and a write still failed (someone took the name in between), the others are created and stay: `ok` and `FAIL` lines, exit status `1`.
 - `--dry-run` only checks, and prints `--- <name>` and the YAML each DevPod would be created from.

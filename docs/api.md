@@ -150,7 +150,9 @@ one or take it off the public list (`PATCH {"public": false}`), nothing else.
 | `${OWNER}` | whoever launches (filled by the server) |
 | `${NAME}` | the DevPod's full name: you give the short name, your prefix is added |
 | `${NODE}` | a node; given as `nodes`, one DevPod per node |
-| `${INDEX}` | the DevPod's number in the launch, from 1 (filled by the server) |
+| `${INDEX}` | the DevPod's number in the launch, from 0 (filled by the server) |
+| `${COUNT}` | how many the launch creates (filled by the server) |
+| `${LEADER}` | the full name of number 0 — every DevPod reaches the others by name, so this is a `MASTER_ADDR` (filled by the server) |
 
 A name is `[A-Z][A-Z0-9_]*`; any other `${…}` (a shell's `${home}`) is left as
 it is. Values are single-line text of at most 1024 bytes.
@@ -165,7 +167,7 @@ curl -X PATCH … -d '{"public":true}' $DEVPOD/api/configs/star-sglang
 curl … "$DEVPOD/api/configs?scope=public"
 curl … $DEVPOD/api/configs/star-sglang
 
-# launch: one DevPod per node, named <me>-sg-1, <me>-sg-2
+# launch: one DevPod per node, named <me>-sg-0, <me>-sg-1
 curl … -d '{"vars":{"NAME":"sg"},"nodes":["m602","m603"]}' $DEVPOD/api/configs/star-sglang/launch
 # a config without ${NODE} takes a count instead (default 1, at most 32)
 curl … -d '{"vars":{"NAME":"w","IMAGE":"debian:12"},"count":3}' $DEVPOD/api/configs/star-plain/launch
@@ -176,13 +178,27 @@ exactly as `POST /api/devpods` with that YAML would create it, as you: the same
 quota, node and manifest rules. With several, the name gets `-<index>` unless
 the config uses `${INDEX}` itself.
 
+Each DevPod records where it came from: the label `devpod.io/config` (the
+config's name) and the annotations `devpod.io/config-hash` (of the text it was
+made from) and `devpod.io/config-vars` (the values given, and `NAME`'s). Several
+at once form a group: the label `devpod.io/group` (`<you>-<short name>`, or the
+name of number 0 when the config has no `${NAME}`) and the annotations
+`devpod.io/group-index`, `devpod.io/group-size` and `devpod.io/group-leader`.
+The answer then also carries `"group"`. A launch whose group you still have
+DevPods of is refused (`GROUP_TAKEN`).
+
+A config may say what its variables are (`"variables": [{name, description?,
+type?, options?}]` when saving): `type` is `string` (the default), `int`,
+`choice` (one of `options`), `node` or `image`. A value that is not of its
+type fails the launch with `BAD_VALUE`.
+
 The launch is checked as a whole first. The answer is `{"items": [{index, name,
 node, ok, code, message}]}` with:
 
 | Status | Meaning |
 |---|---|
 | `200` | every DevPod was created (or, with `"dryRun": true`, would be — each item then carries its `yaml`) |
-| `422` `LAUNCH_REJECTED` | at least one could not be created; **nothing was**. The failing items say why (`QUOTA_EXCEEDED`, `NAME_TAKEN`, `DUPLICATE_NAME`, `BAD_NAME`, `NODE_RESERVED`, `BAD_REQUEST` for YAML the values broke, …) and carry their `yaml` |
+| `422` `LAUNCH_REJECTED` | at least one could not be created; **nothing was**. The failing items say why (`QUOTA_EXCEEDED`, `NAME_TAKEN`, `DUPLICATE_NAME`, `BAD_NAME`, `BAD_VALUE`, `GROUP_TAKEN`, `NODE_RESERVED`, `BAD_REQUEST` for YAML the values broke, …) and carry their `yaml` |
 | `207` | the check passed but a write failed meanwhile; the others were created and are not undone |
 | `400` `BAD_VARIABLES` | a variable is missing or unknown (`detail` names them), or a value is not single-line text |
 

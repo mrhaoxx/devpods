@@ -5,10 +5,18 @@
 package webui
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"net/http"
 	"regexp"
+	"slices"
+	"strings"
 	"unicode/utf8"
+
+	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/types"
 
 	devpodv1alpha1 "github.com/mrhaoxx/devpod/api/v1alpha1"
 	"github.com/mrhaoxx/devpod/internal/configvars"
@@ -184,4 +192,47 @@ func varViews(c *devpodv1alpha1.DevPodConfig) []ConfigVarView {
 
 func isOfficial(c *devpodv1alpha1.DevPodConfig) bool {
 	return c.Annotations[annOfficial] == "true"
+}
+
+// Where a DevPod launched from a config came from (spec §2.2).
+const (
+	lblConfig      = "devpod.io/config"
+	lblGroup       = "devpod.io/group"
+	annConfigHash  = "devpod.io/config-hash"
+	annConfigVars  = "devpod.io/config-vars"
+	annGroupIndex  = "devpod.io/group-index"
+	annGroupSize   = "devpod.io/group-size"
+	annGroupLeader = "devpod.io/group-leader"
+)
+
+// contentHash names a config's text: the first 16 hex digits of its SHA-256.
+func contentHash(content string) string {
+	sum := sha256.Sum256([]byte(content))
+	return hex.EncodeToString(sum[:])[:16]
+}
+
+var intRE = regexp.MustCompile(`^-?[0-9]+$`)
+
+// checkVarValue checks a value against what the config says the
+// variable is.
+func (s *Server) checkVarValue(r *http.Request, sess Session, d VarDecl, v string) error {
+	switch d.Type {
+	case VarInt:
+		if !intRE.MatchString(v) {
+			return fmt.Errorf("%s must be a whole number, not %q", d.Name, v)
+		}
+	case VarChoice:
+		if !slices.Contains(d.Options, v) {
+			return fmt.Errorf("%s must be one of %s, not %q", d.Name, strings.Join(d.Options, ", "), v)
+		}
+	case VarNode:
+		var n corev1.Node
+		if err := s.k(r).Reader.Get(r.Context(), types.NamespacedName{Name: v}, &n); err != nil {
+			return fmt.Errorf("%s: %q is not a node", d.Name, v)
+		}
+		if apiErr := s.pinErr(r.Context(), sess.User, v); apiErr != nil {
+			return fmt.Errorf("%s: %s", d.Name, apiErr.Message)
+		}
+	}
+	return nil
 }

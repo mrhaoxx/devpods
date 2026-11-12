@@ -8,6 +8,7 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -119,7 +120,7 @@ func TestConfigLaunch(t *testing.T) {
 	t.Run("one DevPod, owned by whoever launches", func(t *testing.T) {
 		t.Cleanup(func() { cleanupDevPods(t) })
 		items := launch("plain", bob, map[string]any{"vars": vars("NAME", "sg")}, http.StatusOK)
-		if len(items) != 1 || !items[0].OK || items[0].Name != "cl-bob-sg" || items[0].Index != 1 || items[0].YAML != "" {
+		if len(items) != 1 || !items[0].OK || items[0].Name != "cl-bob-sg" || items[0].Index != 0 || items[0].YAML != "" {
 			t.Fatalf("items %+v", items)
 		}
 		dp := waitDevPod(t, "cl-bob-sg")
@@ -136,11 +137,11 @@ func TestConfigLaunch(t *testing.T) {
 	t.Run("a count: names get the index", func(t *testing.T) {
 		t.Cleanup(func() { cleanupDevPods(t) })
 		items := launch("plain", bob, map[string]any{"vars": vars("NAME", "w", "IMAGE", "debian:12"), "count": 3}, http.StatusOK)
-		if len(items) != 3 || items[0].Name != "cl-bob-w-1" || items[1].Name != "cl-bob-w-2" || items[2].Name != "cl-bob-w-3" || items[2].Index != 3 {
+		if len(items) != 3 || items[0].Name != "cl-bob-w-0" || items[1].Name != "cl-bob-w-1" || items[2].Name != "cl-bob-w-2" || items[2].Index != 2 {
 			t.Fatalf("items %+v", items)
 		}
 		created(items)
-		if dp := waitDevPod(t, "cl-bob-w-2"); dp.Spec.Pod.Spec.Containers[0].Image != "debian:12" {
+		if dp := waitDevPod(t, "cl-bob-w-1"); dp.Spec.Pod.Spec.Containers[0].Image != "debian:12" {
 			t.Fatalf("image %s", dp.Spec.Pod.Spec.Containers[0].Image)
 		}
 	})
@@ -148,7 +149,7 @@ func TestConfigLaunch(t *testing.T) {
 	t.Run("a config that places the index itself", func(t *testing.T) {
 		t.Cleanup(func() { cleanupDevPods(t) })
 		items := launch("indexed", bob, map[string]any{"vars": vars("NAME", "x"), "count": 2}, http.StatusOK)
-		if len(items) != 2 || items[0].Name != "cl-bob-x-n1" || items[1].Name != "cl-bob-x-n2" {
+		if len(items) != 2 || items[0].Name != "cl-bob-x-n0" || items[1].Name != "cl-bob-x-n1" {
 			t.Fatalf("items %+v", items)
 		}
 		created(items)
@@ -167,11 +168,11 @@ func TestConfigLaunch(t *testing.T) {
 	t.Run("nodes: one DevPod each, in the order given", func(t *testing.T) {
 		t.Cleanup(func() { cleanupDevPods(t) })
 		items := launch("pinned", bob, map[string]any{"vars": vars("NAME", "p"), "nodes": []string{"cl-node-b", "cl-node-a"}}, http.StatusOK)
-		if len(items) != 2 || items[0].Node != "cl-node-b" || items[1].Node != "cl-node-a" || items[0].Name != "cl-bob-p-1" {
+		if len(items) != 2 || items[0].Node != "cl-node-b" || items[1].Node != "cl-node-a" || items[0].Name != "cl-bob-p-0" {
 			t.Fatalf("items %+v", items)
 		}
 		created(items)
-		if dp := waitDevPod(t, "cl-bob-p-2"); dp.Spec.Pod.Spec.NodeSelector["kubernetes.io/hostname"] != "cl-node-a" {
+		if dp := waitDevPod(t, "cl-bob-p-1"); dp.Spec.Pod.Spec.NodeSelector["kubernetes.io/hostname"] != "cl-node-a" {
 			t.Fatalf("pin %v", dp.Spec.Pod.Spec.NodeSelector)
 		}
 		// a node that is not there fails that instance, and so the launch
@@ -179,7 +180,7 @@ func TestConfigLaunch(t *testing.T) {
 		if len(items) != 2 || !items[0].OK || items[1].OK || !strings.Contains(items[1].Message, "cl-node-zz") {
 			t.Fatalf("items %+v", items)
 		}
-		if devpodExists(t, "cl-bob-q-1") {
+		if devpodExists(t, "cl-bob-q-0") {
 			t.Fatal("a rejected launch created a DevPod")
 		}
 	})
@@ -225,7 +226,7 @@ func TestConfigLaunch(t *testing.T) {
 		if len(items) != 3 || !items[0].OK || !items[1].OK || items[2].Code != "QUOTA_EXCEEDED" {
 			t.Fatalf("items %+v", items)
 		}
-		if devpodExists(t, "cl-bob-b-1") {
+		if devpodExists(t, "cl-bob-b-0") {
 			t.Fatal("a rejected launch created a DevPod")
 		}
 	})
@@ -264,8 +265,8 @@ func TestConfigLaunch(t *testing.T) {
 			t.Fatalf("plan: %s", code)
 		}
 		// someone creates the second name meanwhile
-		items := launch("plain", bob, map[string]any{"vars": vars("NAME", "race-2")}, http.StatusOK)
-		if len(items) != 1 || items[0].Name != "cl-bob-race-2" {
+		items := launch("plain", bob, map[string]any{"vars": vars("NAME", "race-1")}, http.StatusOK)
+		if len(items) != 1 || items[0].Name != "cl-bob-race-1" {
 			t.Fatalf("the intruder %+v", items)
 		}
 		created(items)
@@ -273,8 +274,97 @@ func TestConfigLaunch(t *testing.T) {
 		if status != http.StatusMultiStatus || len(got) != 3 || !got[0].OK || got[1].OK || got[1].Code != "NAME_TAKEN" || !got[2].OK {
 			t.Fatalf("status %d items %+v", status, got)
 		}
-		waitDevPod(t, "cl-bob-race-1")
-		waitDevPod(t, "cl-bob-race-3")
+		waitDevPod(t, "cl-bob-race-0")
+		waitDevPod(t, "cl-bob-race-2")
+	})
+
+	envYAML := func(name string) string {
+		return "apiVersion: devpod.io/v1alpha1\nkind: DevPod\nmetadata:\n  name: " + name + "\nspec:\n  owner: ${OWNER}\n  running: true\n  pod:\n    spec:\n" +
+			"      containers:\n        - name: dev\n          image: ubuntu:24.04\n          env:\n            - {name: LEADER, value: '${LEADER}'}\n            - {name: COUNT, value: '${COUNT}'}\n" +
+			"          resources:\n            limits: {cpu: '1', memory: 1Gi}\n"
+	}
+	envOf := func(dp devpodv1alpha1.DevPod, name string) string {
+		for _, e := range dp.Spec.Pod.Spec.Containers[0].Env {
+			if e.Name == name {
+				return e.Value
+			}
+		}
+		return "<unset>"
+	}
+	save("env", envYAML("${NAME}"))
+	save("envfixed", envYAML("cl-bob-fixed"))
+
+	t.Run("provenance", func(t *testing.T) {
+		t.Cleanup(func() { cleanupDevPods(t) })
+		body := call("POST", "/api/configs/cl-alice-plain/launch", bob, jsonBody(map[string]any{"vars": vars("NAME", "pv"), "count": 2}), http.StatusOK)
+		if body["group"] != "cl-bob-pv" {
+			t.Fatalf("group %v", body["group"])
+		}
+		created(launchItems(t, body))
+		for i, name := range []string{"cl-bob-pv-0", "cl-bob-pv-1"} {
+			dp := waitDevPod(t, name)
+			l, a := dp.Labels, dp.Annotations
+			if l["devpod.io/config"] != "cl-alice-plain" || l["devpod.io/group"] != "cl-bob-pv" ||
+				a["devpod.io/group-index"] != strconv.Itoa(i) || a["devpod.io/group-size"] != "2" || a["devpod.io/group-leader"] != "cl-bob-pv-0" ||
+				len(a["devpod.io/config-hash"]) != 16 || strings.Trim(a["devpod.io/config-hash"], "0123456789abcdef") != "" ||
+				!strings.Contains(a["devpod.io/config-vars"], `"NAME":"`+name+`"`) {
+				t.Fatalf("%s: labels %v annotations %v", name, l, a)
+			}
+		}
+		// one alone is no group
+		body = call("POST", "/api/configs/cl-alice-plain/launch", bob, jsonBody(map[string]any{"vars": vars("NAME", "pv1")}), http.StatusOK)
+		if _, has := body["group"]; has {
+			t.Fatalf("a group for one: %v", body["group"])
+		}
+		dp := waitDevPod(t, "cl-bob-pv1")
+		if dp.Labels["devpod.io/config"] != "cl-alice-plain" || dp.Labels["devpod.io/group"] != "" || dp.Annotations["devpod.io/group-index"] != "" {
+			t.Fatalf("labels %v annotations %v", dp.Labels, dp.Annotations)
+		}
+	})
+
+	t.Run("leader", func(t *testing.T) {
+		t.Cleanup(func() { cleanupDevPods(t) })
+		created(launch("env", bob, map[string]any{"vars": vars("NAME", "ld"), "count": 3}, http.StatusOK))
+		for _, name := range []string{"cl-bob-ld-0", "cl-bob-ld-1", "cl-bob-ld-2"} {
+			if dp := waitDevPod(t, name); envOf(dp, "LEADER") != "cl-bob-ld-0" || envOf(dp, "COUNT") != "3" {
+				t.Fatalf("%s: LEADER %q COUNT %q", name, envOf(dp, "LEADER"), envOf(dp, "COUNT"))
+			}
+		}
+		// without ${NAME}: its own name
+		created(launch("envfixed", bob, map[string]any{}, http.StatusOK))
+		if dp := waitDevPod(t, "cl-bob-fixed"); envOf(dp, "LEADER") != "cl-bob-fixed" || envOf(dp, "COUNT") != "1" {
+			t.Fatalf("LEADER %q COUNT %q", envOf(dp, "LEADER"), envOf(dp, "COUNT"))
+		}
+	})
+
+	t.Run("typed", func(t *testing.T) {
+		t.Cleanup(func() { cleanupDevPods(t) })
+		content := strings.Replace(envYAML("${NAME}"), "            - {name: COUNT, value: '${COUNT}'}\n",
+			"            - {name: A, value: '${N}'}\n            - {name: B, value: '${GPU}'}\n            - {name: C, value: '${WHERE}'}\n", 1)
+		call("POST", "/api/configs", alice, jsonBody(map[string]any{"id": "typed", "title": "typed", "content": content, "sharedWith": []string{"cl-bob"},
+			"variables": []map[string]any{{"name": "N", "type": "int"}, {"name": "GPU", "type": "choice", "options": []string{"1", "2"}}, {"name": "WHERE", "type": "node"}}}), http.StatusCreated)
+		bad := func(v map[string]string, says string) {
+			t.Helper()
+			items := launch("typed", bob, map[string]any{"vars": v}, http.StatusUnprocessableEntity)
+			if len(items) != 1 || items[0].Code != "BAD_VALUE" || !strings.Contains(items[0].Message, says) {
+				t.Fatalf("items %+v", items)
+			}
+		}
+		bad(vars("NAME", "ty", "N", "1", "GPU", "3", "WHERE", "cl-node-a"), "GPU")
+		bad(vars("NAME", "ty", "N", "abc", "GPU", "1", "WHERE", "cl-node-a"), "N")
+		bad(vars("NAME", "ty", "N", "1", "GPU", "1", "WHERE", "cl-node-zz"), "WHERE")
+		created(launch("typed", bob, map[string]any{"vars": vars("NAME", "ty", "N", "-4", "GPU", "2", "WHERE", "cl-node-a")}, http.StatusOK))
+	})
+
+	t.Run("group taken", func(t *testing.T) {
+		t.Cleanup(func() { cleanupDevPods(t) })
+		save("gt", launchYAML("${NAME}-g${INDEX}", "1", ""))
+		save("gt2", launchYAML("${NAME}-h${INDEX}", "1", ""))
+		created(launch("gt", bob, map[string]any{"vars": vars("NAME", "gt"), "count": 2}, http.StatusOK))
+		items := launch("gt2", bob, map[string]any{"vars": vars("NAME", "gt"), "count": 2}, http.StatusUnprocessableEntity)
+		if len(items) != 2 || items[0].Code != "GROUP_TAKEN" || items[1].Code != "GROUP_TAKEN" {
+			t.Fatalf("items %+v", items)
+		}
 	})
 
 	t.Run("a config taken away is not there to launch", func(t *testing.T) {
@@ -393,11 +483,11 @@ func TestConfigLaunch_Example(t *testing.T) {
 	req := jsonBody(map[string]any{"vars": map[string]string{"NAME": "sg"}, "nodes": []string{"ex-node-a", "ex-node-b"}})
 
 	items := launchItems(t, apiCall(t, srv, "POST", "/api/configs/ex-root-sglang/launch", root, req, http.StatusOK))
-	if len(items) != 2 || !items[0].OK || !items[1].OK || items[0].Name != "ex-root-sg-1" || items[1].Node != "ex-node-b" {
+	if len(items) != 2 || !items[0].OK || !items[1].OK || items[0].Name != "ex-root-sg-0" || items[1].Node != "ex-node-b" {
 		t.Fatalf("admin launch %+v", items)
 	}
-	dp := waitDevPod(t, "ex-root-sg-2")
-	waitDevPod(t, "ex-root-sg-1")
+	dp := waitDevPod(t, "ex-root-sg-1")
+	waitDevPod(t, "ex-root-sg-0")
 	spec := dp.Spec.Pod.Spec
 	if dp.Spec.Owner != "ex-root" || dp.Spec.Shell != "zsh" || !spec.HostNetwork || !*spec.Containers[0].SecurityContext.Privileged ||
 		spec.NodeSelector["kubernetes.io/hostname"] != "ex-node-b" || len(spec.Volumes) != 4 || spec.Containers[0].Resources.Limits.Name("nvidia.com/gpu", "").String() != "8" {
@@ -406,11 +496,11 @@ func TestConfigLaunch_Example(t *testing.T) {
 
 	// an ordinary user launches it too: cpu and memory limits are optional
 	items = launchItems(t, apiCall(t, srv, "POST", "/api/configs/ex-root-sglang/launch", bob, req, http.StatusOK))
-	if len(items) != 2 || !items[0].OK || !items[1].OK || items[1].Name != "ex-bob-sg-2" {
+	if len(items) != 2 || !items[0].OK || !items[1].OK || items[1].Name != "ex-bob-sg-1" {
 		t.Fatalf("user launch %+v", items)
 	}
-	waitDevPod(t, "ex-bob-sg-1")
-	if dp := waitDevPod(t, "ex-bob-sg-2"); dp.Spec.Owner != "ex-bob" {
+	waitDevPod(t, "ex-bob-sg-0")
+	if dp := waitDevPod(t, "ex-bob-sg-1"); dp.Spec.Owner != "ex-bob" {
 		t.Fatalf("owner %s", dp.Spec.Owner)
 	}
 }

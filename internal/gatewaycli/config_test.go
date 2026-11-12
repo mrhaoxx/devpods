@@ -285,7 +285,7 @@ func TestConfigLaunch(t *testing.T) {
 	f.on("GET /api/configs/alice-sg", 0, cfgMine)
 	const launch = "POST /api/configs/alice-sg/launch"
 
-	f.on(launch, 0, `{"items":[{"index":1,"name":"alice-sg-1","node":"a","ok":true},{"index":2,"name":"alice-sg-2","node":"b","ok":true}]}`)
+	f.on(launch, 0, `{"group":"alice-sg","items":[{"index":0,"name":"alice-sg-0","node":"a","ok":true},{"index":1,"name":"alice-sg-1","node":"b","ok":true}]}`)
 	code, out, errs := f.run("config launch sg --set NAME=sg --set IMAGE=reg.test/x:1=2 --node a --node b", "")
 	if code != ExitOK || errs != "" {
 		t.Fatalf("launch: %d %q", code, errs)
@@ -294,13 +294,16 @@ func TestConfigLaunch(t *testing.T) {
 		t.Fatalf("calls %v", got)
 	}
 	rows := strings.Split(strings.TrimSpace(out), "\n")
-	if len(rows) != 2 || !reflect.DeepEqual(strings.Fields(rows[0]), []string{"ok", "alice-sg-1", "a"}) || !reflect.DeepEqual(strings.Fields(rows[1]), []string{"ok", "alice-sg-2", "b"}) {
+	if len(rows) != 3 || !reflect.DeepEqual(strings.Fields(rows[0]), []string{"ok", "alice-sg-0", "a"}) || !reflect.DeepEqual(strings.Fields(rows[1]), []string{"ok", "alice-sg-1", "b"}) ||
+		rows[2] != "group: alice-sg" {
 		t.Fatalf("out:\n%s", out)
 	}
 
 	// a count, no variables
-	f.on(launch, 0, `{"items":[{"index":1,"name":"alice-w","ok":true}]}`)
-	f.run("config launch sg --count 3", "")
+	f.on(launch, 0, `{"items":[{"index":0,"name":"alice-w","ok":true}]}`)
+	if _, out, _ := f.run("config launch sg --count 3", ""); strings.Contains(out, "group") {
+		t.Fatalf("a group line for one: %q", out)
+	}
 	if got := f.taken(); len(got) != 2 || got[1] != launch+` {"count":3}` {
 		t.Fatalf("calls %v", got)
 	}

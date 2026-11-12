@@ -23,7 +23,8 @@ const maxConfigContent = 256 << 10
 
 const configLong = `A config is a DevPod manifest saved as text, with variables: ${NAME} (the
 DevPod's name — you give the part after your user name), ${NODE}, ${OWNER},
-${INDEX}, and any ${VAR} or ${VAR:-default} of your own.
+${INDEX} (from 0), ${COUNT}, ${LEADER} (the name of number 0), and any ${VAR}
+or ${VAR:-default} of your own.
 
   config [list] [--mine|--shared|--public]   the configs you may use
   config show <name>                         its details and YAML
@@ -38,8 +39,8 @@ ${INDEX}, and any ${VAR} or ${VAR:-default} of your own.
 
 <name> is the config's full name as the list shows it; your own may be given
 without your user name. launch creates one DevPod per --node for a config with
-${NODE}, otherwise --count of them (default 1); several get -1, -2, … after the
-name. Everything is checked first: if one cannot be created, none is. --dry-run
+${NODE}, otherwise --count of them (default 1); several get -0, -1, … after the
+name and form a group. Everything is checked first: if one cannot be created, none is. --dry-run
 only checks, and prints the YAML each DevPod would be created from.`
 
 func configCommands() []*command {
@@ -425,6 +426,7 @@ func configLaunch(e *Env, c *command, a *parsed, args []string) int {
 		fmt.Fprintf(e.Err, "error: %s\n", err)
 	}
 	var res struct {
+		Group string       `json:"group"`
 		Items []launchItem `json:"items"`
 	}
 	if err := json.Unmarshal(raw, &res); err != nil {
@@ -462,6 +464,9 @@ func configLaunch(e *Env, c *command, a *parsed, args []string) int {
 		default:
 			fmt.Fprintf(e.Out, "ok   %s  %s\n", it.Name, dash(it.Node))
 		}
+	}
+	if res.Group != "" && !rejected {
+		fmt.Fprintf(e.Out, "group: %s\n", res.Group)
 	}
 	return code
 }
