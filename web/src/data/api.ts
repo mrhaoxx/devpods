@@ -237,7 +237,8 @@ export const getPubkeys = () => req<{ pubkeys: string[] | null }>("GET", "/api/m
 export const putPubkeys = (pubkeys: string[]) => req<{ pubkeys: string[] }>("PUT", "/api/me/pubkeys", { pubkeys });
 
 export { watchDevPods, watchDevPod } from "./sse";
-export type DevPodDetail = { devpod: DevPod; binding?: BindingInfo; pod?: PodInfo };
+/** configOutdated: the config it came from has changed since (only when I may see that config) */
+export type DevPodDetail = { devpod: DevPod; binding?: BindingInfo; pod?: PodInfo; configOutdated?: boolean };
 
 /* ─── Audit ───────────────────────────────────────────────────────── */
 export type SessionRow = {

@@ -1,6 +1,7 @@
 // DevPod 详情 (UI spec §5.2). One SSE connection carries status, events,
 // metrics and processes; with live data off, status and events come
 // from the plain detail stream instead.
+import { Provenance } from "./Provenance";
 import { preloadYamlEditor } from "../../../design/yaml/YamlEditor";
 import { Notice } from "../../../design/Form";
 import { reservationNotes } from "../status";
@@ -195,6 +196,7 @@ export function DetailPage() {
           删除
         </Button>
       </header>
+      <Provenance dp={dp} outdated={d.configOutdated} />
       <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs">
         {me?.admin && <Meta k="Owner">{owner}</Meta>}
         <Meta k="节点">{pod?.node}</Meta>
