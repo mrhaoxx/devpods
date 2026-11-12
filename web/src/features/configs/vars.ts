@@ -12,7 +12,11 @@ export const OWNER = "OWNER";
 export const NAME = "NAME";
 export const NODE = "NODE";
 export const INDEX = "INDEX";
-const builtin = (n: string) => n === OWNER || n === NAME || n === NODE || n === INDEX;
+export const COUNT = "COUNT";
+export const LEADER = "LEADER";
+/** serverFilled: the server gives the value, never the person launching. */
+export const serverFilled = (n: string) => n === OWNER || n === INDEX || n === COUNT || n === LEADER;
+const builtin = (n: string) => n === NAME || n === NODE || serverFilled(n);
 
 type Ref = { name: string; def: string; hasDefault: boolean };
 
@@ -79,7 +83,7 @@ export function parseVars(content: string): ConfigVar[] {
   });
   return order.map((n) => {
     const r = by.get(n)!;
-    const v: ConfigVar = { name: n, builtin: builtin(n), required: !r.hasDefault && n !== OWNER && n !== INDEX };
+    const v: ConfigVar = { name: n, builtin: builtin(n), required: !r.hasDefault && !serverFilled(n) };
     if (r.def !== "") v.default = r.def;
     return v;
   });

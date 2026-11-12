@@ -23,11 +23,19 @@ import (
 
 // The variables with a meaning of their own.
 const (
-	Owner = "OWNER" // the user launching; filled by the server
-	Name  = "NAME"  // the DevPod's full name
-	Node  = "NODE"  // the node it is pinned to
-	Index = "INDEX" // its number in a batch, from 1; filled by the server
+	Owner  = "OWNER"  // the user launching; filled by the server
+	Name   = "NAME"   // the DevPod's full name
+	Node   = "NODE"   // the node it is pinned to
+	Index  = "INDEX"  // its number in a launch, from 0; filled by the server
+	Count  = "COUNT"  // how many the launch creates; filled by the server
+	Leader = "LEADER" // the full name of the launch's number 0; filled by the server
 )
+
+// ServerFilled: a variable the server gives a value, never the person
+// launching.
+func ServerFilled(name string) bool {
+	return name == Owner || name == Index || name == Count || name == Leader
+}
 
 // MaxValueLen bounds one value, in bytes.
 const MaxValueLen = 1024
@@ -128,7 +136,7 @@ func scan(content string, text func(string), variable func(ref)) {
 }
 
 func builtin(name string) bool {
-	return name == Owner || name == Name || name == Node || name == Index
+	return name == Name || name == Node || ServerFilled(name)
 }
 
 // collect lists the variables in order of first appearance; a variable
@@ -160,7 +168,7 @@ func Parse(content string) []Var {
 		out = append(out, Var{
 			Name:     n,
 			Builtin:  builtin(n),
-			Required: !r.hasDefault && n != Owner && n != Index,
+			Required: !r.hasDefault && !ServerFilled(n),
 			Default:  r.def,
 		})
 	}
