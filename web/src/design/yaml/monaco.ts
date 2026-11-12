@@ -28,7 +28,10 @@ configureMonacoYaml(monaco, {
   validate: true,
   format: { enable: false }, // the text is the user's: never rewritten
   isKubernetes: true,
-  schemas: [{ uri: "devpod.io/devpod.json", fileMatch: ["**/devpod/*.yaml"], schema: devpodSchema as JSONSchema }],
+  // the schema is given here and never fetched (enableSchemaRequest is
+  // off): the uri only names it. It must be absolute — a bare name is
+  // taken for a path, looked for there, and not found.
+  schemas: [{ uri: "https://devpod.haoxx.me/schemas/devpod.json", fileMatch: ["**/devpod/*.yaml"], schema: devpodSchema as JSONSchema }],
 });
 
 let models = 0;
