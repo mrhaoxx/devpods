@@ -199,4 +199,13 @@ describe("config editor", () => {
     fireEvent.click(screen.getByRole("button", { name: "保存" }));
     await waitFor(() => expect(JSON.parse(calls.find((c) => c.method === "PATCH")?.body ?? "{}")).toEqual({ content: "name: ${NAME}\n" }));
   });
+
+  it("a config's page: the YAML beside its variables, basic facts, sharing and what was made from it", async () => {
+    stubFetch({ "GET /api/configs/alice-sg": cfg(), "/api/devpods": { items: [], pods: {} } });
+    renderWithProviders(app, { route: "/configs/alice-sg" });
+    const basics = within(await screen.findByRole("region", { name: "基本信息" }));
+    expect((basics.getByLabelText("标题") as HTMLInputElement).value).toBe("SGLang");
+    expect(screen.getByRole("region", { name: "分享与公开" })).toBeTruthy();
+    expect(screen.getByRole("region", { name: "由它建出的 DevPod" })).toBeTruthy();
+  });
 });

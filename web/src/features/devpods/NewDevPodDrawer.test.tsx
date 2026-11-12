@@ -186,4 +186,15 @@ describe("new DevPod drawer", () => {
     expect(await screen.findByLabelText("nb1")).toBeTruthy();
     expect(screen.queryByLabelText("na1")).toBeNull();
   });
+
+  it("a long group shows 8 and the rest on asking; a search shows all that match", async () => {
+    const many = Array.from({ length: 10 }, (_, i) => summary({ name: `eve-p${i}`, owner: "eve", title: `公开 ${i}`, public: true }));
+    stubFetch({ ...base, "GET /api/configs": { items: many } });
+    page("/?new=1");
+    const list = within(await screen.findByRole("region", { name: "配置列表" }));
+    await list.findByText("公开 0");
+    expect(list.getAllByRole("button", { name: /^公开 \d/ })).toHaveLength(8);
+    fireEvent.click(list.getByRole("button", { name: "显示更多（2）" }));
+    expect(list.getAllByRole("button", { name: /^公开 \d/ })).toHaveLength(10);
+  });
 });

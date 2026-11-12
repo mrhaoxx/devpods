@@ -2,11 +2,18 @@
 // a new one, my own to edit, or someone else's to read. The variables of
 // the YAML are listed as it is typed — the same reading as the server's —
 // each with a type and a description. A save is checked first.
+import { Badge } from "../../design/Badge";
 import { devpodHref } from "../../data/cluster";
 import { refOf } from "../../data/api";
 import { launchCluster } from "../../data/cluster";
 import { useClusterList } from "../../data/clusterFilter";
-import { useCallback, useEffect, useMemo, useState, type FormEvent } from "react";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useState,
+  type FormEvent,
+} from "react";
 import { Link, useLocation, useNavigate, useParams } from "react-router-dom";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { ApiFailure } from "../../data/api";
@@ -17,11 +24,24 @@ import { Button } from "../../design/Button";
 import { EmptyState } from "../../design/EmptyState";
 import { Field, Group, Input, Notice } from "../../design/Form";
 import { YamlEditor } from "../../design/yaml/YamlEditor";
-import { checkConfig, createConfig, getConfig, patchConfig, type CheckProblem, type Config, type ConfigPatch, type VarDecl } from "./api";
+import {
+  checkConfig,
+  createConfig,
+  getConfig,
+  patchConfig,
+  type CheckProblem,
+  type Config,
+  type ConfigPatch,
+  type VarDecl,
+} from "./api";
 import { cleanDecl, keptDecls, VariablesTable } from "./VariablesTable";
 
 /** What a page hands over to start a new config from. */
-export type NewConfigState = { content?: string; title?: string; description?: string };
+export type NewConfigState = {
+  content?: string;
+  title?: string;
+  description?: string;
+};
 
 const MAX_NAME = 63;
 const MAX_CONTENT = 256 << 10;
@@ -32,32 +52,54 @@ const users = (s: string) => [...new Set(s.split(/[\s,，]+/).filter(Boolean))];
 const declsOf = (c?: Config): VarDecl[] =>
   (c?.variables ?? [])
     .filter((v) => !v.builtin)
-    .map((v) => cleanDecl({ name: v.name, type: v.type, description: v.description, options: v.options }))
+    .map((v) =>
+      cleanDecl({
+        name: v.name,
+        type: v.type,
+        description: v.description,
+        options: v.options,
+      }),
+    )
     .filter((d): d is VarDecl => d !== null);
 
 /** MadeFrom: the DevPods launched from this config that I may see. */
 function MadeFrom({ name }: { name: string }) {
   const me = useMe().data;
   const list = useDevPods(me?.admin ? "all" : "mine");
-  const made = (list.data?.items ?? []).filter((dp) => provenance(dp).config === name);
+  const made = (list.data?.items ?? []).filter(
+    (dp) => provenance(dp).config === name,
+  );
   return (
-    <section aria-label="由它建出的 DevPod" className="rounded-md border border-line p-2 text-xs">
-      <div className="mb-1 font-medium">由它建出的 DevPod</div>
-      {made.length === 0 ? (
-        <p className="text-faint">{list.isLoading ? "加载中…" : "还没有"}</p>
-      ) : (
-        <ul className="space-y-0.5">
-          {made.map((dp) => (
-            <li key={dp.metadata.name} className="flex items-center gap-1.5">
-              <StatusDot phase={dp.status?.phase} showLabel={false} />
-              <Link to={devpodHref(refOf(dp))} className="mono hover:text-accent">
-                {dp.metadata.name}
-              </Link>
-              {me?.admin && dp.spec.owner !== me.user && <span className="text-faint">{dp.spec.owner}</span>}
-            </li>
-          ))}
-        </ul>
-      )}
+    <section
+      aria-label="由它建出的 DevPod"
+      className="rounded-md border border-line p-2 text-xs"
+    >
+      <details open={made.length > 0 && made.length <= 10}>
+        <summary className="cursor-pointer font-medium">
+          由它建出的 DevPod{" "}
+          <span className="mono font-normal text-faint">{made.length}</span>
+        </summary>
+        {made.length === 0 ? (
+          <p className="text-faint">{list.isLoading ? "加载中…" : "还没有"}</p>
+        ) : (
+          <ul className="space-y-0.5">
+            {made.map((dp) => (
+              <li key={dp.metadata.name} className="flex items-center gap-1.5">
+                <StatusDot phase={dp.status?.phase} showLabel={false} />
+                <Link
+                  to={devpodHref(refOf(dp))}
+                  className="mono hover:text-accent"
+                >
+                  {dp.metadata.name}
+                </Link>
+                {me?.admin && dp.spec.owner !== me.user && (
+                  <span className="text-faint">{dp.spec.owner}</span>
+                )}
+              </li>
+            ))}
+          </ul>
+        )}
+      </details>
     </section>
   );
 }
@@ -70,13 +112,22 @@ export function ConfigEditor() {
   const qc = useQueryClient();
   const clusters = useClusterList().data?.items ?? [];
   const handed = (useLocation().state ?? {}) as NewConfigState;
-  const q = useQuery({ queryKey: ["config", name], queryFn: () => getConfig(name!), enabled: !creating, retry: false });
+  const q = useQuery({
+    queryKey: ["config", name],
+    queryFn: () => getConfig(name!),
+    enabled: !creating,
+    retry: false,
+  });
   const loaded = q.data;
 
   const [id, setId] = useState("");
   const [title, setTitle] = useState(creating ? (handed.title ?? "") : "");
-  const [description, setDescription] = useState(creating ? (handed.description ?? "") : "");
-  const [content, setContent] = useState(creating ? (handed.content ?? "") : "");
+  const [description, setDescription] = useState(
+    creating ? (handed.description ?? "") : "",
+  );
+  const [content, setContent] = useState(
+    creating ? (handed.content ?? "") : "",
+  );
   const [share, setShare] = useState("");
   const [pub, setPub] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -117,11 +168,23 @@ export function ConfigEditor() {
 
   const mine = creating || !!loaded?.mine;
   const prefix = `${me?.user ?? ""}-`;
-  const shownId = creating ? id : loaded!.name.startsWith(loaded!.owner + "-") ? loaded!.name.slice(loaded!.owner.length + 1) : loaded!.name;
-  const idError = creating && id !== "" && (!idRE.test(id) || (prefix + id).length > MAX_NAME) ? `小写字母、数字和连字符；连同前缀不超过 ${MAX_NAME} 个字符` : undefined;
+  const shownId = creating
+    ? id
+    : loaded!.name.startsWith(loaded!.owner + "-")
+      ? loaded!.name.slice(loaded!.owner.length + 1)
+      : loaded!.name;
+  const idError =
+    creating && id !== "" && (!idRE.test(id) || (prefix + id).length > MAX_NAME)
+      ? `小写字母、数字和连字符；连同前缀不超过 ${MAX_NAME} 个字符`
+      : undefined;
   const tooBig = new TextEncoder().encode(content).length > MAX_CONTENT;
   const list = users(share);
-  const ok = !busy && title.trim() !== "" && content !== "" && !tooBig && (!creating || (id !== "" && !idError));
+  const ok =
+    !busy &&
+    title.trim() !== "" &&
+    content !== "" &&
+    !tooBig &&
+    (!creating || (id !== "" && !idError));
 
   const save = async (checked: boolean) => {
     setBusy(true);
@@ -131,7 +194,10 @@ export function ConfigEditor() {
     try {
       if (!checked) {
         // what the check finds is said first; a check that cannot run stops nothing
-        const found = await checkConfig(launchCluster(clusters), { content, variables: keptDecls(content, decls) }).then(
+        const found = await checkConfig(launchCluster(clusters), {
+          content,
+          variables: keptDecls(content, decls),
+        }).then(
           (r) => r.problems,
           () => [],
         );
@@ -141,7 +207,17 @@ export function ConfigEditor() {
         }
       }
       if (creating) {
-        await createConfig({ id, title: title.trim(), description, content, sharedWith: list, public: pub, ...(keptDecls(content, decls).length ? { variables: keptDecls(content, decls) } : {}) });
+        await createConfig({
+          id,
+          title: title.trim(),
+          description,
+          content,
+          sharedWith: list,
+          public: pub,
+          ...(keptDecls(content, decls).length
+            ? { variables: keptDecls(content, decls) }
+            : {}),
+        });
         void qc.invalidateQueries({ queryKey: ["configs"] });
         nav("/configs");
       } else {
@@ -153,14 +229,21 @@ export function ConfigEditor() {
         if (list.join(",") !== was.sharedWith.join(",")) body.sharedWith = list;
         if (pub !== was.public) body.public = pub;
         const kept = keptDecls(content, decls);
-        if (JSON.stringify(kept) !== JSON.stringify(savedDecls)) body.variables = kept;
+        if (JSON.stringify(kept) !== JSON.stringify(savedDecls))
+          body.variables = kept;
         const next = await patchConfig(was.name, body);
         qc.setQueryData(["config", name], next);
         void qc.invalidateQueries({ queryKey: ["configs"] });
         setSaved(true);
       }
     } catch (err) {
-      setError(err instanceof ApiFailure ? (err.code === "CONFIG_EXISTS" ? `你已经有一个标识为 ${id} 的配置` : err.body.message) : String(err));
+      setError(
+        err instanceof ApiFailure
+          ? err.code === "CONFIG_EXISTS"
+            ? `你已经有一个标识为 ${id} 的配置`
+            : err.body.message
+          : String(err),
+      );
     } finally {
       setBusy(false);
     }
@@ -176,16 +259,37 @@ export function ConfigEditor() {
         <Link to="/configs" className="text-xs text-muted hover:text-accent">
           ← 配置
         </Link>
-        <h1 className="text-sm font-semibold">{creating ? "新建配置" : loaded!.title}</h1>
-        {!creating && <span className="mono text-xs text-muted">{loaded!.name}</span>}
+        <h1 className="text-sm font-semibold">
+          {creating ? "新建配置" : loaded!.title}
+        </h1>
+        {!creating && loaded!.official && <Badge tone="accent">官方</Badge>}
+        {!creating && loaded!.public && !loaded!.official && (
+          <Badge tone="accent">公开</Badge>
+        )}
+        {!creating && (
+          <span className="mono text-xs text-muted">
+            {loaded!.name} · {loaded!.owner}
+          </span>
+        )}
         <span className="flex-1" />
         {!creating && loaded && (
-          <Link to={`/?new=1&config=${encodeURIComponent(loaded.name)}`} className="inline-flex h-7 items-center rounded-md border border-line px-2.5 text-xs hover:bg-sunk">
+          <Link
+            to={`/?new=1&config=${encodeURIComponent(loaded.name)}`}
+            className="inline-flex h-7 items-center rounded-md border border-line px-2.5 text-xs hover:bg-sunk"
+          >
             用此配置创建
           </Link>
         )}
         {!creating && (
-          <Button onClick={() => nav("/configs/new", { state: { content, title, description } satisfies NewConfigState })}>另存为副本</Button>
+          <Button
+            onClick={() =>
+              nav("/configs/new", {
+                state: { content, title, description } satisfies NewConfigState,
+              })
+            }
+          >
+            另存为副本
+          </Button>
         )}
         {mine && (
           <Button type="submit" variant="primary" disabled={!ok}>
@@ -195,14 +299,21 @@ export function ConfigEditor() {
       </header>
       {!mine && (
         <Notice tone="idle">
-          这是 {loaded!.owner} 的配置，你可以用它创建 DevPod 或另存为自己的副本，不能修改原件。创建时按你自己的权限和配额检查。
+          这是 {loaded!.owner} 的配置，你可以用它创建 DevPod
+          或另存为自己的副本，不能修改原件。创建时按你自己的权限和配额检查。
         </Notice>
       )}
       {error && <Notice>{error}</Notice>}
       {saved && <Notice tone="run">已保存。</Notice>}
       {problems && (
-        <section aria-label="保存前检查" className="space-y-2 rounded-md bg-warm-soft px-3 py-2 text-xs text-warm">
-          <div className="font-medium">保存前检查发现 {problems.length} 处问题（用示例值代入变量后检查；配额和节点是否空闲在创建时才检查）：</div>
+        <section
+          aria-label="保存前检查"
+          className="space-y-2 rounded-md bg-warm-soft px-3 py-2 text-xs text-warm"
+        >
+          <div className="font-medium">
+            保存前检查发现 {problems.length}{" "}
+            处问题（用示例值代入变量后检查；配额和节点是否空闲在创建时才检查）：
+          </div>
           <ul className="space-y-0.5">
             {problems.map((p, i) => (
               <li key={i} className="mono">
@@ -217,15 +328,53 @@ export function ConfigEditor() {
           </div>
         </section>
       )}
-      <div className="grid gap-3 lg:grid-cols-[minmax(0,1fr)_18rem]">
+      <div className="grid gap-3 lg:grid-cols-[minmax(0,1fr)_22rem]">
+        <Group
+          label="YAML"
+          hint="完整的 DevPod YAML，可以含变量"
+          error={tooBig ? "内容超过 256 KiB" : undefined}
+        >
+          <YamlEditor
+            ariaLabel="YAML"
+            value={content}
+            onChange={setContent}
+            readOnly={!mine}
+            minLines={24}
+            maxLines={44}
+            schema="devpod"
+            templated
+          />
+        </Group>
         <div className="space-y-3">
-          <div className="grid gap-3 sm:grid-cols-2">
+          <VariablesTable
+            content={content}
+            decls={decls}
+            onChange={onDecls}
+            readOnly={!mine}
+          />
+          <section
+            aria-label="基本信息"
+            className="space-y-3 rounded-md border border-line p-2"
+          >
+            <div className="text-xs font-medium">基本信息</div>
             <Field label="标题">
-              <Input aria-label="标题" value={title} onChange={(e) => setTitle(e.target.value)} maxLength={80} readOnly={!mine} />
+              <Input
+                aria-label="标题"
+                value={title}
+                onChange={(e) => setTitle(e.target.value)}
+                maxLength={80}
+                readOnly={!mine}
+              />
             </Field>
-            <Field label="标识" hint={creating ? "保存后不能修改" : undefined} error={idError}>
+            <Field
+              label="标识"
+              hint={creating ? "保存后不能修改" : undefined}
+              error={idError}
+            >
               <div className="flex items-center rounded-md border border-line-strong bg-surface focus-within:border-accent">
-                <span className="mono pl-2.5 text-sm text-faint">{creating ? prefix : `${loaded!.owner}-`}</span>
+                <span className="mono pl-2.5 text-sm text-faint">
+                  {creating ? prefix : `${loaded!.owner}-`}
+                </span>
                 <input
                   aria-label="标识"
                   value={shownId}
@@ -235,32 +384,53 @@ export function ConfigEditor() {
                 />
               </div>
             </Field>
-          </div>
-          <Field label="说明">
-            <Input aria-label="说明" value={description} onChange={(e) => setDescription(e.target.value)} maxLength={500} readOnly={!mine} />
-          </Field>
-          <Group label="YAML" hint="完整的 DevPod YAML，可以含变量" error={tooBig ? "内容超过 256 KiB" : undefined}>
-            <YamlEditor ariaLabel="YAML" value={content} onChange={setContent} readOnly={!mine} minLines={24} maxLines={44} schema="devpod" templated />
-          </Group>
-        </div>
-        <div className="space-y-3">
-          <VariablesTable content={content} decls={decls} onChange={onDecls} readOnly={!mine} />
-          {!creating && loaded && <MadeFrom name={loaded.name} />}
+            <Field label="说明">
+              <Input
+                aria-label="说明"
+                value={description}
+                onChange={(e) => setDescription(e.target.value)}
+                maxLength={500}
+                readOnly={!mine}
+              />
+            </Field>
+          </section>
           {mine && (
-            <div className="space-y-3 rounded-md border border-line p-2">
+            <section
+              aria-label="分享与公开"
+              className="space-y-3 rounded-md border border-line p-2"
+            >
+              <div className="text-xs font-medium">分享与公开</div>
               <Field label="分享给" hint="用户名，逗号或空格分隔">
-                <Input aria-label="分享给" value={share} onChange={(e) => setShare(e.target.value)} className="mono" placeholder="alice, bob" />
+                <Input
+                  aria-label="分享给"
+                  value={share}
+                  onChange={(e) => setShare(e.target.value)}
+                  className="mono"
+                  placeholder="alice, bob"
+                />
               </Field>
               <label className="flex items-start gap-1.5 text-xs">
-                <input type="checkbox" aria-label="公开" checked={pub} onChange={(e) => setPub(e.target.checked)} className="mt-0.5" />
+                <input
+                  type="checkbox"
+                  aria-label="公开"
+                  checked={pub}
+                  onChange={(e) => setPub(e.target.checked)}
+                  className="mt-0.5"
+                />
                 <span>
                   公开
-                  <span className="block text-[11px] text-faint">所有登录用户都能看到并使用。</span>
+                  <span className="block text-[11px] text-faint">
+                    所有登录用户都能看到并使用。
+                  </span>
                 </span>
               </label>
-              <p className="text-[11px] text-faint">被分享的人只能查看、使用和另存为副本。他们创建的 DevPod 归他们自己，按他们自己的权限和配额检查。</p>
-            </div>
+              <p className="text-[11px] text-faint">
+                被分享的人只能查看、使用和另存为副本。他们创建的 DevPod
+                归他们自己，按他们自己的权限和配额检查。
+              </p>
+            </section>
           )}
+          {!creating && loaded && <MadeFrom name={loaded.name} />}
         </div>
       </div>
     </form>

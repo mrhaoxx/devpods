@@ -3,6 +3,7 @@ import { fireEvent, screen, waitFor, within } from "@testing-library/react";
 import { renderWithProviders, stubFetch, stubMe } from "../../test/render";
 import type { ConfigSummary } from "./api";
 import { ConfigsPage } from "./ConfigsPage";
+import { useLocation } from "react-router-dom";
 
 const cfg = (o: Partial<ConfigSummary>): ConfigSummary => ({
   name: "alice-a",
@@ -22,7 +23,7 @@ const cfg = (o: Partial<ConfigSummary>): ConfigSummary => ({
 });
 
 const mine = cfg({});
-const shared = cfg({ name: "bob-s", owner: "bob", title: "共享的", mine: false });
+const shared = cfg({ name: "bob-s", owner: "bob", title: "共享的", mine: false, variables: [{ name: "GPUS", builtin: false, required: true, type: "int" }] });
 const pub = cfg({ name: "carol-p", owner: "carol", title: "公开的", mine: false, public: true });
 const minePublic = cfg({ name: "alice-pub", title: "我公开的", public: true });
 const official = cfg({ name: "root-o", owner: "root", title: "官方的", mine: false, public: true, official: true });
@@ -39,102 +40,91 @@ const lists = (extra: Record<string, unknown> = {}) =>
     ...extra,
   });
 const row = (title: string) => screen.getByText(title).closest("tr") as HTMLElement;
+const rowTitles = () =>
+  screen
+    .getAllByRole("row")
+    .slice(1)
+    .map((r) => r.querySelector("[data-testid=config-title]")?.textContent)
+    .filter(Boolean);
+const menu = async (title: string) => {
+  fireEvent.keyDown(within(row(title)).getByRole("button", { name: `${title} 更多操作` }), { key: "Enter" });
+  return within(await screen.findByRole("menu"));
+};
+
+function Where() {
+  const l = useLocation();
+  return <div data-testid="where">{l.pathname + l.search}</div>;
+}
 
 describe("配置 page", () => {
   afterEach(() => vi.unstubAllGlobals());
 
-  it("lists my configs, those shared with me and the public ones", async () => {
-    lists();
-    renderWithProviders(<ConfigsPage />);
-    const my = within(await screen.findByRole("region", { name: "我的" }));
-    await my.findByText("我的配置");
-    expect(my.getByText("我公开的")).toBeTruthy();
-    const sh = within(screen.getByRole("region", { name: "分享给我的" }));
-    expect(await sh.findByText("共享的")).toBeTruthy();
-    const pu = within(screen.getByRole("region", { name: "公开" }));
-    expect(await pu.findByText("公开的")).toBeTruthy();
-    // my own public config is listed with mine, once
-    expect(pu.queryByText("我公开的")).toBeNull();
-    expect(within(row("我的配置")).getByText("NAME")).toBeTruthy();
-    expect(within(row("我公开的")).getByText("公开")).toBeTruthy();
-    expect(within(row("共享的")).getByText("bob")).toBeTruthy();
-  });
-
-  it("someone else's config can be used and copied, not edited or deleted", async () => {
+  it("one table: every config once, official first; scopes with counts narrow it; a search finds by variable", async () => {
     lists();
     renderWithProviders(<ConfigsPage />);
     await screen.findByText("共享的");
-    const r = within(row("共享的"));
-    expect(r.getByRole("link", { name: "用此配置创建" })).toBeTruthy();
-    expect(r.getByRole("button", { name: "另存为副本" })).toBeTruthy();
-    expect(r.queryByRole("link", { name: "编辑" })).toBeNull();
-    expect(r.queryByRole("button", { name: /删除/ })).toBeNull();
-    expect(r.queryByRole("button", { name: "取消公开" })).toBeNull();
-    const own = within(row("我的配置"));
-    expect(own.getByRole("link", { name: "编辑" })).toBeTruthy();
-    expect(own.getByRole("button", { name: /删除/ })).toBeTruthy();
+    expect(rowTitles()[0]).toBe("官方的");
+    expect(rowTitles()).toHaveLength(5);
+    expect(within(row("共享的")).getByText("bob")).toBeTruthy();
+    expect(within(row("我的配置")).getByText("IMAGE")).toBeTruthy();
+    expect(within(row("我公开的")).getByText("公开")).toBeTruthy();
+    fireEvent.click(screen.getByRole("tab", { name: /我的\s*2/ }));
+    await waitFor(() => expect(rowTitles().sort()).toEqual(["我公开的", "我的配置"]));
+    fireEvent.click(screen.getByRole("tab", { name: /全部\s*5/ }));
+    fireEvent.change(screen.getByLabelText("搜索配置"), { target: { value: "GPUS" } });
+    await waitFor(() => expect(rowTitles()).toEqual(["共享的"]));
   });
 
-  it("the owner deletes after confirming", async () => {
+  it("sorts by title", async () => {
+    lists();
+    renderWithProviders(<ConfigsPage />, { route: "/configs?sort=title" });
+    await screen.findByText("共享的");
+    const t = rowTitles() as string[];
+    expect(t).toEqual([...t].sort((a, b) => a.localeCompare(b)));
+  });
+
+  it("someone else's config is used, viewed or copied; mine is edited or deleted after confirming", async () => {
     const calls = lists({ "DELETE /api/configs/alice-a": new Response(null, { status: 204 }) });
-    renderWithProviders(<ConfigsPage />);
-    await screen.findByText("我的配置");
-    fireEvent.click(within(row("我的配置")).getByRole("button", { name: /删除/ }));
+    renderWithProviders(
+      <>
+        <ConfigsPage />
+        <Where />
+      </>,
+    );
+    await screen.findByText("共享的");
+    expect(within(row("共享的")).getByRole("link", { name: "用此配置创建" }).getAttribute("href")).toBe("/?new=1&config=bob-s");
+    const theirs = await menu("共享的");
+    expect(theirs.getByRole("menuitem", { name: "查看" })).toBeTruthy();
+    expect(theirs.getByRole("menuitem", { name: "另存为副本" })).toBeTruthy();
+    expect(theirs.queryByRole("menuitem", { name: "删除" })).toBeNull();
+    fireEvent.keyDown(screen.getByRole("menu"), { key: "Escape" });
+    const own = await menu("我的配置");
+    expect(own.getByRole("menuitem", { name: "编辑" })).toBeTruthy();
+    fireEvent.click(own.getByRole("menuitem", { name: "删除" }));
     fireEvent.click(await screen.findByRole("button", { name: "删除配置" }));
     await waitFor(() => expect(calls.some((c) => c.method === "DELETE" && c.url.pathname === "/api/configs/alice-a")).toBe(true));
+    fireEvent.click(within(row("公开的")).getByText("carol"));
+    await waitFor(() => expect(screen.getByTestId("where").textContent).toBe("/configs/carol-p"));
   });
 
-  it("an admin may take someone's public config down or delete it", async () => {
-    const calls = lists({ "PATCH /api/configs/carol-p": { ...pub, public: false } });
-    renderWithProviders(<ConfigsPage />, { me: stubMe({ admin: true }) });
+  it("an admin marks a public config official or takes it down; nobody else may", async () => {
+    const calls = lists({ "PATCH /api/configs/carol-p": cfg({ ...pub, official: true }) });
+    const first = renderWithProviders(<ConfigsPage />, { me: stubMe({ admin: true, user: "root2" }) });
     await screen.findByText("公开的");
-    const r = within(row("公开的"));
-    expect(r.getByRole("button", { name: /删除/ })).toBeTruthy();
-    expect(r.queryByRole("link", { name: "编辑" })).toBeNull();
-    fireEvent.click(r.getByRole("button", { name: "取消公开" }));
-    await waitFor(() => expect(calls.find((c) => c.method === "PATCH")?.body).toBe('{"public":false}'));
-  });
-
-  it("用此配置创建 opens the new-DevPod drawer on that config", async () => {
+    fireEvent.click((await menu("公开的")).getByRole("menuitem", { name: "设为官方" }));
+    await waitFor(() => expect(calls.find((c) => c.method === "PATCH")?.body).toBe('{"official":true}'));
+    fireEvent.click((await menu("公开的")).getByRole("menuitem", { name: "取消公开" }));
+    await waitFor(() => expect(calls.filter((c) => c.method === "PATCH").at(-1)?.body).toBe('{"public":false}'));
+    first.unmount();
     lists();
     renderWithProviders(<ConfigsPage />);
-    await screen.findByText("共享的");
-    const link = within(row("共享的")).getByRole("link", { name: "用此配置创建" });
-    expect(link.getAttribute("href")).toMatch(/^\/\?new=1&config=[a-z0-9-]+$/);
+    await screen.findByText("公开的");
+    expect((await menu("公开的")).queryByRole("menuitem", { name: "设为官方" })).toBeNull();
   });
 
   it("says so when there is nothing", async () => {
     stubFetch({ "GET /api/configs": { items: [] } });
     renderWithProviders(<ConfigsPage />);
     expect(await screen.findByText("还没有保存过配置")).toBeTruthy();
-  });
-
-  it("official configs come first, listed once", async () => {
-    lists();
-    renderWithProviders(<ConfigsPage />);
-    const off = within(await screen.findByRole("region", { name: "官方" }));
-    expect(await off.findByText("官方的")).toBeTruthy();
-    expect(within(row("官方的")).getByText("官方")).toBeTruthy(); // the badge
-    expect(within(screen.getByRole("region", { name: "公开" })).queryByText("官方的")).toBeNull();
-    const regions = screen.getAllByRole("region").map((r) => r.getAttribute("aria-label"));
-    expect(regions[0]).toBe("官方");
-  });
-
-  it("an admin marks a public config official, or not; nobody else may", async () => {
-    const calls = lists({ "PATCH /api/configs/carol-p": cfg({ ...pub, official: true }), "PATCH /api/configs/root-o": cfg({ ...official, official: false }) });
-    renderWithProviders(<ConfigsPage />, { me: stubMe({ admin: true, user: "root2" }) });
-    await screen.findByText("公开的");
-    fireEvent.click(within(row("公开的")).getByRole("button", { name: "设为官方" }));
-    await waitFor(() => expect(calls.find((c) => c.method === "PATCH" && c.url.pathname.endsWith("carol-p"))?.body).toBe('{"official":true}'));
-    fireEvent.click(within(row("官方的")).getByRole("button", { name: "取消官方" }));
-    await waitFor(() => expect(calls.find((c) => c.method === "PATCH" && c.url.pathname.endsWith("root-o"))?.body).toBe('{"official":false}'));
-  });
-
-  it("not an admin: no official switch", async () => {
-    lists();
-    renderWithProviders(<ConfigsPage />);
-    await screen.findByText("公开的");
-    expect(screen.queryByRole("button", { name: "设为官方" })).toBeNull();
-    expect(screen.queryByRole("button", { name: "取消官方" })).toBeNull();
   });
 });

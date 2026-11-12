@@ -41,6 +41,8 @@ export function pickerGroups(items: ConfigSummary[], recent: Recent[] = []): Gro
   return groups.filter((g) => g.items.length > 0);
 }
 
+const FOLD = 8;
+
 const matches = (c: ConfigSummary, q: string) => {
   const s = q.trim().toLowerCase();
   return !s || [c.title, c.name, c.owner, c.description].some((x) => x.toLowerCase().includes(s));
@@ -49,6 +51,8 @@ const matches = (c: ConfigSummary, q: string) => {
 export function ConfigPicker({ onPick, onBlank }: { onPick: (c: ConfigSummary) => void; onBlank: () => void }) {
   const q = useQuery({ queryKey: ["configs", "all"], queryFn: () => listConfigs() });
   const [search, setSearch] = useState("");
+  // a group shows FOLD at first; the rest on asking (all of them while searching)
+  const [more, setMore] = useState<ReadonlySet<string>>(new Set());
   const user = useMe().data?.user ?? "";
   const recent = useMemo(() => recentConfigs(user), [user]);
   const usedAt = new Map(recent.map((r) => [r.name, r.at]));
@@ -77,7 +81,7 @@ export function ConfigPicker({ onPick, onBlank }: { onPick: (c: ConfigSummary) =
           <div key={g.label}>
             <h3 className="mb-1 text-xs font-semibold text-muted">{g.label}</h3>
             <ul className="space-y-1">
-              {g.items.map((c) => {
+              {(search.trim() || more.has(g.label) ? g.items : g.items.slice(0, FOLD)).map((c) => {
                 const vars = c.variables.filter((v) => !["OWNER", "INDEX", "COUNT", "LEADER"].includes(v.name)).map((v) => v.name);
                 return (
                   <li key={c.name}>
@@ -97,6 +101,11 @@ export function ConfigPicker({ onPick, onBlank }: { onPick: (c: ConfigSummary) =
                 );
               })}
             </ul>
+            {!search.trim() && !more.has(g.label) && g.items.length > FOLD && (
+              <button type="button" onClick={() => setMore((m) => new Set(m).add(g.label))} className="mt-1 text-xs text-accent hover:underline">
+                显示更多（{g.items.length - FOLD}）
+              </button>
+            )}
           </div>
         ))}
         {q.isSuccess && all.length > 0 && groups.length === 0 && <p className="text-xs text-muted">没有符合的配置。</p>}
