@@ -185,7 +185,7 @@ func main() {
 	var theHub *hub
 	hubName := "" // this gateway's registered name, when it serves several clusters
 	if hf.enabled() {
-		if theHub, err = hf.start(ctx, clientset); err != nil {
+		if theHub, err = hf.start(ctx, clientset, strings.TrimSpace(string(ssh.MarshalAuthorizedKey(internalSigner.PublicKey())))); err != nil {
 			slog.Error("hub", "err", err)
 			os.Exit(1)
 		}

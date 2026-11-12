@@ -76,6 +76,15 @@ rules:
 - apiGroups: [""]
   resources: ["events"]
   verbs: ["create"]
+# The internal keys of the gateways the console names for this cluster,
+# for its DevPods to trust (the controller reads them).
+- apiGroups: [""]
+  resources: ["configmaps"]
+  verbs: ["create"]
+- apiGroups: [""]
+  resources: ["configmaps"]
+  resourceNames: ["devpod-gateway-keys"]
+  verbs: ["get", "update"]
 # Redeploy: delete a DevPod's Pod so the controller recreates it.
 - apiGroups: [""]
   resources: ["pods"]

@@ -71,9 +71,12 @@ type hub struct {
 
 	id                      *agent.Identity
 	console, name, instance string
+	// internalKey: the key this gateway signs into DevPods with, reported
+	// for the clusters it serves to trust
+	internalKey string
 }
 
-func (f *hubFlags) start(ctx context.Context, kc kubernetes.Interface) (*hub, error) {
+func (f *hubFlags) start(ctx context.Context, kc kubernetes.Interface, internalKey string) (*hub, error) {
 	if *f.name == "" {
 		return nil, errors.New("--console needs --gateway-name")
 	}
@@ -99,7 +102,7 @@ func (f *hubFlags) start(ctx context.Context, kc kubernetes.Interface) (*hub, er
 		}
 	}
 	h := &hub{link: gwlink.NewClient(gwlink.Options{Console: *f.console, Gateway: *f.name, Identity: id}),
-		id: id, console: *f.console, name: *f.name, instance: *f.instance}
+		id: id, console: *f.console, name: *f.name, instance: *f.instance, internalKey: internalKey}
 	instances := func() []string { return []string{*f.instance} }
 	if *f.instanceSelector != "" {
 		instances = podNames(kc, *f.namespace, *f.instanceSelector, *f.instance)
@@ -169,7 +172,7 @@ func (h *hub) report(ctx context.Context) {
 		}
 		slices.Sort(names)
 		rctx, cancel := context.WithTimeout(ctx, 10*time.Second)
-		err := h.link.Report(rctx, gwlink.Report{Version: version, Clusters: names})
+		err := h.link.Report(rctx, gwlink.Report{Version: version, Clusters: names, InternalKey: h.internalKey})
 		cancel()
 		if err != nil {
 			slog.Warn("gateway_report", "err", err)

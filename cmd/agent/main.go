@@ -11,6 +11,8 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"log/slog"
 	"net"
 	"net/http"
@@ -141,6 +143,11 @@ func main() {
 		Namespace: devpodNamespace, DevPods: devpods,
 		DialGateway:   func(_ context.Context, address string) (net.Conn, error) { return ws(address) },
 		GatewayTunnel: tunnel.ClientOptions{Idle: idle},
+		// the gateways that serve this cluster, for its DevPods to trust:
+		// the controller reads them from this ConfigMap
+		PublishGatewayKeys: func(ctx context.Context, keys []string) error {
+			return publishGatewayKeys(ctx, kc, devpodNamespace, keys)
+		},
 		Info: func(ctx context.Context) agent.Info {
 			in := agent.Info{AgentVersion: version, Capabilities: caps}
 			if v, err := kc.Discovery().ServerVersion(); err == nil {
@@ -181,4 +188,32 @@ func splitList(v string) []string {
 		}
 	}
 	return out
+}
+
+// publishGatewayKeys writes the gateways' internal keys into the ConfigMap
+// the controller reads (one authorized_keys line each).
+func publishGatewayKeys(ctx context.Context, kc kubernetes.Interface, ns string, keys []string) error {
+	data := map[string]string{devpodv1alpha1.GatewayKeysKey: ""}
+	if len(keys) > 0 {
+		data[devpodv1alpha1.GatewayKeysKey] = strings.Join(keys, "\n") + "\n"
+	}
+	cms := kc.CoreV1().ConfigMaps(ns)
+	cur, err := cms.Get(ctx, devpodv1alpha1.GatewayKeysConfigMap, metav1.GetOptions{})
+	if apierrors.IsNotFound(err) {
+		_, err = cms.Create(ctx, &corev1.ConfigMap{
+			ObjectMeta: metav1.ObjectMeta{Name: devpodv1alpha1.GatewayKeysConfigMap, Namespace: ns,
+				Labels: map[string]string{"app.kubernetes.io/managed-by": "devpod-agent"}},
+			Data: data,
+		}, metav1.CreateOptions{})
+		return err
+	}
+	if err != nil {
+		return err
+	}
+	if cur.Data[devpodv1alpha1.GatewayKeysKey] == data[devpodv1alpha1.GatewayKeysKey] {
+		return nil
+	}
+	cur.Data = data
+	_, err = cms.Update(ctx, cur, metav1.UpdateOptions{})
+	return err
 }

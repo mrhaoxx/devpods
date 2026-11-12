@@ -184,10 +184,15 @@ func TestGateways_TheAgentDialsOutAndServesDialOnly(t *testing.T) {
 	rogue := newGatewayEnd(t, ctx, "rogue", "c1", id) // answers at an address the console named, with another key
 	ends := map[string]*gatewayEnd{"gw.example": gw, "rogue.example": rogue}
 
+	published := make(chan []string, 8)
 	a, err := agent.New(agent.Options{
 		Cluster: "c1", Identity: id, API: &rest.Config{Host: api.URL}, InfoInterval: 20 * time.Millisecond,
 		Namespace: "devpods",
-		DevPods:   devpods(t, devpodAt("alice-a", "devpods", echo.Addr().String(), devpodv1alpha1.DevPodRunning)),
+		PublishGatewayKeys: func(_ context.Context, keys []string) error {
+			published <- keys
+			return nil
+		},
+		DevPods: devpods(t, devpodAt("alice-a", "devpods", echo.Addr().String(), devpodv1alpha1.DevPodRunning)),
 		DialGateway: func(ctx context.Context, address string) (net.Conn, error) {
 			return ends[strings.TrimPrefix(address, "https://")].dial(ctx)
 		},
@@ -213,8 +218,17 @@ func TestGateways_TheAgentDialsOutAndServesDialOnly(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	tell(agent.Gateway{Name: "b300", Address: "https://gw.example", PublicKey: gw.id.PublicKey()},
+	tell(agent.Gateway{Name: "b300", Address: "https://gw.example", PublicKey: gw.id.PublicKey(), InternalKey: "ssh-ed25519 AAAA b300-internal"},
 		agent.Gateway{Name: "rogue", Address: "https://rogue.example", PublicKey: gw.id.PublicKey()})
+	// the DevPods here are to trust the gateways the console names: their keys are published
+	select {
+	case keys := <-published:
+		if len(keys) != 1 || keys[0] != "ssh-ed25519 AAAA b300-internal" {
+			t.Fatalf("published %v", keys)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("the gateways' keys were never published")
+	}
 	until := func(what string, cond func() bool) {
 		t.Helper()
 		deadline := time.Now().Add(5 * time.Second)

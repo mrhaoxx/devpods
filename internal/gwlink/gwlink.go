@@ -143,6 +143,9 @@ type Clusters struct {
 type Report struct {
 	Version  string   `json:"version,omitempty"`
 	Clusters []string `json:"clusters"` // whose agents are connected to it
+	// InternalKey: the key it signs into DevPods with (authorized_keys
+	// line), for the DevPods of the clusters it serves to trust.
+	InternalKey string `json:"internalKey,omitempty"`
 }
 
 /* ---- the gateway's side ---- */

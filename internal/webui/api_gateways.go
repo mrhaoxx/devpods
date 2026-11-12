@@ -5,10 +5,12 @@
 package webui
 
 import (
+	"strings"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"golang.org/x/crypto/ssh"
 	"io"
 	"net"
 	"net/http"
@@ -349,6 +351,11 @@ func (s *Server) writeGatewayStatus(name string, report *gwlink.Report) {
 		if report != nil {
 			g.Status.Version = report.Version
 			g.Status.Clusters = slices.Compact(slices.Sorted(slices.Values(report.Clusters)))
+			// a key, and nothing else, becomes what DevPods trust; a
+			// gateway of an earlier version says none and leaves it be
+			if k, ok := authorizedKeyLine(report.InternalKey); ok {
+				g.Status.InternalKey = k
+			}
 		}
 		return s.Client.Status().Update(ctx, &g)
 	})
@@ -592,4 +599,17 @@ func (s *Server) loginCluster(r *http.Request) string {
 		return name
 	}
 	return ""
+}
+
+// authorizedKeyLine: k as one authorized_keys line (key type and key, no
+// options), if it is a single SSH public key.
+func authorizedKeyLine(k string) (string, bool) {
+	if k == "" || len(k) > 4096 {
+		return "", false
+	}
+	pub, _, opts, rest, err := ssh.ParseAuthorizedKey([]byte(k))
+	if err != nil || len(opts) > 0 || len(strings.TrimSpace(string(rest))) > 0 {
+		return "", false
+	}
+	return strings.TrimSpace(string(ssh.MarshalAuthorizedKey(pub))), true
 }

@@ -12,6 +12,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
@@ -52,9 +53,11 @@ type DevPodReconciler struct {
 	// through the host-key Secret; nil = telemetry off.
 	Telemetry *render.TelemetrySettings
 
-	// GatewayInternalPub is the gateway's internal public key in
-	// OpenSSH authorized_keys-line form, embedded into every per-DevPod
-	// host-key Secret as the sidecar's sole authorized key.
+	// GatewayInternalPub is the local gateway's internal public key in
+	// OpenSSH authorized_keys-line form. A DevPod trusts it and the keys
+	// of the gateways that serve the cluster from elsewhere, as its agent
+	// publishes them (ConfigMap GatewayKeysConfigMap) — in its host-key
+	// Secret's authorized_keys, kept in step (sshd reads it from there).
 	GatewayInternalPub []byte
 
 	// Reservations turns on the node-reservation rules (reservation spec
@@ -507,12 +510,16 @@ func (r *DevPodReconciler) ensureHostKeySecret(ctx context.Context, dp *devpodv1
 		if len(existing.Data["ssh_host_ed25519_key"]) == 0 {
 			return fmt.Errorf("host-key Secret %q exists but is missing ssh_host_ed25519_key", key)
 		}
-		return r.syncTelemetryKeys(ctx, dp, &existing)
+		return r.syncSecretKeys(ctx, dp, &existing)
 	}
 	if !apierrors.IsNotFound(err) {
 		return fmt.Errorf("get host key secret: %w", err)
 	}
-	sec, err := render.HostKeySecret(dp, r.GwConfig, nil, r.GatewayInternalPub)
+	trusted, err := r.trustedKeys(ctx, dp.Namespace)
+	if err != nil {
+		return err
+	}
+	sec, err := render.HostKeySecret(dp, r.GwConfig, nil, trusted)
 	if err != nil {
 		return err
 	}
@@ -534,16 +541,53 @@ func (r *DevPodReconciler) ensureHostKeySecret(ctx context.Context, dp *devpodv1
 	return nil
 }
 
-// syncTelemetryKeys keeps the Secret's ingest-token / telemetry.json in
-// step with the controller's settings (spec §10.3: reconciled, not only
-// written at creation). The SSH keys are never touched.
-func (r *DevPodReconciler) syncTelemetryKeys(ctx context.Context, dp *devpodv1alpha1.DevPod, sec *corev1.Secret) error {
-	if r.Telemetry == nil {
-		return nil
+// trustedKeys: the gateways a DevPod lets in, as authorized_keys lines —
+// the local gateway's, then those the agent published, each once.
+func (r *DevPodReconciler) trustedKeys(ctx context.Context, ns string) ([]byte, error) {
+	var out []string
+	seen := map[string]bool{}
+	add := func(text string) {
+		for _, l := range strings.Split(text, "\n") {
+			if l = strings.TrimSpace(l); l != "" && !seen[l] {
+				seen[l] = true
+				out = append(out, l)
+			}
+		}
 	}
-	want, err := render.TelemetrySecretData(dp, r.Telemetry)
+	add(string(r.GatewayInternalPub))
+	// none published is none; a read that failed is not "none" (the
+	// DevPods would stop trusting the gateways that serve them)
+	var cm corev1.ConfigMap
+	switch err := r.Get(ctx, types.NamespacedName{Namespace: ns, Name: devpodv1alpha1.GatewayKeysConfigMap}, &cm); {
+	case err == nil:
+		add(cm.Data[devpodv1alpha1.GatewayKeysKey])
+	case !apierrors.IsNotFound(err):
+		return nil, fmt.Errorf("gateway keys: %w", err)
+	}
+	if len(out) == 0 {
+		return nil, nil
+	}
+	return []byte(strings.Join(out, "\n") + "\n"), nil
+}
+
+// syncSecretKeys keeps the Secret's authorized_keys (the gateways the
+// DevPod trusts) and ingest-token / telemetry.json in step with the
+// controller's settings (spec §10.3: reconciled, not only written at
+// creation). The DevPod's own host key is never touched.
+func (r *DevPodReconciler) syncSecretKeys(ctx context.Context, dp *devpodv1alpha1.DevPod, sec *corev1.Secret) error {
+	trusted, err := r.trustedKeys(ctx, dp.Namespace)
 	if err != nil {
 		return err
+	}
+	want := map[string][]byte{"authorized_keys": trusted}
+	if r.Telemetry != nil {
+		tel, err := render.TelemetrySecretData(dp, r.Telemetry)
+		if err != nil {
+			return err
+		}
+		for k, v := range tel {
+			want[k] = v
+		}
 	}
 	changed := false
 	for k, v := range want {
@@ -559,7 +603,7 @@ func (r *DevPodReconciler) syncTelemetryKeys(ctx context.Context, dp *devpodv1al
 		return nil
 	}
 	if err := r.Update(ctx, sec); err != nil {
-		return fmt.Errorf("update telemetry keys: %w", err)
+		return fmt.Errorf("update host-key Secret keys: %w", err)
 	}
 	return nil
 }
@@ -801,5 +845,24 @@ func (r *DevPodReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	if r.Reservations {
 		b = b.Watches(&devpodv1alpha1.Reservation{}, handler.EnqueueRequestsFromMapFunc(r.reservationDevPods))
 	}
+	// the gateways' keys changed: every DevPod of the namespace follows
+	b = b.Watches(&corev1.ConfigMap{}, handler.EnqueueRequestsFromMapFunc(r.gatewayKeysDevPods))
 	return b.Complete(r)
+}
+
+// gatewayKeysDevPods: the DevPods to reconcile when the published gateway
+// keys change (any other ConfigMap: none).
+func (r *DevPodReconciler) gatewayKeysDevPods(ctx context.Context, o client.Object) []reconcile.Request {
+	if o.GetName() != devpodv1alpha1.GatewayKeysConfigMap {
+		return nil
+	}
+	var list devpodv1alpha1.DevPodList
+	if err := r.List(ctx, &list, client.InNamespace(o.GetNamespace())); err != nil {
+		return nil
+	}
+	out := make([]reconcile.Request, 0, len(list.Items))
+	for i := range list.Items {
+		out = append(out, reconcile.Request{NamespacedName: types.NamespacedName{Namespace: list.Items[i].Namespace, Name: list.Items[i].Name}})
+	}
+	return out
 }

@@ -98,6 +98,12 @@ spec:
                   type: string
                 type: array
                 x-kubernetes-list-type: set
+              internalKey:
+                description: |-
+                  InternalKey: the key the gateway signs into DevPods with
+                  (authorized_keys line), as it reports it. The clusters' agents are
+                  told it, and the DevPods there trust it.
+                type: string
               lastSeen:
                 description: 'LastSeen: the gateway''s latest question to the console.'
                 format: date-time

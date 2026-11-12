@@ -5,6 +5,7 @@
 package controllers_test
 
 import (
+	"strings"
 	"testing"
 	"time"
 
@@ -594,4 +595,57 @@ func TestReconcile_OwnerAllowNetPolCleanedOnLastDevPod(t *testing.T) {
 		time.Sleep(200 * time.Millisecond)
 	}
 	t.Fatalf("owner-allow policy never deleted after the last DevPod went away")
+}
+
+// A DevPod trusts the gateways that serve its cluster: the local one's
+// key and the keys its agent publishes (ConfigMap devpod-gateway-keys),
+// in its host-key Secret — also when they change after it was made.
+func TestDevPodReconciler_TrustsPublishedGatewayKeys(t *testing.T) {
+	setupSuite(t)
+	env := newTestEnv(t)
+	dp := &devpodv1alpha1.DevPod{
+		ObjectMeta: metav1.ObjectMeta{Name: "carol-gw", Namespace: "devpods"},
+		Spec: devpodv1alpha1.DevPodSpec{
+			Owner:   "carol",
+			Running: true,
+			Pod:     &devpodv1alpha1.PodWorkloadSpec{Spec: corev1.PodSpec{Containers: []corev1.Container{{Name: "dev", Image: "x"}}}},
+		},
+	}
+	if err := env.Client.Create(env.Ctx, dp); err != nil {
+		t.Fatalf("create devpod: %v", err)
+	}
+	authorized := func() string {
+		var sec corev1.Secret
+		if err := env.Client.Get(env.Ctx, types.NamespacedName{Name: "carol-gw-hostkey", Namespace: "devpods"}, &sec); err != nil {
+			return ""
+		}
+		return string(sec.Data["authorized_keys"])
+	}
+	waitFor := func(what string, ok func(string) bool) {
+		t.Helper()
+		deadline := time.Now().Add(30 * time.Second)
+		for time.Now().Before(deadline) {
+			if ok(authorized()) {
+				return
+			}
+			time.Sleep(250 * time.Millisecond)
+		}
+		t.Fatalf("%s: authorized_keys = %q", what, authorized())
+	}
+	waitFor("the local gateway's key", func(s string) bool { return strings.Contains(s, "test gateway-internal") })
+	cm := &corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{Name: "devpod-gateway-keys", Namespace: "devpods"},
+		Data: map[string]string{"authorized_keys": "ssh-ed25519 BBBB hub-gateway\n"}}
+	if err := env.Client.Create(env.Ctx, cm); err != nil {
+		t.Fatalf("create gateway keys: %v", err)
+	}
+	waitFor("the published key too", func(s string) bool {
+		return strings.Contains(s, "test gateway-internal") && strings.Contains(s, "ssh-ed25519 BBBB hub-gateway")
+	})
+	cm.Data["authorized_keys"] = "ssh-ed25519 CCCC other-gateway\n"
+	if err := env.Client.Update(env.Ctx, cm); err != nil {
+		t.Fatalf("update gateway keys: %v", err)
+	}
+	waitFor("the new key, not the old", func(s string) bool {
+		return strings.Contains(s, "CCCC other-gateway") && !strings.Contains(s, "BBBB")
+	})
 }

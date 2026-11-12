@@ -10,6 +10,8 @@ import (
 	"log/slog"
 	"net"
 	"slices"
+	"strings"
+	"time"
 
 	"github.com/mrhaoxx/devpod/internal/tunnel"
 )
@@ -20,6 +22,9 @@ type Gateway struct {
 	Name      string `json:"name"`
 	Address   string `json:"address"`
 	PublicKey string `json:"publicKey"`
+	// InternalKey: the key the gateway signs into DevPods with
+	// (authorized_keys line), as it reported it; the DevPods here trust it.
+	InternalKey string `json:"internalKey,omitempty"`
 }
 
 // GatewayProofContext is what a gateway's proof to an agent is made for.
@@ -58,8 +63,10 @@ func (a *Agent) serveGateways(ctx context.Context, conn net.Conn) {
 	}
 }
 
-// setGateways dials out to the gateways of list and leaves the others.
+// setGateways dials out to the gateways of list and leaves the others,
+// and publishes their internal keys for the DevPods here to trust.
 func (a *Agent) setGateways(list []Gateway) {
+	a.publishGatewayKeys(list)
 	if a.o.DialGateway == nil {
 		return
 	}
@@ -127,4 +134,27 @@ func (a *Agent) handleGateway(ctx context.Context, purpose []byte, conn net.Conn
 		return
 	}
 	a.serveDial(ctx, p, conn)
+}
+
+// publishGatewayKeys hands the internal keys of the gateways the console
+// named (each once, in order) to Options.PublishGatewayKeys. A gateway
+// that reported none (an earlier version) adds nothing.
+func (a *Agent) publishGatewayKeys(list []Gateway) {
+	if a.o.PublishGatewayKeys == nil {
+		return
+	}
+	seen := map[string]bool{}
+	keys := []string{}
+	for _, g := range list {
+		if k := strings.TrimSpace(g.InternalKey); k != "" && !seen[k] {
+			seen[k] = true
+			keys = append(keys, k)
+		}
+	}
+	slices.Sort(keys)
+	ctx, cancel := context.WithTimeout(a.runCtx, 30*time.Second)
+	defer cancel()
+	if err := a.o.PublishGatewayKeys(ctx, keys); err != nil {
+		slog.Warn("agent_gateway_keys", "cluster", a.o.Cluster, "err", err.Error())
+	}
 }

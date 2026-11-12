@@ -160,9 +160,15 @@ func TestGateways(t *testing.T) {
 		t.Fatalf("clusters: %+v %v", clusters, err)
 	}
 	// what it says of itself is shown to admins
-	if err := gw.Report(ctx, gwlink.Report{Version: "v0.8.0", Clusters: []string{"a"}}); err != nil {
+	internalKey := "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIMTlaVZ1W7ZmQ5c3bKkq5cL2Ey0HkP2Qj4mY8v3a1b2c"
+	if err := gw.Report(ctx, gwlink.Report{Version: "v0.8.0", Clusters: []string{"a"}, InternalKey: internalKey}); err != nil {
 		t.Fatalf("report: %v", err)
 	}
+	// the key it signs into DevPods with is kept, for the clusters it serves to trust
+	w.until("the internal key is recorded", func() bool {
+		var g devpodv1alpha1.Gateway
+		return w.a.Get(ctx, types.NamespacedName{Name: "b300"}, &g) == nil && g.Status.InternalKey == internalKey
+	})
 	w.until("the report is recorded", func() bool {
 		_, out, _ := w.call("root", "GET", "/api/admin/gateways", "")
 		list, _ := out["items"].([]any)

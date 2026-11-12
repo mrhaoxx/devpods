@@ -249,7 +249,7 @@ func (r *Registry) gatewayList(ctx context.Context) ([]agent.Gateway, error) {
 	for i := range list.Items {
 		g := &list.Items[i]
 		if !g.Spec.Paused && g.Spec.PublicKey != "" && g.Spec.AgentAddress != "" {
-			out = append(out, agent.Gateway{Name: g.Name, Address: g.Spec.AgentAddress, PublicKey: g.Spec.PublicKey})
+			out = append(out, agent.Gateway{Name: g.Name, Address: g.Spec.AgentAddress, PublicKey: g.Spec.PublicKey, InternalKey: g.Status.InternalKey})
 		}
 	}
 	slices.SortFunc(out, func(a, b agent.Gateway) int { return strings.Compare(a.Name, b.Name) })

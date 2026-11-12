@@ -78,6 +78,11 @@ type Options struct {
 	DevPods       client.Reader
 	DialGateway   func(ctx context.Context, address string) (net.Conn, error)
 	GatewayTunnel tunnel.ClientOptions // timings and pool size; the rest is the agent's
+	// PublishGatewayKeys makes the internal keys of the gateways the
+	// console names (authorized_keys lines) known in this cluster, for its
+	// DevPods to trust; called with the whole set whenever the list comes.
+	// nil = not published.
+	PublishGatewayKeys func(ctx context.Context, keys []string) error
 }
 
 // Agent serves the streams the console opens.

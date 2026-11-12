@@ -86,6 +86,15 @@ const (
 	OwnerLabel                      = "devpod.io/owner"
 )
 
+// GatewayKeysConfigMap is the ConfigMap (DevPod namespace) in which a
+// cluster's agent publishes the internal keys of the gateways that serve
+// the cluster (key GatewayKeysKey, authorized_keys lines); the cluster's
+// DevPods trust them besides the local gateway's.
+const (
+	GatewayKeysConfigMap = "devpod-gateway-keys"
+	GatewayKeysKey       = "authorized_keys"
+)
+
 // RegistryCredentialsSecretName is the user's registry credentials Secret.
 func RegistryCredentialsSecretName(user string) string { return RegistryCredentialsSecretPrefix + user }
 

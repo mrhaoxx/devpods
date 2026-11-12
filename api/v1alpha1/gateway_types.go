@@ -67,6 +67,12 @@ type GatewayStatus struct {
 	// +optional
 	// +listType=set
 	Clusters []string `json:"clusters,omitempty"`
+	// InternalKey: the key the gateway signs into DevPods with
+	// (authorized_keys line), as it reports it. The clusters' agents are
+	// told it, and the DevPods there trust it.
+	//
+	// +optional
+	InternalKey string `json:"internalKey,omitempty"`
 }
 
 // Gateway is an SSH and port-link gateway known to this console.
