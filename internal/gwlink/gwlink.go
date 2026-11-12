@@ -332,7 +332,9 @@ func Join(ctx context.Context, hc *http.Client, console, gateway, token string, 
 		return err
 	}
 	defer func() { _ = resp.Body.Close() }()
-	if resp.StatusCode == http.StatusNoContent || resp.StatusCode == http.StatusOK {
+	// 204 and nothing else: a console of an earlier version answers 200
+	// to any path (its page), which is not a join
+	if resp.StatusCode == http.StatusNoContent {
 		return nil
 	}
 	msg, _ := io.ReadAll(io.LimitReader(resp.Body, 1024))

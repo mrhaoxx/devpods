@@ -165,3 +165,30 @@ func TestClient_CachesBrieflyAndOutlastsAShortOutage(t *testing.T) {
 		t.Fatalf("console back: %v %v %v", keys, stale, err)
 	}
 }
+
+// A console that does not know of gateways yet (an earlier version)
+// answers its page, 200, to any path: that is not a join.
+func TestJoin_OnlyAJoinIsAJoin(t *testing.T) {
+	status := http.StatusOK
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		if status == http.StatusNoContent {
+			w.WriteHeader(status)
+			return
+		}
+		w.WriteHeader(status)
+		_, _ = io.WriteString(w, "<!doctype html><title>console</title>")
+	}))
+	defer srv.Close()
+	id := identity(t)
+	if err := gwlink.Join(context.Background(), nil, srv.URL, "b300", "dpj_x", id); err == nil {
+		t.Fatal("a page answered with 200 was taken for a join")
+	}
+	status = http.StatusForbidden
+	if err := gwlink.Join(context.Background(), nil, srv.URL, "b300", "dpj_x", id); err == nil {
+		t.Fatal("a refusal was taken for a join")
+	}
+	status = http.StatusNoContent
+	if err := gwlink.Join(context.Background(), nil, srv.URL, "b300", "dpj_x", id); err != nil {
+		t.Fatalf("a join: %v", err)
+	}
+}
