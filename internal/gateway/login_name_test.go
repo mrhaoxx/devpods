@@ -22,7 +22,7 @@ func TestParseLoginName(t *testing.T) {
 		{"alice", "", "", true},        // pod required
 		{"alice+", "", "", true},
 		{"+pod", "", "", true},
-		{"alice+pod+extra", "", "", true},
+		{"alice+pod+extra+more", "", "", true},
 		{"alice+../pod", "", "", true},
 		{"alice+pod ", "", "", true},   // trailing whitespace
 		{"", "", "", true},

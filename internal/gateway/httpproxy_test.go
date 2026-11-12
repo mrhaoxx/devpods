@@ -169,9 +169,9 @@ func TestHTTPProxy_PrivateByDefault(t *testing.T) {
 
 	// a collaborator who was removed loses access with the cookie still valid
 	var dp devpodv1alpha1.DevPod
-	_ = p.c.Get(context.Background(), client.ObjectKey{Name: "alice-dev", Namespace: "devpods"}, &dp)
+	_ = p.dir.(*kubeDirectory).c.Get(context.Background(), client.ObjectKey{Name: "alice-dev", Namespace: "devpods"}, &dp)
 	dp.Spec.Collaborators = nil
-	if err := p.c.(client.Client).Update(context.Background(), &dp); err != nil {
+	if err := p.dir.(*kubeDirectory).c.(client.Client).Update(context.Background(), &dp); err != nil {
 		t.Fatal(err)
 	}
 	if resp := do("GET", "/lab", map[string]string{"Cookie": ck.Name + "=" + ck.Value}); resp.StatusCode != http.StatusUnauthorized {
@@ -184,9 +184,9 @@ func TestHTTPProxy_PrivateByDefault(t *testing.T) {
 func TestHTTPProxy_SignedInUsersPort(t *testing.T) {
 	p, do, seen, bport := proxyRig(t)
 	var dp devpodv1alpha1.DevPod
-	_ = p.c.Get(context.Background(), client.ObjectKey{Name: "alice-dev", Namespace: "devpods"}, &dp)
+	_ = p.dir.(*kubeDirectory).c.Get(context.Background(), client.ObjectKey{Name: "alice-dev", Namespace: "devpods"}, &dp)
 	dp.Annotations[httpauth.UserPortsAnnotation] = bport
-	if err := p.c.(client.Client).Update(context.Background(), &dp); err != nil {
+	if err := p.dir.(*kubeDirectory).c.(client.Client).Update(context.Background(), &dp); err != nil {
 		t.Fatal(err)
 	}
 	if resp := do("GET", "/", map[string]string{"Accept": "text/html"}); resp.StatusCode != http.StatusFound {
@@ -211,9 +211,9 @@ func TestHTTPProxy_SignedInUsersPort(t *testing.T) {
 	}
 	// closing the port again shuts the stranger out at once
 	delete(dp.Annotations, httpauth.UserPortsAnnotation)
-	_ = p.c.Get(context.Background(), client.ObjectKey{Name: "alice-dev", Namespace: "devpods"}, &dp)
+	_ = p.dir.(*kubeDirectory).c.Get(context.Background(), client.ObjectKey{Name: "alice-dev", Namespace: "devpods"}, &dp)
 	delete(dp.Annotations, httpauth.UserPortsAnnotation)
-	if err := p.c.(client.Client).Update(context.Background(), &dp); err != nil {
+	if err := p.dir.(*kubeDirectory).c.(client.Client).Update(context.Background(), &dp); err != nil {
 		t.Fatal(err)
 	}
 	if resp := do("GET", "/app", map[string]string{"Cookie": ck.Name + "=" + ck.Value}); resp.StatusCode != http.StatusUnauthorized {
@@ -233,9 +233,9 @@ func TestHTTPProxy_PublicPortAndGuards(t *testing.T) {
 		t.Fatalf("missing suffix: %d", resp.StatusCode)
 	}
 	var dp devpodv1alpha1.DevPod
-	_ = p.c.Get(context.Background(), client.ObjectKey{Name: "alice-dev", Namespace: "devpods"}, &dp)
+	_ = p.dir.(*kubeDirectory).c.Get(context.Background(), client.ObjectKey{Name: "alice-dev", Namespace: "devpods"}, &dp)
 	dp.Annotations[httpauth.PublicPortsAnnotation] = bport + ",1"
-	if err := p.c.(client.Client).Update(context.Background(), &dp); err != nil {
+	if err := p.dir.(*kubeDirectory).c.(client.Client).Update(context.Background(), &dp); err != nil {
 		t.Fatal(err)
 	}
 	if resp := do("GET", "/pub", nil); resp.StatusCode != http.StatusOK || len(*seen) != 1 {
@@ -251,7 +251,7 @@ func TestHTTPProxy_PublicPortAndGuards(t *testing.T) {
 		ObjectMeta: metav1.ObjectMeta{Name: "bob-dev", Namespace: "devpods", Annotations: map[string]string{httpauth.IDAnnotation: "yyyyyyyy3333", httpauth.PublicPortsAnnotation: bport}},
 		Status:     devpodv1alpha1.DevPodStatus{Phase: devpodv1alpha1.DevPodRunning, Endpoint: "127.0.0.1:1"},
 	}
-	if err := p.c.(client.Client).Create(context.Background(), fresh); err != nil {
+	if err := p.dir.(*kubeDirectory).c.(client.Client).Create(context.Background(), fresh); err != nil {
 		t.Fatal(err)
 	}
 	now := time.Now()

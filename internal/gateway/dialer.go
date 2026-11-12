@@ -20,7 +20,18 @@ const DialTimeout = 5 * time.Second
 // Dialer opens SSH connections to backend (per-DevPod) sshd instances.
 type Dialer struct {
 	signer ssh.Signer
+	// Net, when set, is how a DevPod's address is reached: through the
+	// agent of its cluster (a gateway of several clusters has no route to
+	// a Pod of its own). Nil: a plain TCP connection.
+	Net func(ctx context.Context, cluster, addr, purpose string) (net.Conn, error)
 }
+
+// What a connection to a DevPod is for; the cluster's agent holds each
+// to its own rule (sshd's port for SSH, any other port for HTTP).
+const (
+	PurposeSSH  = "ssh"
+	PurposeHTTP = "http"
+)
 
 // NewDialer returns a Dialer that authenticates to the backend using
 // the given gateway internal signing key.
@@ -34,8 +45,19 @@ func NewDialer(internalKey ssh.Signer) *Dialer {
 // not verified — the backend is reached over a cluster-internal Pod IP
 // which is itself the trust anchor.
 func (d *Dialer) Dial(ctx context.Context, addr string) (ssh.Conn, <-chan ssh.NewChannel, <-chan *ssh.Request, error) {
-	dialer := &net.Dialer{Timeout: DialTimeout}
-	tcp, err := dialer.DialContext(ctx, "tcp", addr)
+	return d.DialIn(ctx, "", addr)
+}
+
+// DialIn is Dial to a DevPod of cluster.
+func (d *Dialer) DialIn(ctx context.Context, cluster, addr string) (ssh.Conn, <-chan ssh.NewChannel, <-chan *ssh.Request, error) {
+	var tcp net.Conn
+	var err error
+	if d.Net != nil {
+		tcp, err = d.Net(ctx, cluster, addr, PurposeSSH)
+	} else {
+		dialer := &net.Dialer{Timeout: DialTimeout}
+		tcp, err = dialer.DialContext(ctx, "tcp", addr)
+	}
 	if err != nil {
 		return nil, nil, nil, fmt.Errorf("dial %s: %w", addr, err)
 	}

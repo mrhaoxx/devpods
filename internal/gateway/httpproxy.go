@@ -5,6 +5,7 @@
 package gateway
 
 import (
+	"context"
 	"fmt"
 	"log/slog"
 	"net"
@@ -33,8 +34,7 @@ import (
 // out as a one-minute ticket (see AuthPath). Every request re-checks
 // that the cookie's user may still reach the port.
 type HTTPProxy struct {
-	c          client.Reader
-	dpNS       string
+	dir        Directory
 	baseDomain string
 	suffix     string
 	// Key signs tickets and cookies (shared with the webui); without it
@@ -43,10 +43,12 @@ type HTTPProxy struct {
 	// LoginURL is the webui endpoint a browser is sent to for a ticket.
 	LoginURL string
 	Now      func() time.Time
+	// Net, when set, is how a DevPod's address is reached: through the
+	// agent of its cluster (see Dialer.Net). Nil: a plain TCP connection.
+	Net func(ctx context.Context, cluster, addr, purpose string) (net.Conn, error)
 
-	mu    sync.Mutex
-	ids   map[string]string // id → DevPod name
-	idsAt time.Time
+	mu         sync.Mutex
+	transports map[string]*http.Transport // per cluster: idle connections are reused
 }
 
 // idsTTL bounds how stale the id index may be (a reset id stops working
@@ -56,41 +58,50 @@ const (
 	idsMissRefresh = time.Second
 )
 
+// NewHTTPProxy serves the DevPods of the namespace read through c.
 func NewHTTPProxy(c client.Reader, devpodNamespace, baseDomain, suffix string) *HTTPProxy {
-	return &HTTPProxy{c: c, dpNS: devpodNamespace, baseDomain: baseDomain, suffix: suffix, Now: time.Now}
+	p := NewHTTPProxyWith(nil, baseDomain, suffix)
+	// the id index ages by the proxy's clock
+	p.dir = &kubeDirectory{c: c, ns: devpodNamespace, now: func() time.Time { return p.Now() }}
+	return p
 }
 
-// lookup finds the DevPod with the id.
-func (p *HTTPProxy) lookup(r *http.Request, id string) (*devpodv1alpha1.DevPod, bool) {
-	if !httpauth.ValidID(id) {
-		return nil, false
+// NewHTTPProxyWith serves the DevPods dir knows (a gateway of several
+// clusters asks the console).
+func NewHTTPProxyWith(dir Directory, baseDomain, suffix string) *HTTPProxy {
+	return &HTTPProxy{dir: dir, baseDomain: baseDomain, suffix: suffix, Now: time.Now}
+}
+
+// lookup finds the DevPod with the id, and its cluster.
+func (p *HTTPProxy) lookup(r *http.Request, id string) (*devpodv1alpha1.DevPod, string, bool) {
+	f, err := p.dir.ByHTTPID(r.Context(), id)
+	if err != nil || f == nil {
+		return nil, "", false
+	}
+	return f.DevPod, f.Cluster, true
+}
+
+// transport is how the DevPods of cluster are reached; nil is Go's own.
+func (p *HTTPProxy) transport(cluster string) http.RoundTripper {
+	if p.Net == nil {
+		return nil
 	}
 	p.mu.Lock()
-	name, ok := p.ids[id]
-	// an id drawn a moment ago is not in the index yet: a miss rebuilds
-	// it (at most once per idsMissRefresh, so unknown ids stay cheap)
-	if age := p.Now().Sub(p.idsAt); p.ids == nil || age > idsTTL || (!ok && age > idsMissRefresh) {
-		var list devpodv1alpha1.DevPodList
-		if err := p.c.List(r.Context(), &list, client.InNamespace(p.dpNS)); err == nil {
-			ids := make(map[string]string, len(list.Items))
-			for i := range list.Items {
-				if v := list.Items[i].Annotations[httpauth.IDAnnotation]; v != "" {
-					ids[v] = list.Items[i].Name
-				}
-			}
-			p.ids, p.idsAt = ids, p.Now()
-		}
-		name, ok = p.ids[id]
+	defer p.mu.Unlock()
+	if t := p.transports[cluster]; t != nil {
+		return t
 	}
-	p.mu.Unlock()
-	if !ok {
-		return nil, false
+	if p.transports == nil {
+		p.transports = map[string]*http.Transport{}
 	}
-	var dp devpodv1alpha1.DevPod
-	if err := p.c.Get(r.Context(), client.ObjectKey{Name: name, Namespace: p.dpNS}, &dp); err != nil || dp.Annotations[httpauth.IDAnnotation] != id {
-		return nil, false
+	t := &http.Transport{
+		DialContext: func(ctx context.Context, _, addr string) (net.Conn, error) {
+			return p.Net(ctx, cluster, addr, PurposeHTTP)
+		},
+		MaxIdleConnsPerHost: 8, IdleConnTimeout: 60 * time.Second, ResponseHeaderTimeout: 0,
 	}
-	return &dp, true
+	p.transports[cluster] = t
+	return t
 }
 
 // parseHost splits a proxy hostname into the id and the port.
@@ -165,7 +176,7 @@ func (p *HTTPProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid host", http.StatusBadRequest)
 		return
 	}
-	dp, ok := p.lookup(r, id)
+	dp, cluster, ok := p.lookup(r, id)
 	if !ok {
 		http.Error(w, "not found", http.StatusNotFound)
 		return
@@ -208,6 +219,7 @@ func (p *HTTPProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			req.URL.Scheme = "http"
 			req.URL.Host = target
 		},
+		Transport:     p.transport(cluster),
 		FlushInterval: -1,
 		ErrorHandler: func(w http.ResponseWriter, _ *http.Request, err error) {
 			http.Error(w, fmt.Sprintf("nothing answers on port %d of this DevPod (%v)", port, err), http.StatusBadGateway)

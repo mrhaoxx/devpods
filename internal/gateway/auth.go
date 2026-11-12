@@ -11,8 +11,6 @@ import (
 	"fmt"
 
 	"golang.org/x/crypto/ssh"
-	apierrors "k8s.io/apimachinery/pkg/api/errors"
-	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	devpodv1alpha1 "github.com/mrhaoxx/devpod/api/v1alpha1"
@@ -50,12 +48,19 @@ type AuthResult struct {
 	DevPodName string
 	Endpoint   string
 	AuthPath   AuthPath
+	// Cluster the DevPod is in; "" where the gateway serves one cluster.
+	Cluster string
+	// Ambiguous, when set, replaces the rest: the key was good, but
+	// several clusters have a DevPod of that name this user may log in
+	// to. These are the logins that say which. Told only to someone whose
+	// key was accepted.
+	Ambiguous []string
 }
 
 // Authenticator validates SSH client public keys against an ordered
 // chain of IdentitySources and resolves the target DevPod.
 type Authenticator struct {
-	c         client.Reader
+	dir       Directory
 	dpNS      string
 	proxyKeys map[string]string // SHA256 fingerprint → alias
 	sources   []IdentitySource  // ordered; first match wins
@@ -66,10 +71,17 @@ type Authenticator struct {
 // (e.g., crdSource then ldapSource).
 func NewAuthenticator(c client.Reader, devpodNamespace string) *Authenticator {
 	return &Authenticator{
-		c:       c,
+		dir:     NewKubeDirectory(c, devpodNamespace),
 		dpNS:    devpodNamespace,
 		sources: []IdentitySource{NewCRDSource(c)},
 	}
+}
+
+// WithDirectory replaces where DevPods are looked up (a gateway of
+// several clusters asks the console).
+func (a *Authenticator) WithDirectory(d Directory) *Authenticator {
+	a.dir = d
+	return a
 }
 
 // WithProxyKeys attaches the trusted-proxy index. Pass nil/empty to
@@ -97,30 +109,26 @@ func (a *Authenticator) WithSources(srcs []IdentitySource) *Authenticator {
 func (a *Authenticator) Authenticate(ctx context.Context, loginName string, key ssh.PublicKey) (*AuthResult, error) {
 	var ap AuthPath
 
-	user, pod, err := ParseLoginName(loginName)
+	user, pod, cluster, err := ParseLogin(loginName)
 	if err != nil {
 		return nil, &AuthError{Err: fmt.Errorf("%w: %v", ErrLoginNameFormat, err), AuthPath: ap}
 	}
 	ap.User = user
 	ap.Pod = pod
 
-	// Fetch DevPod up front so a bad pod name fails fast regardless
+	// Look the DevPod up first so a bad pod name fails fast regardless
 	// of identity-source latency.
 	//
 	// The login is "<owner>+<pod>", but the DevPod resource is named
 	// "<owner>-<pod>" so pod names only need to be unique per owner, not
-	// cluster-wide (many users can each have a "day2"). Fall back to the
-	// bare "<pod>" name for DevPods created before owner-scoped naming.
-	var dp devpodv1alpha1.DevPod
-	getErr := a.c.Get(ctx, types.NamespacedName{Name: DevPodResourceName(user, pod), Namespace: a.dpNS}, &dp)
-	if apierrors.IsNotFound(getErr) {
-		getErr = a.c.Get(ctx, types.NamespacedName{Name: pod, Namespace: a.dpNS}, &dp)
-	}
+	// cluster-wide (many users can each have a "day2"); the bare "<pod>"
+	// name is for DevPods created before owner-scoped naming.
+	found, getErr := a.dir.Lookup(ctx, user, pod, cluster)
 	if getErr != nil {
-		if apierrors.IsNotFound(getErr) {
-			return nil, &AuthError{Err: fmt.Errorf("%w: %q (owner %q) in ns %q", ErrDevPodNotFound, pod, user, a.dpNS), AuthPath: ap}
-		}
 		return nil, &AuthError{Err: fmt.Errorf("get devpod: %w", getErr), AuthPath: ap}
+	}
+	if len(found) == 0 {
+		return nil, &AuthError{Err: fmt.Errorf("%w: %q (owner %q) in ns %q", ErrDevPodNotFound, pod, user, a.dpNS), AuthPath: ap}
 	}
 
 	// Trusted-proxy short-circuit — fingerprint-only, identity
@@ -128,7 +136,7 @@ func (a *Authenticator) Authenticate(ctx context.Context, loginName string, key 
 	if alias, ok := a.proxyKeys[ssh.FingerprintSHA256(key)]; ok {
 		ap.Kind = "trusted_proxy"
 		ap.Alias = alias
-		return a.finalize(&dp, user, pod, ap)
+		return a.finalize(found, user, pod, ap)
 	}
 
 	// Resolve via ordered sources.
@@ -165,14 +173,31 @@ func (a *Authenticator) Authenticate(ctx context.Context, loginName string, key 
 		return nil, &AuthError{Err: fmt.Errorf("%w: %q", ErrUserNotFound, user), AuthPath: ap}
 	}
 
-	return a.finalize(&dp, user, pod, ap)
+	return a.finalize(found, user, pod, ap)
 }
 
-// finalize runs the shared post-match checks (access + readiness).
-func (a *Authenticator) finalize(dp *devpodv1alpha1.DevPod, user, pod string, ap AuthPath) (*AuthResult, error) {
-	if !accessAllowed(dp, user) {
-		return nil, &AuthError{Err: fmt.Errorf("%w: user %q on devpod %q", ErrAccessDenied, user, pod), AuthPath: ap}
+// finalize runs the shared post-match checks (access + readiness) on
+// what the login could mean. Among several clusters, what counts is what
+// this user may log in to: one such DevPod is the answer; several are
+// told apart by the caller (AuthResult.Ambiguous).
+func (a *Authenticator) finalize(found []Found, user, pod string, ap AuthPath) (*AuthResult, error) {
+	var mine []Found
+	for _, f := range found {
+		if accessAllowed(f.DevPod, user) {
+			mine = append(mine, f)
+		}
 	}
+	switch {
+	case len(mine) == 0:
+		return nil, &AuthError{Err: fmt.Errorf("%w: user %q on devpod %q", ErrAccessDenied, user, pod), AuthPath: ap}
+	case len(mine) > 1:
+		res := &AuthResult{User: user, AuthPath: ap}
+		for _, f := range mine {
+			res.Ambiguous = append(res.Ambiguous, user+"+"+pod+"+"+f.Cluster)
+		}
+		return res, nil
+	}
+	dp := mine[0].DevPod
 	if dp.Status.Phase != devpodv1alpha1.DevPodRunning || dp.Status.Endpoint == "" {
 		return nil, &AuthError{
 			Err:      fmt.Errorf("%w: %q phase=%q endpoint=%q", ErrDevPodNotReady, pod, dp.Status.Phase, dp.Status.Endpoint),
@@ -184,6 +209,7 @@ func (a *Authenticator) finalize(dp *devpodv1alpha1.DevPod, user, pod string, ap
 		DevPodName: dp.Name,
 		Endpoint:   dp.Status.Endpoint,
 		AuthPath:   ap,
+		Cluster:    mine[0].Cluster,
 	}, nil
 }
 

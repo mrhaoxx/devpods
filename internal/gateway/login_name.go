@@ -18,7 +18,7 @@ import (
 // components match `[a-z0-9-]{1,32}`.
 var ErrInvalidLoginName = errors.New("invalid login name")
 
-var loginRE = regexp.MustCompile(`^([a-z0-9-]{1,32})\+([a-z0-9-]{1,32})$`)
+var loginRE = regexp.MustCompile(`^([a-z0-9-]{1,32})\+([a-z0-9-]{1,32})(?:\+([a-z0-9-]{1,32}))?$`)
 
 // ParseLoginName splits an SSH login user string into (devpodOwner,
 // devpodName).
@@ -27,11 +27,20 @@ var loginRE = regexp.MustCompile(`^([a-z0-9-]{1,32})\+([a-z0-9-]{1,32})$`)
 // (missing pod, empty parts, uppercase, traversal characters, trailing
 // whitespace) returns ErrInvalidLoginName.
 func ParseLoginName(s string) (owner, pod string, err error) {
+	owner, pod, _, err = ParseLogin(s)
+	return owner, pod, err
+}
+
+// ParseLogin splits a login into user, DevPod and — where a gateway
+// serves several clusters — the cluster: "<user>+<pod>[+<cluster>]". The
+// cluster can always be written and has to be when two clusters have a
+// DevPod of that name.
+func ParseLogin(s string) (user, pod, cluster string, err error) {
 	m := loginRE.FindStringSubmatch(s)
 	if m == nil {
-		return "", "", fmt.Errorf("%w: %q", ErrInvalidLoginName, s)
+		return "", "", "", fmt.Errorf("%w: %q", ErrInvalidLoginName, s)
 	}
-	return m[1], m[2], nil
+	return m[1], m[2], m[3], nil
 }
 
 // DevPodResourceName maps a login "<owner>+<pod>" to the DevPod resource

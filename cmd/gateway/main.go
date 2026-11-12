@@ -473,6 +473,8 @@ func handle(parent context.Context, id uint64, conn net.Conn, hostSigner ssh.Sig
 				"devpod.io/user":      res.User,
 				"devpod.io/devpod":    res.DevPodName,
 				"devpod.io/endpoint":  res.Endpoint,
+				"devpod.io/cluster":   res.Cluster,
+				"devpod.io/ambiguous": strings.Join(res.Ambiguous, " "),
 				"devpod.io/auth-path": string(apJSON),
 				"devpod.io/pubkey-fp": ssh.FingerprintSHA256(key),
 			},
@@ -485,6 +487,14 @@ func handle(parent context.Context, id uint64, conn net.Conn, hostSigner ssh.Sig
 	}
 	defer srvConn.Close()
 	if serveCLI(parent, srvConn, srvChans, srvReqs) {
+		return
+	}
+
+	// The key was good, but the name is one several clusters have: say
+	// how to write it, and end.
+	if amb := srvConn.Permissions.Extensions["devpod.io/ambiguous"]; amb != "" {
+		slog.Info("auth_ambiguous", "id", id, "login", srvConn.User(), "candidates", amb)
+		refuseWith(srvConn, srvChans, srvReqs, ambiguousMessage(strings.Fields(amb)))
 		return
 	}
 
@@ -527,7 +537,7 @@ func handle(parent context.Context, id uint64, conn net.Conn, hostSigner ssh.Sig
 
 	endpoint := srvConn.Permissions.Extensions["devpod.io/endpoint"]
 	dctx, dcancel := context.WithTimeout(parent, gateway.DialTimeout)
-	cliConn, cliChans, cliReqs, err := dialer.Dial(dctx, endpoint)
+	cliConn, cliChans, cliReqs, err := dialer.DialIn(dctx, srvConn.Permissions.Extensions["devpod.io/cluster"], endpoint)
 	dcancel()
 	if err != nil {
 		slog.Warn("dial_failed", "id", id, "endpoint", endpoint, "err", err)
