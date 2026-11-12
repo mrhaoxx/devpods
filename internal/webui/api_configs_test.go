@@ -113,7 +113,7 @@ func TestConfigAPI(t *testing.T) {
 		bad(func(m map[string]any) { m["title"] = strings.Repeat("t", 81) })
 		bad(func(m map[string]any) { m["description"] = strings.Repeat("d", 501) })
 		bad(func(m map[string]any) { m["content"] = "" })
-		bad(func(m map[string]any) { m["content"] = strings.Repeat("a", 65537) })
+		bad(func(m map[string]any) { m["content"] = strings.Repeat("a", 256<<10+1) })
 		bad(func(m map[string]any) { m["sharedWith"] = []string{"Not A User"} })
 		bad(func(m map[string]any) { m["unknown"] = 1 })
 		many := make([]string, 65)
@@ -121,6 +121,8 @@ func TestConfigAPI(t *testing.T) {
 			many[i] = "u" + strings.Repeat("x", i%7) + string(rune('a'+i%26)) + string(rune('a'+i/26))
 		}
 		bad(func(m map[string]any) { m["sharedWith"] = many })
+		// up to 256 KiB of text
+		call("POST", "/api/configs", alice, jsonBody(map[string]any{"id": "big", "title": "t", "content": strings.Repeat("a", 256<<10)}), http.StatusCreated)
 		// content is text: not parsed when saved
 		call("POST", "/api/configs", alice, jsonBody(map[string]any{"id": "odd", "title": "t", "content": "gpu: ${GPU}\n  - not yaml"}), http.StatusCreated)
 	})
@@ -279,4 +281,100 @@ func TestConfigsFollowUserDeletion(t *testing.T) {
 		t.Fatalf("sharedWith after the deletion: %v", sw)
 	}
 	_ = webui.SessionCookie
+}
+
+// varsByName indexes a config view's variables.
+func varsByName(v map[string]any) map[string]map[string]any {
+	out := map[string]map[string]any{}
+	for _, x := range v["variables"].([]any) {
+		m := x.(map[string]any)
+		out[m["name"].(string)] = m
+	}
+	return out
+}
+
+func TestConfigVariables(t *testing.T) {
+	setupSuite(t)
+	s, sm := newServer(t)
+	t.Cleanup(func() { cleanupConfigs(t) })
+	alice := forge(sm, "cv-alice", false)
+	srv := httptest.NewServer(s.Routes())
+	t.Cleanup(srv.Close)
+	call := func(method, path string, auth any, body string, want int) map[string]any {
+		t.Helper()
+		return apiCall(t, srv, method, path, auth, body, want)
+	}
+	content := "gpu: ${GPU:-1}\nname: ${NAME}\n"
+	call("POST", "/api/configs", alice, jsonBody(map[string]any{"id": "v", "title": "t", "content": content, "variables": []map[string]any{
+		{"name": "GPU", "type": "choice", "options": []string{"1", "2"}, "description": "每个 DevPod 的 GPU 数"},
+		{"name": "GONE", "type": "int"},
+	}}), http.StatusCreated)
+	vars := varsByName(call("GET", "/api/configs/cv-alice-v", alice, "", http.StatusOK))
+	gpu := vars["GPU"]
+	if gpu["type"] != "choice" || gpu["default"] != "1" || gpu["description"] != "每个 DevPod 的 GPU 数" || jsonBody(gpu["options"]) != `["1","2"]` {
+		t.Fatalf("GPU %+v", gpu)
+	}
+	if vars["NAME"]["type"] != "string" {
+		t.Fatalf("NAME %+v", vars["NAME"])
+	}
+	if _, ok := vars["GONE"]; ok {
+		t.Fatal("a declaration of a variable the text does not have was kept")
+	}
+
+	bad := func(decl map[string]any) {
+		t.Helper()
+		call("PATCH", "/api/configs/cv-alice-v", alice, jsonBody(map[string]any{"variables": []map[string]any{decl}}), http.StatusBadRequest)
+	}
+	bad(map[string]any{"name": "NAME", "description": "x"}) // a builtin
+	bad(map[string]any{"name": "GPU", "type": "float"})     // no such type
+	bad(map[string]any{"name": "GPU", "type": "choice"})    // a choice without options
+	bad(map[string]any{"name": "gpu", "type": "int"})       // not a variable name
+	bad(map[string]any{"name": "GPU", "description": strings.Repeat("d", 201)})
+
+	// the text loses ${GPU}: so does the declaration
+	call("PATCH", "/api/configs/cv-alice-v", alice, jsonBody(map[string]any{"content": "name: ${NAME}\n"}), http.StatusOK)
+	var c devpodv1alpha1.DevPodConfig
+	if err := k8sClient.Get(context.Background(), client.ObjectKey{Namespace: "devpods", Name: "cv-alice-v"}, &c); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(c.Annotations["devpod.io/variables"], "GPU") {
+		t.Fatalf("annotation still declares GPU: %q", c.Annotations["devpod.io/variables"])
+	}
+}
+
+func TestConfigOfficial(t *testing.T) {
+	setupSuite(t)
+	s, sm := newServer(t)
+	t.Cleanup(func() { cleanupConfigs(t) })
+	alice, root := forge(sm, "co-alice", false), forge(sm, "co-root", true)
+	srv := httptest.NewServer(s.Routes())
+	t.Cleanup(srv.Close)
+	call := func(method, path string, auth any, body string, want int) map[string]any {
+		t.Helper()
+		return apiCall(t, srv, method, path, auth, body, want)
+	}
+	call("POST", "/api/configs", alice, jsonBody(map[string]any{"id": "o", "title": "zzz last by title", "content": "a: b", "official": true}), http.StatusForbidden)
+	call("POST", "/api/configs", alice, jsonBody(map[string]any{"id": "o", "title": "zzz last by title", "content": "a: b"}), http.StatusCreated)
+	call("POST", "/api/configs", alice, jsonBody(map[string]any{"id": "p", "title": "aaa first by title", "content": "a: b", "public": true}), http.StatusCreated)
+	call("PATCH", "/api/configs/co-alice-o", alice, `{"official":true}`, http.StatusForbidden)
+	call("PATCH", "/api/configs/co-alice-o", root, `{"official":true}`, http.StatusBadRequest) // not public
+	call("PATCH", "/api/configs/co-alice-o", alice, `{"public":true}`, http.StatusOK)
+	if v := call("PATCH", "/api/configs/co-alice-o", root, `{"official":true}`, http.StatusOK); v["official"] != true {
+		t.Fatalf("official %+v", v)
+	}
+	call("PATCH", "/api/configs/co-alice-o", root, `{"official":true,"title":"x"}`, http.StatusForbidden)
+
+	list := call("GET", "/api/configs", alice, "", http.StatusOK)
+	if got := configNames(list); len(got) != 2 || got[0] != "co-alice-o" {
+		t.Fatalf("official first: %v", got)
+	}
+	if got := configNames(call("GET", "/api/configs?scope=official", alice, "", http.StatusOK)); len(got) != 1 || got[0] != "co-alice-o" {
+		t.Fatalf("scope=official: %v", got)
+	}
+	call("GET", "/api/configs?scope=bogus", alice, "", http.StatusBadRequest)
+
+	// taken off the public list: no longer official either
+	if v := call("PATCH", "/api/configs/co-alice-o", root, `{"public":false}`, http.StatusOK); v["official"] != false {
+		t.Fatalf("still official after unpublishing: %+v", v)
+	}
 }

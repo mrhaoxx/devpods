@@ -34,7 +34,7 @@ type DevPodConfigSpec struct {
 	// variable may stand where a number belongs.
 	//
 	// +kubebuilder:validation:MinLength=1
-	// +kubebuilder:validation:MaxLength=65536
+	// +kubebuilder:validation:MaxLength=262144
 	Content string `json:"content"`
 
 	// SharedWith are the users who may see and use the config besides

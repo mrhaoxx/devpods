@@ -4,13 +4,25 @@ import { apiPath } from "../../data/cluster";
 // DevPod or several.
 import { ApiFailure, req, type ApiError } from "../../data/api";
 
-export interface ConfigVar {
+/** What a variable is: it picks the launch form's control and how a value is checked. */
+export type VarType = "string" | "int" | "choice" | "node" | "image";
+/** A variable as the text has it (vars.ts reads the same). */
+export interface ParsedVar {
   name: string;
   builtin: boolean;
   /** the person launching has to give it */
   required: boolean;
   default?: string;
 }
+/** A variable with what the config says of it. */
+export interface ConfigVar extends ParsedVar {
+  description?: string;
+  type: VarType;
+  /** a choice's options */
+  options?: string[];
+}
+/** What a config says of one of its variables (saved with it). */
+export type VarDecl = { name: string; description?: string; type?: VarType; options?: string[] };
 export interface ConfigSummary {
   name: string;
   owner: string;
@@ -19,6 +31,8 @@ export interface ConfigSummary {
   /** empty unless the config is mine (or I am an admin) */
   sharedWith: string[];
   public: boolean;
+  /** marked by an admin; listed first */
+  official: boolean;
   variables: ConfigVar[];
   mine: boolean;
   updatedAt: string;
@@ -26,9 +40,18 @@ export interface ConfigSummary {
 export interface Config extends ConfigSummary {
   content: string;
 }
-export type ConfigScope = "mine" | "shared" | "public";
-export type ConfigCreate = { id: string; title: string; description?: string; content: string; sharedWith?: string[]; public?: boolean };
-export type ConfigPatch = Partial<Pick<Config, "title" | "description" | "content" | "sharedWith" | "public">>;
+export type ConfigScope = "mine" | "shared" | "public" | "official";
+export type ConfigCreate = {
+  id: string;
+  title: string;
+  description?: string;
+  content: string;
+  sharedWith?: string[];
+  public?: boolean;
+  variables?: VarDecl[];
+  official?: boolean;
+};
+export type ConfigPatch = Partial<Pick<Config, "title" | "description" | "content" | "sharedWith" | "public" | "official">> & { variables?: VarDecl[] };
 
 const path = (name: string) => `/api/configs/${encodeURIComponent(name)}`;
 export const listConfigs = (scope?: ConfigScope) => req<{ items: ConfigSummary[] }>("GET", `/api/configs${scope ? `?scope=${scope}` : ""}`);

@@ -21,7 +21,6 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	devpodv1alpha1 "github.com/mrhaoxx/devpod/api/v1alpha1"
-	"github.com/mrhaoxx/devpod/internal/configvars"
 )
 
 // Saved configs (config center spec §2, §5.1): DevPod YAML with
@@ -36,7 +35,7 @@ const (
 	maxConfigName    = 63
 	maxConfigTitle   = 80
 	maxConfigDesc    = 500
-	maxConfigContent = 64 << 10
+	maxConfigContent = 256 << 10
 	maxConfigShares  = 64
 )
 
@@ -47,16 +46,17 @@ var shareNameRE = regexp.MustCompile(`^[a-z0-9]([-a-z0-9._]{0,61}[a-z0-9])?$`)
 
 // ConfigView is a config as the API shows it. Lists leave Content out.
 type ConfigView struct {
-	Name        string           `json:"name"`
-	Owner       string           `json:"owner"`
-	Title       string           `json:"title"`
-	Description string           `json:"description"`
-	Content     *string          `json:"content,omitempty"`
-	SharedWith  []string         `json:"sharedWith"`
-	Public      bool             `json:"public"`
-	Variables   []configvars.Var `json:"variables"`
-	Mine        bool             `json:"mine"`
-	UpdatedAt   string           `json:"updatedAt"`
+	Name        string          `json:"name"`
+	Owner       string          `json:"owner"`
+	Title       string          `json:"title"`
+	Description string          `json:"description"`
+	Content     *string         `json:"content,omitempty"`
+	SharedWith  []string        `json:"sharedWith"`
+	Public      bool            `json:"public"`
+	Official    bool            `json:"official"`
+	Variables   []ConfigVarView `json:"variables"`
+	Mine        bool            `json:"mine"`
+	UpdatedAt   string          `json:"updatedAt"`
 }
 
 func configView(c *devpodv1alpha1.DevPodConfig, sess Session, withContent bool) ConfigView {
@@ -67,15 +67,13 @@ func configView(c *devpodv1alpha1.DevPodConfig, sess Session, withContent bool) 
 		Description: c.Spec.Description,
 		SharedWith:  c.Spec.SharedWith,
 		Public:      c.Spec.Public,
-		Variables:   configvars.Parse(c.Spec.Content),
+		Official:    isOfficial(c),
+		Variables:   varViews(c),
 		Mine:        c.Spec.Owner == sess.User,
 		UpdatedAt:   c.Annotations[configUpdatedAnnotation],
 	}
 	if v.SharedWith == nil {
 		v.SharedWith = []string{}
-	}
-	if v.Variables == nil {
-		v.Variables = []configvars.Var{}
 	}
 	if v.UpdatedAt == "" {
 		v.UpdatedAt = c.CreationTimestamp.UTC().Format(time.RFC3339)
@@ -180,8 +178,8 @@ func (s *Server) handleListConfigs(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	scope := r.URL.Query().Get("scope")
-	if scope != "" && scope != "mine" && scope != "shared" && scope != "public" {
-		s.writeServerErr(w, badRequest("scope is mine, shared or public"))
+	if scope != "" && scope != "mine" && scope != "shared" && scope != "public" && scope != "official" {
+		s.writeServerErr(w, badRequest("scope is mine, shared, public or official"))
 		return
 	}
 	var list devpodv1alpha1.DevPodConfigList
@@ -202,6 +200,8 @@ func (s *Server) handleListConfigs(w http.ResponseWriter, r *http.Request) {
 			in = shared
 		case "public":
 			in = c.Spec.Public
+		case "official":
+			in = isOfficial(c) && (mine || shared || c.Spec.Public)
 		default:
 			in = mine || shared || c.Spec.Public
 		}
@@ -209,9 +209,13 @@ func (s *Server) handleListConfigs(w http.ResponseWriter, r *http.Request) {
 			items = append(items, configView(c, sess, false))
 		}
 	}
+	// official first, then the most recently changed
 	sort.Slice(items, func(i, j int) bool {
-		if items[i].Title != items[j].Title {
-			return items[i].Title < items[j].Title
+		if items[i].Official != items[j].Official {
+			return items[i].Official
+		}
+		if items[i].UpdatedAt != items[j].UpdatedAt {
+			return items[i].UpdatedAt > items[j].UpdatedAt
 		}
 		return items[i].Name < items[j].Name
 	})
@@ -240,6 +244,10 @@ type ConfigCreateRequest struct {
 	Content     string   `json:"content"`
 	SharedWith  []string `json:"sharedWith,omitempty"`
 	Public      bool     `json:"public,omitempty"`
+	// Variables: what the config says of its variables (type, description).
+	Variables []VarDecl `json:"variables,omitempty"`
+	// Official: admins only, on a public config.
+	Official bool `json:"official,omitempty"`
 }
 
 // handleCreateConfig: POST /api/configs — a config of the caller's,
@@ -268,6 +276,19 @@ func (s *Server) handleCreateConfig(w http.ResponseWriter, r *http.Request) {
 		s.writeServerErr(w, apiErr)
 		return
 	}
+	if req.Official && !sess.Admin {
+		s.writeErr(w, http.StatusForbidden, "FORBIDDEN", "only an admin marks a config official", nil)
+		return
+	}
+	if req.Official && !req.Public {
+		s.writeServerErr(w, badRequest("only a public config can be official"))
+		return
+	}
+	decls, apiErr := cleanDecls(req.Content, req.Variables)
+	if apiErr != nil {
+		s.writeServerErr(w, apiErr)
+		return
+	}
 	c := &devpodv1alpha1.DevPodConfig{
 		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: s.NS},
 		Spec: devpodv1alpha1.DevPodConfigSpec{
@@ -280,6 +301,10 @@ func (s *Server) handleCreateConfig(w http.ResponseWriter, r *http.Request) {
 		},
 	}
 	stampConfig(c)
+	writeDecls(c, decls)
+	if req.Official {
+		c.Annotations[annOfficial] = "true"
+	}
 	if err := s.Client.Create(r.Context(), c); err != nil {
 		if apierrors.IsAlreadyExists(err) {
 			s.writeErr(w, http.StatusConflict, "CONFIG_EXISTS", fmt.Sprintf("you already have a config %q", req.ID), nil)
@@ -294,16 +319,18 @@ func (s *Server) handleCreateConfig(w http.ResponseWriter, r *http.Request) {
 // ConfigPatchRequest is the PATCH /api/configs/{name} body: the fields
 // to change.
 type ConfigPatchRequest struct {
-	Title       *string   `json:"title,omitempty"`
-	Description *string   `json:"description,omitempty"`
-	Content     *string   `json:"content,omitempty"`
-	SharedWith  *[]string `json:"sharedWith,omitempty"`
-	Public      *bool     `json:"public,omitempty"`
+	Title       *string    `json:"title,omitempty"`
+	Description *string    `json:"description,omitempty"`
+	Content     *string    `json:"content,omitempty"`
+	SharedWith  *[]string  `json:"sharedWith,omitempty"`
+	Public      *bool      `json:"public,omitempty"`
+	Variables   *[]VarDecl `json:"variables,omitempty"`
+	Official    *bool      `json:"official,omitempty"`
 }
 
 // handlePatchConfig: PATCH /api/configs/{name}. The owner changes
-// anything; an admin who is not the owner may only take it off the
-// public list.
+// anything but whether it is official; an admin who is not the owner
+// may only take it off the public list, or mark it official or not.
 func (s *Server) handlePatchConfig(w http.ResponseWriter, r *http.Request) {
 	sess, ok := s.sessionFrom(w, r)
 	if !ok {
@@ -319,10 +346,15 @@ func (s *Server) handlePatchConfig(w http.ResponseWriter, r *http.Request) {
 		s.writeServerErr(w, apiErr)
 		return
 	}
+	if req.Official != nil && !sess.Admin {
+		s.writeErr(w, http.StatusForbidden, "FORBIDDEN", "only an admin marks a config official", nil)
+		return
+	}
 	if c.Spec.Owner != sess.User {
-		unpublish := sess.Admin && req.Public != nil && !*req.Public &&
-			req.Title == nil && req.Description == nil && req.Content == nil && req.SharedWith == nil
-		if !unpublish {
+		nothingElse := req.Title == nil && req.Description == nil && req.Content == nil && req.SharedWith == nil && req.Variables == nil
+		unpublish := req.Public != nil && !*req.Public && req.Official == nil
+		mark := req.Official != nil && req.Public == nil
+		if !sess.Admin || !nothingElse || !(unpublish || mark) {
 			s.writeErr(w, http.StatusForbidden, "FORBIDDEN", "only the owner may change a config", nil)
 			return
 		}
@@ -350,6 +382,39 @@ func (s *Server) handlePatchConfig(w http.ResponseWriter, r *http.Request) {
 	}
 	if req.Public != nil {
 		c.Spec.Public = *req.Public
+	}
+	switch {
+	case req.Variables != nil:
+		decls, apiErr := cleanDecls(c.Spec.Content, *req.Variables)
+		if apiErr != nil {
+			s.writeServerErr(w, apiErr)
+			return
+		}
+		writeDecls(c, decls)
+	case req.Content != nil:
+		// what the new text no longer has is no longer described
+		decls, apiErr := cleanDecls(c.Spec.Content, readDecls(c))
+		if apiErr != nil {
+			decls = nil
+		}
+		writeDecls(c, decls)
+	}
+	if c.Annotations == nil {
+		c.Annotations = map[string]string{}
+	}
+	if req.Official != nil {
+		if *req.Official && !c.Spec.Public {
+			s.writeServerErr(w, badRequest("only a public config can be official"))
+			return
+		}
+		if *req.Official {
+			c.Annotations[annOfficial] = "true"
+		} else {
+			delete(c.Annotations, annOfficial)
+		}
+	}
+	if !c.Spec.Public {
+		delete(c.Annotations, annOfficial)
 	}
 	stampConfig(c)
 	if err := s.Client.Update(r.Context(), c); err != nil {

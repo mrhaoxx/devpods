@@ -150,10 +150,10 @@ var apiRoutes = []apiRoute{
 	{"POST /api/audit/sessions/{id}/disconnect", "admin:write", "Cut a session's SSH connection"},
 	{"GET /api/search", "devpods:read", "Search users, DevPods, sessions and commands"},
 
-	{"GET /api/configs", "configs:read", "Saved configs I may see (?scope=mine|shared|public)"},
+	{"GET /api/configs", "configs:read", "Saved configs I may see, official first (?scope=mine|shared|public|official)"},
 	{"GET /api/configs/{name}", "configs:read", "One config: its YAML and variables"},
-	{"POST /api/configs", "configs:write", "Save a config: {id, title, description?, content, sharedWith?, public?}"},
-	{"PATCH /api/configs/{name}", "configs:write", "Change a config of mine: title, description, content, sharedWith, public"},
+	{"POST /api/configs", "configs:write", "Save a config: {id, title, description?, content, sharedWith?, public?, variables?, official? (admins)}"},
+	{"PATCH /api/configs/{name}", "configs:write", "Change a config of mine: title, description, content, sharedWith, public, variables; admins: official"},
 	{"DELETE /api/configs/{name}", "configs:write", "Delete a config"},
 	{"POST /api/configs/{name}/launch", "configs:read", "Create DevPods from a config (also needs devpods:create): {vars, nodes?, count?, dryRun?}"},
 

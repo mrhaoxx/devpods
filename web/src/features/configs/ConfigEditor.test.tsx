@@ -13,6 +13,7 @@ const cfg = (o: Partial<Config> = {}): Config => ({
   content: "name: ${NAME}\nimage: ${IMAGE:-ubuntu:24.04}\n",
   sharedWith: ["bob"],
   public: false,
+  official: false,
   variables: [],
   mine: true,
   updatedAt: new Date().toISOString(),

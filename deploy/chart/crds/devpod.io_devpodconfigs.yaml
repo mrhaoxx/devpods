@@ -62,7 +62,7 @@ spec:
                   Content is the DevPod YAML as the owner wrote it, variables
                   (${VAR}, ${VAR:-default}) included. It is text, not a DevPod: a
                   variable may stand where a number belongs.
-                maxLength: 65536
+                maxLength: 262144
                 minLength: 1
                 type: string
               description:

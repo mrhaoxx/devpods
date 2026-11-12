@@ -11,9 +11,10 @@ const cfg = (o: Partial<ConfigSummary>): ConfigSummary => ({
   description: "",
   sharedWith: [],
   public: false,
+  official: false,
   variables: [
-    { name: "NAME", builtin: true, required: true },
-    { name: "IMAGE", builtin: false, required: false, default: "ubuntu:24.04" },
+    { name: "NAME", builtin: true, required: true, type: "string" },
+    { name: "IMAGE", builtin: false, required: false, default: "ubuntu:24.04", type: "string" },
   ],
   mine: true,
   updatedAt: new Date().toISOString(),

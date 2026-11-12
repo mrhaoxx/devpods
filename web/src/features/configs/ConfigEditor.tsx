@@ -10,7 +10,7 @@ import { Button } from "../../design/Button";
 import { EmptyState } from "../../design/EmptyState";
 import { Field, Group, Input, Notice } from "../../design/Form";
 import { YamlEditor } from "../../design/yaml/YamlEditor";
-import { createConfig, getConfig, patchConfig, type Config, type ConfigPatch, type ConfigVar } from "./api";
+import { createConfig, getConfig, patchConfig, type Config, type ConfigPatch, type ParsedVar } from "./api";
 import { LaunchDialog } from "./LaunchDialog";
 import { INDEX, NAME, NODE, OWNER, parseVars } from "./vars";
 
@@ -29,7 +29,7 @@ const builtinNote: Record<string, string> = {
   [INDEX]: "批量创建时的序号，从 1 开始",
 };
 
-function Variables({ vars }: { vars: ConfigVar[] }) {
+function Variables({ vars }: { vars: ParsedVar[] }) {
   return (
     <div className="rounded-md border border-line bg-sunk p-2 text-xs">
       <div className="mb-1 font-medium">变量</div>
@@ -211,7 +211,7 @@ export function ConfigEditor() {
           )}
         </div>
       </div>
-      {launch && loaded && <LaunchDialog config={{ name: loaded.name, title: loaded.title, variables: parseVars(loaded.content) }} onClose={() => setLaunch(false)} />}
+      {launch && loaded && <LaunchDialog config={{ name: loaded.name, title: loaded.title, variables: loaded.variables }} onClose={() => setLaunch(false)} />}
     </form>
   );
 }

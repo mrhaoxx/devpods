@@ -5,7 +5,7 @@ import type { NodeChoice } from "../../data/api";
 import type { ConfigVar } from "./api";
 import { LaunchDialog, launchNames } from "./LaunchDialog";
 
-const v = (name: string, o: Partial<ConfigVar> = {}): ConfigVar => ({ name, builtin: ["NAME", "NODE", "OWNER", "INDEX"].includes(name), required: !["OWNER", "INDEX"].includes(name), ...o });
+const v = (name: string, o: Partial<ConfigVar> = {}): ConfigVar => ({ name, builtin: ["NAME", "NODE", "OWNER", "INDEX"].includes(name), required: !["OWNER", "INDEX"].includes(name), type: "string", ...o });
 const node = (name: string, o: Partial<NodeChoice> = {}): NodeChoice => ({
   name,
   ready: true,

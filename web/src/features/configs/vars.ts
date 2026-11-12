@@ -6,7 +6,7 @@
 //   $${               a literal ${
 //
 // A name is [A-Z][A-Z0-9_]*; any other ${...} is text.
-import type { ConfigVar } from "./api";
+import type { ParsedVar } from "./api";
 
 export const OWNER = "OWNER";
 export const NAME = "NAME";
@@ -68,7 +68,7 @@ function scan(content: string, variable: (r: Ref) => void) {
 
 /** parseVars lists the variables in order of first appearance; the first
  *  default a variable carries anywhere is its default everywhere. */
-export function parseVars(content: string): ConfigVar[] {
+export function parseVars(content: string): ParsedVar[] {
   const order: string[] = [];
   const by = new Map<string, Ref>();
   scan(content, (r) => {
@@ -83,7 +83,7 @@ export function parseVars(content: string): ConfigVar[] {
   });
   return order.map((n) => {
     const r = by.get(n)!;
-    const v: ConfigVar = { name: n, builtin: builtin(n), required: !r.hasDefault && !serverFilled(n) };
+    const v: ParsedVar = { name: n, builtin: builtin(n), required: !r.hasDefault && !serverFilled(n) };
     if (r.def !== "") v.default = r.def;
     return v;
   });
