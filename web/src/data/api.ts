@@ -64,7 +64,7 @@ export interface Me {
   hasPassword: boolean;
   ssh: { host: string; port: number; loginSuffix?: string };
   /** per cluster, in a console of several */
-  clusters?: Record<string, { quota: Me["quota"]; usage: Me["usage"] }>;
+  clusters?: Record<string, { quota: Me["quota"]; usage: Me["usage"]; ssh?: Me["ssh"] }>;
 }
 
 // sshUser builds the login string: "<owner>+<pod>" plus an optional
@@ -231,7 +231,7 @@ export type BindingInfo = {
 export const me = async () => {
   const m = await req<Me>("GET", "/api/me");
   const mine = m.clusters?.[currentCluster()];
-  return mine ? { ...m, quota: mine.quota, usage: mine.usage } : m;
+  return mine ? { ...m, quota: mine.quota, usage: mine.usage, ssh: mine.ssh ?? m.ssh } : m;
 };
 export type DevPodList = { items: DevPod[]; pods: Record<string, PodInfo> };
 export const listDevPods = (scope: "mine" | "all" = "mine") =>

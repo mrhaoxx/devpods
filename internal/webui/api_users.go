@@ -77,10 +77,15 @@ func (s *Server) handleMe(w http.ResponseWriter, r *http.Request) {
 	if s.Clusters != nil {
 		perCluster = map[string]any{}
 		for _, cc := range s.ks(r) {
-			perCluster[cc.Name] = map[string]any{
+			of := map[string]any{
 				"usage": usageOf(cc.Name, false),
 				"quota": EffectiveQuota(userPtr, cc.Name, s.clusterQuota(r.Context(), cc)),
 			}
+			// where to connect for this cluster's DevPods, when a gateway says
+			if ssh := s.sshOf(r.Context(), cc.Name); ssh != nil {
+				of["ssh"] = ssh
+			}
+			perCluster[cc.Name] = of
 		}
 	}
 

@@ -123,6 +123,19 @@ func (s *Server) httpProxy(w http.ResponseWriter) (*HTTPProxy, bool) {
 	return s.HTTPProxy, true
 }
 
+// httpProxyIn is the port-link address scheme for the request's cluster:
+// that of the gateway serving it, else the console's own. Called once
+// the request's cluster is settled.
+func (s *Server) httpProxyIn(r *http.Request, h *HTTPProxy) *HTTPProxy {
+	if s.Clusters == nil {
+		return h
+	}
+	if gh := s.proxyOfGateway(s.gatewayOf(r.Context(), s.k(r).Name)); gh != nil {
+		return gh
+	}
+	return h
+}
+
 // annotate rewrites the DevPod's annotations with fn, retrying conflicts.
 func (s *Server) annotate(r *http.Request, dp *devpodv1alpha1.DevPod, fn func(a map[string]string)) (*devpodv1alpha1.DevPod, error) {
 	for attempt := 0; ; attempt++ {
@@ -172,7 +185,7 @@ func (s *Server) handleGetHTTP(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	s.writeJSON(w, http.StatusOK, h.view(dp))
+	s.writeJSON(w, http.StatusOK, s.httpProxyIn(r, h).view(dp))
 }
 
 // handlePutHTTP serves PUT /api/devpods/{name}/http: {"publicPorts":[…]} and
@@ -240,7 +253,7 @@ func (s *Server) handlePutHTTP(w http.ResponseWriter, r *http.Request) {
 		s.writeErr(w, http.StatusInternalServerError, "INTERNAL", err.Error(), nil)
 		return
 	}
-	s.writeJSON(w, http.StatusOK, h.view(dp))
+	s.writeJSON(w, http.StatusOK, s.httpProxyIn(r, h).view(dp))
 }
 
 // handleHTTPTicket serves POST /api/http/ticket {host, rd}: the logged-in
@@ -265,7 +278,16 @@ func (s *Server) handleHTTPTicket(w http.ResponseWriter, r *http.Request) {
 		s.writeErr(w, http.StatusBadRequest, "BAD_REQUEST", "malformed request body", nil)
 		return
 	}
-	id, port, ok := h.parseHost(req.Host)
+	// the address may be the console's own scheme or any gateway's
+	var id string
+	var port int
+	ok = false
+	for _, cand := range s.httpProxies(r.Context()) {
+		if id, port, ok = cand.parseHost(req.Host); ok {
+			h = cand
+			break
+		}
+	}
 	if !ok {
 		s.writeErr(w, http.StatusBadRequest, "BAD_REQUEST", "not a DevPod port address", nil)
 		return

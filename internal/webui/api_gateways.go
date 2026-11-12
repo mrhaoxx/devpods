@@ -10,9 +10,11 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"slices"
 	"sort"
+	"strconv"
 	"sync"
 	"time"
 
@@ -484,4 +486,75 @@ func (s *Server) handleGatewayReport(w http.ResponseWriter, r *http.Request) {
 	}
 	s.writeGatewayStatus(name, &rep)
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// gatewayOf is the gateway that serves a cluster: the one the cluster
+// names, else the only one there is; nil when there is none to say (the
+// console's own settings then stand).
+func (s *Server) gatewayOf(ctx context.Context, cluster string) *devpodv1alpha1.Gateway {
+	if s.Clusters == nil || cluster == "" {
+		return nil
+	}
+	var c devpodv1alpha1.Cluster
+	if err := s.Client.Get(ctx, types.NamespacedName{Name: cluster}, &c); err == nil && c.Spec.Gateway != "" {
+		var g devpodv1alpha1.Gateway
+		if err := s.Client.Get(ctx, types.NamespacedName{Name: c.Spec.Gateway}, &g); err == nil {
+			return &g
+		}
+		return nil
+	}
+	var list devpodv1alpha1.GatewayList
+	if err := s.Client.List(ctx, &list); err == nil && len(list.Items) == 1 {
+		return &list.Items[0]
+	}
+	return nil
+}
+
+// sshOf is where users connect by SSH for a cluster's DevPods, and the
+// cluster to write in the login (a gateway of several clusters takes
+// "<user>+<pod>+<cluster>"); nil when the console's own settings stand.
+func (s *Server) sshOf(ctx context.Context, cluster string) map[string]any {
+	g := s.gatewayOf(ctx, cluster)
+	if g == nil || g.Spec.SSHAddress == "" {
+		return nil
+	}
+	host, port := g.Spec.SSHAddress, 22
+	if h, p, err := net.SplitHostPort(g.Spec.SSHAddress); err == nil {
+		if n, err := strconv.Atoi(p); err == nil {
+			host, port = h, n
+		}
+	}
+	return map[string]any{"host": host, "port": port, "loginSuffix": cluster}
+}
+
+// proxyOfGateway is the port-link address scheme of a gateway (signed
+// with the console's key, which every gateway shares); nil if it serves
+// no port links.
+func (s *Server) proxyOfGateway(g *devpodv1alpha1.Gateway) *HTTPProxy {
+	if g == nil || g.Spec.HTTPBaseDomain == "" || s.HTTPProxy == nil {
+		return nil
+	}
+	h, err := NewHTTPProxy("{id}-{port}"+g.Spec.HTTPSuffix+"."+g.Spec.HTTPBaseDomain, s.HTTPProxy.Scheme, s.HTTPProxy.Key)
+	if err != nil {
+		return nil
+	}
+	h.Port = int(g.Spec.HTTPPort)
+	return h
+}
+
+// httpProxies are every port-link address scheme there is: the console's
+// own and each gateway's.
+func (s *Server) httpProxies(ctx context.Context) []*HTTPProxy {
+	out := []*HTTPProxy{s.HTTPProxy}
+	if s.Clusters != nil {
+		var list devpodv1alpha1.GatewayList
+		if err := s.Client.List(ctx, &list); err == nil {
+			for i := range list.Items {
+				if h := s.proxyOfGateway(&list.Items[i]); h != nil {
+					out = append(out, h)
+				}
+			}
+		}
+	}
+	return out
 }

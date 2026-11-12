@@ -22,6 +22,7 @@ import (
 	"github.com/mrhaoxx/devpod/internal/agent"
 	"github.com/mrhaoxx/devpod/internal/gwlink"
 	"github.com/mrhaoxx/devpod/internal/httpauth"
+	"github.com/mrhaoxx/devpod/internal/webui"
 )
 
 // A gateway of several clusters: registered by an admin, joined with a
@@ -198,6 +199,33 @@ func TestGateways(t *testing.T) {
 	raw, _ := json.Marshal(out)
 	if !strings.Contains(string(raw), `"gateway":"b300"`) {
 		t.Fatalf("the cluster's gateway is not shown: %s", raw)
+	}
+
+	// what users are shown for a DevPod of b: that gateway's address, the
+	// login with the cluster, and port links on that gateway's domain
+	hp, err := webui.NewHTTPProxy("{id}-{port}.console.test", "https", []byte("0123456789abcdef0123456789abcdef"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	w.s.HTTPProxy = hp
+	w.until("the console sees where b's gateway is", func() bool {
+		_, me, _ := w.call("gl-alice", "GET", "/api/me", "")
+		cl, _ := me["clusters"].(map[string]any)
+		cb, _ := cl["b"].(map[string]any)
+		ssh, _ := cb["ssh"].(map[string]any)
+		return ssh["host"] == "ssh2.example.com" && ssh["port"] == float64(22) && ssh["loginSuffix"] == "b"
+	})
+	code, out, _ = w.call("gl-alice", "GET", "/api/clusters/b/devpods/gl-alice-only/http", "")
+	if tpl, _ := out["urlTemplate"].(string); code != http.StatusOK || tpl != "https://"+linkID+"-{port}.apps.example.com" {
+		t.Fatalf("a port link of b: %d %v", code, out)
+	}
+	// a ticket is given for that gateway's domain, and for no other
+	code, out, _ = w.call("gl-alice", "POST", "/api/http/ticket", `{"host":"`+linkID+`-8080.apps.example.com","rd":"/"}`)
+	if u, _ := out["url"].(string); code != http.StatusOK || !strings.HasPrefix(u, "https://"+linkID+"-8080.apps.example.com/") {
+		t.Fatalf("a ticket for b's gateway: %d %v", code, out)
+	}
+	if code, out, _ := w.call("gl-alice", "POST", "/api/http/ticket", `{"host":"`+linkID+`-8080.apps.evil.example","rd":"/"}`); code != http.StatusBadRequest {
+		t.Fatalf("a ticket for a domain no gateway has: %d %v", code, out)
 	}
 
 	if code, _, _ := w.call("root", "DELETE", "/api/admin/gateways/b300", ""); code != http.StatusNoContent {

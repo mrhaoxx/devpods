@@ -97,15 +97,19 @@ func (w *Webshell) release(user string) {
 // webshellLogin is the gateway login "<user>+<pod>" for user on dp. The
 // gateway resolves "<user>-<pod>" first and then the bare name, so the
 // owner's prefix is dropped and anyone else names the DevPod in full.
-func webshellLogin(user, devpod string) string {
+func webshellLogin(user, devpod, cluster string) string {
+	login := user + "+" + devpod
 	if rest, ok := strings.CutPrefix(devpod, user+"-"); ok && rest != "" {
-		return user + "+" + rest
+		login = user + "+" + rest
 	}
-	return user + "+" + devpod
+	if cluster != "" { // a gateway of several clusters is told which
+		login += "+" + cluster
+	}
+	return login
 }
 
 // open connects to the gateway as user and starts a shell on a pty.
-func (w *Webshell) open(ctx context.Context, user, devpod string, cols, rows int) (*ssh.Client, *ssh.Session, io.WriteCloser, io.Reader, io.Reader, error) {
+func (w *Webshell) open(ctx context.Context, user, devpod, cluster string, cols, rows int) (*ssh.Client, *ssh.Session, io.WriteCloser, io.Reader, io.Reader, error) {
 	hk := ssh.InsecureIgnoreHostKey() //nolint:gosec // in-cluster Service; pinned when a host key is configured
 	if w.hostKey != nil {
 		hk = ssh.FixedHostKey(w.hostKey)
@@ -118,7 +122,7 @@ func (w *Webshell) open(ctx context.Context, user, devpod string, cols, rows int
 	}
 	_ = conn.SetDeadline(time.Now().Add(webshellDialTimeout))
 	cc, chans, reqs, err := ssh.NewClientConn(conn, w.addr, &ssh.ClientConfig{
-		User: webshellLogin(user, devpod), Auth: []ssh.AuthMethod{ssh.PublicKeys(w.signer)}, HostKeyCallback: hk,
+		User: webshellLogin(user, devpod, cluster), Auth: []ssh.AuthMethod{ssh.PublicKeys(w.signer)}, HostKeyCallback: hk,
 	})
 	if err != nil {
 		_ = conn.Close()
@@ -217,7 +221,7 @@ func (s *Server) handleDevPodShell(w http.ResponseWriter, r *http.Request) {
 	defer ws.release(sess.User)
 
 	cols, rows := termSize(r.URL.Query())
-	client, shell, stdin, stdout, stderr, err := ws.open(r.Context(), sess.User, dp.Name, cols, rows)
+	client, shell, stdin, stdout, stderr, err := ws.open(r.Context(), sess.User, dp.Name, s.k(r).Name, cols, rows)
 	if err != nil {
 		s.writeErr(w, http.StatusBadGateway, "GATEWAY_UNAVAILABLE", "the SSH gateway refused the connection: "+err.Error(), nil)
 		return
