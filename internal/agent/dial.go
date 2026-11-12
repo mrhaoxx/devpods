@@ -106,14 +106,17 @@ func DialAllowed(ctx context.Context, r client.Reader, namespace string, p Purpo
 }
 
 // dialAnswer is the one line the agent says before a dial stream becomes
-// the connection: whether it is there.
+// the connection: whether it is there, and the agent's end of it as the
+// DevPod sees it (a shell's peer there; the gateway records it with the
+// session, so the shell's commands can be told apart by it).
 type dialAnswer struct {
 	OK    bool   `json:"ok"`
 	Error string `json:"error,omitempty"`
+	Local string `json:"local,omitempty"`
 }
 
-func answerDial(conn net.Conn, err error) {
-	a := dialAnswer{OK: err == nil}
+func answerDial(conn net.Conn, err error, local string) {
+	a := dialAnswer{OK: err == nil, Local: local}
 	if err != nil {
 		a.Error = err.Error()
 	}
@@ -123,38 +126,57 @@ func answerDial(conn net.Conn, err error) {
 	_ = conn.SetWriteDeadline(time.Time{})
 }
 
-// AwaitDial reads the agent's answer on a dial stream: nil means what
-// follows is the connection to the DevPod. Not a byte more is read.
-func AwaitDial(conn net.Conn) error {
+// AwaitDial reads the agent's answer on a dial stream: without an error,
+// what follows is the connection to the DevPod, returned with the local
+// address the DevPod sees (an agent that does not say it: the stream's
+// own). Not a byte more is read.
+func AwaitDial(conn net.Conn) (net.Conn, error) {
 	_ = conn.SetReadDeadline(time.Now().Add(15 * time.Second))
 	defer func() { _ = conn.SetReadDeadline(time.Time{}) }()
 	var line []byte
 	one := make([]byte, 1)
 	for len(line) < 1024 {
 		if _, err := io.ReadFull(conn, one); err != nil {
-			return fmt.Errorf("the cluster's agent did not answer: %w", err)
+			return nil, fmt.Errorf("the cluster's agent did not answer: %w", err)
 		}
 		if one[0] == '\n' {
 			var a dialAnswer
 			if err := json.Unmarshal(line, &a); err != nil {
-				return errors.New("the cluster's agent answered something else")
+				return nil, errors.New("the cluster's agent answered something else")
 			}
 			if !a.OK {
-				return errors.New("the cluster's agent refused: " + a.Error)
+				return nil, errors.New("the cluster's agent refused: " + a.Error)
 			}
-			return nil
+			if a.Local == "" {
+				return conn, nil
+			}
+			return localConn{Conn: conn, local: tcpAddr(a.Local)}, nil
 		}
 		line = append(line, one[0])
 	}
-	return errors.New("the cluster's agent answered something else")
+	return nil, errors.New("the cluster's agent answered something else")
 }
+
+// tcpAddr is an address as the agent wrote it.
+type tcpAddr string
+
+func (a tcpAddr) Network() string { return "tcp" }
+func (a tcpAddr) String() string  { return string(a) }
+
+// localConn is a dial stream that says the agent's local address.
+type localConn struct {
+	net.Conn
+	local net.Addr
+}
+
+func (c localConn) LocalAddr() net.Addr { return c.local }
 
 // serveDial connects a gateway's stream to a DevPod's address, if the
 // rule allows it.
 func (a *Agent) serveDial(ctx context.Context, p Purpose, conn net.Conn) {
 	defer func() { _ = conn.Close() }()
 	if a.o.DevPods == nil {
-		answerDial(conn, errors.New("this agent makes no connections to DevPods"))
+		answerDial(conn, errors.New("this agent makes no connections to DevPods"), "")
 		return
 	}
 	cctx, cancel := context.WithTimeout(ctx, 5*time.Second)
@@ -164,7 +186,11 @@ func (a *Agent) serveDial(ctx context.Context, p Purpose, conn net.Conn) {
 		target, err = (&net.Dialer{}).DialContext(cctx, "tcp", p.Addr)
 	}
 	cancel()
-	answerDial(conn, err)
+	local := ""
+	if err == nil {
+		local = target.LocalAddr().String()
+	}
+	answerDial(conn, err, local)
 	if err != nil {
 		return
 	}

@@ -143,7 +143,7 @@ func (a *Agent) handle(ctx context.Context, purpose []byte, conn net.Conn) {
 	case "gateways":
 		a.serveGateways(ctx, conn)
 	case "dial": // the console asks for DevPods' state, not for connections to them
-		answerDial(conn, errors.New("only a gateway is given connections to DevPods"))
+		answerDial(conn, errors.New("only a gateway is given connections to DevPods"), "")
 		_ = conn.Close()
 	default:
 		_ = conn.Close() // not something this agent does

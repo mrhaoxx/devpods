@@ -144,11 +144,12 @@ func (g *gatewayEnd) open(ctx context.Context, cluster, addr, purpose, uid, user
 	if err != nil {
 		return nil, err
 	}
-	if err := agent.AwaitDial(conn); err != nil {
+	c, err := agent.AwaitDial(conn)
+	if err != nil {
 		_ = conn.Close()
 		return nil, err
 	}
-	return conn, nil
+	return c, nil
 }
 
 func TestGateways_TheAgentDialsOutAndServesDialOnly(t *testing.T) {
@@ -160,11 +161,16 @@ func TestGateways_TheAgentDialsOutAndServesDialOnly(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer echo.Close()
+	peers := make(chan string, 16) // where each connection came from, as the "DevPod" sees it
 	go func() {
 		for {
 			c, err := echo.Accept()
 			if err != nil {
 				return
+			}
+			select {
+			case peers <- c.RemoteAddr().String():
+			default:
 			}
 			go func() { _, _ = io.Copy(c, c); _ = c.Close() }()
 		}
@@ -236,6 +242,12 @@ func TestGateways_TheAgentDialsOutAndServesDialOnly(t *testing.T) {
 	if _, err := io.ReadFull(conn, buf); err != nil || string(buf) != "hello" {
 		t.Fatalf("through the agent: %q %v", buf, err)
 	}
+	// the connection's local address is the agent's end of it, as the
+	// DevPod sees it: what the gateway records to tell its session's
+	// commands (a shell's peer) from others'
+	if seen := <-peers; conn.LocalAddr().String() != seen {
+		t.Fatalf("local address %q, the DevPod saw %q", conn.LocalAddr(), seen)
+	}
 	_ = conn.Close()
 	// what the rule refuses is said, not just dropped
 	if _, err := gw.open(ctx, "c1", "10.96.0.1:443", "http", "uid-alice-a", ""); err == nil || !strings.Contains(err.Error(), "not the DevPod's address") {
@@ -279,7 +291,7 @@ func TestGateways_TheAgentDialsOutAndServesDialOnly(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := agent.AwaitDial(d); err == nil {
+	if _, err := agent.AwaitDial(d); err == nil {
 		t.Fatal("the console was given a connection to a DevPod")
 	}
 	_ = d.Close()
@@ -300,4 +312,20 @@ func TestGateways_TheAgentDialsOutAndServesDialOnly(t *testing.T) {
 	// a gateway the console no longer names is left
 	tell()
 	until("the agent leaves the gateway", func() bool { _, ok := gw.srv.Peers()["c1"]; return !ok })
+}
+
+// An agent from before the answer carried its address: the connection
+// is taken as it is.
+func TestAwaitDial_AnAnswerWithoutAnAddress(t *testing.T) {
+	a, b := net.Pipe()
+	defer a.Close()
+	defer b.Close()
+	go func() { _, _ = b.Write([]byte(`{"ok":true}` + "\n")) }()
+	c, err := agent.AwaitDial(a)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.LocalAddr() != a.LocalAddr() {
+		t.Fatalf("local address %v, want the stream's own %v", c.LocalAddr(), a.LocalAddr())
+	}
 }

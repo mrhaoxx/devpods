@@ -249,11 +249,14 @@ func (h *hub) dial(ctx context.Context, t gateway.Target) (net.Conn, error) {
 	if err != nil {
 		return nil, err
 	}
-	if err := agent.AwaitDial(conn); err != nil {
+	// the connection says the agent's end of it as the DevPod sees it: the
+	// session records that, and a shell's commands are matched by it
+	c, err := agent.AwaitDial(conn)
+	if err != nil {
 		_ = conn.Close()
 		return nil, err
 	}
-	return conn, nil
+	return c, nil
 }
 
 // sources swaps the cluster's User objects for the keys the console holds.
