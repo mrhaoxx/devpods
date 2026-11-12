@@ -292,7 +292,10 @@ func redactArgs(argv []string) []string {
 
 var errInterrupted = errors.New("interrupted")
 
-const maxInput = 64 << 10 // unread input kept per session
+// maxInput is the unread input kept per session: room for the largest
+// config piped to `config save` before it starts reading, and then some,
+// so a larger one is still seen as too large rather than cut.
+const maxInput = maxConfigContent + 64<<10
 
 // input is a session's standard input and its interrupts. One goroutine
 // reads the channel for the whole session, so Ctrl-C is seen while a

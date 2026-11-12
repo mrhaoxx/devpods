@@ -222,7 +222,7 @@ func TestConfigSave(t *testing.T) {
 		t.Fatalf("no id: %d", code)
 	}
 	// more than a config may hold
-	if code, _, errs := f.run("config save sg", strings.Repeat("a: b\n", 14000)); code != ExitUsage || !strings.Contains(errs, "64") {
+	if code, _, errs := f.run("config save sg", strings.Repeat("a: b\n", 53000)); code != ExitUsage || !strings.Contains(errs, "256") {
 		t.Fatalf("too large: %d %q", code, errs)
 	}
 	if got := f.taken(); len(got) != 0 {

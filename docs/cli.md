@@ -147,7 +147,7 @@ ok   alice-sg-2  m603
 - The launch is checked as a whole first. If any DevPod cannot be created — quota, a name already taken, a reserved node, a value that breaks the YAML — **none is**: each line says `pass` or `FAIL … CODE: message`, and the exit status is `1`.
 - If the check passed and a write still failed (someone took the name in between), the others are created and stay: `ok` and `FAIL` lines, exit status `1`.
 - `--dry-run` only checks, and prints `--- <name>` and the YAML each DevPod would be created from.
-- `config save` reads the whole of standard input (at most 64 KiB). Saving an id you already have replaces its YAML and changes only what the flags say.
+- `config save` reads the whole of standard input (at most 256 KiB). Saving an id you already have replaces its YAML and changes only what the flags say.
 - With `--json`, `launch` prints the API's answer (`{"items": [{index, name, node, ok, code, message, yaml}]}`), also when the launch was rejected.
 
 ## For scripts and agents

@@ -36,6 +36,15 @@ const type = (label: string, value: string) => fireEvent.change(screen.getByLabe
 describe("config editor", () => {
   afterEach(() => vi.unstubAllGlobals());
 
+  it("takes up to 256 KiB of YAML", () => {
+    stubFetch({});
+    renderWithProviders(app, { route: "/configs/new" });
+    type("YAML", "a".repeat(200 << 10));
+    expect(screen.queryByText("内容超过 256 KiB")).toBeNull();
+    type("YAML", "a".repeat((256 << 10) + 1));
+    expect(screen.getByText("内容超过 256 KiB")).toBeTruthy();
+  });
+
   it("a new config: the variables are listed as they are typed, then it is saved", async () => {
     const calls = stubFetch({ "POST /api/configs": new Response(JSON.stringify(cfg({ name: "alice-gpu" })), { status: 201 }) });
     renderWithProviders(app, { route: "/configs/new" });

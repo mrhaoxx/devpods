@@ -18,7 +18,7 @@ import { INDEX, NAME, NODE, OWNER, parseVars } from "./vars";
 export type NewConfigState = { content?: string; title?: string; description?: string };
 
 const MAX_NAME = 63;
-const MAX_CONTENT = 64 << 10;
+const MAX_CONTENT = 256 << 10;
 const idRE = /^[a-z0-9]([-a-z0-9]*[a-z0-9])?$/;
 const users = (s: string) => [...new Set(s.split(/[\s,，]+/).filter(Boolean))];
 
@@ -188,7 +188,7 @@ export function ConfigEditor() {
           <Field label="说明">
             <Input aria-label="说明" value={description} onChange={(e) => setDescription(e.target.value)} maxLength={500} readOnly={!mine} />
           </Field>
-          <Group label="YAML" hint="完整的 DevPod YAML，可以含变量" error={tooBig ? "内容超过 64 KiB" : undefined}>
+          <Group label="YAML" hint="完整的 DevPod YAML，可以含变量" error={tooBig ? "内容超过 256 KiB" : undefined}>
             <YamlEditor ariaLabel="YAML" value={content} onChange={setContent} readOnly={!mine} minLines={24} maxLines={44} schema="devpod" />
           </Group>
         </div>

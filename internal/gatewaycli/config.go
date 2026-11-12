@@ -19,7 +19,7 @@ import (
 // kept per user, shared or public, and launched as one or many DevPods.
 
 // maxConfigContent mirrors the console's limit on a config's text.
-const maxConfigContent = 64 << 10
+const maxConfigContent = 256 << 10
 
 const configLong = `A config is a DevPod manifest saved as text, with variables: ${NAME} (the
 DevPod's name — you give the part after your user name), ${NODE}, ${OWNER},
