@@ -9,7 +9,7 @@ function hintOf(v: ConfigVar): string {
   return v.required ? "必填" : v.default ? `默认 ${v.default}` : "可留空";
 }
 
-export function VarInput({ v, value, onChange }: { v: ConfigVar; value: string; onChange: (s: string) => void }) {
+export function VarInput({ cluster, v, value, onChange }: { cluster?: string; v: ConfigVar; value: string; onChange: (s: string) => void }) {
   let control;
   switch (v.type) {
     case "int":
@@ -28,7 +28,7 @@ export function VarInput({ v, value, onChange }: { v: ConfigVar; value: string; 
       );
       break;
     case "node":
-      control = <NodeList single picked={value ? [value] : []} setPicked={(ns) => onChange(ns[0] ?? "")} legend={v.required ? "选一个节点" : "选一个节点（可不选）"} />;
+      control = <NodeList cluster={cluster} single picked={value ? [value] : []} setPicked={(ns) => onChange(ns[0] ?? "")} legend={v.required ? "选一个节点" : "选一个节点（可不选）"} />;
       break;
     case "image":
       control = (

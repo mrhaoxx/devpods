@@ -2,6 +2,7 @@
 // each node's free GPUs and state; picked in order — the order numbers
 // the DevPods (INDEX) or pairs them with the nodes of a migration. A
 // node someone else holds now cannot be picked. single: one node.
+import { keyOf } from "../../data/cluster";
 import { useMemo, useState } from "react";
 import type { NodeChoice } from "../../data/api";
 import { useNodeChoices } from "../../data/queries";
@@ -20,6 +21,7 @@ function state(n: NodeChoice): string | null {
 }
 
 export function NodeList({
+  cluster,
   picked,
   setPicked,
   disabled,
@@ -27,6 +29,8 @@ export function NodeList({
   max = 32,
   single = false,
 }: {
+  /** whose nodes: one cluster's (all of them without) */
+  cluster?: string;
   picked: string[];
   setPicked: (n: string[]) => void;
   disabled?: boolean;
@@ -34,7 +38,8 @@ export function NodeList({
   max?: number;
   single?: boolean;
 }) {
-  const nodes = useNodeChoices().data?.items ?? [];
+  const all = useNodeChoices().data?.items;
+  const nodes = useMemo(() => (all ?? []).filter((n) => !cluster || n.cluster === cluster), [all, cluster]);
   const [q, setQ] = useState("");
   const [onlyUsable, setOnlyUsable] = useState(false);
   const [onlyGpu, setOnlyGpu] = useState(false);
@@ -106,7 +111,7 @@ export function NodeList({
           const st = state(n);
           const free = n.gpuTotal - n.gpuUsed;
           return (
-            <li key={n.name} className="border-b border-line last:border-0">
+            <li key={keyOf(n)} className="border-b border-line last:border-0">
               <label className={`flex items-center gap-2 px-2 py-1 ${n.selectable ? "cursor-pointer hover:bg-sunk" : "opacity-50"} ${at >= 0 ? "bg-accent-soft" : ""}`}>
                 <input
                   type={single ? "radio" : "checkbox"}

@@ -10,7 +10,7 @@ import { Button } from "../../design/Button";
 import { Field, Input } from "../../design/Form";
 
 export type BulkKind = "migrate" | "collaborators" | "image" | "redeploy";
-export type BulkTarget = { name: string; collaborators: string[] };
+export type BulkTarget = { cluster?: string; name: string; collaborators: string[] };
 /** What a bulk action does to one DevPod: a spec patch, or a redeploy. */
 export type BulkPlan = { action: string; patch?: (t: BulkTarget, index: number) => SpecPatch; redeploy?: boolean };
 
@@ -33,14 +33,14 @@ export function migrateTargets(devpods: string[], nodes: string[]): [string, str
   return null;
 }
 
-function MigrateBody({ devpods, picked, setPicked, unpin, setUnpin }: { devpods: string[]; picked: string[]; setPicked: (n: string[]) => void; unpin: boolean; setUnpin: (b: boolean) => void }) {
+function MigrateBody({ cluster, devpods, picked, setPicked, unpin, setUnpin }: { cluster?: string; devpods: string[]; picked: string[]; setPicked: (n: string[]) => void; unpin: boolean; setUnpin: (b: boolean) => void }) {
   const pairs = migrateTargets(devpods, picked);
   return (
     <div className="space-y-2 text-xs">
       <p className="text-muted">
         选 1 个节点：全部迁到它。选多个：数量要和 DevPod 相同，按勾选顺序一一对应。运行中的 DevPod 会在目标节点上重建，SSH 会话会断开；home 卷不变。
       </p>
-      <NodeList picked={picked} setPicked={setPicked} disabled={unpin} />
+      <NodeList cluster={cluster} picked={picked} setPicked={setPicked} disabled={unpin} />
       {!unpin && picked.length > 0 && !pairs && (
         <p role="alert" className="text-fail">
           已选 {picked.length} 个节点、{devpods.length} 个 DevPod：节点数要么是 1，要么等于 DevPod 数。
@@ -92,7 +92,7 @@ export function BulkDialog({ kind, targets, onClose, onRun }: { kind: BulkKind |
           <Dialog.Title className="text-sm font-semibold">
             {TITLE[kind]}：{count} 个 DevPod
           </Dialog.Title>
-          {kind === "migrate" && <MigrateBody devpods={targets.map((t) => t.name)} picked={nodes} setPicked={setNodes} unpin={unpin} setUnpin={setUnpin} />}
+          {kind === "migrate" && <MigrateBody cluster={targets[0]?.cluster} devpods={targets.map((t) => t.name)} picked={nodes} setPicked={setNodes} unpin={unpin} setUnpin={setUnpin} />}
           {kind === "image" && (
             <Field label="镜像" hint="运行中的 DevPod 会用新镜像重建，SSH 会话会断开。">
               <Input aria-label="镜像" className="mono" value={image} onChange={(e) => setImage(e.target.value)} placeholder="ubuntu:24.04" list={MY_IMAGES_LIST} autoFocus />

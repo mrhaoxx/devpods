@@ -197,7 +197,7 @@ export function LaunchForm({
               </Field>
             )}
             {usesNode ? (
-              <NodeList picked={nodes} setPicked={setNodes} max={MAX_LAUNCH} legend="节点（每个节点建一个，按勾选顺序编号）" />
+              <NodeList cluster={cluster} picked={nodes} setPicked={setNodes} max={MAX_LAUNCH} legend="节点（每个节点建一个，按勾选顺序编号）" />
             ) : (
               <Field label="数量" hint={`1 到 ${MAX_LAUNCH}`} error={countOK ? undefined : `数量要在 1 到 ${MAX_LAUNCH} 之间`}>
                 <Input aria-label="数量" type="number" min={1} max={MAX_LAUNCH} value={count} onChange={(e) => setCount(e.target.value)} className="mono w-24" />
@@ -209,7 +209,7 @@ export function LaunchForm({
               </p>
             )}
             {others.map((v) => (
-              <VarInput key={v.name} v={v} value={values[v.name] ?? ""} onChange={(x) => setValues((m) => ({ ...m, [v.name]: x }))} />
+              <VarInput key={v.name} cluster={cluster} v={v} value={values[v.name] ?? ""} onChange={(x) => setValues((m) => ({ ...m, [v.name]: x }))} />
             ))}
           </fieldset>
           {names.length > 0 && !outcome && (

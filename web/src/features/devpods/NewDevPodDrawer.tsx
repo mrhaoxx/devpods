@@ -2,7 +2,7 @@
 // in its variables — or write a YAML by hand. ?config= opens on a
 // config, ?image= on a blank YAML with that image.
 import { devpodHref, launchCluster, rememberLaunchCluster } from "../../data/cluster";
-import { useClusterList } from "../../data/clusterFilter";
+import { useClusterFilter, useClusterList } from "../../data/clusterFilter";
 import { useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
@@ -36,7 +36,7 @@ function Launch({ cluster, name, onBack, onEditOnce }: { cluster?: string; name:
         // all made: go to what was made (leaving ?new=1 closes the
         // drawer); otherwise stay on the results
         if (r.items.length === 0 || !r.items.every((i) => i.ok)) return;
-        if (r.group) nav(`/?group=${encodeURIComponent(r.group)}`);
+        if (r.group) nav(`/?group=${encodeURIComponent(r.group)}${cluster ? `&cluster=${encodeURIComponent(cluster)}` : ""}`);
         else nav(devpodHref({ cluster, name: r.items[0].name }));
       }}
     />
@@ -47,18 +47,45 @@ export function NewDevPodDrawer({ config, image, in: asked, onClose }: { config?
   const user = useMe().data?.user ?? "me";
   const nav = useNavigate();
   const clusters = useClusterList().data?.items ?? [];
-  const cluster = asked && clusters.some((c) => c.name === asked) ? asked : launchCluster(clusters);
+  const { filter } = useClusterFilter();
+  const [picked, setPicked] = useState<string>();
+  const known = (c?: string) => !!c && clusters.some((x) => x.name === c);
+  const cluster = known(picked) ? picked : known(asked) ? asked : launchCluster(clusters, filter);
+  const shown = clusters.find((c) => c.name === cluster);
   const [step, setStep] = useState<Step>(() =>
     image ? { kind: "yaml", text: minimalYaml(user, image), from: "blank" } : config ? { kind: "launch", name: config } : { kind: "pick" },
   );
   return (
     <Drawer open onOpenChange={(o) => !o && onClose()} title="新建 DevPod" width={560}>
+      {clusters.length >= 2 ? (
+        <label className="mb-3 flex items-center gap-2 text-xs">
+          <span className="text-muted">建在</span>
+          <select
+            aria-label="建在"
+            value={cluster ?? ""}
+            onChange={(e) => setPicked(e.target.value)}
+            className="h-7 rounded-md border border-line bg-surface px-1 text-xs"
+          >
+            {clusters.map((c) => (
+              <option key={c.name} value={c.name} disabled={!c.connected}>
+                {(c.displayName || c.name) + (c.connected ? "" : "（离线）")}
+              </option>
+            ))}
+          </select>
+        </label>
+      ) : (
+        shown && (
+          <p className="mb-3 text-xs text-muted">
+            建在 <span className="text-ink">{shown.displayName || shown.name}</span>
+          </p>
+        )
+      )}
       {step.kind === "pick" && (
         <ConfigPicker onPick={(c) => setStep({ kind: "launch", name: c.name })} onBlank={() => setStep({ kind: "yaml", text: minimalYaml(user), from: "blank" })} />
       )}
       {step.kind === "launch" && (
         <Launch
-          key={step.name}
+          key={`${step.name}@${cluster ?? ""}`}
           cluster={cluster}
           name={step.name}
           onBack={() => setStep({ kind: "pick" })}

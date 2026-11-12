@@ -146,4 +146,44 @@ describe("new DevPod drawer", () => {
     await waitFor(() => expect(JSON.parse(localStorage.getItem("devpod.recentConfigs.alice") ?? "[]")[0].name).toBe("eve-pub"));
     localStorage.clear();
   });
+
+  it("is made in the cluster picked: the one used last by default, its nodes only; switching shows the other's", async () => {
+    localStorage.setItem("devpod.lastLaunchCluster", "b");
+    const n = (cluster: string, name: string) => ({ cluster, name, ready: true, cpu: { allocatable: 8, allocated: 0 }, mem: { allocatable: 1, allocated: 0 }, gpuTotal: 0, gpuUsed: 0, reservable: false, pending: 0, held: null, next: null, selectable: true });
+    const pinned = summary({ name: "bob-sg", title: "SG", sharedWith: ["alice"], variables: [v("NAME"), v("NODE")] });
+    const calls = stubFetch({
+      ...base,
+      "/api/nodes": { items: [n("a", "m602"), n("a", "na1"), n("b", "m602")] },
+      "GET /api/configs/bob-sg": { ...pinned, content: "" },
+      "POST /api/clusters/b/configs/bob-sg/launch": json(200, { items: [{ index: 0, name: "alice-s", node: "m602", ok: true }] }),
+    });
+    renderWithProviders(
+      <>
+        <MyDevPodsPage />
+        <Where />
+      </>,
+      { route: "/?new=1&config=bob-sg", clusters: [{ name: "a", connected: true }, { name: "b", connected: true }] },
+    );
+    const where = (await screen.findByLabelText("建在")) as HTMLSelectElement;
+    expect(where.value).toBe("b");
+    await screen.findByLabelText("m602");
+    expect(screen.queryByLabelText("na1")).toBeNull();
+    fireEvent.change(screen.getByLabelText("短名"), { target: { value: "s" } });
+    fireEvent.click(screen.getByLabelText("m602"));
+    fireEvent.click(screen.getByRole("button", { name: "创建" }));
+    await waitFor(() => expect(calls.some((c) => c.method === "POST" && c.url.pathname === "/api/clusters/b/configs/bob-sg/launch")).toBe(true));
+    await waitFor(() => expect(screen.getByTestId("where").textContent).toBe("/devpods/b/alice-s"));
+    expect(localStorage.getItem("devpod.lastLaunchCluster")).toBe("b");
+    localStorage.clear();
+  });
+
+  it("switching the cluster lists the other cluster's nodes", async () => {
+    const n = (cluster: string, name: string) => ({ cluster, name, ready: true, cpu: { allocatable: 8, allocated: 0 }, mem: { allocatable: 1, allocated: 0 }, gpuTotal: 0, gpuUsed: 0, reservable: false, pending: 0, held: null, next: null, selectable: true });
+    const pinned = summary({ name: "bob-sg", title: "SG", sharedWith: ["alice"], variables: [v("NAME"), v("NODE")] });
+    stubFetch({ ...base, "/api/nodes": { items: [n("a", "na1"), n("b", "nb1")] }, "GET /api/configs/bob-sg": { ...pinned, content: "" } });
+    renderWithProviders(<MyDevPodsPage />, { route: "/?new=1&config=bob-sg", clusters: [{ name: "a", connected: true }, { name: "b", connected: true }] });
+    fireEvent.change(await screen.findByLabelText("建在"), { target: { value: "b" } });
+    expect(await screen.findByLabelText("nb1")).toBeTruthy();
+    expect(screen.queryByLabelText("na1")).toBeNull();
+  });
 });

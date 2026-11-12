@@ -274,7 +274,7 @@ export function DevPodTable({ scope }: { scope: "mine" | "all" }) {
       <BulkDialog
         key={dialog?.kind ?? "none"}
         kind={dialog?.kind ?? null}
-        targets={(dialog?.rows ?? []).map((r) => ({ name: r.name, collaborators: r.dp.spec.collaborators ?? [] }))}
+        targets={(dialog?.rows ?? []).map((r) => ({ cluster: r.cluster, name: r.name, collaborators: r.dp.spec.collaborators ?? [] }))}
         onClose={() => setDialog(null)}
         onRun={(plan) => {
           const d = dialog!;
