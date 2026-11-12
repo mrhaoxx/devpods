@@ -78,8 +78,12 @@ func (s *Server) handleLiveDevPods(w http.ResponseWriter, r *http.Request) {
 	}
 	s.streamLive(w, r, func(ctx context.Context, snap live.Snapshot) (any, error) {
 		var list devpodv1alpha1.DevPodList
-		if err := s.Client.List(ctx, &list, client.InNamespace(s.NS), client.UnsafeDisableDeepCopy); err != nil {
-			return nil, err
+		for _, cc := range s.ksc(r.Context()) { // the request's cluster, or every one
+			var one devpodv1alpha1.DevPodList
+			if err := cc.Client.List(ctx, &one, client.InNamespace(s.NS), client.UnsafeDisableDeepCopy); err != nil {
+				return nil, err
+			}
+			list.Items = append(list.Items, one.Items...)
 		}
 		items := []liveItem{}
 		for i := range list.Items {

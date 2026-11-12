@@ -1,4 +1,6 @@
-{{- if include "devpod.telemetry.on" $ }}
+{{- /* A cluster whose telemetry goes on to a console elsewhere uses that
+       console's key: bring devpod-ingest-key yourself. */}}
+{{- if and (include "devpod.telemetry.on" $) (not (include "devpod.telemetry.forward" $)) }}
 {{- /* Shared HMAC key for per-DevPod ingest tokens; kept across upgrades
        (a new key would invalidate every running DevPod's token). */}}
 {{- $existing := lookup "v1" "Secret" .Values.namespaces.system "devpod-ingest-key" }}

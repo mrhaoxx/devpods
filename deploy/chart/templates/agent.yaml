@@ -5,6 +5,7 @@
 {{- $caps := list }}
 {{- if dig "enabled" false (.Values.snapshot | default dict) }}{{ $caps = append $caps "snapshots" }}{{ end }}
 {{- if dig "enabled" false (.Values.reservation | default dict) }}{{ $caps = append $caps "reservations" }}{{ end }}
+{{- if include "devpod.telemetry.on" . }}{{ $caps = append $caps "telemetry" }}{{ end }}
 {{- $joinSecret := $a.joinTokenSecret | default (ternary "devpod-agent-join" "" (not (empty $a.joinToken))) }}
 # The agent dials out to the console that manages this cluster and
 # forwards what the console asks to this cluster's API server, as its own
@@ -47,6 +48,14 @@ spec:
         {{- if $caps }}
         - --capabilities={{ join "," $caps }}
         {{- end }}
+        - --devpod-namespace={{ .Values.namespaces.devpods }}
+        {{- with (dig "telemetry" "url" "" $a) }}
+        # DevPods post telemetry here; the agent passes it on
+        - --telemetry-url={{ . }}
+        - --telemetry-listen=:8081
+        ports:
+        - {name: telemetry, containerPort: 8081}
+        {{- end }}
         resources: {{- toYaml $a.resources | nindent 10 }}
         securityContext:
           allowPrivilegeEscalation: false
@@ -64,6 +73,22 @@ spec:
         secret:
           secretName: {{ $joinSecret }}
       {{- end }}
+{{- if dig "telemetry" "url" "" $a }}
+---
+# Where this cluster's DevPods send telemetry: the agent, which passes it
+# on to the console's receiver.
+apiVersion: v1
+kind: Service
+metadata:
+  name: devpod-agent-ingest
+  namespace: {{ .Values.namespaces.system }}
+  labels: {{ include "devpod.labels" . | nindent 4 }}
+spec:
+  selector:
+    app.kubernetes.io/name: devpod-agent
+  ports:
+  - {name: telemetry, port: 8081, targetPort: telemetry}
+{{- end }}
 {{- if $a.joinToken }}
 ---
 # The one-time join token (agent.joinToken). It stops working once used;

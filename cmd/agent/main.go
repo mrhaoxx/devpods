@@ -13,6 +13,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net"
+	"net/http"
 	"os"
 	"os/signal"
 	"strings"
@@ -42,6 +43,7 @@ func main() {
 		identitySecret, identityFile, tokenFile      string
 		capabilities, controller                     string
 		idle                                         int
+		telemetryURL, telemetryListen                string
 	)
 	flag.StringVar(&cluster, "cluster", "", "this cluster's name, as registered at the console (required)")
 	flag.StringVar(&console, "console", "", "the console's address for agents, e.g. https://devpod.example.com (required)")
@@ -53,6 +55,8 @@ func main() {
 	flag.StringVar(&capabilities, "capabilities", "", "what this cluster offers, comma separated: snapshots, reservations, telemetry")
 	flag.StringVar(&controller, "controller-deployment", "devpod-controller", "the controller's Deployment, whose image tag is reported as its version")
 	flag.IntVar(&idle, "idle-connections", 8, "unused data connections kept on each instance of the console and of each gateway")
+	flag.StringVar(&telemetryURL, "telemetry-url", "", "the console's telemetry receiver, e.g. https://devpod.example.com/ingest/v1/batch: DevPods of this cluster post their telemetry to the agent (--telemetry-listen), which passes it on")
+	flag.StringVar(&telemetryListen, "telemetry-listen", ":8081", "where the agent takes telemetry batches in the cluster (with --telemetry-url)")
 	flag.Parse()
 	slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stderr, nil)))
 	if cluster == "" || console == "" {
@@ -115,6 +119,20 @@ func main() {
 		c.SetReadLimit(-1) // streams carry whatever their two ends say
 		// the connection lives as long as the agent, not as long as the dial
 		return websocket.NetConn(ctx, c, websocket.MessageBinary), nil
+	}
+
+	if telemetryURL != "" {
+		ts := &http.Server{Addr: telemetryListen, Handler: agent.TelemetryForward(telemetryURL, nil), ReadHeaderTimeout: 10 * time.Second}
+		go func() {
+			slog.Info("telemetry_forward", "listen", telemetryListen, "to", telemetryURL)
+			if err := ts.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+				fatal(fmt.Errorf("--telemetry-listen: %w", err))
+			}
+		}()
+		go func() {
+			<-ctx.Done()
+			_ = ts.Close()
+		}()
 	}
 
 	caps := splitList(capabilities)

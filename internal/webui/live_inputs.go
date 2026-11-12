@@ -54,13 +54,13 @@ func (li *LiveInputs) Refresh(ctx context.Context) error {
 	if li.S.Audit == nil || li.S.Audit.Store == nil {
 		return nil
 	}
-	var list devpodv1alpha1.DevPodList
-	if err := li.S.Client.List(ctx, &list, client.InNamespace(li.S.NS), client.UnsafeDisableDeepCopy); err != nil {
+	all, err := li.UIDs(ctx)
+	if err != nil {
 		return err
 	}
-	uids := make([]string, 0, len(list.Items))
-	for i := range list.Items {
-		uids = append(uids, string(list.Items[i].UID))
+	uids := make([]string, 0, len(all))
+	for uid := range all {
+		uids = append(uids, uid)
 	}
 	pres, err := li.S.Audit.Store.Presence(ctx, uids)
 	if err != nil {
@@ -116,19 +116,38 @@ func (li *LiveInputs) Build(ctx context.Context) live.Inputs {
 	defer cancel()
 	s := li.S
 	in := live.Inputs{Quotas: map[string]live.Quota{}}
-	var dps devpodv1alpha1.DevPodList
-	if err := s.Client.List(ctx, &dps, client.InNamespace(s.NS), client.UnsafeDisableDeepCopy); err != nil {
-		return in
-	}
-	var pods corev1.PodList
-	_ = s.Client.List(ctx, &pods, client.InNamespace(s.NS), client.HasLabels{render.LabelDevPod}, client.UnsafeDisableDeepCopy)
-	podOf := map[string]*corev1.Pod{}
-	for i := range pods.Items {
-		podOf[pods.Items[i].Labels[render.LabelDevPod]] = &pods.Items[i]
-	}
+	// every cluster the console manages (its own, when it manages no
+	// others): a DevPod's uid tells them apart
 	owners := map[string]bool{}
-	for i := range dps.Items {
-		dp := &dps.Items[i]
+	var nodes corev1.NodeList
+	for n, cc := range s.ksc(ctx) {
+		var dps devpodv1alpha1.DevPodList
+		if err := cc.Client.List(ctx, &dps, client.InNamespace(s.NS), client.UnsafeDisableDeepCopy); err != nil {
+			if n == 0 && s.Clusters == nil {
+				return in
+			}
+			continue // a cluster that cannot be read is left out of this round
+		}
+		var pods corev1.PodList
+		_ = cc.Client.List(ctx, &pods, client.InNamespace(s.NS), client.HasLabels{render.LabelDevPod}, client.UnsafeDisableDeepCopy)
+		var ns corev1.NodeList
+		if err := cc.Client.List(ctx, &ns, client.UnsafeDisableDeepCopy); err == nil {
+			nodes.Items = append(nodes.Items, ns.Items...)
+		}
+		li.devpodRefs(&in, owners, dps.Items, pods.Items)
+	}
+	li.finish(ctx, &in, owners, nodes.Items)
+	return in
+}
+
+// devpodRefs adds one cluster's DevPods to in.
+func (li *LiveInputs) devpodRefs(in *live.Inputs, owners map[string]bool, dps []devpodv1alpha1.DevPod, pods []corev1.Pod) {
+	podOf := map[string]*corev1.Pod{}
+	for i := range pods {
+		podOf[pods[i].Labels[render.LabelDevPod]] = &pods[i]
+	}
+	for i := range dps {
+		dp := &dps[i]
 		ref := live.DevPodRef{UID: string(dp.UID), Name: dp.Name, Owner: dp.Spec.Owner, Phase: string(dp.Status.Phase),
 			PhaseSince: dp.CreationTimestamp.Time}
 		owners[dp.Spec.Owner] = true
@@ -145,11 +164,14 @@ func (li *LiveInputs) Build(ctx context.Context) live.Inputs {
 		}
 		in.DevPods = append(in.DevPods, ref)
 	}
+}
 
-	var nodes corev1.NodeList
-	if err := s.Client.List(ctx, &nodes, client.UnsafeDisableDeepCopy); err == nil {
-		for i := range nodes.Items {
-			n := &nodes.Items[i]
+// finish adds the nodes, the owners' quotas and what the audit store said.
+func (li *LiveInputs) finish(ctx context.Context, in *live.Inputs, owners map[string]bool, nodes []corev1.Node) {
+	s := li.S
+	{
+		for i := range nodes {
+			n := &nodes[i]
 			ref := live.NodeRef{Name: n.Name, Labels: map[string]string{}, GPUModel: n.Labels[gpuProductLabel],
 				CPUAllocatable: cores(n.Status.Allocatable), MemAllocatable: bytesOf(n.Status.Allocatable), GPUAllocatable: gpus(n.Status.Allocatable)}
 			for k, v := range n.Labels {
@@ -181,7 +203,6 @@ func (li *LiveInputs) Build(ctx context.Context) live.Inputs {
 	li.mu.Lock()
 	in.Idle, in.Alerts, in.Presence = li.idle, li.alerts, li.presence
 	li.mu.Unlock()
-	return in
 }
 
 // uidIndex is the cache index DevPodByUID uses (RegisterIndexes).
@@ -197,13 +218,15 @@ func RegisterIndexes(ctx context.Context, fi client.FieldIndexer) error {
 
 // UIDs lists the DevPods' UIDs; an error means "unknown", not "none".
 func (li *LiveInputs) UIDs(ctx context.Context) (map[string]bool, error) {
-	var list devpodv1alpha1.DevPodList
-	if err := li.S.Client.List(ctx, &list, client.InNamespace(li.S.NS), client.UnsafeDisableDeepCopy); err != nil {
-		return nil, err
-	}
-	out := make(map[string]bool, len(list.Items))
-	for i := range list.Items {
-		out[string(list.Items[i].UID)] = true
+	out := map[string]bool{}
+	for _, cc := range li.S.ksc(ctx) { // of every cluster
+		var list devpodv1alpha1.DevPodList
+		if err := cc.Client.List(ctx, &list, client.InNamespace(li.S.NS), client.UnsafeDisableDeepCopy); err != nil {
+			return nil, err
+		}
+		for i := range list.Items {
+			out[string(list.Items[i].UID)] = true
+		}
 	}
 	return out, nil
 }
@@ -211,9 +234,11 @@ func (li *LiveInputs) UIDs(ctx context.Context) (map[string]bool, error) {
 // DevPodByUID finds a DevPod in the cache by UID (an index lookup: the
 // ingest authenticates every batch with it).
 func (s *Server) DevPodByUID(ctx context.Context, uid string) (*devpodv1alpha1.DevPod, bool) {
-	var list devpodv1alpha1.DevPodList
-	if err := s.Client.List(ctx, &list, client.InNamespace(s.NS), client.MatchingFields{uidIndex: uid}); err != nil || len(list.Items) == 0 {
-		return nil, false
+	for _, cc := range s.ksc(ctx) { // in whichever cluster it is
+		var list devpodv1alpha1.DevPodList
+		if err := cc.Client.List(ctx, &list, client.InNamespace(s.NS), client.MatchingFields{uidIndex: uid}); err == nil && len(list.Items) > 0 {
+			return &list.Items[0], true
+		}
 	}
-	return &list.Items[0], true
+	return nil, false
 }

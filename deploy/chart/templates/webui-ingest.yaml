@@ -1,4 +1,4 @@
-{{- if include "devpod.telemetry.on" $ }}
+{{- if and (include "devpod.telemetry.on" $) (not (include "devpod.telemetry.forward" $)) }}
 # Selectorless: the elected webui leader writes this Service's
 # EndpointSlice (devpod-webui-ingest-leader) with its own Pod IP, so
 # supervisors always reach the one replica that accepts telemetry.
