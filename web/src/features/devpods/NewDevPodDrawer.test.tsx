@@ -128,4 +128,22 @@ describe("new DevPod drawer", () => {
     await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
     expect(screen.getByTestId("where").textContent).toBe("/");
   });
+
+  it("the configs used last come first, once; a launch is remembered", async () => {
+    localStorage.setItem("devpod.recentConfigs.alice", JSON.stringify([{ name: "bob-shared", at: Date.now() - 2 * 86400e3 }, { name: "gone", at: Date.now() }]));
+    stubFetch({
+      ...base,
+      "GET /api/configs/eve-pub": { ...configs[3], content: "" },
+      "POST /api/configs/eve-pub/launch": json(200, { items: [{ index: 0, name: "alice-p", ok: true }] }),
+    });
+    page("/?new=1");
+    const list = within(await screen.findByRole("region", { name: "配置列表" }));
+    await list.findByText("共享环境");
+    expect(list.getAllByRole("heading").map((h) => h.textContent)).toEqual(["最近使用", "官方", "我的", "公开"]);
+    expect(list.getAllByText("共享环境")).toHaveLength(1);
+    fireEvent.click(list.getByRole("button", { name: /公开环境/ }));
+    fireEvent.click(await screen.findByRole("button", { name: "创建" }));
+    await waitFor(() => expect(JSON.parse(localStorage.getItem("devpod.recentConfigs.alice") ?? "[]")[0].name).toBe("eve-pub"));
+    localStorage.clear();
+  });
 });

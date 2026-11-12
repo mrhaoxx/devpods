@@ -1,27 +1,42 @@
 // 新建 DevPod, first step (config-centric create spec §5.1): the configs I
-// may use — official, mine, shared with me, public — or a blank YAML.
+// may use — the ones I used last (this browser remembers), official,
+// mine, shared with me, public — or a blank YAML.
 import { useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import { Button } from "../../design/Button";
 import { Input } from "../../design/Form";
+import { useMe } from "../../data/queries";
+import { fmtAge } from "../../lib/format";
+import { recentConfigs, type Recent } from "./recentConfigs";
 import { listConfigs, type ConfigSummary } from "../configs/api";
 
 type Group = { label: string; items: ConfigSummary[] };
 
-/** pickerGroups: each config once, in the first group it belongs to. */
-export function pickerGroups(items: ConfigSummary[]): Group[] {
+const RECENT = 5;
+
+/** pickerGroups: each config once, in the first group it belongs to;
+ *  the last used (at most 5, latest first) before all. */
+export function pickerGroups(items: ConfigSummary[], recent: Recent[] = []): Group[] {
+  const byName = new Map(items.map((c) => [c.name, c]));
+  const last = recent
+    .map((r) => byName.get(r.name))
+    .filter((c): c is ConfigSummary => c !== undefined)
+    .slice(0, RECENT);
+  const lastNames = new Set(last.map((c) => c.name));
   const groups: Group[] = [
+    { label: "最近使用", items: last },
     { label: "官方", items: [] },
     { label: "我的", items: [] },
     { label: "分享给我的", items: [] },
     { label: "公开", items: [] },
   ];
   for (const c of items) {
-    if (c.official) groups[0].items.push(c);
-    else if (c.mine) groups[1].items.push(c);
-    else if (!c.public) groups[2].items.push(c);
-    else groups[3].items.push(c);
+    if (lastNames.has(c.name)) continue;
+    if (c.official) groups[1].items.push(c);
+    else if (c.mine) groups[2].items.push(c);
+    else if (!c.public) groups[3].items.push(c);
+    else groups[4].items.push(c);
   }
   return groups.filter((g) => g.items.length > 0);
 }
@@ -34,8 +49,11 @@ const matches = (c: ConfigSummary, q: string) => {
 export function ConfigPicker({ onPick, onBlank }: { onPick: (c: ConfigSummary) => void; onBlank: () => void }) {
   const q = useQuery({ queryKey: ["configs", "all"], queryFn: () => listConfigs() });
   const [search, setSearch] = useState("");
+  const user = useMe().data?.user ?? "";
+  const recent = useMemo(() => recentConfigs(user), [user]);
+  const usedAt = new Map(recent.map((r) => [r.name, r.at]));
   const all = q.data?.items ?? [];
-  const groups = useMemo(() => pickerGroups(all.filter((c) => matches(c, search))), [all, search]);
+  const groups = useMemo(() => pickerGroups(all.filter((c) => matches(c, search)), recent), [all, search, recent]);
   return (
     <div className="space-y-3">
       <div className="flex gap-2">
@@ -67,6 +85,9 @@ export function ConfigPicker({ onPick, onBlank }: { onPick: (c: ConfigSummary) =
                       <div className="flex items-baseline gap-2">
                         <span className="truncate text-sm font-medium">{c.title}</span>
                         {c.official && <span className="rounded bg-accent-soft px-1 text-[10px] text-accent">官方</span>}
+                        {g.label === "最近使用" && usedAt.has(c.name) && (
+                          <span className="shrink-0 text-[11px] text-muted">{fmtAge(new Date(usedAt.get(c.name)!).toISOString())} 前</span>
+                        )}
                         <span className="mono ml-auto shrink-0 text-[11px] text-faint">{c.owner}</span>
                       </div>
                       {c.description && <div className="mt-0.5 truncate text-xs text-muted">{c.description}</div>}

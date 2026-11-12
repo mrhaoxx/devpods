@@ -11,11 +11,13 @@ import { getConfig } from "../configs/api";
 import { LaunchForm } from "../configs/LaunchForm";
 import { BlankYaml, minimalYaml } from "./BlankYaml";
 import { ConfigPicker } from "./ConfigPicker";
+import { rememberConfig } from "./recentConfigs";
 
 type Step = { kind: "pick" } | { kind: "launch"; name: string } | { kind: "yaml"; text: string; from: "blank" | "launch" };
 
 function Launch({ name, onBack, onEditOnce }: { name: string; onBack: () => void; onEditOnce: (yaml: string) => void }) {
   const nav = useNavigate();
+  const user = useMe().data?.user ?? "";
   const q = useQuery({ queryKey: ["config", name], queryFn: () => getConfig(name), retry: false });
   if (q.isError) return <Notice>配置 {name} 不可用：它被删除，或不再分享给你。</Notice>;
   if (!q.data) return <p className="text-xs text-muted">加载中…</p>;
@@ -25,6 +27,8 @@ function Launch({ name, onBack, onEditOnce }: { name: string; onBack: () => void
       onBack={onBack}
       onEditOnce={onEditOnce}
       onDone={(r) => {
+        // something was made from it: it was used
+        if (r.items.some((i) => i.ok) && user) rememberConfig(user, name);
         // all made: go to what was made (leaving ?new=1 closes the
         // drawer); otherwise stay on the results
         if (r.items.length === 0 || !r.items.every((i) => i.ok)) return;
