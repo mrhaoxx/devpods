@@ -167,6 +167,12 @@ var apiRoutes = []apiRoute{
 	{"POST /api/me/tokens", scopeNone, "Create an access token (browser only)"},
 	{"DELETE /api/me/tokens/{id}", scopeNone, "Revoke an access token (browser only)"},
 
+	{"GET /api/clusters", scopeAny, "Clusters this console manages: name, connected, capabilities"},
+	{"GET /api/admin/clusters", "admin:read", "Clusters with agent state and default quota"},
+	{"POST /api/admin/clusters", "admin:write", "Register a cluster: {name, displayName?}; answers the join token, once"},
+	{"PATCH /api/admin/clusters/{name}", "admin:write", "Edit a cluster: {displayName?, paused?, defaultQuota?}"},
+	{"DELETE /api/admin/clusters/{name}", "admin:write", "Stop managing a cluster (its DevPods stay)"},
+	{"POST /api/admin/clusters/{name}/token", "admin:write", "A new join token; the agent that had joined is no longer accepted"},
 	{"GET /api/admin/devpods", "admin:read", "Every DevPod"},
 	{"GET /api/admin/live/overview", "admin:read", "Server-sent events: cluster overview"},
 	{"GET /api/admin/nodes", "admin:read", "Nodes"},

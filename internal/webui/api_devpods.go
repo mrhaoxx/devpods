@@ -25,6 +25,7 @@ import (
 	"sigs.k8s.io/yaml"
 
 	devpodv1alpha1 "github.com/mrhaoxx/devpod/api/v1alpha1"
+	"github.com/mrhaoxx/devpod/internal/webui/clusters"
 )
 
 // Server carries the webui backend's dependencies. Handlers run the
@@ -40,6 +41,10 @@ type Server struct {
 	DefaultQuota devpodv1alpha1.UserQuota
 	KoreEnabled  bool
 	Origin       string // allowed Origin for mutating requests
+
+	// Clusters, when set, makes this the console of other clusters: their
+	// agents connect here. Nil: the console of the cluster it runs in.
+	Clusters *clusters.Registry
 	// CLIKey lets the SSH gateway act for a user it authenticated (the
 	// CLI over SSH); empty = off.
 	CLIKey []byte

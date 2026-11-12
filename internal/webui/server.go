@@ -127,6 +127,16 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("GET /api/admin/nodes/{name}", s.handleAdminNode)
 	mux.HandleFunc("GET /api/admin/live/overview", s.handleLiveOverview)
 	mux.HandleFunc("GET /api/search", s.handleSearch)
+
+	mux.HandleFunc("GET /api/clusters", s.handleClusters)
+	mux.HandleFunc("GET /api/admin/clusters", s.handleAdminClusters)
+	mux.HandleFunc("POST /api/admin/clusters", s.handleCreateCluster)
+	mux.HandleFunc("PATCH /api/admin/clusters/{name}", s.handlePatchCluster)
+	mux.HandleFunc("DELETE /api/admin/clusters/{name}", s.handleDeleteCluster)
+	mux.HandleFunc("POST /api/admin/clusters/{name}/token", s.handleClusterToken)
+	// agents of the clusters this console manages (no session)
+	mux.HandleFunc("POST /agent/join", s.handleAgentJoin)
+	mux.HandleFunc("GET /agent/connect", s.handleAgentConnect)
 	mux.HandleFunc("/api/", func(w http.ResponseWriter, r *http.Request) {
 		s.writeErr(w, http.StatusNotFound, "NOT_FOUND", "no such endpoint", nil)
 	})

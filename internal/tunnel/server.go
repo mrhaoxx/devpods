@@ -121,6 +121,17 @@ func (s *Server) untrack(c net.Conn) {
 	s.mu.Unlock()
 }
 
+// Disconnect drops a peer's connections to this instance (it may dial
+// again; refusing it then is Authorize's business).
+func (s *Server) Disconnect(name string) {
+	s.mu.Lock()
+	p := s.peers[name]
+	s.mu.Unlock()
+	if p != nil {
+		s.drop(name, p, true)
+	}
+}
+
 // Peers lists the peers connected to this instance.
 func (s *Server) Peers() map[string]PeerStatus {
 	s.mu.Lock()
