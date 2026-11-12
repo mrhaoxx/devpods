@@ -105,6 +105,13 @@ export function createYamlEditor(
     scrollbar: { alwaysConsumeMouseWheel: false },
     overviewRulerLanes: 0,
     fixedOverflowWidgets: true,
+    // fields are offered as they are typed (YAML values count as strings
+    // to Monaco), from the schema — not every word already in the text
+    quickSuggestions: { other: true, strings: true, comments: false },
+    quickSuggestionsDelay: 50,
+    suggestOnTriggerCharacters: true,
+    wordBasedSuggestions: "off",
+    suggest: { showWords: false, snippetsPreventQuickSuggestions: false },
   });
   let silent = false;
   // (as tall as its box: YamlEditor sizes the box to the text)
