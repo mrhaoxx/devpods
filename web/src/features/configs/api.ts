@@ -60,6 +60,11 @@ export const createConfig = (body: ConfigCreate) => req<Config>("POST", "/api/co
 export const patchConfig = (name: string, body: ConfigPatch) => req<Config>("PATCH", path(name), body);
 export const deleteConfig = (name: string) => req<void>("DELETE", path(name));
 
+/** checkConfig: what is wrong with a config's text, before it is saved (nothing: an empty list). */
+export type CheckProblem = { line?: number; code: string; message: string };
+export const checkConfig = (body: { content: string; variables?: VarDecl[]; vars?: Record<string, string> }) =>
+  req<{ problems: CheckProblem[] }>("POST", "/api/configs:check", body);
+
 export type LaunchItem = { index: number; name: string; node?: string; ok: boolean; code?: string; message?: string; yaml?: string };
 export type LaunchBody = { vars: Record<string, string>; nodes?: string[]; count?: number; dryRun?: boolean };
 /** 200: all created (or, on a dry run, would be). 207: some were. 422:

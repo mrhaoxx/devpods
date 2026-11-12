@@ -26,6 +26,7 @@ function Group({
   onCopy,
   onDelete,
   onUnpublish,
+  onOfficial,
 }: {
   title: string;
   empty: string;
@@ -35,6 +36,7 @@ function Group({
   onCopy: (c: ConfigSummary) => void;
   onDelete: (c: ConfigSummary) => void;
   onUnpublish: (c: ConfigSummary) => void;
+  onOfficial: (c: ConfigSummary, official: boolean) => void;
 }) {
   return (
     <section aria-label={title} className="rounded-lg border border-line bg-surface">
@@ -65,7 +67,8 @@ function Group({
                       <Link to={`/configs/${c.name}`} className="font-medium text-ink hover:text-accent">
                         {c.title}
                       </Link>
-                      {c.public && <Badge tone="accent">公开</Badge>}
+                      {c.official && <Badge tone="accent">官方</Badge>}
+                      {c.public && !c.official && <Badge tone="accent">公开</Badge>}
                       {c.mine && c.sharedWith.length > 0 && <Badge title={c.sharedWith.join(", ")}>分享给 {c.sharedWith.length} 人</Badge>}
                     </div>
                     <div className="mono text-[11px] text-faint">{c.name}</div>
@@ -98,6 +101,11 @@ function Group({
                       <button type="button" onClick={() => onCopy(c)} className="text-muted hover:text-accent">
                         另存为副本
                       </button>
+                      {admin && c.public && (
+                        <button type="button" onClick={() => onOfficial(c, !c.official)} className="text-muted hover:text-accent">
+                          {c.official ? "取消官方" : "设为官方"}
+                        </button>
+                      )}
                       {!c.mine && admin && c.public && (
                         <button type="button" onClick={() => onUnpublish(c)} className="text-muted hover:text-fail">
                           取消公开
@@ -128,27 +136,37 @@ export function ConfigsPage() {
   const mine = useConfigs("mine");
   const shared = useConfigs("shared");
   const pub = useConfigs("public");
+  const off = useConfigs("official");
   const [forget, setForget] = useState<ConfigSummary | null>(null);
   const [error, setError] = useState<string | null>(null);
   const refresh = () => void qc.invalidateQueries({ queryKey: ["configs"] });
   const say = (e: unknown) => setError(e instanceof ApiFailure ? e.body.message : String(e));
   const del = useMutation({ mutationFn: (name: string) => deleteConfig(name), onError: say, onSettled: refresh });
   const unpublish = useMutation({ mutationFn: (name: string) => patchConfig(name, { public: false }), onError: say, onSettled: refresh });
+  const mark = useMutation({ mutationFn: (p: { name: string; official: boolean }) => patchConfig(p.name, { official: p.official }), onError: say, onSettled: refresh });
   // a copy starts a new config of mine from the other's text
   const copy = (c: ConfigSummary) =>
     getConfig(c.name)
       .then((full) => nav("/configs/new", { state: { content: full.content, title: full.title, description: full.description } }))
       .catch(say);
 
-  const my = mine.data?.items ?? [];
-  const sh = shared.data?.items ?? [];
-  // a config is listed once: mine with mine, shared with shared
-  const seen = new Set([...my, ...sh].map((c) => c.name));
+  // a config is listed once: official first, then mine, shared, public
+  const of = off.data?.items ?? [];
+  const isOff = new Set(of.map((c) => c.name));
+  const my = (mine.data?.items ?? []).filter((c) => !isOff.has(c.name));
+  const sh = (shared.data?.items ?? []).filter((c) => !isOff.has(c.name));
+  const seen = new Set([...of, ...my, ...sh].map((c) => c.name));
   const pu = (pub.data?.items ?? []).filter((c) => !seen.has(c.name));
   const loading = mine.isLoading || shared.isLoading || pub.isLoading;
   const failed = mine.isError && shared.isError && pub.isError;
-  const none = !loading && !failed && my.length + sh.length + pu.length === 0;
-  const act = { admin, onCopy: (c: ConfigSummary) => void copy(c), onDelete: setForget, onUnpublish: (c: ConfigSummary) => unpublish.mutate(c.name) };
+  const none = !loading && !failed && of.length + my.length + sh.length + pu.length === 0;
+  const act = {
+    admin,
+    onCopy: (c: ConfigSummary) => void copy(c),
+    onDelete: setForget,
+    onUnpublish: (c: ConfigSummary) => unpublish.mutate(c.name),
+    onOfficial: (c: ConfigSummary, official: boolean) => mark.mutate({ name: c.name, official }),
+  };
 
   return (
     <div className="space-y-3 p-3">
@@ -171,6 +189,7 @@ export function ConfigsPage() {
         <EmptyState title="还没有保存过配置" hint="点「新建配置」，或在 DevPod 详情页点「存为配置」。" />
       ) : (
         <>
+          {of.length > 0 && <Group title="官方" empty="" items={of} showOwner {...act} />}
           <Group title="我的" empty="你还没有保存过配置。" items={my} showOwner={false} {...act} />
           <Group title="分享给我的" empty="没有人单独分享配置给你。" items={sh} showOwner {...act} />
           <Group title="公开" empty="没有其他公开的配置。" items={pu} showOwner {...act} />

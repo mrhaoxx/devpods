@@ -64,7 +64,7 @@ describe("config editor", () => {
     fireEvent.click(screen.getByLabelText("公开"));
     fireEvent.click(screen.getByRole("button", { name: "保存" }));
     await waitFor(() =>
-      expect(JSON.parse(calls.find((c) => c.method === "POST")?.body ?? "{}")).toEqual({
+      expect(JSON.parse(calls.find((c) => c.method === "POST" && c.url.pathname === "/api/configs")?.body ?? "{}")).toEqual({
         id: "gpu",
         title: "GPU 配置",
         description: "",
@@ -150,5 +150,43 @@ describe("config editor", () => {
     stubFetch({});
     renderWithProviders(app, { route: "/configs/alice-gone" });
     expect(await screen.findByText("没有这个配置，或它没有分享给你")).toBeTruthy();
+  });
+
+  it("a save is checked first; what the check finds is said, and may be saved anyway", async () => {
+    const calls = stubFetch({
+      "GET /api/configs/alice-sg": cfg(),
+      "POST /api/configs:check": { problems: [{ line: 2, code: "BAD_YAML", message: "unknown field runnning" }] },
+      "PATCH /api/configs/alice-sg": cfg({ title: "SGLang 8" }),
+    });
+    renderWithProviders(app, { route: "/configs/alice-sg" });
+    await screen.findByLabelText("标识");
+    type("标题", "SGLang 8");
+    fireEvent.click(screen.getByRole("button", { name: "保存" }));
+    const found = await screen.findByRole("region", { name: "保存前检查" });
+    expect(found.textContent).toContain("第 2 行");
+    expect(found.textContent).toContain("unknown field runnning");
+    expect(calls.some((c) => c.method === "PATCH")).toBe(false);
+    expect(JSON.parse(calls.find((c) => c.url.pathname === "/api/configs:check")!.body!).content).toBe(cfg().content);
+    fireEvent.click(within(found).getByRole("button", { name: "仍然保存" }));
+    await waitFor(() => expect(JSON.parse(calls.find((c) => c.method === "PATCH")?.body ?? "{}")).toEqual({ title: "SGLang 8" }));
+  });
+
+  it("what is said of a variable is saved with the config", async () => {
+    const calls = stubFetch({ "GET /api/configs/alice-sg": cfg(), "POST /api/configs:check": { problems: [] }, "PATCH /api/configs/alice-sg": cfg() });
+    renderWithProviders(app, { route: "/configs/alice-sg" });
+    await screen.findByLabelText("标识");
+    fireEvent.change(screen.getByLabelText("IMAGE 的类型"), { target: { value: "image" } });
+    fireEvent.click(screen.getByRole("button", { name: "保存" }));
+    await waitFor(() => expect(JSON.parse(calls.find((c) => c.method === "PATCH")?.body ?? "{}")).toEqual({ variables: [{ name: "IMAGE", type: "image" }] }));
+  });
+
+  it("lists the DevPods made from it", async () => {
+    const dp = (name: string, config?: string) => ({ metadata: { name, labels: config ? { "devpod.io/config": config } : {} }, spec: { owner: "alice", running: true }, status: { phase: "Running" } });
+    stubFetch({ "GET /api/configs/alice-sg": cfg(), "/api/devpods": { items: [dp("alice-a", "alice-sg"), dp("alice-b", "other"), dp("alice-c")], pods: {} } });
+    renderWithProviders(app, { route: "/configs/alice-sg" });
+    const made = within(await screen.findByRole("region", { name: "由它建出的 DevPod" }));
+    expect(await made.findByRole("link", { name: "alice-a" })).toBeTruthy();
+    expect(made.queryByRole("link", { name: "alice-b" })).toBeNull();
+    expect(made.queryByRole("link", { name: "alice-c" })).toBeNull();
   });
 });

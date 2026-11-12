@@ -1,17 +1,20 @@
-// One config (config center spec §6.2): a new one, my own to edit, or
-// someone else's to read. The variables of the YAML are listed as it is
-// typed — the same reading as the server's.
-import { useEffect, useMemo, useState, type FormEvent } from "react";
+// One config (config center spec §6.2, config-centric create spec §5.4):
+// a new one, my own to edit, or someone else's to read. The variables of
+// the YAML are listed as it is typed — the same reading as the server's —
+// each with a type and a description. A save is checked first.
+import { useCallback, useEffect, useMemo, useState, type FormEvent } from "react";
 import { Link, useLocation, useNavigate, useParams } from "react-router-dom";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { ApiFailure } from "../../data/api";
-import { useMe } from "../../data/queries";
+import { useDevPods, useMe } from "../../data/queries";
+import { StatusDot } from "../../design/StatusDot";
+import { provenance } from "../devpods/provenance";
 import { Button } from "../../design/Button";
 import { EmptyState } from "../../design/EmptyState";
 import { Field, Group, Input, Notice } from "../../design/Form";
 import { YamlEditor } from "../../design/yaml/YamlEditor";
-import { createConfig, getConfig, patchConfig, type Config, type ConfigPatch, type ParsedVar } from "./api";
-import { INDEX, NAME, NODE, OWNER, parseVars } from "./vars";
+import { checkConfig, createConfig, getConfig, patchConfig, type CheckProblem, type Config, type ConfigPatch, type VarDecl } from "./api";
+import { cleanDecl, VariablesTable } from "./VariablesTable";
 
 /** What a page hands over to start a new config from. */
 export type NewConfigState = { content?: string; title?: string; description?: string };
@@ -21,33 +24,37 @@ const MAX_CONTENT = 256 << 10;
 const idRE = /^[a-z0-9]([-a-z0-9]*[a-z0-9])?$/;
 const users = (s: string) => [...new Set(s.split(/[\s,，]+/).filter(Boolean))];
 
-const builtinNote: Record<string, string> = {
-  [OWNER]: "自动填入当前用户",
-  [NAME]: "创建时填短名，自动加用户名前缀",
-  [NODE]: "创建时选节点；选几个就创建几个",
-  [INDEX]: "批量创建时的序号，从 1 开始",
-};
+/** declsOf: what a loaded config says of its variables, as it is saved. */
+const declsOf = (c?: Config): VarDecl[] =>
+  (c?.variables ?? [])
+    .filter((v) => !v.builtin)
+    .map((v) => cleanDecl({ name: v.name, type: v.type, description: v.description, options: v.options }))
+    .filter((d): d is VarDecl => d !== null);
 
-function Variables({ vars }: { vars: ParsedVar[] }) {
+/** MadeFrom: the DevPods launched from this config that I may see. */
+function MadeFrom({ name }: { name: string }) {
+  const me = useMe().data;
+  const list = useDevPods(me?.admin ? "all" : "mine");
+  const made = (list.data?.items ?? []).filter((dp) => provenance(dp).config === name);
   return (
-    <div className="rounded-md border border-line bg-sunk p-2 text-xs">
-      <div className="mb-1 font-medium">变量</div>
-      {vars.length === 0 ? (
-        <p className="text-faint">还没有变量</p>
+    <section aria-label="由它建出的 DevPod" className="rounded-md border border-line p-2 text-xs">
+      <div className="mb-1 font-medium">由它建出的 DevPod</div>
+      {made.length === 0 ? (
+        <p className="text-faint">{list.isLoading ? "加载中…" : "还没有"}</p>
       ) : (
-        <ul aria-label="变量" className="space-y-1">
-          {vars.map((v) => (
-            <li key={v.name} className="flex flex-wrap items-baseline gap-x-2">
-              <span className="mono text-ink">{v.name}</span>
-              <span className="text-muted">{v.builtin ? builtinNote[v.name] : v.default !== undefined ? `默认 ${v.default}` : v.required ? "必填" : "可留空"}</span>
+        <ul className="space-y-0.5">
+          {made.map((dp) => (
+            <li key={dp.metadata.name} className="flex items-center gap-1.5">
+              <StatusDot phase={dp.status?.phase} showLabel={false} />
+              <Link to={`/devpods/${dp.metadata.name}`} className="mono hover:text-accent">
+                {dp.metadata.name}
+              </Link>
+              {me?.admin && dp.spec.owner !== me.user && <span className="text-faint">{dp.spec.owner}</span>}
             </li>
           ))}
         </ul>
       )}
-      <p className="mt-2 text-[11px] text-faint">
-        写法：{"${VAR}"} 必填，{"${VAR:-默认值}"} 有默认值，{"$${"} 表示字面量 {"${"}。变量名是大写字母、数字和下划线；其他 {"${...}"}（如脚本里的 {"${home}"}）原样保留。
-      </p>
-    </div>
+    </section>
   );
 }
 
@@ -70,6 +77,9 @@ export function ConfigEditor() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [saved, setSaved] = useState(false);
+  const [decls, setDecls] = useState<VarDecl[]>([]);
+  const [problems, setProblems] = useState<CheckProblem[] | null>(null);
+  const onDecls = useCallback((d: VarDecl[]) => setDecls(d), []);
 
   useEffect(() => {
     if (!loaded) return;
@@ -78,9 +88,9 @@ export function ConfigEditor() {
     setContent(loaded.content);
     setShare(loaded.sharedWith.join(", "));
     setPub(loaded.public);
+    setDecls(declsOf(loaded));
   }, [loaded]);
-
-  const vars = useMemo(() => parseVars(content), [content]);
+  const savedDecls = useMemo(() => declsOf(loaded), [loaded]);
 
   if (!creating && q.isError) {
     const gone = q.error instanceof ApiFailure && q.error.status === 404;
@@ -108,14 +118,25 @@ export function ConfigEditor() {
   const list = users(share);
   const ok = !busy && title.trim() !== "" && content !== "" && !tooBig && (!creating || (id !== "" && !idError));
 
-  const submit = async (e: FormEvent) => {
-    e.preventDefault();
+  const save = async (checked: boolean) => {
     setBusy(true);
     setError(null);
     setSaved(false);
+    setProblems(null);
     try {
+      if (!checked) {
+        // what the check finds is said first; a check that cannot run stops nothing
+        const found = await checkConfig({ content, variables: decls }).then(
+          (r) => r.problems,
+          () => [],
+        );
+        if (found.length > 0) {
+          setProblems(found);
+          return;
+        }
+      }
       if (creating) {
-        await createConfig({ id, title: title.trim(), description, content, sharedWith: list, public: pub });
+        await createConfig({ id, title: title.trim(), description, content, sharedWith: list, public: pub, ...(decls.length ? { variables: decls } : {}) });
         void qc.invalidateQueries({ queryKey: ["configs"] });
         nav("/configs");
       } else {
@@ -126,6 +147,7 @@ export function ConfigEditor() {
         if (content !== was.content) body.content = content;
         if (list.join(",") !== was.sharedWith.join(",")) body.sharedWith = list;
         if (pub !== was.public) body.public = pub;
+        if (JSON.stringify(decls) !== JSON.stringify(savedDecls)) body.variables = decls;
         const next = await patchConfig(was.name, body);
         qc.setQueryData(["config", name], next);
         void qc.invalidateQueries({ queryKey: ["configs"] });
@@ -136,6 +158,10 @@ export function ConfigEditor() {
     } finally {
       setBusy(false);
     }
+  };
+  const submit = (e: FormEvent) => {
+    e.preventDefault();
+    void save(false);
   };
 
   return (
@@ -168,6 +194,23 @@ export function ConfigEditor() {
       )}
       {error && <Notice>{error}</Notice>}
       {saved && <Notice tone="run">已保存。</Notice>}
+      {problems && (
+        <section aria-label="保存前检查" className="space-y-2 rounded-md bg-warm-soft px-3 py-2 text-xs text-warm">
+          <div className="font-medium">保存前检查发现 {problems.length} 处问题（用示例值代入变量后检查；配额和节点是否空闲在创建时才检查）：</div>
+          <ul className="space-y-0.5">
+            {problems.map((p, i) => (
+              <li key={i} className="mono">
+                {p.line ? `第 ${p.line} 行：` : ""}
+                {p.message}
+              </li>
+            ))}
+          </ul>
+          <div className="flex gap-2">
+            <Button onClick={() => setProblems(null)}>返回修改</Button>
+            <Button onClick={() => void save(true)}>仍然保存</Button>
+          </div>
+        </section>
+      )}
       <div className="grid gap-3 lg:grid-cols-[minmax(0,1fr)_18rem]">
         <div className="space-y-3">
           <div className="grid gap-3 sm:grid-cols-2">
@@ -191,11 +234,12 @@ export function ConfigEditor() {
             <Input aria-label="说明" value={description} onChange={(e) => setDescription(e.target.value)} maxLength={500} readOnly={!mine} />
           </Field>
           <Group label="YAML" hint="完整的 DevPod YAML，可以含变量" error={tooBig ? "内容超过 256 KiB" : undefined}>
-            <YamlEditor ariaLabel="YAML" value={content} onChange={setContent} readOnly={!mine} minLines={24} maxLines={44} schema="devpod" />
+            <YamlEditor ariaLabel="YAML" value={content} onChange={setContent} readOnly={!mine} minLines={24} maxLines={44} schema="devpod" templated />
           </Group>
         </div>
         <div className="space-y-3">
-          <Variables vars={vars} />
+          <VariablesTable content={content} decls={decls} onChange={onDecls} readOnly={!mine} />
+          {!creating && loaded && <MadeFrom name={loaded.name} />}
           {mine && (
             <div className="space-y-3 rounded-md border border-line p-2">
               <Field label="分享给" hint="用户名，逗号或空格分隔">

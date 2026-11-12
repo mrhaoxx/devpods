@@ -25,12 +25,16 @@ const mine = cfg({});
 const shared = cfg({ name: "bob-s", owner: "bob", title: "共享的", mine: false });
 const pub = cfg({ name: "carol-p", owner: "carol", title: "公开的", mine: false, public: true });
 const minePublic = cfg({ name: "alice-pub", title: "我公开的", public: true });
+const official = cfg({ name: "root-o", owner: "root", title: "官方的", mine: false, public: true, official: true });
 
 const lists = (extra: Record<string, unknown> = {}) =>
   stubFetch({
     "GET /api/configs": (url: URL) => {
       const scope = url.searchParams.get("scope");
-      return { items: scope === "mine" ? [mine, minePublic] : scope === "shared" ? [shared] : scope === "public" ? [pub, minePublic] : [] };
+      return {
+        items:
+          scope === "mine" ? [mine, minePublic] : scope === "shared" ? [shared] : scope === "public" ? [official, pub, minePublic] : scope === "official" ? [official] : [],
+      };
     },
     ...extra,
   });
@@ -103,5 +107,34 @@ describe("配置 page", () => {
     stubFetch({ "GET /api/configs": { items: [] } });
     renderWithProviders(<ConfigsPage />);
     expect(await screen.findByText("还没有保存过配置")).toBeTruthy();
+  });
+
+  it("official configs come first, listed once", async () => {
+    lists();
+    renderWithProviders(<ConfigsPage />);
+    const off = within(await screen.findByRole("region", { name: "官方" }));
+    expect(await off.findByText("官方的")).toBeTruthy();
+    expect(within(row("官方的")).getByText("官方")).toBeTruthy(); // the badge
+    expect(within(screen.getByRole("region", { name: "公开" })).queryByText("官方的")).toBeNull();
+    const regions = screen.getAllByRole("region").map((r) => r.getAttribute("aria-label"));
+    expect(regions[0]).toBe("官方");
+  });
+
+  it("an admin marks a public config official, or not; nobody else may", async () => {
+    const calls = lists({ "PATCH /api/configs/carol-p": cfg({ ...pub, official: true }), "PATCH /api/configs/root-o": cfg({ ...official, official: false }) });
+    renderWithProviders(<ConfigsPage />, { me: stubMe({ admin: true, user: "root2" }) });
+    await screen.findByText("公开的");
+    fireEvent.click(within(row("公开的")).getByRole("button", { name: "设为官方" }));
+    await waitFor(() => expect(calls.find((c) => c.method === "PATCH" && c.url.pathname.endsWith("carol-p"))?.body).toBe('{"official":true}'));
+    fireEvent.click(within(row("官方的")).getByRole("button", { name: "取消官方" }));
+    await waitFor(() => expect(calls.find((c) => c.method === "PATCH" && c.url.pathname.endsWith("root-o"))?.body).toBe('{"official":false}'));
+  });
+
+  it("not an admin: no official switch", async () => {
+    lists();
+    renderWithProviders(<ConfigsPage />);
+    await screen.findByText("公开的");
+    expect(screen.queryByRole("button", { name: "设为官方" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "取消官方" })).toBeNull();
   });
 });
