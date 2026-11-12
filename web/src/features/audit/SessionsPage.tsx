@@ -1,5 +1,6 @@
 // 会话列表 (UI spec §5.8): admins filter by user / DevPod / time; others
 // see their own sessions (the server enforces it).
+import { useClusterFilter } from "../../data/clusterFilter";
 import { devpodHref } from "../../data/cluster";
 import { useState } from "react";
 import { Link } from "react-router-dom";
@@ -27,6 +28,7 @@ export function SessionsPage({ mine }: { mine?: boolean }) {
   const me = useMe().data;
   const admin = !!me?.admin && !mine;
   const [url, setUrl] = useUrlState(schema);
+  const { matches } = useClusterFilter();
   const now = useNow(10_000);
   const [sorting, setSorting] = useState<SortingState>([]);
   const filters = {
@@ -112,7 +114,7 @@ export function SessionsPage({ mine }: { mine?: boolean }) {
         <>
           <DataTable<SessionSummary>
           storageKey="sessions"
-            data={q.items}
+            data={q.items.filter(matches)}
             columns={columns}
             getRowId={(s) => s.session_id}
             sorting={sorting}

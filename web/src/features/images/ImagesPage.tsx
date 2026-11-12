@@ -1,5 +1,6 @@
 // 我的镜像: the images saved from DevPods — copy the address, start a
 // DevPod from one, watch one still being saved, forget one.
+import { useClusterFilter } from "../../data/clusterFilter";
 import { devpodHref } from "../../data/cluster";
 import { useState } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
@@ -39,7 +40,8 @@ export function ImagesPage() {
   const [forget, setForget] = useState<SnapshotView | null>(null);
   const del = useMutation({ mutationFn: (s: SnapshotView) => deleteSnapshot(s), onSettled: () => void qc.invalidateQueries({ queryKey: ["snapshots"] }) });
   const retry = useMutation({ mutationFn: (s: SnapshotView) => retrySnapshot(s), onSettled: () => void qc.invalidateQueries({ queryKey: ["snapshots"] }) });
-  const items = q.data?.items ?? [];
+  const { matches, several } = useClusterFilter();
+  const items = (q.data?.items ?? []).filter(matches);
   const busy = (s: SnapshotView) => s.phase === "Pending" || s.phase === "Running";
 
   return (
@@ -73,6 +75,7 @@ export function ImagesPage() {
               <thead>
                 <tr className="h-7 border-b border-line text-left text-[11px] text-muted">
                   <th className="px-3 font-normal">镜像</th>
+                  {several && <th className="px-2 font-normal">集群</th>}
                   {all && <th className="px-2 font-normal">用户</th>}
                   <th className="px-2 font-normal">来源 DevPod</th>
                   <th className="px-2 font-normal">大小</th>
@@ -89,6 +92,7 @@ export function ImagesPage() {
                       {s.customRegistry && <div className="text-[11px] text-faint">自定义仓库</div>}
                       {s.phase === "Failed" && s.message && <div className="text-[11px] text-fail">{s.message}</div>}
                     </td>
+                    {several && <td className="mono px-2 py-1.5">{s.cluster}</td>}
                     {all && <td className="mono px-2 py-1.5">{s.owner}</td>}
                     <td className="px-2 py-1.5">
                       <Link to={devpodHref({ cluster: s.cluster, name: s.devpod })} className="mono text-ink hover:text-accent">

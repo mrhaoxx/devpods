@@ -81,4 +81,18 @@ describe("nodes page", () => {
     expect(within(dlg).getAllByText("alice-train").length).toBeGreaterThan(0);
     expect(within(dlg).getByText("87%")).toBeTruthy();
   });
+
+  it("every cluster's nodes: a name in two clusters is two rows; the filter narrows them", async () => {
+    stubFetch({ "/api/admin/nodes": { items: [{ ...node("m602", true, {}), cluster: "a" }, { ...node("m602", true, {}), cluster: "b" }], live: true } });
+    const clusters = [
+      { name: "a", connected: true },
+      { name: "b", connected: true },
+    ];
+    const first = renderWithProviders(<NodesPage />, { me: stubMe({ admin: true }), route: "/admin/nodes", clusters });
+    await waitFor(() => expect(tableNames()).toEqual(["m602", "m602"]));
+    expect(screen.getByRole("columnheader", { name: /集群/ })).toBeTruthy();
+    first.unmount();
+    renderWithProviders(<NodesPage />, { me: stubMe({ admin: true }), route: "/admin/nodes?cluster=b", clusters });
+    await waitFor(() => expect(tableNames()).toEqual(["m602"]));
+  });
 });

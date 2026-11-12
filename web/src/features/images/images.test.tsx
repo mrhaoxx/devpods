@@ -265,13 +265,13 @@ describe("snapshots", () => {
 
   it("a failed save is tried again with 重试; the failed one stays", async () => {
     const calls = stubFetch({
-      "/api/snapshots": { items: [view({ id: "s-bad", phase: "Failed", image: "reg.test/users/alice/c:v3", message: "push denied" })] },
-      "POST /api/snapshots/s-bad/retry": new Response(JSON.stringify(view({ id: "s-again", phase: "Pending", image: "reg.test/users/alice/c:v3" })), { status: 201 }),
+      "/api/snapshots": { items: [{ ...view({ id: "s-bad", phase: "Failed", image: "reg.test/users/alice/c:v3", message: "push denied" }), cluster: "b" }] },
+      "POST /api/clusters/b/snapshots/s-bad/retry": new Response(JSON.stringify(view({ id: "s-again", phase: "Pending", image: "reg.test/users/alice/c:v3" })), { status: 201 }),
     });
     renderWithProviders(<ImagesPage />, { me: features() });
     const bad = (await screen.findByText("reg.test/users/alice/c:v3")).closest("tr")!;
     fireEvent.click(within(bad).getByRole("button", { name: "重试" }));
-    await waitFor(() => expect(calls.some((c) => c.method === "POST" && c.url.pathname === "/api/snapshots/s-bad/retry")).toBe(true));
+    await waitFor(() => expect(calls.some((c) => c.method === "POST" && c.url.pathname === "/api/clusters/b/snapshots/s-bad/retry")).toBe(true));
     expect(calls.some((c) => c.method === "DELETE")).toBe(false);
   });
 

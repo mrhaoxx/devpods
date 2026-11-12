@@ -1,6 +1,8 @@
 // 节点 (UI spec §5.4): one row per node; the drawer (?node=) lists the
 // node's DevPods, each GPU card's occupant and the Kore CPU layout.
 // Reservation columns arrive with the reservation backend (ruling R1).
+import { useClusterFilter } from "../../data/clusterFilter";
+import type { Cluster } from "../clusters/api";
 import { devpodHref, keyOf, refOfKey, type Ref } from "../../data/cluster";
 import { useMemo, useState } from "react";
 import { Link } from "react-router-dom";
@@ -84,6 +86,27 @@ function ReservableSwitch({ r }: { r: Ref }) {
       {set.isError && <span className="text-[11px] text-fail">保存失败</span>}
     </span>
   );
+}
+
+/** withCluster: the columns with a 集群 one after the name (offline marked). */
+function withCluster(cs: ColumnDef<NodeView, unknown>[], clusters: Cluster[]): ColumnDef<NodeView, unknown>[] {
+  const of = new Map(clusters.map((c) => [c.name, c]));
+  const col: ColumnDef<NodeView, unknown> = {
+    id: "cluster",
+    header: "集群",
+    accessorFn: (n) => n.cluster ?? "",
+    meta: { priority: 2, width: 100 },
+    cell: ({ row: { original: n } }) => {
+      const c = n.cluster ? of.get(n.cluster) : undefined;
+      return (
+        <span className="inline-flex items-center gap-1">
+          {c?.displayName || n.cluster}
+          {c && !c.connected && <Badge tone="warm">离线</Badge>}
+        </span>
+      );
+    },
+  };
+  return [cs[0], col, ...cs.slice(1)];
 }
 
 const columns: ColumnDef<NodeView, unknown>[] = [
@@ -276,7 +299,9 @@ function NodeDrawerBody({ r }: { r: Ref }) {
 export function NodesPage() {
   const q = useNodes();
   const [url, setUrl] = useUrlState(schema);
-  const items = q.data?.items ?? [];
+  const { matches, several, clusters } = useClusterFilter();
+  const items = useMemo(() => (q.data?.items ?? []).filter(matches), [q.data, matches]);
+  const cols = useMemo(() => (several ? withCluster(columns, clusters) : columns), [several, clusters]);
   const shown = useMemo(
     () =>
       items.filter(
@@ -305,7 +330,7 @@ export function NodesPage() {
         <DataTable<NodeView>
           storageKey="nodes"
           data={shown}
-          columns={columns}
+          columns={cols}
           getRowId={keyOf}
           sorting={sorting}
           onSortingChange={(s) => setUrl({ sort: s[0] ? `${s[0].desc ? "-" : ""}${s[0].id}` : "" })}
