@@ -19,6 +19,8 @@ type Info struct {
 	ControllerVersion string   `json:"controllerVersion,omitempty"`
 	KubernetesVersion string   `json:"kubernetesVersion,omitempty"`
 	Capabilities      []string `json:"capabilities,omitempty"`
+	// Gateways the agent is connected to.
+	Gateways []string `json:"gateways,omitempty"`
 }
 
 // serveInfo writes the cluster's Info at once and again whenever it
@@ -42,6 +44,7 @@ func (a *Agent) serveInfo(ctx context.Context, conn net.Conn) {
 			in = a.o.Info(ctx)
 		}
 		in.Cluster = a.o.Cluster
+		in.Gateways = a.connectedGateways()
 		return in
 	}
 	enc := json.NewEncoder(conn)

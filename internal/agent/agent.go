@@ -17,7 +17,10 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"sync"
 	"time"
+
+	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	"k8s.io/client-go/rest"
 
@@ -30,6 +33,10 @@ const Kind = "agent"
 // Purpose says what a stream is for.
 type Purpose struct {
 	Kind string `json:"kind"`
+	// Addr and For: of a "dial" stream — a DevPod's address, and what
+	// the connection is for (see DialAllowed).
+	Addr string `json:"addr,omitempty"`
+	For  string `json:"for,omitempty"`
 }
 
 // The streams the console opens on the agent's connections.
@@ -57,6 +64,16 @@ type Options struct {
 	Info func(ctx context.Context) Info
 	// InfoInterval is how often Info is asked again (default 30 s).
 	InfoInterval time.Duration
+
+	// Gateways. The console names the gateways that serve this cluster;
+	// the agent dials out to each (DialGateway makes one connection to a
+	// gateway's address) and connects it to DevPods it asks for — the
+	// DevPods of Namespace, read through DevPods. Without DialGateway
+	// the agent has nothing to do with gateways.
+	Namespace     string
+	DevPods       client.Reader
+	DialGateway   func(ctx context.Context, address string) (net.Conn, error)
+	GatewayTunnel tunnel.ClientOptions // timings and pool size; the rest is the agent's
 }
 
 // Agent serves the streams the console opens.
@@ -64,6 +81,10 @@ type Agent struct {
 	o    Options
 	kube *http.Server
 	ln   *streamListener
+
+	runCtx   context.Context
+	gmu      sync.Mutex
+	gateways map[string]*gatewayLink
 }
 
 // New prepares an agent.
@@ -78,7 +99,7 @@ func New(o Options) (*Agent, error) {
 	if err != nil {
 		return nil, err
 	}
-	a := &Agent{o: o, ln: newStreamListener()}
+	a := &Agent{o: o, ln: newStreamListener(), runCtx: context.Background(), gateways: map[string]*gatewayLink{}}
 	a.kube = &http.Server{Handler: h, ReadHeaderTimeout: 30 * time.Second}
 	return a, nil
 }
@@ -93,6 +114,11 @@ func (a *Agent) Run(ctx context.Context, t tunnel.ClientOptions) error {
 	if t.OnError == nil {
 		t.OnError = func(err error) { slog.Warn("agent_connect", "cluster", a.o.Cluster, "err", err.Error()) }
 	}
+	rctx, stop := context.WithCancel(ctx)
+	defer stop() // the connections to gateways end with the agent
+	a.gmu.Lock()
+	a.runCtx = rctx
+	a.gmu.Unlock()
 	go func() { _ = a.kube.Serve(a.ln) }()
 	defer func() { _ = a.kube.Close() }()
 	return tunnel.NewClient(t).Run(ctx)
@@ -110,6 +136,11 @@ func (a *Agent) handle(ctx context.Context, purpose []byte, conn net.Conn) {
 		a.ln.offer(conn) // served as HTTP by a.kube
 	case "info":
 		a.serveInfo(ctx, conn)
+	case "gateways":
+		a.serveGateways(ctx, conn)
+	case "dial": // the console asks for DevPods' state, not for connections to them
+		answerDial(conn, errors.New("only a gateway is given connections to DevPods"))
+		_ = conn.Close()
 	default:
 		_ = conn.Close() // not something this agent does
 	}
