@@ -1,0 +1,141 @@
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.16.5
+  name: clusters.devpod.io
+spec:
+  group: devpod.io
+  names:
+    kind: Cluster
+    listKind: ClusterList
+    plural: clusters
+    shortNames:
+    - dpcl
+    singular: cluster
+  scope: Cluster
+  versions:
+  - additionalPrinterColumns:
+    - jsonPath: .status.connected
+      name: Connected
+      type: boolean
+    - jsonPath: .status.agentVersion
+      name: Agent
+      type: string
+    - jsonPath: .status.lastSeen
+      name: Last seen
+      type: date
+    - jsonPath: .metadata.creationTimestamp
+      name: Age
+      type: date
+    name: v1alpha1
+    schema:
+      openAPIV3Schema:
+        description: |-
+          Cluster is a cluster of DevPods managed by this console. Its name is
+          what users write after a DevPod's name when two clusters hold one of
+          the same name, so it cannot be "devpod" (the CLI's login name).
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: |-
+              ClusterSpec registers a cluster with the console that manages it. The
+              cluster's agent dials out to the console and proves itself with the
+              key recorded here; the console never dials a cluster.
+            properties:
+              agentPublicKey:
+                description: |-
+                  AgentPublicKey is the agent's identity, an authorized_keys line. It
+                  is recorded when the agent joins with a one-time token; empty until
+                  then.
+                type: string
+              defaultQuota:
+                description: |-
+                  DefaultQuota applies in this cluster to users without an entry of
+                  their own for it.
+                properties:
+                  compute:
+                    additionalProperties:
+                      anyOf:
+                      - type: integer
+                      - type: string
+                      pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                      x-kubernetes-int-or-string: true
+                    description: |-
+                      Compute caps the SUM of container resource limits (containers +
+                      initContainers) across the user's *running* DevPods. Keys: cpu,
+                      memory, and extended resources such as nvidia.com/gpu.
+                    type: object
+                  maxDevPods:
+                    description: MaxDevPods limits how many DevPod CRs the user may
+                      own.
+                    format: int32
+                    type: integer
+                  storage:
+                    anyOf:
+                    - type: integer
+                    - type: string
+                    description: |-
+                      Storage caps the SUM of spec.persistence.size across ALL of the
+                      user's DevPods, hibernated included (PVCs survive hibernation).
+                    pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                    x-kubernetes-int-or-string: true
+                type: object
+              displayName:
+                description: DisplayName shown in the console.
+                maxLength: 80
+                type: string
+              paused:
+                description: 'Paused: the agent''s connections are refused and dropped.'
+                type: boolean
+            type: object
+          status:
+            description: ClusterStatus is what the console last heard from the cluster's
+              agent.
+            properties:
+              agentVersion:
+                type: string
+              capabilities:
+                description: 'Capabilities the cluster offers: snapshots, reservations,
+                  telemetry…'
+                items:
+                  type: string
+                type: array
+                x-kubernetes-list-type: set
+              connected:
+                type: boolean
+              controllerVersion:
+                type: string
+              kubernetesVersion:
+                type: string
+              lastSeen:
+                format: date-time
+                type: string
+            required:
+            - connected
+            type: object
+        type: object
+        x-kubernetes-validations:
+        - message: a cluster name is at most 32 characters and cannot be 'devpod'
+          rule: self.metadata.name != 'devpod' && size(self.metadata.name) <= 32
+    served: true
+    storage: true
+    subresources:
+      status: {}
