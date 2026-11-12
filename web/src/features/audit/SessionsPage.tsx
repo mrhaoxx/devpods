@@ -110,6 +110,7 @@ export function SessionsPage({ mine }: { mine?: boolean }) {
       ) : (
         <>
           <DataTable<SessionSummary>
+          storageKey="sessions"
             data={q.items}
             columns={columns}
             getRowId={(s) => s.session_id}

@@ -68,18 +68,66 @@ export type DataTableProps<T> = {
   /** dim: live data is stale (reconnecting); the last values stay */
   dim?: boolean;
   rowClass?(r: T): string;
+  /** storageKey: remember column widths set by dragging, in this browser, under this name */
+  storageKey?: string;
 };
+
+const MIN_COL = 48;
+const sizesKey = (k: string) => `devpod.columns.${k}`;
+function readSizes(k?: string): Record<string, number> {
+  if (!k) return {};
+  try {
+    const v = JSON.parse(localStorage.getItem(sizesKey(k)) ?? "{}");
+    return v && typeof v === "object" ? v : {};
+  } catch {
+    return {};
+  }
+}
+function writeSizes(k: string | undefined, v: Record<string, number>) {
+  if (!k) return;
+  try {
+    localStorage.setItem(sizesKey(k), JSON.stringify(v));
+  } catch {
+    // not kept: no matter
+  }
+}
 
 export function DataTable<T>(p: DataTableProps<T>) {
   const wrap = useRef<HTMLDivElement>(null);
   const width = useWidth(wrap);
   const [showAll, setShowAll] = useState(false);
   const [selection, setSelection] = useState<RowSelectionState>({});
+  // Each column is as wide as it says (or as it was dragged to), never as
+  // its cells happen to be: live numbers changing do not move the columns.
+  const [sizes, setSizes] = useState<Record<string, number>>(() => readSizes(p.storageKey));
+  const sizesRef = useRef(sizes);
+  sizesRef.current = sizes;
 
   const metas = useMemo(
-    () => p.columns.map((c, i) => ({ id: c.id ?? String(i), priority: c.meta?.priority ?? 1, width: c.meta?.width })),
-    [p.columns],
+    () => p.columns.map((c, i) => ({ id: c.id ?? String(i), priority: c.meta?.priority ?? 1, width: sizes[c.id ?? String(i)] ?? c.meta?.width ?? 120 })),
+    [p.columns, sizes],
   );
+  const widthOf = (id: string) => metas.find((m) => m.id === id)?.width ?? 120;
+  const startResize = (id: string, e: React.MouseEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    const x0 = e.clientX;
+    const w0 = widthOf(id);
+    const move = (ev: MouseEvent) => setSizes((cur) => ({ ...cur, [id]: Math.max(MIN_COL, Math.round(w0 + ev.clientX - x0)) }));
+    const up = (ev: MouseEvent) => {
+      move(ev);
+      document.removeEventListener("mousemove", move);
+      document.removeEventListener("mouseup", up);
+      writeSizes(p.storageKey, { ...sizesRef.current, [id]: Math.max(MIN_COL, Math.round(w0 + ev.clientX - x0)) });
+    };
+    document.addEventListener("mousemove", move);
+    document.addEventListener("mouseup", up);
+  };
+  const resetSize = (id: string) => {
+    const { [id]: _, ...rest } = sizesRef.current;
+    setSizes(rest);
+    writeSizes(p.storageKey, rest);
+  };
   const visibleIds = showAll ? metas.map((m) => m.id) : columnsForWidth(width - (p.selectable ? 28 : 0), metas);
   const hidden = metas.length - visibleIds.length;
   const columnVisibility = Object.fromEntries(metas.map((m) => [m.id, visibleIds.includes(m.id)]));
@@ -108,6 +156,7 @@ export function DataTable<T>(p: DataTableProps<T>) {
   const clear = () => setSelection({});
   const rows = table.getRowModel().rows;
   const colCount = visibleIds.length + (p.selectable ? 1 : 0);
+  const tableWidth = visibleIds.reduce((n, id) => n + widthOf(id), p.selectable ? 28 : 0);
 
   return (
     <div ref={wrap} className="min-w-0">
@@ -128,12 +177,12 @@ export function DataTable<T>(p: DataTableProps<T>) {
         </div>
       )}
       <div className={showAll ? "overflow-x-auto" : "overflow-x-hidden"}>
-        <table className="w-full border-collapse text-xs">
+        <table className="min-w-full border-collapse text-xs" style={{ tableLayout: "fixed", width: tableWidth }}>
           <thead className="sticky top-0 z-[1] bg-surface">
             {table.getHeaderGroups().map((hg) => (
               <tr key={hg.id} className="h-7 border-b border-line text-left text-[11px] text-muted">
                 {p.selectable && (
-                  <th className="w-7 px-2">
+                  <th className="px-2" style={{ width: 28 }}>
                     <input
                       type="checkbox"
                       aria-label="全选"
@@ -153,7 +202,8 @@ export function DataTable<T>(p: DataTableProps<T>) {
                     <th
                       key={h.id}
                       aria-sort={dir === "asc" ? "ascending" : dir === "desc" ? "descending" : undefined}
-                      className={`px-2 font-medium whitespace-nowrap ${h.column.columnDef.meta?.align === "right" ? "text-right" : ""}`}
+                      style={{ width: widthOf(h.column.id) }}
+                      className={`relative truncate px-2 font-medium whitespace-nowrap ${h.column.columnDef.meta?.align === "right" ? "text-right" : ""}`}
                     >
                       {sortable ? (
                         <button type="button" onClick={h.column.getToggleSortingHandler()} className="inline-flex items-center gap-0.5 hover:text-ink">
@@ -165,6 +215,15 @@ export function DataTable<T>(p: DataTableProps<T>) {
                       ) : (
                         label
                       )}
+                      <span
+                        role="separator"
+                        aria-orientation="vertical"
+                        aria-label={`调整 ${typeof h.column.columnDef.header === "string" ? h.column.columnDef.header : h.column.id} 列宽`}
+                        title="拖动调整列宽，双击恢复"
+                        onMouseDown={(e) => startResize(h.column.id, e)}
+                        onDoubleClick={() => resetSize(h.column.id)}
+                        className="absolute inset-y-0 right-0 w-1.5 cursor-col-resize hover:bg-accent/40"
+                      />
                     </th>
                   );
                 })}
@@ -190,14 +249,14 @@ export function DataTable<T>(p: DataTableProps<T>) {
                 } ${p.rowClass?.(row.original) ?? ""}`}
               >
                 {p.selectable && (
-                  <td className="w-7 px-2">
+                  <td className="px-2">
                     <input type="checkbox" aria-label={`选择 ${row.id}`} checked={row.getIsSelected()} onChange={row.getToggleSelectedHandler()} />
                   </td>
                 )}
                 {row.getVisibleCells().map((cell) => (
                   <td
                     key={cell.id}
-                    className={`max-w-[320px] truncate px-2 whitespace-nowrap ${cell.column.columnDef.meta?.mono ? "mono" : ""} ${
+                    className={`truncate px-2 whitespace-nowrap ${cell.column.columnDef.meta?.mono ? "mono" : ""} ${
                       cell.column.columnDef.meta?.align === "right" ? "text-right" : ""
                     }`}
                   >

@@ -40,7 +40,7 @@ export function AlertsPage() {
         <AuditError error={q.error} />
       ) : (
         <>
-          <DataTable<AlertRow> data={rows} columns={columns} getRowId={(a) => `${a.ts}:${a.kind}:${a.session_id}:${a.detail}`} sorting={sorting} onSortingChange={setSorting} empty={<EmptyState title={q.isLoading ? "加载中…" : "这段时间没有告警"} />} />
+          <DataTable<AlertRow> storageKey="alerts" data={rows} columns={columns} getRowId={(a) => `${a.ts}:${a.kind}:${a.session_id}:${a.detail}`} sorting={sorting} onSortingChange={setSorting} empty={<EmptyState title={q.isLoading ? "加载中…" : "这段时间没有告警"} />} />
           <LoadMore hasMore={q.hasNextPage} busy={q.isFetchingNextPage} onClick={() => void q.fetchNextPage()} />
         </>
       )}
@@ -101,7 +101,7 @@ export function AccessLogPage() {
         <AuditError error={q.error} />
       ) : (
         <>
-          <DataTable<AccessLogRow> data={rows} columns={columns} getRowId={(a) => `${a.ts}:${a.viewer}:${a.action}:${a.target_session}:${a.target_file}`} sorting={sorting} onSortingChange={setSorting} empty={<EmptyState title={q.isLoading ? "加载中…" : "这段时间没有访问记录"} />} />
+          <DataTable<AccessLogRow> storageKey="access-log" data={rows} columns={columns} getRowId={(a) => `${a.ts}:${a.viewer}:${a.action}:${a.target_session}:${a.target_file}`} sorting={sorting} onSortingChange={setSorting} empty={<EmptyState title={q.isLoading ? "加载中…" : "这段时间没有访问记录"} />} />
           <LoadMore hasMore={q.hasNextPage} busy={q.isFetchingNextPage} onClick={() => void q.fetchNextPage()} />
         </>
       )}

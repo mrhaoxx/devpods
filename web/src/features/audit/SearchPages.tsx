@@ -55,7 +55,7 @@ export function CommandsPage() {
         <AuditError error={q.error} />
       ) : (
         <>
-          <DataTable<CommandRow> data={q.items} columns={columns} getRowId={(c) => c.event_id} sorting={sorting} onSortingChange={setSorting} empty={<EmptyState title={q.isLoading ? "加载中…" : "这段时间没有命令"} />} />
+          <DataTable<CommandRow> storageKey="commands" data={q.items} columns={columns} getRowId={(c) => c.event_id} sorting={sorting} onSortingChange={setSorting} empty={<EmptyState title={q.isLoading ? "加载中…" : "这段时间没有命令"} />} />
           <LoadMore hasMore={q.hasNextPage} busy={q.isFetchingNextPage} onClick={() => void q.fetchNextPage()} />
         </>
       )}
@@ -111,7 +111,7 @@ export function FilesPage() {
         <AuditError error={q.error} />
       ) : (
         <>
-          <DataTable<FileEventRow> data={q.items} columns={columns} getRowId={(f) => f.event_id} sorting={sorting} onSortingChange={setSorting} empty={<EmptyState title={q.isLoading ? "加载中…" : "这段时间没有文件传输"} />} />
+          <DataTable<FileEventRow> storageKey="files" data={q.items} columns={columns} getRowId={(f) => f.event_id} sorting={sorting} onSortingChange={setSorting} empty={<EmptyState title={q.isLoading ? "加载中…" : "这段时间没有文件传输"} />} />
           <LoadMore hasMore={q.hasNextPage} busy={q.isFetchingNextPage} onClick={() => void q.fetchNextPage()} />
         </>
       )}

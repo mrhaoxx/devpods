@@ -301,6 +301,7 @@ export function NodesPage() {
         <EmptyState tone="error" title="无法加载节点" hint={String(q.error)} />
       ) : (
         <DataTable<NodeView>
+          storageKey="nodes"
           data={shown}
           columns={columns}
           getRowId={(n) => n.name}

@@ -170,6 +170,7 @@ export function UsersPage() {
         <EmptyState tone="error" title="无法加载用户" hint={String(q.error)} />
       ) : (
         <DataTable<AdminUserRow>
+          storageKey="users"
           data={shown}
           columns={columns}
           getRowId={(u) => u.name}

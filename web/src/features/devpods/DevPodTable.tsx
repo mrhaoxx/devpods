@@ -237,6 +237,7 @@ export function DevPodTable({ scope }: { scope: "mine" | "all" }) {
         <EmptyState tone="error" title="无法加载 DevPod 列表" hint={String(list.error)} />
       ) : (
         <DataTable<Row>
+          storageKey="devpods"
           data={shown}
           columns={columns}
           getRowId={(r) => (r.group ? `group:${r.name}` : r.name)}

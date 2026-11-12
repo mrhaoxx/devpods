@@ -68,6 +68,7 @@ export function ProcessTable({ procs, limit, live }: { procs?: ProcLive[]; limit
   const data = limit ? [...(procs ?? [])].sort((a, b) => b.cpu - a.cpu).slice(0, limit) : (procs ?? []);
   return (
     <DataTable<ProcLive>
+          storageKey="processes"
       data={data}
       columns={columns}
       getRowId={(p) => `${p.pid}:${p.start}`}

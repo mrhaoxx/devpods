@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { fireEvent, render, screen } from "@testing-library/react";
 import type { ColumnDef, SortingState } from "@tanstack/react-table";
 import { useState } from "react";
@@ -69,5 +69,42 @@ describe("DataTable", () => {
     expect(columnsForWidth(250, metas)).toEqual(["c1", "c2"]);
     expect(columnsForWidth(0, metas)).toHaveLength(5); // width unknown: show all
     expect(columnsForWidth(10, metas)).toEqual(["c1"]); // priority 1 always shows
+  });
+
+  describe("column widths", () => {
+    afterEach(() => localStorage.clear());
+    const sized: ColumnDef<Row, unknown>[] = [
+      { id: "name", header: "名称", accessorKey: "name", meta: { priority: 1, width: 150 } },
+      { id: "cpu", header: "CPU", accessorKey: "cpu", meta: { priority: 1, width: 90 } },
+    ];
+    const table = () => render(<DataTable data={rows} columns={sized} getRowId={(r) => r.name} sorting={[]} onSortingChange={() => {}} storageKey="t" />);
+    const colWidth = (name: string) => (screen.getByRole("columnheader", { name: new RegExp(name) }) as HTMLElement).style.width;
+
+    it("a column is as wide as it says, whatever its cells hold", () => {
+      table();
+      expect(screen.getByRole("table").style.tableLayout).toBe("fixed");
+      expect(colWidth("名称")).toBe("150px");
+      expect(colWidth("CPU")).toBe("90px");
+    });
+
+    it("a width once set is kept", () => {
+      localStorage.setItem("devpod.columns.t", JSON.stringify({ name: 260 }));
+      table();
+      expect(colWidth("名称")).toBe("260px");
+      expect(colWidth("CPU")).toBe("90px");
+    });
+
+    it("dragging a column's edge sets its width, and it is remembered", () => {
+      table();
+      const edge = screen.getByRole("separator", { name: "调整 名称 列宽" });
+      fireEvent.mouseDown(edge, { clientX: 100 });
+      fireEvent.mouseMove(document, { clientX: 140 });
+      fireEvent.mouseUp(document, { clientX: 140 });
+      expect(colWidth("名称")).toBe("190px");
+      expect(JSON.parse(localStorage.getItem("devpod.columns.t") ?? "{}").name).toBe(190);
+      // a double click goes back to the column's own width
+      fireEvent.doubleClick(edge);
+      expect(colWidth("名称")).toBe("150px");
+    });
   });
 });
