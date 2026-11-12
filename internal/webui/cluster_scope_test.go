@@ -189,6 +189,19 @@ func TestClusterScope(t *testing.T) {
 	w := setupWorld(t)
 	const mk = `{"name":"x","image":"ubuntu:24.04"}`
 
+	// someone not signed in is not told which clusters there are
+	for _, path := range []string{"/api/clusters/b/devpods", "/api/clusters/nope/devpods", "/api/devpods?cluster=nope"} {
+		req := httptest.NewRequest("GET", path, nil)
+		rec := httptest.NewRecorder()
+		w.h.ServeHTTP(rec, req)
+		if rec.Code != http.StatusUnauthorized {
+			t.Fatalf("GET %s without a session: %d %s", path, rec.Code, rec.Body.String())
+		}
+	}
+	if code, out, _ := w.call("gl-alice", "GET", "/api/clusters/..%2f..%2fx/devpods", ""); code != http.StatusNotFound {
+		t.Fatalf("a name that is not a name: %d %v", code, out)
+	}
+
 	// with two clusters, a new DevPod has to say where
 	if code, out, _ := w.call("gl-alice", "POST", "/api/devpods", mk); code != http.StatusBadRequest || out["code"] != "CLUSTER_REQUIRED" {
 		t.Fatalf("create without a cluster: %d %v", code, out)
@@ -335,6 +348,12 @@ func TestClusterScope(t *testing.T) {
 	if code, out, _ := w.call("gl-alice", "POST", "/api/clusters/b/devpods", `{"name":"third","image":"ubuntu:24.04"}`); code != http.StatusConflict || out["code"] != "QUOTA_EXCEEDED" {
 		t.Fatalf("a third DevPod in a cluster that allows two: %d %v", code, out)
 	}
+	// b's default says how many; how much is still the console's default
+	_, me, _ := w.call("gl-alice", "GET", "/api/me", "")
+	qb, _ := me["clusters"].(map[string]any)["b"].(map[string]any)["quota"].(map[string]any)
+	if compute, _ := qb["compute"].(map[string]any); qb["maxDevPods"] != float64(2) || compute["cpu"] != "8" {
+		t.Fatalf("b's quota for a user without one of their own: %v", qb)
+	}
 	if code, out, _ := w.call("gl-alice", "POST", "/api/clusters/a/devpods", `{"name":"second","image":"ubuntu:24.04"}`); code != http.StatusCreated {
 		t.Fatalf("a second DevPod in a, which allows five: %d %v", code, out)
 	}
@@ -384,5 +403,58 @@ func TestClusterScope(t *testing.T) {
 	})
 	if w.exists(w.b, "gl-alice-only") {
 		t.Fatal("the delete did not reach b")
+	}
+}
+
+// With one cluster, nobody names it. That it is away must not get in the
+// way of what is not about a cluster: signing in, users, the clusters
+// themselves — or the console could not even resume the one it paused.
+func TestSoleClusterAway(t *testing.T) {
+	w := setupWorld(t)
+	ctx := context.Background()
+	if code, out, _ := w.call("gl-alice", "POST", "/api/clusters/b/devpods", `{"name":"x","image":"ubuntu:24.04"}`); code != http.StatusCreated {
+		t.Fatalf("create: %d %v", code, out)
+	}
+	// cluster a is no longer managed: b is the only one
+	if err := w.a.Delete(ctx, &devpodv1alpha1.Cluster{ObjectMeta: metav1.ObjectMeta{Name: "a"}}); err != nil {
+		t.Fatal(err)
+	}
+	w.s.Clusters.Sweep(ctx)
+	w.until("the console sees one cluster, and b's DevPod without being told where", func() bool {
+		code, out, _ := w.call("gl-alice", "GET", "/api/devpods", "")
+		return code == http.StatusOK && len(items(out)) == 1
+	})
+	if code, out, _ := w.call("gl-alice", "POST", "/api/devpods", `{"name":"y","image":"ubuntu:24.04"}`); code != http.StatusCreated {
+		t.Fatalf("create without naming the only cluster: %d %v", code, out)
+	}
+
+	w.stopB()
+	w.until("b is away", func() bool { _, stale := w.s.Clusters.Stale("b"); return stale })
+	// what is a cluster's: read as last known, not changed
+	code, _, hdr := w.call("gl-alice", "GET", "/api/devpods", "")
+	if code != http.StatusOK || hdr.Get("X-DevPod-Stale-Since") == "" {
+		t.Fatalf("the list while the only cluster is away: %d stale=%q", code, hdr.Get("X-DevPod-Stale-Since"))
+	}
+	if code, out, _ := w.call("gl-alice", "POST", "/api/devpods", `{"name":"z","image":"ubuntu:24.04"}`); code != http.StatusServiceUnavailable || out["code"] != "CLUSTER_OFFLINE" {
+		t.Fatalf("a change while the only cluster is away: %d %v", code, out)
+	}
+	if code, out, _ := w.call("gl-alice", "PATCH", "/api/devpods/gl-alice-x", `{"running":false}`); code != http.StatusServiceUnavailable {
+		t.Fatalf("a change by name while the only cluster is away: %d %v", code, out)
+	}
+	// what is the console's: as ever
+	if code, out, hdr := w.call("gl-alice", "GET", "/api/me", ""); code != http.StatusOK || hdr.Get("X-DevPod-Stale-Since") != "" {
+		t.Fatalf("/api/me: %d %v stale=%q", code, out, hdr.Get("X-DevPod-Stale-Since"))
+	}
+	if code, out, _ := w.call("gl-alice", "PUT", "/api/me/pubkeys", `{"pubkeys":[]}`); code == http.StatusServiceUnavailable {
+		t.Fatalf("saving my keys is refused because a cluster is away: %v", out)
+	}
+	if code, out, _ := w.call("root", "PATCH", "/api/admin/clusters/b", `{"paused":true}`); code != http.StatusOK {
+		t.Fatalf("pause the only cluster: %d %v", code, out)
+	}
+	if code, out, _ := w.call("root", "PATCH", "/api/admin/clusters/b", `{"paused":false}`); code != http.StatusOK {
+		t.Fatalf("resume the only cluster while it is away: %d %v", code, out)
+	}
+	if code, out, _ := w.call("root", "POST", "/api/admin/clusters/b/token", ""); code != http.StatusOK {
+		t.Fatalf("a new token for the only cluster while it is away: %d %v", code, out)
 	}
 }

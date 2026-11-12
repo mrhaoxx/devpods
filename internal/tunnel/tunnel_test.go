@@ -65,7 +65,7 @@ func (s *site) add(t *testing.T, name string, authorize func(context.Context, tu
 	}
 	srv := tunnel.NewServer(tunnel.ServerOptions{
 		Instance: name, Instances: s.list, Authorize: authorize, OnPeer: onPeer,
-		Heartbeat: 20 * time.Millisecond, Dead: 80 * time.Millisecond,
+		Heartbeat: 20 * time.Millisecond, Dead: 500 * time.Millisecond,
 	})
 	s.mu.Lock()
 	s.instances = append(s.instances, srv)
@@ -121,7 +121,7 @@ func newClient(t *testing.T, ctx context.Context, s *site, name string, idle int
 		Handle: func(_ context.Context, purpose []byte, conn net.Conn) {
 			got <- stream{string(purpose), conn}
 		},
-		Heartbeat: 20 * time.Millisecond, Dead: 80 * time.Millisecond,
+		Heartbeat: 20 * time.Millisecond, Dead: 500 * time.Millisecond,
 		BackoffMin: 5 * time.Millisecond, BackoffMax: 40 * time.Millisecond,
 	})
 	go func() { _ = c.Run(ctx) }()
@@ -197,12 +197,15 @@ func TestClient_ConnectsToEveryInstance(t *testing.T) {
 	srvs := []*tunnel.Server{s.add(t, "i0", nil, nil), s.add(t, "i1", nil, nil), s.add(t, "i2", nil, nil)}
 	c, _ := newClient(t, ctx, s, "mulan", 8)
 	eventually(t, "every instance has a control connection and 8 idle ones", func() bool { return settled(c, []string{"i0", "i1", "i2"}, 8) })
-	for i, srv := range srvs {
-		p, ok := srv.Peers()["mulan"]
-		if !ok || p.Idle != 8 {
-			t.Fatalf("instance %d sees %+v", i, p)
+	// (an instance counts a connection a moment after the client does)
+	eventually(t, "every instance sees its 8", func() bool {
+		for _, srv := range srvs {
+			if p, ok := srv.Peers()["mulan"]; !ok || p.Idle != 8 {
+				return false
+			}
 		}
-	}
+		return true
+	})
 	// once settled, the client stops dialling
 	before := s.dials.Load()
 	time.Sleep(100 * time.Millisecond)
@@ -219,15 +222,14 @@ func TestClient_FollowsInstanceChanges(t *testing.T) {
 	srv1 := s.add(t, "i1", nil, nil)
 	// the client learns of the new instance from the next handshake it makes:
 	// using a stream makes it dial again
-	eventually(t, "the new instance is joined", func() bool {
-		if conn, err := s.instances[0].Dial(ctx, "mulan", []byte("x")); err == nil {
-			_ = conn.Close()
-		}
-		return settled(c, []string{"i0", "i1"}, 2)
-	})
-	if p := srv1.Peers()["mulan"]; p.Idle != 2 {
-		t.Fatalf("new instance sees %+v", p)
+	if conn, err := s.instances[0].Dial(ctx, "mulan", []byte("x")); err != nil {
+		t.Fatal(err)
+	} else {
+		_ = conn.Close()
 	}
+	eventually(t, "the new instance is joined", func() bool {
+		return settled(c, []string{"i0", "i1"}, 2) && srv1.Peers()["mulan"].Idle == 2
+	})
 	s.remove("i0")
 	eventually(t, "the removed instance is dropped", func() bool { return settled(c, []string{"i1"}, 2) })
 }

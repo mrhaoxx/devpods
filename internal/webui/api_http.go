@@ -271,7 +271,8 @@ func (s *Server) handleHTTPTicket(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var list devpodv1alpha1.DevPodList
-	if err := s.k(r).Client.List(r.Context(), &list, client.InNamespace(s.NS)); err != nil {
+	var err error
+	if list.Items, err = s.allDevPods(r); err != nil { // the id says which, in whichever cluster
 		s.writeErr(w, http.StatusInternalServerError, "INTERNAL", err.Error(), nil)
 		return
 	}

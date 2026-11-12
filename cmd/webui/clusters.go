@@ -70,21 +70,30 @@ func (f *clusterFlags) build(ctx context.Context, hub client.Client, reader clie
 		}
 		instances = podNames(reader, *f.namespace, sel, *f.instance)
 	}
-	inNS := cache.ByObject{Namespaces: map[string]cache.Config{devpodNamespace: {}}}
+	warm, byObject := clusterCache(devpodNamespace)
 	r := clusters.New(clusters.Options{
 		Hub: hub, Reader: reader, Instance: *f.instance, Instances: instances,
-		Scheme: scheme, Indexes: webui.RegisterIndexes,
-		// what the console reads of a cluster, there to read when it is away
-		Warm: []client.Object{
-			&devpodv1alpha1.DevPod{}, &corev1.Pod{}, &corev1.Node{},
-			&devpodv1alpha1.Reservation{}, &devpodv1alpha1.DevPodSnapshot{},
-		},
-		ByObject: map[client.Object]cache.ByObject{
-			&devpodv1alpha1.DevPod{}: inNS, &corev1.Pod{}: inNS, &corev1.Event{}: inNS,
-		},
+		Scheme: scheme, Indexes: webui.RegisterIndexes, Warm: warm, ByObject: byObject,
 	})
 	go r.Run(ctx)
 	return r, nil
+}
+
+// clusterCache is what the console keeps of a cluster: the kinds whose
+// informers start with the cluster's clients (there to read when it is
+// away), and the namespace each namespaced kind is read in. The agent may
+// list a namespaced kind in the DevPod namespace only: one read across
+// namespaces would be refused, and the cache would never sync.
+func clusterCache(devpodNamespace string) ([]client.Object, map[client.Object]cache.ByObject) {
+	inNS := cache.ByObject{Namespaces: map[string]cache.Config{devpodNamespace: {}}}
+	warm := []client.Object{
+		&devpodv1alpha1.DevPod{}, &corev1.Pod{}, &devpodv1alpha1.DevPodSnapshot{}, // in the DevPod namespace
+		&corev1.Node{}, &devpodv1alpha1.Reservation{}, // cluster-scoped
+	}
+	byObject := map[client.Object]cache.ByObject{
+		&devpodv1alpha1.DevPod{}: inNS, &corev1.Pod{}: inNS, &corev1.Event{}: inNS, &devpodv1alpha1.DevPodSnapshot{}: inNS,
+	}
+	return warm, byObject
 }
 
 // podNames lists the console's running Pods, asked at most every few

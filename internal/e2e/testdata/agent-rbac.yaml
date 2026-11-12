@@ -1,0 +1,137 @@
+---
+# Source: devpod/templates/agent-rbac.yaml
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: devpod-agent
+  namespace: devpod-system
+  labels: 
+    app.kubernetes.io/name: devpod
+    app.kubernetes.io/instance: devpod
+    app.kubernetes.io/managed-by: Helm
+    helm.sh/chart: devpod-0.1.0
+---
+# Source: devpod/templates/agent-rbac.yaml
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: devpod-agent
+  labels: 
+    app.kubernetes.io/name: devpod
+    app.kubernetes.io/instance: devpod
+    app.kubernetes.io/managed-by: Helm
+    helm.sh/chart: devpod-0.1.0
+rules:
+# Users here hold only what the console writes of them: the registries
+# they saved credentials for, for this cluster's controller.
+- apiGroups: ["devpod.io"]
+  resources: ["users"]
+  verbs: ["get", "list", "watch", "create", "update"]
+- apiGroups: ["devpod.io"]
+  resources: ["devpodtemplates"]
+  verbs: ["get", "list", "watch"]
+- apiGroups: [""]
+  resources: ["nodes"]
+  verbs: ["get", "list", "watch"]
+# Read always (the console keeps them in its cache of this cluster);
+# changed only where reservations are on.
+- apiGroups: ["devpod.io"]
+  resources: ["reservations"]
+  verbs: ["get", "list", "watch"]
+- apiGroups: ["kore.zjusct.io"]
+  resources: ["korenodetopologies"]
+  verbs: ["get", "list", "watch"]
+---
+# Source: devpod/templates/agent-rbac.yaml
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: devpod-agent
+  labels: 
+    app.kubernetes.io/name: devpod
+    app.kubernetes.io/instance: devpod
+    app.kubernetes.io/managed-by: Helm
+    helm.sh/chart: devpod-0.1.0
+roleRef: {apiGroup: rbac.authorization.k8s.io, kind: ClusterRole, name: devpod-agent}
+subjects:
+- {kind: ServiceAccount, name: devpod-agent, namespace: devpod-system}
+---
+# Source: devpod/templates/agent-rbac.yaml
+# What the console does in the DevPod namespace, through the agent.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: devpod-agent
+  namespace: devpods
+  labels: 
+    app.kubernetes.io/name: devpod
+    app.kubernetes.io/instance: devpod
+    app.kubernetes.io/managed-by: Helm
+    helm.sh/chart: devpod-0.1.0
+rules:
+- apiGroups: ["devpod.io"]
+  resources: ["devpods", "devpodsnapshots"]
+  verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+- apiGroups: [""]
+  resources: ["pods", "events"]
+  verbs: ["get", "list", "watch"]
+# Redeploy: delete a DevPod's Pod so the controller recreates it.
+- apiGroups: [""]
+  resources: ["pods"]
+  verbs: ["delete"]
+---
+# Source: devpod/templates/agent-rbac.yaml
+# The agent's own key: made on its first start, kept in one Secret, read
+# back on later starts. And the controller's version, to report.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: devpod-agent-identity
+  namespace: devpod-system
+  labels: 
+    app.kubernetes.io/name: devpod
+    app.kubernetes.io/instance: devpod
+    app.kubernetes.io/managed-by: Helm
+    helm.sh/chart: devpod-0.1.0
+rules:
+- apiGroups: [""]
+  resources: ["secrets"]
+  resourceNames: ["devpod-agent-identity"]
+  verbs: ["get"]
+- apiGroups: [""]
+  resources: ["secrets"]
+  verbs: ["create"]
+- apiGroups: ["apps"]
+  resources: ["deployments"]
+  resourceNames: ["devpod-controller"]
+  verbs: ["get"]
+---
+# Source: devpod/templates/agent-rbac.yaml
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: devpod-agent
+  namespace: devpods
+  labels: 
+    app.kubernetes.io/name: devpod
+    app.kubernetes.io/instance: devpod
+    app.kubernetes.io/managed-by: Helm
+    helm.sh/chart: devpod-0.1.0
+roleRef: {apiGroup: rbac.authorization.k8s.io, kind: Role, name: devpod-agent}
+subjects:
+- {kind: ServiceAccount, name: devpod-agent, namespace: devpod-system}
+---
+# Source: devpod/templates/agent-rbac.yaml
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: devpod-agent-identity
+  namespace: devpod-system
+  labels: 
+    app.kubernetes.io/name: devpod
+    app.kubernetes.io/instance: devpod
+    app.kubernetes.io/managed-by: Helm
+    helm.sh/chart: devpod-0.1.0
+roleRef: {apiGroup: rbac.authorization.k8s.io, kind: Role, name: devpod-agent-identity}
+subjects:
+- {kind: ServiceAccount, name: devpod-agent, namespace: devpod-system}

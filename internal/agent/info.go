@@ -59,6 +59,8 @@ func (a *Agent) serveInfo(ctx context.Context, conn net.Conn) {
 					return
 				}
 				last = now
+			} else if _, err := conn.Write([]byte("\n")); err != nil {
+				return // nothing new: a blank line, so that nothing in between takes the stream for dead
 			}
 		case <-gone:
 			return

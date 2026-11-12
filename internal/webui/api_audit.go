@@ -20,7 +20,6 @@ import (
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/types"
-	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	devpodv1alpha1 "github.com/mrhaoxx/devpod/api/v1alpha1"
 	"github.com/mrhaoxx/devpod/internal/audit/policy"
@@ -104,11 +103,14 @@ func (s *Server) devpodUID(r *http.Request) (uid string, ok bool) {
 	if name == "" {
 		return "", true
 	}
-	var dp devpodv1alpha1.DevPod
-	if err := s.k(r).Client.Get(r.Context(), types.NamespacedName{Namespace: s.NS, Name: name}, &dp); err != nil {
-		return "", false
+	// in whichever cluster it is; the first of that name when two have one
+	for _, cc := range s.ks(r) {
+		var dp devpodv1alpha1.DevPod
+		if err := cc.Client.Get(r.Context(), types.NamespacedName{Namespace: s.NS, Name: name}, &dp); err == nil {
+			return string(dp.UID), true
+		}
 	}
-	return string(dp.UID), true
+	return "", false
 }
 
 func (s *Server) auditStoreErr(w http.ResponseWriter, err error) {
@@ -430,12 +432,12 @@ func (s *Server) handleAuditPresence(w http.ResponseWriter, r *http.Request) {
 	}
 	var dps []devpodv1alpha1.DevPod
 	if sess.Admin && r.URL.Query().Get("scope") == "all" {
-		var list devpodv1alpha1.DevPodList
-		if err := s.k(r).Client.List(r.Context(), &list, client.InNamespace(s.NS)); err != nil {
+		all, err := s.allDevPods(r)
+		if err != nil {
 			s.writeErr(w, http.StatusInternalServerError, "INTERNAL", err.Error(), nil)
 			return
 		}
-		dps = list.Items
+		dps = all
 	} else {
 		owned, err := s.ownedDevPods(r, sess.User)
 		if err != nil {

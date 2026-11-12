@@ -81,8 +81,14 @@ func LoadOrCreateIdentity(store Store) (*Identity, error) {
 // PublicKey is the identity as an authorized_keys line.
 func (i *Identity) PublicKey() string { return i.line }
 
+// proofContext is prefixed to what is signed, so that a proof is a proof
+// of this and nothing else, whatever bytes the other end sends.
+const proofContext = "devpod agent connect v1\n"
+
+func proofMessage(nonce []byte) []byte { return append([]byte(proofContext), nonce...) }
+
 // Sign proves the identity over a nonce the console sent.
-func (i *Identity) Sign(nonce []byte) []byte { return ed25519.Sign(i.priv, nonce) }
+func (i *Identity) Sign(nonce []byte) []byte { return ed25519.Sign(i.priv, proofMessage(nonce)) }
 
 // Verify checks a proof against a registered public key (an
 // authorized_keys line holding an Ed25519 key).
@@ -99,7 +105,7 @@ func Verify(publicKey string, nonce, proof []byte) error {
 	if !ok {
 		return errors.New("registered key: not an Ed25519 key")
 	}
-	if !ed25519.Verify(ed, nonce, proof) {
+	if !ed25519.Verify(ed, proofMessage(nonce), proof) {
 		return errors.New("the proof does not match the registered key")
 	}
 	return nil

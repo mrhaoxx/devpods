@@ -30,13 +30,17 @@ import (
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
+	"k8s.io/client-go/tools/clientcmd"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/envtest"
+	"sigs.k8s.io/yaml"
 
 	devpodv1alpha1 "github.com/mrhaoxx/devpod/api/v1alpha1"
 	"github.com/mrhaoxx/devpod/internal/webui"
@@ -44,7 +48,53 @@ import (
 
 type apiServer struct {
 	c          client.Client
-	kubeconfig string
+	kubeconfig string // an administrator's
+	env        *envtest.Environment
+}
+
+// restrictedAgent gives the cluster an agent identity with exactly what
+// the chart grants (testdata/agent-rbac.yaml, kept equal to the chart's
+// render by hack/test-chart.sh) and returns a kubeconfig for it.
+func restrictedAgent(t *testing.T, env *envtest.Environment, c client.Client, dir, name string) string {
+	t.Helper()
+	ctx := context.Background()
+	if err := c.Create(ctx, &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "devpod-system"}}); err != nil {
+		t.Fatal(err)
+	}
+	raw, err := os.ReadFile(filepath.Join("testdata", "agent-rbac.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	n := 0
+	for _, doc := range strings.Split(string(raw), "\n---") {
+		obj := &unstructured.Unstructured{}
+		if err := yaml.Unmarshal([]byte(doc), &obj.Object); err != nil {
+			t.Fatalf("agent-rbac.yaml: %v", err)
+		}
+		if obj.GetKind() == "" {
+			continue
+		}
+		if err := c.Create(ctx, obj); err != nil {
+			t.Fatalf("apply %s/%s: %v", obj.GetKind(), obj.GetName(), err)
+		}
+		n++
+	}
+	if n < 7 {
+		t.Fatalf("agent-rbac.yaml holds %d objects", n)
+	}
+	user, err := env.AddUser(envtest.User{Name: "system:serviceaccount:devpod-system:devpod-agent", Groups: []string{"system:serviceaccounts", "system:authenticated"}}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	kc, err := user.KubeConfig()
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(dir, name+"-agent.kubeconfig")
+	if err := os.WriteFile(path, kc, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return path
 }
 
 func startAPIServer(t *testing.T, scheme *runtime.Scheme, dir, name string) *apiServer {
@@ -74,7 +124,7 @@ func startAPIServer(t *testing.T, scheme *runtime.Scheme, dir, name string) *api
 	if err := c.Create(context.Background(), &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "devpods"}}); err != nil {
 		t.Fatal(err)
 	}
-	return &apiServer{c: c, kubeconfig: path}
+	return &apiServer{c: c, kubeconfig: path, env: env}
 }
 
 // proc is a running program whose output is kept for the failure report.
@@ -152,6 +202,9 @@ func TestMultiCluster(t *testing.T) {
 
 	// two clusters; a is also where the console keeps its own objects
 	a, b := startAPIServer(t, scheme, dir, "a"), startAPIServer(t, scheme, dir, "b")
+
+	// cluster b's agent is given what the chart gives it, and no more
+	b.kubeconfig = restrictedAgent(t, b.env, b.c, dir, "b")
 
 	// an admin who signs in with a password
 	hash, err := webui.HashPassword("correct horse battery", 8)
@@ -244,7 +297,7 @@ func TestMultiCluster(t *testing.T) {
 	}
 	startAgent := func(name string, srv *apiServer, withToken bool) *proc {
 		args := []string{"--cluster=" + name, "--console=" + base, "--kubeconfig=" + srv.kubeconfig,
-			"--identity-file=" + filepath.Join(dir, name+".identity"), "--namespace=default", "--capabilities=snapshots"}
+			"--identity-file=" + filepath.Join(dir, name+".identity"), "--namespace=devpod-system", "--capabilities=snapshots"}
 		if withToken {
 			args = append(args, "--join-token-file="+tokens[name])
 		}
@@ -261,6 +314,47 @@ func TestMultiCluster(t *testing.T) {
 	body, _ := json.Marshal(map[string]string{"cluster": "b", "token": strings.TrimSpace(string(spent)), "publicKey": "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIFzmR0Dk5Lk5gGk4Sx0dH5ZyqVQk1o3o8o4S0r9o6m0f x"})
 	if code, out, _ := call("POST", "/agent/join", string(body)); code != http.StatusForbidden {
 		t.Fatalf("a second join with a spent token: %d %v", code, out)
+	}
+
+	// with the chart's rights the console can do its work in b: its cache
+	// of b syncs (every kind it keeps), and what it reads there answers
+	until("the console has b's cache", 90*time.Second, func() bool {
+		code, _, _ := call("GET", "/api/clusters/b/devpods", "")
+		return code == http.StatusOK
+	})
+	for _, path := range []string{"/api/clusters/b/templates", "/api/clusters/b/nodes", "/api/clusters/b/admin/nodes", "/api/clusters/b/admin/devpods"} {
+		if code, out, _ := call("GET", path, ""); code != http.StatusOK {
+			t.Fatalf("GET %s with the chart's rights: %d %v", path, code, out)
+		}
+	}
+	// a registry credential lands in b as a User the agent may write
+	if code, out, _ := call("PUT", "/api/me/registries/reg.example.com", `{"username":"root","password":"s3cret"}`); code != http.StatusOK {
+		t.Fatalf("save a credential: %d %v", code, out)
+	} else if cl, _ := out["clusters"].(map[string]any); cl["b"] != "ok" {
+		t.Fatalf("the credential did not reach b: %v", out)
+	}
+	// and no further: with the agent's rights there are no Secrets to read,
+	// and no Pods outside the DevPod namespace
+	kc, err := os.ReadFile(b.kubeconfig)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rc, err := clientcmd.RESTConfigFromKubeConfig(kc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	asAgent, err := client.New(rc, client.Options{Scheme: scheme})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := asAgent.List(ctx, &corev1.SecretList{}, client.InNamespace("devpods")); !apierrors.IsForbidden(err) {
+		t.Fatalf("the agent listing Secrets in the DevPod namespace: %v", err)
+	}
+	if err := asAgent.List(ctx, &corev1.PodList{}, client.InNamespace("kube-system")); !apierrors.IsForbidden(err) {
+		t.Fatalf("the agent listing Pods in another namespace: %v", err)
+	}
+	if err := asAgent.List(ctx, &corev1.PodList{}, client.InNamespace("devpods")); err != nil {
+		t.Fatalf("the agent listing Pods in the DevPod namespace: %v", err)
 	}
 
 	// the same DevPod name in both clusters

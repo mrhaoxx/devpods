@@ -34,10 +34,17 @@ import (
 // The result says, per cluster: "ok", "offline" or "failed".
 func (s *Server) projectRegistries(ctx context.Context, user string, registries []devpodv1alpha1.UserRegistry, auth *devpodv1alpha1.UserRegistryAuth) map[string]string {
 	out := map[string]string{}
+	sc, _ := ctx.Value(scopeKey{}).(*reqScope)
+	reach := func(name string) bool { return sc == nil || len(sc.only) == 0 || slices.Contains(sc.only, name) }
 	for _, name := range s.clusterNames(ctx) {
-		out[name] = "offline" // until shown otherwise: registered, never connected
+		if reach(name) {
+			out[name] = "offline" // until shown otherwise: registered, never connected
+		}
 	}
 	s.Clusters.Each(func(cc *clusters.ClusterClients) {
+		if !reach(cc.Name) {
+			return // a token for some clusters writes to those
+		}
 		if _, stale := s.Clusters.Stale(cc.Name); stale {
 			out[cc.Name] = "offline"
 			return

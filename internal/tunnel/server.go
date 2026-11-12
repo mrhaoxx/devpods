@@ -47,6 +47,7 @@ type PeerStatus struct {
 // Server is one instance accepting initiators.
 type Server struct {
 	o      ServerOptions
+	notify sync.Mutex // held while a peer's presence changes and OnPeer is told
 	mu     sync.Mutex
 	peers  map[string]*peer
 	conns  map[net.Conn]struct{}
@@ -54,11 +55,12 @@ type Server struct {
 }
 
 type peer struct {
-	control net.Conn
-	idle    []*conn
-	arrive  chan struct{} // an idle connection came in
-	gone    chan struct{} // closed when the control connection ends
-	since   time.Time
+	control  net.Conn
+	idle     []*conn
+	arrive   chan struct{} // an idle connection came in
+	gone     chan struct{} // closed when the control connection ends
+	goneOnce sync.Once
+	since    time.Time
 }
 
 // conn is a data connection; done closes when it is closed.
@@ -133,7 +135,7 @@ func (s *Server) Disconnect(name string) {
 	p := s.peers[name]
 	s.mu.Unlock()
 	if p != nil {
-		s.drop(name, p, true)
+		s.drop(name, p)
 	}
 }
 
@@ -185,19 +187,22 @@ func (s *Server) Accept(ctx context.Context, nc net.Conn) {
 
 func (s *Server) control(ctx context.Context, name string, nc net.Conn) {
 	p := &peer{control: nc, arrive: make(chan struct{}, 1), gone: make(chan struct{}), since: time.Now()}
+	// a peer's coming and going are told in the order they happen
+	s.notify.Lock()
 	s.mu.Lock()
 	old := s.peers[name]
 	s.peers[name] = p
 	s.mu.Unlock()
-	if old != nil { // the initiator started over: the new connection is the one
-		s.drop(name, old, false)
-	}
-	if err := writeFrame(nc, result{OK: true}); err != nil {
-		s.drop(name, p, old == nil)
-		return
-	}
 	if old == nil && s.o.OnPeer != nil {
 		s.o.OnPeer(name, true)
+	}
+	s.notify.Unlock()
+	if old != nil { // the initiator started over: the new connection is the one
+		s.drop(name, old)
+	}
+	if err := writeFrame(nc, result{OK: true}); err != nil {
+		s.drop(name, p)
+		return
 	}
 	stop := context.AfterFunc(ctx, func() { _ = nc.Close() })
 	defer stop()
@@ -217,12 +222,15 @@ func (s *Server) control(ctx context.Context, name string, nc net.Conn) {
 			}
 		}
 	}
-	s.drop(name, p, true)
+	s.drop(name, p)
 }
 
 // drop ends a peer's presence: its control connection and the idle data
-// connections that came with it.
-func (s *Server) drop(name string, p *peer, tell bool) {
+// connections that came with it. If it was the peer's current presence,
+// its going is told — before the connections are closed, which can take
+// seconds each when the other end is no longer there.
+func (s *Server) drop(name string, p *peer) {
+	s.notify.Lock()
 	s.mu.Lock()
 	current := s.peers[name] == p
 	if current {
@@ -231,17 +239,14 @@ func (s *Server) drop(name string, p *peer, tell bool) {
 	idle := p.idle
 	p.idle = nil
 	s.mu.Unlock()
-	select {
-	case <-p.gone:
-	default:
-		close(p.gone)
-	}
-	_ = p.control.Close()
-	for _, c := range idle {
-		_ = c.Close()
-	}
-	if current && tell && s.o.OnPeer != nil {
+	p.goneOnce.Do(func() { close(p.gone) })
+	if current && s.o.OnPeer != nil {
 		s.o.OnPeer(name, false)
+	}
+	s.notify.Unlock()
+	go func() { _ = p.control.Close() }()
+	for _, c := range idle {
+		go func() { _ = c.Close() }()
 	}
 }
 
@@ -348,7 +353,7 @@ func (s *Server) Dial(ctx context.Context, name string, purpose []byte) (net.Con
 		_ = c.SetWriteDeadline(time.Time{})
 		c.wmu.Unlock()
 		if err != nil {
-			_ = c.Close() // it died while idle: take the next
+			go func() { _ = c.Close() }() // it died while idle: take the next
 			continue
 		}
 		return c, nil

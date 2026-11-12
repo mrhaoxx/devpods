@@ -47,12 +47,21 @@ type scopeKey struct{}
 // reqScope is a request's cluster, once known.
 type reqScope struct {
 	cc *clusters.ClusterClients
+	// implied: nobody named the cluster — it is the only one there is.
+	// Whether it is away matters only if the request turns out to be
+	// about a cluster at all, so that is looked at on first use.
+	implied, write, looked bool
+	w                      http.ResponseWriter
 	// only, when set: the clusters the caller's token reaches.
 	only []string
 }
 
-// errClusterRequired is what k panics with; withCluster answers it.
-var errClusterRequired = errors.New("cluster required")
+// errClusterRequired and errClusterAway are what k panics with;
+// withCluster answers them.
+var (
+	errClusterRequired = errors.New("cluster required")
+	errClusterAway     = errors.New("cluster away")
+)
 
 // local is the cluster the console runs in, as a cluster.
 func (s *Server) local() *clusters.ClusterClients {
@@ -69,6 +78,15 @@ func (s *Server) kc(ctx context.Context) *clusters.ClusterClients {
 		return s.local()
 	}
 	if sc, _ := ctx.Value(scopeKey{}).(*reqScope); sc != nil && sc.cc != nil {
+		if sc.implied && !sc.looked {
+			sc.looked = true
+			if since, stale := s.Clusters.Stale(sc.cc.Name); stale {
+				if sc.write {
+					panic(errClusterAway)
+				}
+				sc.w.Header().Set(StaleHeader, since.UTC().Format(time.RFC3339))
+			}
+		}
 		return sc.cc
 	}
 	panic(errClusterRequired)
@@ -224,29 +242,41 @@ func (s *Server) withCluster(next http.Handler) http.Handler {
 		if name == "" {
 			name = r.URL.Query().Get("cluster")
 		}
-		if name == "" {
-			if names := s.clusterNames(r.Context()); len(names) == 1 {
-				// the only cluster there is; if it never connected, whoever
-				// needs it is told so by k
-				if cc, err := s.Clusters.Clients(names[0]); err == nil {
-					name = cc.Name
-				}
+		sc := &reqScope{w: w, write: r.Method != http.MethodGet && r.Method != http.MethodHead}
+		switch {
+		case name != "" && !hasCredential(r):
+			// someone not signed in is not told which clusters exist or
+			// are away: the handler answers 401
+		case name != "":
+			if len(name) > MaxClusterNameLen || !dns1123Label.MatchString(name) {
+				s.writeErr(w, http.StatusNotFound, "UNKNOWN_CLUSTER", "no such cluster", nil)
+				return
 			}
-		}
-		sc := &reqScope{}
-		if name != "" {
 			cc, ok := s.named(w, name)
 			if !ok || !s.settle(w, r, sc, cc) {
 				return
 			}
+		default:
+			if names := s.clusterNames(r.Context()); len(names) == 1 {
+				// the only cluster there is. Most requests are not about a
+				// cluster (signing in, users, the clusters themselves): that
+				// it may be away is the business of those that are (k)
+				if cc, err := s.Clusters.Clients(names[0]); err == nil {
+					sc.cc, sc.implied = cc, true
+				}
+			}
 		}
 		defer func() {
 			if p := recover(); p != nil {
-				if p != errClusterRequired {
+				switch p {
+				case errClusterRequired:
+					s.writeErr(w, http.StatusBadRequest, "CLUSTER_REQUIRED",
+						"say which cluster: /api/clusters/{cluster}/… or ?cluster=", s.clusterNames(r.Context()))
+				case errClusterAway:
+					s.clusterOffline(w, sc.cc.Name)
+				default:
 					panic(p)
 				}
-				s.writeErr(w, http.StatusBadRequest, "CLUSTER_REQUIRED",
-					"say which cluster: /api/clusters/{cluster}/… or ?cluster=", s.clusterNames(r.Context()))
 			}
 		}()
 		next.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), scopeKey{}, sc)))
@@ -259,6 +289,16 @@ func clusterPrefix(name string) string {
 		return ""
 	}
 	return name + ": "
+}
+
+// hasCredential: the request carries something to sign in with (whether
+// it is good is the handler's to say).
+func hasCredential(r *http.Request) bool {
+	if r.Header.Get("Authorization") != "" {
+		return true
+	}
+	_, err := r.Cookie(SessionCookie)
+	return err == nil
 }
 
 // Candidate is one of several DevPods a name could mean.
@@ -340,13 +380,25 @@ type InCluster struct {
 }
 
 // clusterQuota is what a cluster allows a user who has no quota of their
-// own for it: the cluster's default, else the console's.
+// own for it: the cluster's default over the console's, field by field.
 func (s *Server) clusterQuota(ctx context.Context, cc *clusters.ClusterClients) devpodv1alpha1.UserQuota {
-	if s.Clusters != nil && cc.Name != "" {
-		var c devpodv1alpha1.Cluster
-		if err := s.Client.Get(ctx, types.NamespacedName{Name: cc.Name}, &c); err == nil && c.Spec.DefaultQuota != nil {
-			return *c.Spec.DefaultQuota
-		}
+	out := s.DefaultQuota
+	if s.Clusters == nil || cc.Name == "" {
+		return out
 	}
-	return s.DefaultQuota
+	var c devpodv1alpha1.Cluster
+	if err := s.Client.Get(ctx, types.NamespacedName{Name: cc.Name}, &c); err != nil || c.Spec.DefaultQuota == nil {
+		return out
+	}
+	q := c.Spec.DefaultQuota
+	if q.MaxDevPods != nil {
+		out.MaxDevPods = q.MaxDevPods
+	}
+	if q.Compute != nil {
+		out.Compute = q.Compute
+	}
+	if q.Storage != nil {
+		out.Storage = q.Storage
+	}
+	return out
 }

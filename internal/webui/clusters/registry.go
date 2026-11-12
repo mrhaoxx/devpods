@@ -22,6 +22,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/client-go/util/retry"
 	"sigs.k8s.io/controller-runtime/pkg/cache"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
@@ -195,7 +196,9 @@ func (r *Registry) onPeer(cluster string, up bool) {
 		go r.watchInfo(ctx, cluster)
 		go r.ensureClients(cluster)
 	}
-	r.writeStatus(cluster)
+	// what is written is what holds at the time of writing, so the order
+	// of two writes does not matter; the tunnel is not kept waiting
+	go r.writeStatus(cluster)
 }
 
 // watchInfo keeps an info stream to the cluster and records what it says.
@@ -233,26 +236,31 @@ func (r *Registry) watchInfo(ctx context.Context, cluster string) {
 func (r *Registry) writeStatus(cluster string) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	c, err := r.cluster(ctx, cluster)
-	if err != nil {
-		return
-	}
-	connected, seen := r.Connected(cluster)
-	in, _ := r.Info(cluster)
-	st := devpodv1alpha1.ClusterStatus{
-		Connected: connected, AgentVersion: in.AgentVersion, ControllerVersion: in.ControllerVersion,
-		KubernetesVersion: in.KubernetesVersion, Capabilities: in.Capabilities,
-	}
-	if !seen.IsZero() {
-		t := metav1.NewTime(seen.Truncate(time.Second))
-		st.LastSeen = &t
-	}
-	if !connected { // keep what was last known of a cluster that is away
-		st.AgentVersion, st.ControllerVersion = c.Status.AgentVersion, c.Status.ControllerVersion
-		st.KubernetesVersion, st.Capabilities = c.Status.KubernetesVersion, c.Status.Capabilities
-	}
-	c.Status = st
-	if err := r.o.Hub.Status().Update(ctx, c); err != nil && !apierrors.IsConflict(err) && !apierrors.IsNotFound(err) {
+	// two writes can meet (a connect and the first word from the agent):
+	// the one that loses reads again and writes what holds then
+	err := retry.RetryOnConflict(retry.DefaultRetry, func() error {
+		c, err := r.cluster(ctx, cluster)
+		if err != nil {
+			return nil // gone, or the console's own API is away: the next sweep writes
+		}
+		connected, seen := r.Connected(cluster)
+		in, _ := r.Info(cluster)
+		st := devpodv1alpha1.ClusterStatus{
+			Connected: connected, AgentVersion: in.AgentVersion, ControllerVersion: in.ControllerVersion,
+			KubernetesVersion: in.KubernetesVersion, Capabilities: in.Capabilities, Gateways: c.Status.Gateways,
+		}
+		if !seen.IsZero() {
+			t := metav1.NewTime(seen.Truncate(time.Second))
+			st.LastSeen = &t
+		}
+		if !connected { // keep what was last known of a cluster that is away
+			st.AgentVersion, st.ControllerVersion = c.Status.AgentVersion, c.Status.ControllerVersion
+			st.KubernetesVersion, st.Capabilities = c.Status.KubernetesVersion, c.Status.Capabilities
+		}
+		c.Status = st
+		return r.o.Hub.Status().Update(ctx, c)
+	})
+	if err != nil && !apierrors.IsNotFound(err) {
 		slog.Warn("cluster_status", "cluster", cluster, "err", err)
 	}
 }

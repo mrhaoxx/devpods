@@ -169,19 +169,21 @@ func (s *Server) handleDeleteRegistry(w http.ResponseWriter, r *http.Request) {
 		}
 		n := len(u.Spec.Registries)
 		u.Spec.Registries = slices.DeleteFunc(u.Spec.Registries, func(reg devpodv1alpha1.UserRegistry) bool { return reg.Host == host })
+		registries = slices.Clone(u.Spec.Registries)
 		if found = len(u.Spec.Registries) != n; !found {
 			return nil
 		}
 		u.Spec.RegistryAuth = slices.DeleteFunc(u.Spec.RegistryAuth, func(a devpodv1alpha1.UserRegistryAuth) bool { return a.Host == host })
-		registries = slices.Clone(u.Spec.Registries)
 		return s.Client.Update(r.Context(), &u)
 	})
 	switch {
 	case err != nil:
 		s.writeErr(w, http.StatusInternalServerError, "INTERNAL", "could not remove the credential", nil)
-	case !found:
+	case !found && s.Clusters == nil:
 		s.writeErr(w, http.StatusNotFound, "NOT_FOUND", "no such registry", nil)
 	case s.Clusters != nil:
+		// also when the console no longer lists it: a cluster that was
+		// away when it was removed is told now
 		s.writeJSON(w, http.StatusOK, map[string]any{"clusters": s.projectRegistries(r.Context(), sess.User, registries, nil)})
 	default:
 		w.WriteHeader(http.StatusNoContent)

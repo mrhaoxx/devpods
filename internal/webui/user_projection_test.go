@@ -170,7 +170,7 @@ func TestUsersAcrossClusters(t *testing.T) {
 	}
 
 	// a token for one cluster
-	code, out, _ = w.call("gl-alice", "POST", "/api/me/tokens", `{"name":"only-a","scopes":["devpods:read","devpods:create"],"clusters":["a"]}`)
+	code, out, _ = w.call("gl-alice", "POST", "/api/me/tokens", `{"name":"only-a","scopes":["devpods:read","devpods:create","registries:write"],"clusters":["a"]}`)
 	token, _ := out["token"].(string)
 	if code != http.StatusCreated || token == "" {
 		t.Fatalf("create a token: %d %v", code, out)
@@ -203,6 +203,19 @@ func TestUsersAcrossClusters(t *testing.T) {
 	if len(items(out)) != 2 {
 		t.Fatalf("the token's list: %v", items(out))
 	}
+	// a credential saved with it goes where the token reaches
+	code, out = bearer("PUT", "/api/me/registries/third.example.com", `{"username":"alice","password":"s3cret-three"}`)
+	if cl, _ := out["clusters"].(map[string]any); code != http.StatusOK || cl["a"] != "ok" || len(cl) != 1 {
+		t.Fatalf("a credential saved with a token for cluster a: %d %v", code, out)
+	}
+	if got := hosts(userIn(t, w.b, "gl-alice")); strings.Contains(got, "third.example.com") {
+		t.Fatalf("the token for a wrote to b: %s", got)
+	}
+	// removing what is already gone at the console still tells the clusters
+	if code, out, _ := w.call("gl-alice", "DELETE", "/api/me/registries/reg.example.com", ""); code != http.StatusOK || out["clusters"] == nil {
+		t.Fatalf("a removal said again: %d %v", code, out)
+	}
+
 	// b's DevPod by name alone: not there for this token
 	if code, _ := bearer("GET", "/api/devpods/gl-alice-q1", ""); code != http.StatusOK {
 		t.Fatalf("a's q1 by name (b's is out of the token's reach, so the name is not ambiguous): %d", code)
