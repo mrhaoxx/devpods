@@ -102,6 +102,7 @@ func main() {
 	snf := addSnapshotFlags(flag.CommandLine)
 	rf := addReservationFlags(flag.CommandLine)
 	wf := addWebshellFlags(flag.CommandLine)
+	clf := addClusterFlags(flag.CommandLine)
 	gcName := flag.String("gateway-config-name", "default", "GatewayConfig holding the cluster default audit policy")
 	flag.Parse()
 
@@ -265,6 +266,9 @@ func main() {
 		os.Exit(1)
 	}
 	if srv.Webshell, err = wf.build(); err != nil {
+		fatal(err)
+	}
+	if srv.Clusters, err = clf.build(ctx, mgr.GetClient(), mgr.GetAPIReader(), scheme, devpodNamespace); err != nil {
 		fatal(err)
 	}
 
