@@ -23,6 +23,39 @@ commands.
 Live metrics need the telemetry agent, which ships in the supervisor: a
 DevPod starts reporting when its Pod is next recreated.
 
+## Several clusters
+
+One console can manage DevPods in several clusters, and one SSH gateway
+can serve them all. Nothing dials into a cluster: each cluster runs an
+**agent** that dials out.
+
+    console  ◀── agents (Kubernetes requests, what the cluster is)
+       ▲  ◀── gateway (signed questions: which DevPod is this login? whose key is this?)
+       │
+    gateway  ◀── agents (connections to DevPods: sshd, port links)
+
+- **The console's release** — `webui.enabled`, `webui.clusters.enabled`.
+  Under 集群, an admin registers each cluster and each gateway; either
+  is shown a join token once, with the `helm` command to run.
+- **A managed cluster's release** — `webui.enabled=false`,
+  `agent.enabled`, `agent.cluster`, `agent.console`, `agent.joinToken`:
+  the controller and the agent. The agent's service account is what the
+  console can do in that cluster (DevPods, their Pods and events, nodes,
+  reservations; no Secrets), and a gateway gets connections to running
+  DevPods only. `agent.telemetry.url` passes the DevPods' telemetry on to
+  the console.
+- **A gateway of several clusters** — `gateway.hub.enabled`,
+  `gateway.hub.name`, `gateway.hub.console`, `gateway.hub.joinToken`, and
+  a route (TLS, long-lived connections) to the Service
+  `devpod-gateway-agents` for the agents. Users log in with
+  `<user>+<devpod>[+<cluster>]`.
+
+Users, access tokens and saved configs are the console's; quotas are per
+cluster. While a cluster's agent is away the console shows its last
+known state and refuses changes to it; its DevPods keep running. A
+release without any of these values is what it was: one cluster, with
+its own console and gateway. See `docs/api.md` for the API.
+
 ## Commands
 
     # Build all binaries

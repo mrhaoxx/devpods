@@ -46,6 +46,7 @@ export function SessionsPage({ mine }: { mine?: boolean }) {
       cell: ({ row: { original: s } }) => (
         <Link to={`/devpods/${s.devpod}`} className="hover:text-accent">
           {s.devpod}
+          {s.cluster && <span className="ml-1.5 text-faint">· {s.cluster}</span>}
         </Link>
       ),
     },

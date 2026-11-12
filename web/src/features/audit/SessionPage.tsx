@@ -131,6 +131,11 @@ export function SessionPage() {
             {s.devpod}
           </Link>
         </span>
+        {(q.data.cluster || q.data.gateway) && (
+          <span>
+            集群 <span className="mono text-ink">{q.data.cluster || "—"}</span> · 经网关 <span className="mono text-ink">{q.data.gateway || "—"}</span>
+          </span>
+        )}
         <span>
           来源 <span className="mono text-ink">{s.client_ip}</span> · {s.proxy_alias ? `${s.proxy_alias}/` : ""}
           {s.auth_kind}
