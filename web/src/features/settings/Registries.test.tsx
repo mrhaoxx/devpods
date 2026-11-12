@@ -85,6 +85,24 @@ describe("Registries", () => {
     expect(gets()).toBe(3); // landed: polling stopped
   });
 
+  it("says which clusters a credential did not reach", async () => {
+    stubFetch({
+      "/api/me/registries": { items: [] },
+      "PUT /api/me/registries/harbor.example.com": { items: [], clusters: { mulan: "ok", st2: "offline", st3: "failed" } },
+    });
+    renderWithProviders(<Registries />);
+    await screen.findByText("还没有保存任何仓库凭证。");
+    fireEvent.change(screen.getByLabelText("仓库地址"), { target: { value: "harbor.example.com" } });
+    fireEvent.change(screen.getByLabelText("仓库用户名"), { target: { value: "robot" } });
+    fireEvent.change(screen.getByLabelText("仓库密码"), { target: { value: "s3cret" } });
+    fireEvent.click(screen.getByRole("button", { name: "添加凭证" }));
+    const note = await screen.findByText(/没有写入/);
+    expect(note.textContent).toContain("st2");
+    expect(note.textContent).toContain("st3");
+    expect(note.textContent).not.toContain("mulan");
+    expect(note.textContent).toContain("重新保存");
+  });
+
   it("a failed save shows the server's message and keeps the form", async () => {
     stubFetch({
       "/api/me/registries": { items: [] },

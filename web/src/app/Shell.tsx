@@ -9,12 +9,23 @@ import { Topbar } from "./Topbar";
 import { ReconnectBar } from "./ReconnectBar";
 import { EmptyState } from "../design/EmptyState";
 import { CommandPalette } from "../features/search/CommandPalette";
+import { ClusterGate, StaleBar } from "../features/clusters/ClusterSwitcher";
+import type { Me } from "../data/api";
 
 export function Shell() {
   const me = useMe();
   const [menu, setMenu] = useState(false);
   if (me.isError) return <EmptyState tone="error" title="无法加载账户信息" hint={String(me.error)} />;
   if (!me.data) return null;
+  return (
+    <ClusterGate>
+      <ShellBody me={me.data} menu={menu} setMenu={setMenu} />
+    </ClusterGate>
+  );
+}
+
+function ShellBody({ me: data, menu, setMenu }: { me: Me; menu: boolean; setMenu: (o: boolean) => void }) {
+  const me = { data };
   return (
     <LiveEnabled enabled={!!me.data.features.telemetry}>
       <div className="flex h-dvh overflow-hidden">
@@ -32,6 +43,7 @@ export function Shell() {
         </Dialog.Root>
         <div className="flex min-w-0 flex-1 flex-col">
           <ReconnectBar />
+          <StaleBar />
           <Topbar me={me.data} onMenu={() => setMenu(true)} />
           <main className="relative min-h-0 flex-1 overflow-y-auto overflow-x-hidden">
             <Outlet />

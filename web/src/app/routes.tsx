@@ -1,5 +1,6 @@
 // Route table (UI spec §4.2). Pages whose console version has not landed
 // yet still render their phase-1 component inside the shell.
+import { ClustersPage } from "../features/clusters/ClustersPage";
 import { Navigate, Route, Routes, useParams } from "react-router-dom";
 import { Shell } from "./Shell";
 import { LoginPage } from "./LoginPage";
@@ -65,6 +66,7 @@ export function AppRoutes() {
           <Route path="admin/nodes" element={<NodesPage />} />
           <Route path="admin/topology" element={<Navigate to="/admin/nodes" replace />} />
           <Route path="admin/users" element={<UsersPage />} />
+          <Route path="admin/clusters" element={<ClustersPage />} />
         </Route>
         <Route path="*" element={<Navigate to="/" replace />} />
       </Route>

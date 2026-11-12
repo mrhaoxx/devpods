@@ -35,13 +35,16 @@ export function Registries() {
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [remove, setRemove] = useState<RegistryView | null>(null);
+  const [missed, setMissed] = useState<string[]>([]);
   const refresh = () => void qc.invalidateQueries({ queryKey: registriesKey });
   const save = useMutation({
     mutationFn: (v: { host: string; username: string; password: string }) => putRegistry(v.host, { username: v.username, password: v.password }),
-    onSuccess: () => {
+    onSuccess: (answer) => {
       setHost("");
       setUsername("");
       setPassword(""); // sent once; not kept in the page
+      // with several clusters the credential goes to those connected right now
+      setMissed(Object.entries(answer?.clusters ?? {}).flatMap(([c, state]) => (state === "ok" ? [] : [c])));
       refresh();
     },
   });
@@ -59,6 +62,9 @@ export function Registries() {
         用于拉取你的 DevPod 用到的私有镜像，也用于「保存为镜像」时推送到同一个仓库。密码保存在集群里，之后不会再显示；添加或删除只影响之后启动的 DevPod。
       </p>
       {q.isError && <Notice>加载失败：{errText(q.error)}</Notice>}
+      {missed.length > 0 && (
+        <Notice tone="warm">凭证已保存，但没有写入这些集群（当时离线或写入失败）：{missed.join("、")}。它们恢复后请在这里重新保存一次。</Notice>
+      )}
       {items.length > 0 && (
         <table className="w-full border-collapse" aria-label="已保存的仓库">
           <thead>

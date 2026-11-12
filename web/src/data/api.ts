@@ -1,3 +1,5 @@
+import { apiPath, currentCluster, noteStale } from "./cluster";
+
 export interface ApiError {
   code: string;
   message: string;
@@ -21,11 +23,14 @@ export type ReqOptions = { raw?: { body: BodyInit; contentType: string } };
 /** req calls the API; non-2xx answers throw ApiFailure (a body that is
  *  not JSON — a proxy error page — becomes code HTTP_<status>). */
 export async function req<T>(method: string, path: string, body?: unknown, opts: ReqOptions = {}): Promise<T> {
-  const resp = await fetch(path, {
+  const url = apiPath(path);
+  const resp = await fetch(url, {
     method,
     headers: opts.raw ? { "Content-Type": opts.raw.contentType } : body !== undefined ? { "Content-Type": "application/json" } : undefined,
     body: opts.raw ? opts.raw.body : body !== undefined ? JSON.stringify(body) : undefined,
   });
+  // an answer of the cluster in use says whether it is that cluster's last known state
+  if (url !== path) noteStale(resp.headers?.get?.("X-DevPod-Stale-Since") ?? null);
   if (resp.status === 401 && !path.startsWith("/api/auth/")) {
     window.location.href = "/login";
     throw new ApiFailure(401, { code: "UNAUTHORIZED", message: "not logged in" });
@@ -50,9 +55,11 @@ export interface Me {
   nameBudget: number;
   quota: { maxDevPods?: number; compute?: Record<string, string>; storage?: string };
   usage: { devpods: number; running: number; compute: Record<string, string>; storage: string };
-  features: { pubkeySelfService: boolean; kore: boolean; passwordAuth: boolean; audit?: boolean; telemetry?: boolean; reservations?: boolean; webshell?: boolean; httpProxy?: boolean; snapshots?: boolean; snapshotDefaultRegistry?: boolean };
+  features: { pubkeySelfService: boolean; kore: boolean; passwordAuth: boolean; audit?: boolean; telemetry?: boolean; reservations?: boolean; clusters?: boolean; webshell?: boolean; httpProxy?: boolean; snapshots?: boolean; snapshotDefaultRegistry?: boolean };
   hasPassword: boolean;
   ssh: { host: string; port: number; loginSuffix?: string };
+  /** per cluster, in a console of several */
+  clusters?: Record<string, { quota: Me["quota"]; usage: Me["usage"] }>;
 }
 
 // sshUser builds the login string: "<owner>+<pod>" plus an optional
@@ -211,7 +218,13 @@ export type BindingInfo = {
   poolSize?: string;
 };
 
-export const me = () => req<Me>("GET", "/api/me");
+/** me: who I am. In a console of several clusters, the quota and usage
+ *  are those of the cluster in use. */
+export const me = async () => {
+  const m = await req<Me>("GET", "/api/me");
+  const mine = m.clusters?.[currentCluster()];
+  return mine ? { ...m, quota: mine.quota, usage: mine.usage } : m;
+};
 export type DevPodList = { items: DevPod[]; pods: Record<string, PodInfo> };
 export const listDevPods = (scope: "mine" | "all" = "mine") =>
   req<DevPodList>("GET", scope === "all" ? "/api/devpods?scope=all" : "/api/devpods");
@@ -391,7 +404,7 @@ export const search = (q: string) => req<SearchResult>("GET", `/api/search?q=${e
 export const shellPath = (name: string) => `/devpods/${name}/shell`;
 /** shellSocketURL: the terminal WebSocket (UI spec §5.12). */
 export const shellSocketURL = (name: string, cols: number, rows: number, loc: Pick<Location, "protocol" | "host"> = window.location) =>
-  `${loc.protocol === "https:" ? "wss" : "ws"}://${loc.host}/api/devpods/${name}/shell?cols=${cols}&rows=${rows}`;
+  `${loc.protocol === "https:" ? "wss" : "ws"}://${loc.host}${apiPath(`/api/devpods/${name}/shell`)}?cols=${cols}&rows=${rows}`;
 /** probeShell asks why a terminal cannot be opened (a failed WebSocket handshake hides its status). */
 export const probeShell = (name: string) => req<void>("GET", `/api/devpods/${name}/shell?probe=1`);
 
@@ -537,7 +550,7 @@ export function streamSnapshotProgress(id: string, onEvent: (p: SnapshotProgress
   const ctl = new AbortController();
   void (async () => {
     try {
-      const resp = await fetchFn(`/api/snapshots/${id}/progress`, { signal: ctl.signal, credentials: "same-origin" });
+      const resp = await fetchFn(apiPath(`/api/snapshots/${id}/progress`), { signal: ctl.signal, credentials: "same-origin" });
       if (!resp.ok || !resp.body) return onEnd(false);
       const reader = resp.body.getReader();
       const dec = new TextDecoder();
@@ -571,5 +584,7 @@ export function streamSnapshotProgress(id: string, onEvent: (p: SnapshotProgress
  * images for the user's DevPods and to push snapshots to that registry */
 export type RegistryView = { host: string; username: string; pending: boolean };
 export const listRegistries = () => req<{ items: RegistryView[] }>("GET", "/api/me/registries");
-export const putRegistry = (host: string, body: { username: string; password: string }) => req<void>("PUT", `/api/me/registries/${encodeURIComponent(host)}`, body);
+/** clusters (a console of several): cluster → ok | offline | failed, where the credential went. */
+export const putRegistry = (host: string, body: { username: string; password: string }) =>
+  req<{ clusters?: Record<string, string> } | undefined>("PUT", `/api/me/registries/${encodeURIComponent(host)}`, body);
 export const deleteRegistry = (host: string) => req<void>("DELETE", `/api/me/registries/${encodeURIComponent(host)}`);

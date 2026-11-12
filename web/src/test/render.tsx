@@ -24,13 +24,16 @@ export const stubMe = (over: Partial<Me> = {}): Me => ({
 
 /** hub: a LiveHub (over a fake OpenSSE) for components with live data;
  *  without one, live data is disabled. */
-export type RenderOptions = { route?: string; me?: Me | null; client?: QueryClient; hub?: LiveHub; liveEnabled?: boolean };
+/** clusters: what GET /api/clusters is taken to have answered (default:
+ *  none — a console of one cluster); null leaves it to be fetched. */
+export type RenderOptions = { route?: string; me?: Me | null; client?: QueryClient; hub?: LiveHub; liveEnabled?: boolean; clusters?: unknown[] | null };
 
 export function renderWithProviders(ui: ReactElement, opts: RenderOptions = {}) {
   const client =
     opts.client ??
     new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: Infinity }, mutations: { retry: false } } });
   if (opts.me !== null) client.setQueryData(["me"], opts.me ?? stubMe());
+  if (opts.clusters !== null) client.setQueryData(["clusters"], { items: opts.clusters ?? [] });
   const result = render(
     <QueryClientProvider client={client}>
       <LiveHubProvider hub={opts.hub ?? new LiveHub({ open: () => () => {} })} enabled={opts.liveEnabled ?? !!opts.hub}>

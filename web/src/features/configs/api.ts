@@ -1,3 +1,4 @@
+import { apiPath } from "../../data/cluster";
 // Saved configs (internal/webui/api_configs.go, config_launch.go): DevPod
 // YAML with variables, kept per user, shared or public, launched as one
 // DevPod or several.
@@ -45,7 +46,7 @@ export type LaunchResult = { status: 200 | 207 | 422; items: LaunchItem[] };
 /** launchConfig creates DevPods from a config. The three answers that
  *  carry per-DevPod outcomes are returned; anything else throws. */
 export async function launchConfig(name: string, body: LaunchBody): Promise<LaunchResult> {
-  const resp = await fetch(`${path(name)}/launch`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+  const resp = await fetch(apiPath(`${path(name)}/launch`), { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
   if (resp.status === 401) {
     window.location.href = "/login";
     throw new ApiFailure(401, { code: "UNAUTHORIZED", message: "not logged in" });

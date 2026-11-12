@@ -76,6 +76,7 @@ export function Sidebar({ me, onNavigate }: { me: Me; onNavigate?: () => void })
     { to: "/admin/devpods", label: "全部 DevPod", icon: "▤", count: all.data ? `${running}/${allItems.length}` : undefined },
     { to: "/admin/nodes", label: "节点", icon: "⬡", count: nodes.data ? String(nodes.data.items.length) : undefined },
     { to: "/admin/users", label: "用户与配额", icon: "☺", count: users.data ? String(users.data.items.length) : undefined },
+    ...(me.features.clusters ? [{ to: "/admin/clusters", label: "集群", icon: "◈" }] : []),
   ];
   const auditItems: Item[] = [
     { to: "/audit/sessions", label: "会话 / 回放", icon: "▶" },

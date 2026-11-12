@@ -1,3 +1,4 @@
+import { apiPath } from "./cluster";
 // Server-sent events with reconnect (UI spec §6.1: every stream sends a
 // full snapshot each second, so a reconnect needs no catch-up).
 import type { DevPod, DevPodDetail, K8sEvent, PodInfo } from "./api";
@@ -63,7 +64,7 @@ export function makeOpenSSE(ES: typeof EventSource): OpenSSE {
   };
 }
 
-export const openSSE: OpenSSE = (url, h) => makeOpenSSE(EventSource)(url, h);
+export const openSSE: OpenSSE = (url, h) => makeOpenSSE(EventSource)(apiPath(url), h);
 
 const quiet: Omit<SseHandlers, "onMessage"> = { onNamed() {}, onOpen() {}, onError() {} };
 
