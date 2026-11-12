@@ -64,6 +64,12 @@ type APIToken struct {
 	// +optional
 	DevPods []string `json:"devpods,omitempty"`
 
+	// Clusters restricts the token to these clusters, in a console of
+	// several. Empty = every cluster.
+	//
+	// +optional
+	Clusters []string `json:"clusters,omitempty"`
+
 	CreatedAt metav1.Time `json:"createdAt"`
 
 	// ExpiresAt ends the token's validity. nil = never.
@@ -130,6 +136,13 @@ type UserSpec struct {
 	//
 	// +optional
 	Quota *UserQuota `json:"quota,omitempty"`
+
+	// Quotas are this user's caps in single clusters, by cluster name, in
+	// a console of several. A field unset here falls back to Quota, then
+	// to the cluster's default, then to the console's.
+	//
+	// +optional
+	Quotas map[string]UserQuota `json:"quotas,omitempty"`
 
 	// PasswordHash is a bcrypt hash of the user's password. Set = this
 	// user may log in to the web UI with a password. Never returned by

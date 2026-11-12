@@ -203,6 +203,8 @@ type TokenGrant struct {
 	ID      string
 	Scopes  []string
 	DevPods []string // non-empty: only these DevPods
+	// Clusters, non-empty: only these clusters, in a console of several.
+	Clusters []string
 }
 
 func (g *TokenGrant) has(scope string) bool { return slices.Contains(g.Scopes, scope) }
@@ -279,7 +281,10 @@ func (s *Server) bearerSession(w http.ResponseWriter, r *http.Request, bearer st
 	if tok.ExpiresAt != nil && !time.Now().Before(tok.ExpiresAt.Time) {
 		return deny("this token has expired")
 	}
-	g := &TokenGrant{ID: tok.ID, Scopes: tok.Scopes, DevPods: tok.DevPods}
+	g := &TokenGrant{ID: tok.ID, Scopes: tok.Scopes, DevPods: tok.DevPods, Clusters: tok.Clusters}
+	if !s.limitClusters(w, r, g.Clusters) {
+		return Session{}, false
+	}
 	need, listed := routeScope[r.Pattern]
 	switch {
 	case !listed || need == scopeNone:
@@ -326,13 +331,14 @@ type tokenView struct {
 	Name      string     `json:"name"`
 	Scopes    []string   `json:"scopes"`
 	DevPods   []string   `json:"devpods"`
+	Clusters  []string   `json:"clusters,omitempty"`
 	CreatedAt time.Time  `json:"createdAt"`
 	ExpiresAt *time.Time `json:"expiresAt"`
 	Expired   bool       `json:"expired"`
 }
 
 func viewToken(t devpodv1alpha1.APIToken, now time.Time) tokenView {
-	v := tokenView{ID: t.ID, Name: t.Name, Scopes: append([]string{}, t.Scopes...), DevPods: append([]string{}, t.DevPods...), CreatedAt: t.CreatedAt.Time}
+	v := tokenView{ID: t.ID, Name: t.Name, Scopes: append([]string{}, t.Scopes...), DevPods: append([]string{}, t.DevPods...), Clusters: t.Clusters, CreatedAt: t.CreatedAt.Time}
 	if t.ExpiresAt != nil {
 		e := t.ExpiresAt.Time
 		v.ExpiresAt, v.Expired = &e, !now.Before(e)
@@ -384,6 +390,7 @@ func (s *Server) handleCreateToken(w http.ResponseWriter, r *http.Request) {
 		Name          string   `json:"name"`
 		Scopes        []string `json:"scopes"`
 		DevPods       []string `json:"devpods"`
+		Clusters      []string `json:"clusters"`
 		ExpiresInDays int      `json:"expiresInDays"` // 0 = never
 	}
 	dec := json.NewDecoder(r.Body)
@@ -420,10 +427,19 @@ func (s *Server) handleCreateToken(w http.ResponseWriter, r *http.Request) {
 		bad("a token limited to specific DevPods cannot carry admin scopes")
 		return
 	}
+	if len(req.Clusters) > 0 {
+		known := s.clusterNames(r.Context())
+		for _, c := range req.Clusters {
+			if s.Clusters == nil || !slices.Contains(known, c) {
+				bad(fmt.Sprintf("no cluster named %q", c))
+				return
+			}
+		}
+	}
 	id, secret := randString(10), randString(40)
 	now := time.Now()
 	tok := devpodv1alpha1.APIToken{ID: id, Name: req.Name, Hash: hashSecret(secret), Scopes: slices.Compact(slices.Sorted(slices.Values(req.Scopes))),
-		DevPods: slices.Compact(slices.Sorted(slices.Values(req.DevPods))), CreatedAt: metav1.NewTime(now.UTC().Truncate(time.Second))}
+		DevPods: slices.Compact(slices.Sorted(slices.Values(req.DevPods))), Clusters: slices.Compact(slices.Sorted(slices.Values(req.Clusters))), CreatedAt: metav1.NewTime(now.UTC().Truncate(time.Second))}
 	if req.ExpiresInDays > 0 {
 		e := metav1.NewTime(now.Add(time.Duration(req.ExpiresInDays) * 24 * time.Hour).UTC().Truncate(time.Second))
 		tok.ExpiresAt = &e

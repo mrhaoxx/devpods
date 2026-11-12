@@ -8,6 +8,7 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"slices"
 	"strings"
 	"time"
 
@@ -46,6 +47,8 @@ type scopeKey struct{}
 // reqScope is a request's cluster, once known.
 type reqScope struct {
 	cc *clusters.ClusterClients
+	// only, when set: the clusters the caller's token reaches.
+	only []string
 }
 
 // errClusterRequired is what k panics with; withCluster answers it.
@@ -90,9 +93,33 @@ func (s *Server) ksc(ctx context.Context) []*clusters.ClusterClients {
 	if sc, _ := ctx.Value(scopeKey{}).(*reqScope); sc != nil && sc.cc != nil {
 		return []*clusters.ClusterClients{sc.cc}
 	}
+	sc, _ := ctx.Value(scopeKey{}).(*reqScope)
 	var all []*clusters.ClusterClients
-	s.Clusters.Each(func(cc *clusters.ClusterClients) { all = append(all, cc) })
+	s.Clusters.Each(func(cc *clusters.ClusterClients) {
+		if sc == nil || len(sc.only) == 0 || slices.Contains(sc.only, cc.Name) {
+			all = append(all, cc)
+		}
+	})
 	return all
+}
+
+// limitClusters holds a request to the clusters its token names: one
+// that is about another cluster is answered as if that cluster did not
+// exist, and what covers every cluster covers these.
+func (s *Server) limitClusters(w http.ResponseWriter, r *http.Request, only []string) bool {
+	if s.Clusters == nil || len(only) == 0 {
+		return true
+	}
+	sc, _ := r.Context().Value(scopeKey{}).(*reqScope)
+	if sc == nil {
+		return true
+	}
+	if sc.cc != nil && !slices.Contains(only, sc.cc.Name) {
+		s.writeErr(w, http.StatusNotFound, "UNKNOWN_CLUSTER", "no cluster named "+sc.cc.Name, nil)
+		return false
+	}
+	sc.only = only
+	return true
 }
 
 // staleOf reports the clusters among ccs whose agent is away, and marks

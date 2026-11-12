@@ -27,6 +27,11 @@ func (in *APIToken) DeepCopyInto(out *APIToken) {
 		*out = make([]string, len(*in))
 		copy(*out, *in)
 	}
+	if in.Clusters != nil {
+		in, out := &in.Clusters, &out.Clusters
+		*out = make([]string, len(*in))
+		copy(*out, *in)
+	}
 	in.CreatedAt.DeepCopyInto(&out.CreatedAt)
 	if in.ExpiresAt != nil {
 		in, out := &in.ExpiresAt, &out.ExpiresAt
@@ -1298,6 +1303,13 @@ func (in *UserSpec) DeepCopyInto(out *UserSpec) {
 		in, out := &in.Quota, &out.Quota
 		*out = new(UserQuota)
 		(*in).DeepCopyInto(*out)
+	}
+	if in.Quotas != nil {
+		in, out := &in.Quotas, &out.Quotas
+		*out = make(map[string]UserQuota, len(*in))
+		for key, val := range *in {
+			(*out)[key] = *val.DeepCopy()
+		}
 	}
 	if in.APITokens != nil {
 		in, out := &in.APITokens, &out.APITokens

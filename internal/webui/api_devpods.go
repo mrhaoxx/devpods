@@ -239,7 +239,7 @@ func (s *Server) quotaErrFor(r *http.Request, sess Session, proposed *devpodv1al
 	for _, dp := range pending {
 		existing = append(existing, *dp)
 	}
-	if qErr := CheckQuota(EffectiveQuota(userPtr, s.clusterQuota(r.Context(), cc)), existing, proposed); qErr != nil {
+	if qErr := CheckQuota(EffectiveQuota(userPtr, cc.Name, s.clusterQuota(r.Context(), cc)), existing, proposed); qErr != nil {
 		return &serverErr{http.StatusConflict, "QUOTA_EXCEEDED", qErr.Error(), qErr.Violations}
 	}
 	return nil

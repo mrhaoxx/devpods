@@ -38,22 +38,32 @@ func (e *QuotaError) Error() string {
 	return "quota exceeded: " + strings.Join(parts, "; ")
 }
 
-// EffectiveQuota resolves a user's quota field-wise against the
-// global defaults: any unset field falls back.
-func EffectiveQuota(u *devpodv1alpha1.User, def devpodv1alpha1.UserQuota) devpodv1alpha1.UserQuota {
+// EffectiveQuota resolves a user's quota in a cluster, field-wise: the
+// user's entry for that cluster, else the user's own quota, else def (the
+// cluster's default, or the console's). cluster is empty in a console of
+// one cluster.
+func EffectiveQuota(u *devpodv1alpha1.User, cluster string, def devpodv1alpha1.UserQuota) devpodv1alpha1.UserQuota {
 	out := def
-	if u == nil || u.Spec.Quota == nil {
+	if u == nil {
 		return out
 	}
-	q := u.Spec.Quota
-	if q.MaxDevPods != nil {
-		out.MaxDevPods = q.MaxDevPods
+	over := func(q *devpodv1alpha1.UserQuota) {
+		if q == nil {
+			return
+		}
+		if q.MaxDevPods != nil {
+			out.MaxDevPods = q.MaxDevPods
+		}
+		if q.Compute != nil {
+			out.Compute = q.Compute
+		}
+		if q.Storage != nil {
+			out.Storage = q.Storage
+		}
 	}
-	if q.Compute != nil {
-		out.Compute = q.Compute
-	}
-	if q.Storage != nil {
-		out.Storage = q.Storage
+	over(u.Spec.Quota)
+	if q, ok := u.Spec.Quotas[cluster]; ok && cluster != "" {
+		over(&q)
 	}
 	return out
 }

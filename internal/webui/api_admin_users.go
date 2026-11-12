@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"slices"
 	"sort"
 	"time"
 
@@ -52,6 +53,8 @@ type adminUser struct {
 	Running     int                       `json:"running"`
 	Usage       adminUsage                `json:"usage"`
 	Quota       *devpodv1alpha1.UserQuota `json:"quota,omitempty"`
+	// Quotas: per cluster, in a console of several.
+	Quotas map[string]devpodv1alpha1.UserQuota `json:"quotas,omitempty"`
 	// LiveUsage is measured usage from the live layer (absent without it).
 	LiveUsage *liveUsage `json:"liveUsage,omitempty"`
 	// LastSession is the user's latest SSH session (absent without ClickHouse).
@@ -148,6 +151,7 @@ func (s *Server) handleListUsers(w http.ResponseWriter, r *http.Request) {
 			Admin:        s.adminFor(u.Name, &u),
 			HasPassword:  u.Spec.PasswordHash != "",
 			Quota:        u.Spec.Quota,
+			Quotas:       u.Spec.Quotas,
 			Source:       userSource(&u),
 			CustomPolicy: u.Spec.AuditPolicy != nil,
 			Pubkeys:      len(u.Spec.Pubkeys),
@@ -239,7 +243,10 @@ func (s *Server) handlePatchUser(w http.ResponseWriter, r *http.Request) {
 		Password    *string     `json:"password,omitempty"`
 		DisplayName *string     `json:"displayName,omitempty"`
 		Quota       *quotaPatch `json:"quota,omitempty"`
-		Admin       *bool       `json:"admin,omitempty"`
+		// Quotas: per cluster, in a console of several; an empty entry
+		// removes that cluster's.
+		Quotas map[string]*quotaPatch `json:"quotas,omitempty"`
+		Admin  *bool                  `json:"admin,omitempty"`
 	}
 	dec := json.NewDecoder(r.Body)
 	dec.DisallowUnknownFields()
@@ -275,7 +282,36 @@ func (s *Server) handlePatchUser(w http.ResponseWriter, r *http.Request) {
 		}
 		quota = q
 	}
+	quotas := map[string]*devpodv1alpha1.UserQuota{}
+	if len(req.Quotas) > 0 {
+		known := s.clusterNames(r.Context())
+		for cluster, p := range req.Quotas {
+			if s.Clusters == nil || !slices.Contains(known, cluster) {
+				s.writeErr(w, http.StatusBadRequest, "BAD_REQUEST", "no cluster named "+cluster, nil)
+				return
+			}
+			if p == nil {
+				p = &quotaPatch{}
+			}
+			q, err := p.build()
+			if err != nil {
+				s.writeErr(w, http.StatusBadRequest, "BAD_REQUEST", cluster+": "+err.Error(), nil)
+				return
+			}
+			quotas[cluster] = q
+		}
+	}
 	err := s.updateUser(r.Context(), name, func(u *devpodv1alpha1.User) error {
+		for cluster, q := range quotas {
+			if q == nil {
+				delete(u.Spec.Quotas, cluster)
+				continue
+			}
+			if u.Spec.Quotas == nil {
+				u.Spec.Quotas = map[string]devpodv1alpha1.UserQuota{}
+			}
+			u.Spec.Quotas[cluster] = *q
+		}
 		if req.Password != nil {
 			u.Spec.PasswordHash = hash
 		}

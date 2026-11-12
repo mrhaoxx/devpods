@@ -174,7 +174,7 @@ func (li *LiveInputs) Build(ctx context.Context) live.Inputs {
 		}
 	}
 	for owner := range owners {
-		q := EffectiveQuota(byName[owner], s.DefaultQuota)
+		q := EffectiveQuota(byName[owner], "", s.DefaultQuota)
 		in.Quotas[owner] = live.Quota{CPU: cores(q.Compute), Mem: bytesOf(q.Compute), GPU: gpus(q.Compute)}
 	}
 

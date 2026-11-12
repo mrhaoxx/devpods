@@ -137,11 +137,11 @@ func TestCheckQuota_NoLimitsCountsAsNothing(t *testing.T) {
 
 func TestEffectiveQuota(t *testing.T) {
 	def := quota(3, "8", "16Gi", "50Gi")
-	if got := webui.EffectiveQuota(&devpodv1alpha1.User{}, def); got.Compute.Cpu().String() != "8" {
+	if got := webui.EffectiveQuota(&devpodv1alpha1.User{}, "", def); got.Compute.Cpu().String() != "8" {
 		t.Fatalf("nil quota should fall back to defaults, got %+v", got)
 	}
 	u := &devpodv1alpha1.User{Spec: devpodv1alpha1.UserSpec{Quota: &devpodv1alpha1.UserQuota{MaxDevPods: ptr.To(int32(1))}}}
-	got := webui.EffectiveQuota(u, def)
+	got := webui.EffectiveQuota(u, "", def)
 	if *got.MaxDevPods != 1 {
 		t.Fatalf("explicit maxDevPods should win, got %d", *got.MaxDevPods)
 	}

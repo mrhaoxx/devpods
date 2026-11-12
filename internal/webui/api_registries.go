@@ -114,6 +114,7 @@ func (s *Server) handlePutRegistry(w http.ResponseWriter, r *http.Request) {
 	}
 	full := false
 	var out []registryView
+	var registries []devpodv1alpha1.UserRegistry
 	err := retry.RetryOnConflict(retry.DefaultRetry, func() error {
 		var u devpodv1alpha1.User
 		if err := s.ownUser(r.Context(), sess.User, true, &u); err != nil {
@@ -129,8 +130,10 @@ func (s *Server) handlePutRegistry(w http.ResponseWriter, r *http.Request) {
 			u.Spec.Registries[i].Username = req.Username
 		}
 		u.Spec.RegistryAuth = slices.DeleteFunc(u.Spec.RegistryAuth, func(a devpodv1alpha1.UserRegistryAuth) bool { return a.Host == host })
-		u.Spec.RegistryAuth = append(u.Spec.RegistryAuth, devpodv1alpha1.UserRegistryAuth{Host: host, Username: req.Username, Password: req.Password})
-		out = registryViews(&u)
+		if s.Clusters == nil { // with several clusters the password goes to them, not into the console's record
+			u.Spec.RegistryAuth = append(u.Spec.RegistryAuth, devpodv1alpha1.UserRegistryAuth{Host: host, Username: req.Username, Password: req.Password})
+		}
+		out, registries = registryViews(&u), slices.Clone(u.Spec.Registries)
 		return s.Client.Update(r.Context(), &u)
 	})
 	switch {
@@ -140,7 +143,13 @@ func (s *Server) handlePutRegistry(w http.ResponseWriter, r *http.Request) {
 	case full:
 		s.writeErr(w, http.StatusConflict, "TOO_MANY", fmt.Sprintf("at most %d registries; remove one first", maxRegistries), nil)
 	default:
-		s.writeJSON(w, http.StatusOK, map[string]any{"items": out})
+		answer := map[string]any{"items": out}
+		if s.Clusters != nil {
+			// cluster → ok | offline | failed: where the credential is now
+			answer["clusters"] = s.projectRegistries(r.Context(), sess.User, registries,
+				&devpodv1alpha1.UserRegistryAuth{Host: host, Username: req.Username, Password: req.Password})
+		}
+		s.writeJSON(w, http.StatusOK, answer)
 	}
 }
 
@@ -152,6 +161,7 @@ func (s *Server) handleDeleteRegistry(w http.ResponseWriter, r *http.Request) {
 	}
 	host := normalizeRegistryHost(r.PathValue("host"))
 	found := false
+	var registries []devpodv1alpha1.UserRegistry
 	err := retry.RetryOnConflict(retry.DefaultRetry, func() error {
 		var u devpodv1alpha1.User
 		if err := s.ownUser(r.Context(), sess.User, false, &u); err != nil {
@@ -163,6 +173,7 @@ func (s *Server) handleDeleteRegistry(w http.ResponseWriter, r *http.Request) {
 			return nil
 		}
 		u.Spec.RegistryAuth = slices.DeleteFunc(u.Spec.RegistryAuth, func(a devpodv1alpha1.UserRegistryAuth) bool { return a.Host == host })
+		registries = slices.Clone(u.Spec.Registries)
 		return s.Client.Update(r.Context(), &u)
 	})
 	switch {
@@ -170,6 +181,8 @@ func (s *Server) handleDeleteRegistry(w http.ResponseWriter, r *http.Request) {
 		s.writeErr(w, http.StatusInternalServerError, "INTERNAL", "could not remove the credential", nil)
 	case !found:
 		s.writeErr(w, http.StatusNotFound, "NOT_FOUND", "no such registry", nil)
+	case s.Clusters != nil:
+		s.writeJSON(w, http.StatusOK, map[string]any{"clusters": s.projectRegistries(r.Context(), sess.User, registries, nil)})
 	default:
 		w.WriteHeader(http.StatusNoContent)
 	}

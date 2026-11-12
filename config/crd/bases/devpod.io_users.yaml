@@ -63,6 +63,13 @@ spec:
                     (dpt_<id>_<secret>) is shown once at creation; only the SHA-256 of the
                     secret is stored. Written only by the webui.
                   properties:
+                    clusters:
+                      description: |-
+                        Clusters restricts the token to these clusters, in a console of
+                        several. Empty = every cluster.
+                      items:
+                        type: string
+                      type: array
                     createdAt:
                       format: date-time
                       type: string
@@ -232,6 +239,47 @@ spec:
                       user's DevPods, hibernated included (PVCs survive hibernation).
                     pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
                     x-kubernetes-int-or-string: true
+                type: object
+              quotas:
+                additionalProperties:
+                  description: |-
+                    UserQuota caps aggregate resources across a User's DevPods. All
+                    fields are optional; absent fields fall back to the webui's global
+                    defaults. Enforced by the webui backend only — the controller and
+                    gateway ignore it entirely (UI-layer policy, not a security
+                    barrier; see the webui design spec §9).
+                  properties:
+                    compute:
+                      additionalProperties:
+                        anyOf:
+                        - type: integer
+                        - type: string
+                        pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                        x-kubernetes-int-or-string: true
+                      description: |-
+                        Compute caps the SUM of container resource limits (containers +
+                        initContainers) across the user's *running* DevPods. Keys: cpu,
+                        memory, and extended resources such as nvidia.com/gpu.
+                      type: object
+                    maxDevPods:
+                      description: MaxDevPods limits how many DevPod CRs the user
+                        may own.
+                      format: int32
+                      type: integer
+                    storage:
+                      anyOf:
+                      - type: integer
+                      - type: string
+                      description: |-
+                        Storage caps the SUM of spec.persistence.size across ALL of the
+                        user's DevPods, hibernated included (PVCs survive hibernation).
+                      pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                      x-kubernetes-int-or-string: true
+                  type: object
+                description: |-
+                  Quotas are this user's caps in single clusters, by cluster name, in
+                  a console of several. A field unset here falls back to Quota, then
+                  to the cluster's default, then to the console's.
                 type: object
               registries:
                 description: |-

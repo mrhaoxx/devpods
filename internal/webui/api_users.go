@@ -38,43 +38,63 @@ func (s *Server) handleMe(w http.ResponseWriter, r *http.Request) {
 	} else {
 		hasPassword = u.Spec.PasswordHash != ""
 	}
-	owned, err := s.ownedDevPods(r, sess.User)
+	owned, err := s.devPods(r, sess.User)
 	if err != nil {
 		s.writeErr(w, http.StatusInternalServerError, "INTERNAL", err.Error(), nil)
 		return
 	}
-
-	usage := usageInfo{DevPods: len(owned), Compute: map[string]string{}}
-	compute := corev1.ResourceList{}
-	storage := resource.Quantity{}
-	for _, dp := range owned {
-		if dp.Spec.Persistence != nil {
-			storage.Add(dp.Spec.Persistence.Size)
+	usageOf := func(cluster string, all bool) usageInfo {
+		usage := usageInfo{Compute: map[string]string{}}
+		compute := corev1.ResourceList{}
+		storage := resource.Quantity{}
+		for _, dp := range owned {
+			if !all && dp.Cluster != cluster {
+				continue
+			}
+			usage.DevPods++
+			if dp.Spec.Persistence != nil {
+				storage.Add(dp.Spec.Persistence.Size)
+			}
+			if !dp.Spec.Running || dp.Spec.Pod == nil {
+				continue
+			}
+			usage.Running++
+			for name, qty := range PodLimits(&dp.Spec.Pod.Spec) {
+				cur := compute[name]
+				cur.Add(qty)
+				compute[name] = cur
+			}
 		}
-		if !dp.Spec.Running || dp.Spec.Pod == nil {
-			continue
+		for name, qty := range compute {
+			usage.Compute[string(name)] = qty.String()
 		}
-		usage.Running++
-		for name, qty := range PodLimits(&dp.Spec.Pod.Spec) {
-			cur := compute[name]
-			cur.Add(qty)
-			compute[name] = cur
+		usage.Storage = storage.String()
+		return usage
+	}
+	usage := usageOf("", true)
+	// a quota is a cluster's: with several, each has its own count and cap
+	var perCluster map[string]any
+	if s.Clusters != nil {
+		perCluster = map[string]any{}
+		for _, cc := range s.ks(r) {
+			perCluster[cc.Name] = map[string]any{
+				"usage": usageOf(cc.Name, false),
+				"quota": EffectiveQuota(userPtr, cc.Name, s.clusterQuota(r.Context(), cc)),
+			}
 		}
 	}
-	for name, qty := range compute {
-		usage.Compute[string(name)] = qty.String()
-	}
-	usage.Storage = storage.String()
 
 	s.writeJSON(w, http.StatusOK, map[string]any{
 		"user":       sess.User,
 		"admin":      sess.Admin,
 		"nameBudget": NameBudget(sess.User),
-		"quota":      EffectiveQuota(userPtr, s.DefaultQuota),
+		"quota":      EffectiveQuota(userPtr, "", s.DefaultQuota),
 		"usage":      usage,
+		"clusters":   perCluster,
 		"features": map[string]any{
 			"pubkeySelfService": s.PubkeySelfService,
 			"kore":              s.KoreEnabled,
+			"clusters":          s.Clusters != nil,
 			"passwordAuth":      s.PasswordAuth,
 			"audit":             s.Audit != nil,
 			"telemetry":         s.Live != nil && s.Live.Hub != nil,
