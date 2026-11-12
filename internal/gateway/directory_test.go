@@ -109,14 +109,14 @@ func TestAuthenticate_SeveralClusters(t *testing.T) {
 }
 
 func TestDialer_DialInGoesThroughTheClusterDialer(t *testing.T) {
-	var gotCluster, gotAddr, gotPurpose string
+	var got gateway.Target
 	d := gateway.NewDialer(nil)
-	d.Net = func(_ context.Context, cluster, addr, purpose string) (net.Conn, error) {
-		gotCluster, gotAddr, gotPurpose = cluster, addr, purpose
+	d.Net = func(_ context.Context, t gateway.Target) (net.Conn, error) {
+		got = t
 		return nil, errors.New("no way there")
 	}
-	_, _, _, err := d.DialIn(context.Background(), "mulan", "10.0.0.1:22")
-	if err == nil || gotCluster != "mulan" || gotAddr != "10.0.0.1:22" || gotPurpose != gateway.PurposeSSH {
-		t.Fatalf("DialIn: %v %q %q %q", err, gotCluster, gotAddr, gotPurpose)
+	_, _, _, err := d.DialIn(context.Background(), gateway.Target{Cluster: "mulan", Addr: "10.0.0.1:22", DevPodUID: "uid-1", User: "alice"})
+	if want := (gateway.Target{Cluster: "mulan", Addr: "10.0.0.1:22", Purpose: gateway.PurposeSSH, DevPodUID: "uid-1", User: "alice"}); err == nil || got != want {
+		t.Fatalf("DialIn: %v %+v", err, got)
 	}
 }

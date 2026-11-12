@@ -37,6 +37,7 @@ const liveSizeScanSegments = 2
 
 // LiveSessions wires the relay; nil on Server disables live viewing.
 type LiveSessions struct {
+	links   *GatewayLinks // nil: every gateway is in this cluster
 	resolve func(ctx context.Context, gatewayPod string) (string, error)
 	key     string
 	client  *http.Client
@@ -221,7 +222,7 @@ func (s *Server) handleAuditLive(w http.ResponseWriter, r *http.Request) {
 	if !s.logAccess(w, r, sess.User, "watch_live", d.Session.SessionID, fmt.Sprintf("channel/%d", ch)) {
 		return
 	}
-	addr, err := ls.resolve(r.Context(), d.Session.GatewayPod)
+	addr, err := ls.addrOf(r.Context(), d.Gateway, d.Session.GatewayPod)
 	if err != nil {
 		s.writeErr(w, http.StatusServiceUnavailable, "LIVE_UNAVAILABLE", "the session's gateway cannot be reached: "+err.Error(), nil)
 		return

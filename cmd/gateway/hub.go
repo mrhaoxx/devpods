@@ -118,7 +118,7 @@ func (f *hubFlags) start(ctx context.Context, kc kubernetes.Interface) (*hub, er
 			}
 			for _, c := range known {
 				if c.Name == hello.Name {
-					return c.Name, agent.Verify(c.AgentPublicKey, nonce, proof)
+					return c.Name, agent.VerifyFor(c.AgentPublicKey, agent.AtGatewayContext(*f.name), nonce, proof)
 				}
 			}
 			return "", errors.New("no such cluster")
@@ -169,11 +169,13 @@ func (h *hub) report(ctx context.Context) {
 		}
 		slices.Sort(names)
 		rctx, cancel := context.WithTimeout(ctx, 10*time.Second)
-		if err := h.link.Report(rctx, gwlink.Report{Version: version, Clusters: names}); err != nil && !slices.Equal(names, last) {
-			slog.Warn("gateway_report", "err", err)
-		}
+		err := h.link.Report(rctx, gwlink.Report{Version: version, Clusters: names})
 		cancel()
-		last = names
+		if err != nil {
+			slog.Warn("gateway_report", "err", err)
+		} else {
+			last = names // what the console was told; a report that failed is said again soon
+		}
 		// a change is said soon, not at the next half minute
 		soon := time.NewTimer(2 * time.Second)
 	wait:
@@ -185,7 +187,12 @@ func (h *hub) report(ctx context.Context) {
 			case <-tick.C:
 				break wait
 			case <-soon.C:
-				if len(h.srv.Peers()) != len(last) {
+				now := make([]string, 0, len(last))
+				for name := range h.srv.Peers() {
+					now = append(now, name)
+				}
+				slices.Sort(now)
+				if !slices.Equal(now, last) {
 					break wait
 				}
 				soon.Reset(2 * time.Second)
@@ -234,10 +241,10 @@ func (h *hub) linkConsole(ctx context.Context, live http.Handler) {
 }
 
 // dial is the way to a DevPod's address: through its cluster's agent.
-func (h *hub) dial(ctx context.Context, cluster, addr, purpose string) (net.Conn, error) {
-	conn, err := h.srv.Dial(ctx, cluster, agent.DialPurpose(addr, purpose))
+func (h *hub) dial(ctx context.Context, t gateway.Target) (net.Conn, error) {
+	conn, err := h.srv.Dial(ctx, t.Cluster, agent.DialPurpose(t.Addr, t.Purpose, t.DevPodUID, t.User))
 	if errors.Is(err, tunnel.ErrPeerOffline) {
-		return nil, fmt.Errorf("cluster %q is not connected to this gateway", cluster)
+		return nil, fmt.Errorf("cluster %q is not connected to this gateway", t.Cluster)
 	}
 	if err != nil {
 		return nil, err

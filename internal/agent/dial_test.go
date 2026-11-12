@@ -13,12 +13,14 @@ import (
 	"net/http/httptest"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/types"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	"k8s.io/client-go/rest"
@@ -30,10 +32,10 @@ import (
 	"github.com/mrhaoxx/devpod/internal/tunnel"
 )
 
-func devpodAt(name, ns, endpoint string, phase devpodv1alpha1.DevPodPhase) *devpodv1alpha1.DevPod {
+func devpodAt(name, ns, endpoint string, phase devpodv1alpha1.DevPodPhase, collaborators ...string) *devpodv1alpha1.DevPod {
 	return &devpodv1alpha1.DevPod{
-		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: ns},
-		Spec: devpodv1alpha1.DevPodSpec{Owner: "alice", Running: true, Pod: &devpodv1alpha1.PodWorkloadSpec{Spec: corev1.PodSpec{
+		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: ns, UID: types.UID("uid-" + name)},
+		Spec: devpodv1alpha1.DevPodSpec{Owner: "alice", Collaborators: collaborators, Running: true, Pod: &devpodv1alpha1.PodWorkloadSpec{Spec: corev1.PodSpec{
 			Containers: []corev1.Container{{Name: "dev", Image: "x"}}}}},
 		Status: devpodv1alpha1.DevPodStatus{Phase: phase, Endpoint: endpoint},
 	}
@@ -47,42 +49,51 @@ func devpods(t *testing.T, objs ...client.Object) client.Reader {
 	return fake.NewClientBuilder().WithScheme(scheme).WithObjects(objs...).Build()
 }
 
-// What a gateway may be connected to: a running DevPod's sshd for SSH,
-// any other port of a running DevPod for HTTP — and nothing else in the
-// cluster.
+// What a gateway may be connected to is decided by what the agent knows
+// of the cluster now: the DevPod it names, running, at that address; its
+// sshd for SSH and for someone who may log in to it; any other of its
+// ports for HTTP — and nothing else in the cluster.
 func TestDialRule(t *testing.T) {
 	r := devpods(t,
-		devpodAt("alice-a", "devpods", "10.0.0.5:22", devpodv1alpha1.DevPodRunning),
+		devpodAt("alice-a", "devpods", "10.0.0.5:22", devpodv1alpha1.DevPodRunning, "carol"),
 		devpodAt("alice-hostnet", "devpods", "192.168.1.9:2201", devpodv1alpha1.DevPodRunning),
 		devpodAt("alice-stopped", "devpods", "10.0.0.7:22", devpodv1alpha1.DevPodStopped),
+		devpodAt("bob-took-it", "devpods", "10.0.0.8:22", devpodv1alpha1.DevPodRunning),
 		devpodAt("elsewhere", "other", "10.0.9.9:22", devpodv1alpha1.DevPodRunning),
 	)
 	for _, tc := range []struct {
-		addr, purpose string
-		ok            bool
-		why           string
+		uid, addr, purpose, user string
+		ok                       bool
+		why                      string
 	}{
-		{"10.0.0.5:22", "ssh", true, "a DevPod's sshd"},
-		{"192.168.1.9:2201", "ssh", true, "a host-network DevPod's sshd, on its own port"},
-		{"10.0.0.5:8080", "http", true, "another port of a DevPod"},
-		{"10.0.0.5:22", "http", false, "sshd as an HTTP service"},
-		{"10.0.0.5:2222", "ssh", false, "SSH to a port that is not the DevPod's sshd"},
-		{"192.168.1.9:22", "ssh", false, "the node's own sshd behind a host-network DevPod"},
-		{"10.0.0.6:22", "ssh", false, "an address no DevPod has"},
-		{"10.0.0.6:80", "http", false, "an address no DevPod has"},
-		{"10.0.0.7:22", "ssh", false, "a DevPod that is not running"},
-		{"10.0.9.9:22", "ssh", false, "a DevPod of another namespace"},
-		{"10.96.0.1:443", "http", false, "the API server"},
-		{"kubernetes.default.svc:443", "http", false, "a name, not an address"},
-		{"10.0.0.5:22", "", false, "no purpose"},
-		{"10.0.0.5:22", "kube", false, "a purpose that is not one"},
-		{"10.0.0.5", "ssh", false, "no port"},
-		{"10.0.0.5:0", "http", false, "port 0"},
-		{"10.0.0.5:99999", "http", false, "a port that is not one"},
+		{"uid-alice-a", "10.0.0.5:22", "ssh", "alice", true, "the owner, to the DevPod's sshd"},
+		{"uid-alice-a", "10.0.0.5:22", "ssh", "carol", true, "a collaborator"},
+		{"uid-alice-hostnet", "192.168.1.9:2201", "ssh", "alice", true, "a host-network DevPod's sshd, on its own port"},
+		{"uid-alice-a", "10.0.0.5:8080", "http", "", true, "another port of the DevPod"},
+		{"uid-alice-a", "10.0.0.5:22", "ssh", "mallory", false, "someone who may not log in to it, whatever the gateway was told"},
+		{"uid-alice-a", "10.0.0.5:22", "ssh", "", false, "nobody"},
+		{"uid-alice-a", "10.0.0.5:22", "http", "", false, "sshd as an HTTP service"},
+		{"uid-alice-a", "10.0.0.5:022", "http", "", false, "sshd as an HTTP service, the port written another way"},
+		{"uid-alice-a", "10.0.0.5:2222", "ssh", "alice", false, "SSH to a port that is not the DevPod's sshd"},
+		{"uid-alice-hostnet", "192.168.1.9:22", "ssh", "alice", false, "the node's own sshd behind a host-network DevPod"},
+		// the console's picture can be old: the address a DevPod had may be another's now
+		{"uid-alice-a", "10.0.0.8:22", "ssh", "alice", false, "an address that is another DevPod's"},
+		{"uid-alice-stopped", "10.0.0.8:22", "ssh", "alice", false, "a stopped DevPod whose address another DevPod took"},
+		{"uid-alice-stopped", "10.0.0.7:22", "ssh", "alice", false, "a DevPod that is not running"},
+		{"uid-gone", "10.0.0.5:22", "ssh", "alice", false, "a DevPod that is no more"},
+		{"", "10.0.0.5:22", "ssh", "alice", false, "no DevPod named"},
+		{"uid-elsewhere", "10.0.9.9:22", "ssh", "alice", false, "a DevPod of another namespace"},
+		{"uid-alice-a", "10.96.0.1:443", "http", "", false, "the API server"},
+		{"uid-alice-a", "kubernetes.default.svc:443", "http", "", false, "a name, not an address"},
+		{"uid-alice-a", "10.0.0.5:22", "", "alice", false, "no purpose"},
+		{"uid-alice-a", "10.0.0.5:22", "kube", "alice", false, "a purpose that is not one"},
+		{"uid-alice-a", "10.0.0.5", "ssh", "alice", false, "no port"},
+		{"uid-alice-a", "10.0.0.5:0", "http", "", false, "port 0"},
+		{"uid-alice-a", "10.0.0.5:99999", "http", "", false, "a port that is not one"},
 	} {
-		err := agent.DialAllowed(context.Background(), r, "devpods", tc.addr, tc.purpose)
+		err := agent.DialAllowed(context.Background(), r, "devpods", agent.Purpose{Kind: "dial", Addr: tc.addr, For: tc.purpose, UID: tc.uid, User: tc.user})
 		if (err == nil) != tc.ok {
-			t.Errorf("%s (%s to %s): %v", tc.why, tc.purpose, tc.addr, err)
+			t.Errorf("%s (%s to %s of %s for %q): %v", tc.why, tc.purpose, tc.addr, tc.uid, tc.user, err)
 		}
 	}
 }
@@ -93,9 +104,13 @@ type gatewayEnd struct {
 	srv *tunnel.Server
 	id  *agent.Identity
 	ctx context.Context
+	// proofs are what agents sent to prove themselves here.
+	mu     sync.Mutex
+	proofs [][2][]byte // nonce, proof
 }
 
-func newGatewayEnd(t *testing.T, ctx context.Context, cluster string, agentID *agent.Identity) *gatewayEnd {
+// newGatewayEnd is a gateway registered at the console under name.
+func newGatewayEnd(t *testing.T, ctx context.Context, name, cluster string, agentID *agent.Identity) *gatewayEnd {
 	t.Helper()
 	g := &gatewayEnd{ctx: ctx}
 	g.id, _ = agent.LoadOrCreateIdentity(agent.FileStore(filepath.Join(t.TempDir(), "gw")))
@@ -105,7 +120,10 @@ func newGatewayEnd(t *testing.T, ctx context.Context, cluster string, agentID *a
 			if h.Kind != agent.Kind || h.Name != cluster {
 				return "", io.ErrUnexpectedEOF
 			}
-			return h.Name, agent.Verify(agentID.PublicKey(), nonce, proof)
+			g.mu.Lock()
+			g.proofs = append(g.proofs, [2][]byte{nonce, proof})
+			g.mu.Unlock()
+			return h.Name, agent.VerifyFor(agentID.PublicKey(), agent.AtGatewayContext(name), nonce, proof)
 		},
 		Sign:      func(nonce []byte) []byte { return g.id.SignFor(agent.GatewayProofContext, nonce) },
 		Heartbeat: 50 * time.Millisecond, Dead: 500 * time.Millisecond,
@@ -121,8 +139,8 @@ func (g *gatewayEnd) dial(context.Context) (net.Conn, error) {
 
 // open asks the cluster's agent for a connection to addr and returns it
 // once the agent has said it is there.
-func (g *gatewayEnd) open(ctx context.Context, cluster, addr, purpose string) (net.Conn, error) {
-	conn, err := g.srv.Dial(ctx, cluster, agent.DialPurpose(addr, purpose))
+func (g *gatewayEnd) open(ctx context.Context, cluster, addr, purpose, uid, user string) (net.Conn, error) {
+	conn, err := g.srv.Dial(ctx, cluster, agent.DialPurpose(addr, purpose, uid, user))
 	if err != nil {
 		return nil, err
 	}
@@ -156,8 +174,8 @@ func TestGateways_TheAgentDialsOutAndServesDialOnly(t *testing.T) {
 
 	id, _ := agent.LoadOrCreateIdentity(agent.FileStore(filepath.Join(t.TempDir(), "id")))
 	console := newHub(t, ctx, "c1", id)
-	gw := newGatewayEnd(t, ctx, "c1", id)
-	rogue := newGatewayEnd(t, ctx, "c1", id) // answers at an address the console named, with another key
+	gw := newGatewayEnd(t, ctx, "b300", "c1", id)
+	rogue := newGatewayEnd(t, ctx, "rogue", "c1", id) // answers at an address the console named, with another key
 	ends := map[string]*gatewayEnd{"gw.example": gw, "rogue.example": rogue}
 
 	a, err := agent.New(agent.Options{
@@ -209,7 +227,7 @@ func TestGateways_TheAgentDialsOutAndServesDialOnly(t *testing.T) {
 	}
 
 	// SSH to the DevPod's sshd: bytes both ways
-	conn, err := gw.open(ctx, "c1", echo.Addr().String(), "ssh")
+	conn, err := gw.open(ctx, "c1", echo.Addr().String(), "ssh", "uid-alice-a", "alice")
 	if err != nil {
 		t.Fatalf("dial a DevPod's sshd: %v", err)
 	}
@@ -220,11 +238,30 @@ func TestGateways_TheAgentDialsOutAndServesDialOnly(t *testing.T) {
 	}
 	_ = conn.Close()
 	// what the rule refuses is said, not just dropped
-	if _, err := gw.open(ctx, "c1", "10.96.0.1:443", "http"); err == nil || !strings.Contains(err.Error(), "not a DevPod") {
+	if _, err := gw.open(ctx, "c1", "10.96.0.1:443", "http", "uid-alice-a", ""); err == nil || !strings.Contains(err.Error(), "not the DevPod's address") {
 		t.Fatalf("the API server through the agent: %v", err)
 	}
-	if _, err := gw.open(ctx, "c1", echo.Addr().String(), "http"); err == nil {
+	if _, err := gw.open(ctx, "c1", echo.Addr().String(), "http", "uid-alice-a", ""); err == nil {
 		t.Fatal("sshd's port as HTTP was allowed")
+	}
+	if _, err := gw.open(ctx, "c1", echo.Addr().String(), "ssh", "uid-alice-a", "mallory"); err == nil || !strings.Contains(err.Error(), "may log in") {
+		t.Fatalf("a session for someone who may not log in to it: %v", err)
+	}
+
+	// What the agent proved to this gateway is good here and nowhere else:
+	// handed on to the console (or to another gateway) it proves nothing —
+	// a gateway cannot pass for the cluster's agent.
+	gw.mu.Lock()
+	relayed := gw.proofs[len(gw.proofs)-1]
+	gw.mu.Unlock()
+	if err := agent.VerifyFor(id.PublicKey(), agent.AtGatewayContext("b300"), relayed[0], relayed[1]); err != nil {
+		t.Fatalf("the proof as the gateway got it: %v", err)
+	}
+	if err := agent.Verify(id.PublicKey(), relayed[0], relayed[1]); err == nil {
+		t.Fatal("the console would take the agent's proof to a gateway for a proof to itself")
+	}
+	if err := agent.VerifyFor(id.PublicKey(), agent.AtGatewayContext("other-gateway"), relayed[0], relayed[1]); err == nil {
+		t.Fatal("another gateway would take it too")
 	}
 	// a gateway gets connections to DevPods and nothing else: not the cluster's API
 	k, err := gw.srv.Dial(ctx, "c1", agent.PurposeKube)
@@ -238,7 +275,7 @@ func TestGateways_TheAgentDialsOutAndServesDialOnly(t *testing.T) {
 	}
 	_ = k.Close()
 	// and the console gets no connections to DevPods
-	d, err := console.srv.Dial(ctx, "c1", agent.DialPurpose(echo.Addr().String(), "ssh"))
+	d, err := console.srv.Dial(ctx, "c1", agent.DialPurpose(echo.Addr().String(), "ssh", "uid-alice-a", "alice"))
 	if err != nil {
 		t.Fatal(err)
 	}

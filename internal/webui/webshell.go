@@ -221,7 +221,7 @@ func (s *Server) handleDevPodShell(w http.ResponseWriter, r *http.Request) {
 	defer ws.release(sess.User)
 
 	cols, rows := termSize(r.URL.Query())
-	client, shell, stdin, stdout, stderr, err := ws.open(r.Context(), sess.User, dp.Name, s.k(r).Name, cols, rows)
+	client, shell, stdin, stdout, stderr, err := ws.open(r.Context(), sess.User, dp.Name, s.loginCluster(r), cols, rows)
 	if err != nil {
 		s.writeErr(w, http.StatusBadGateway, "GATEWAY_UNAVAILABLE", "the SSH gateway refused the connection: "+err.Error(), nil)
 		return

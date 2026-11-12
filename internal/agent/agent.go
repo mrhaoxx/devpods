@@ -37,6 +37,10 @@ type Purpose struct {
 	// the connection is for (see DialAllowed).
 	Addr string `json:"addr,omitempty"`
 	For  string `json:"for,omitempty"`
+	// UID of the DevPod the connection is to, and (for SSH) the User the
+	// session is for.
+	UID  string `json:"uid,omitempty"`
+	User string `json:"user,omitempty"`
 }
 
 // The streams the console opens on the agent's connections.

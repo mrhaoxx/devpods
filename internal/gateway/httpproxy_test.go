@@ -287,16 +287,15 @@ func TestHTTPProxy_ThroughTheClustersAgent(t *testing.T) {
 	defer backend.Close()
 	real := strings.TrimPrefix(backend.URL, "http://")
 	dp := &devpodv1alpha1.DevPod{
-		ObjectMeta: metav1.ObjectMeta{Name: "alice-dev", Namespace: "devpods", Annotations: map[string]string{
+		ObjectMeta: metav1.ObjectMeta{Name: "alice-dev", Namespace: "devpods", UID: "uid-alice-dev", Annotations: map[string]string{
 			httpauth.IDAnnotation: idA, httpauth.PublicPortsAnnotation: "8080"}},
 		Spec:   devpodv1alpha1.DevPodSpec{Owner: "alice", Running: true},
 		Status: devpodv1alpha1.DevPodStatus{Phase: devpodv1alpha1.DevPodRunning, Endpoint: "10.9.9.9:22"}, // nowhere this test can reach
 	}
 	p := NewHTTPProxyWith(oneDevPod{cluster: "mulan", dp: dp}, "apps.test", "")
-	type asked struct{ cluster, addr, purpose string }
-	var got []asked
-	p.Net = func(ctx context.Context, cluster, addr, purpose string) (net.Conn, error) {
-		got = append(got, asked{cluster, addr, purpose})
+	var got []Target
+	p.Net = func(ctx context.Context, t Target) (net.Conn, error) {
+		got = append(got, t)
 		return (&net.Dialer{}).DialContext(ctx, "tcp", real) // what the agent would connect to
 	}
 	srv := httptest.NewServer(p)
@@ -319,7 +318,7 @@ func TestHTTPProxy_ThroughTheClustersAgent(t *testing.T) {
 	if body := get(); body != "hello from mulan" {
 		t.Fatalf("body %q", body)
 	}
-	if len(got) != 1 || got[0] != (asked{"mulan", "10.9.9.9:8080", PurposeHTTP}) {
+	if len(got) != 1 || got[0] != (Target{Cluster: "mulan", Addr: "10.9.9.9:8080", Purpose: PurposeHTTP, DevPodUID: "uid-alice-dev"}) {
 		t.Fatalf("what the agent was asked for: %+v", got)
 	}
 	// the connection is kept for the next request, not dialled again

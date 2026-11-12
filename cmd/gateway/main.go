@@ -567,7 +567,10 @@ func handle(parent context.Context, id uint64, conn net.Conn, hostSigner ssh.Sig
 
 	endpoint := srvConn.Permissions.Extensions["devpod.io/endpoint"]
 	dctx, dcancel := context.WithTimeout(parent, gateway.DialTimeout)
-	cliConn, cliChans, cliReqs, err := dialer.DialIn(dctx, srvConn.Permissions.Extensions["devpod.io/cluster"], endpoint)
+	cliConn, cliChans, cliReqs, err := dialer.DialIn(dctx, gateway.Target{
+		Cluster: srvConn.Permissions.Extensions["devpod.io/cluster"], Addr: endpoint,
+		DevPodUID: srvConn.Permissions.Extensions["devpod.io/uid"], User: ap.User,
+	})
 	dcancel()
 	if err != nil {
 		slog.Warn("dial_failed", "id", id, "endpoint", endpoint, "err", err)

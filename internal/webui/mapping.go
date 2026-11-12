@@ -17,6 +17,9 @@ const MaxDevPodNameLen = 22
 
 var dns1123Label = regexp.MustCompile(`^[a-z0-9]([-a-z0-9]*[a-z0-9])?$`)
 
+// dns1123Subdomain: a Pod's name.
+var dns1123Subdomain = regexp.MustCompile(`^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$`)
+
 // MapUsername maps a GitLab username to the DevPod user name by
 // prepending the configured prefix. The result must be a valid
 // DNS-1123 label AND leave at least one character of DevPod name

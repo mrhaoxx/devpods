@@ -172,10 +172,15 @@ type Options struct {
 
 // Client asks the console, remembering answers briefly.
 type Client struct {
-	o  Options
-	mu sync.Mutex
-	m  map[string]*entry
+	o      Options
+	mu     sync.Mutex
+	m      map[string]*entry
+	pruned time.Time
 }
+
+// maxRemembered is how many answers are kept before those past use are
+// dropped.
+const maxRemembered = 4096
 
 type entry struct {
 	at       time.Time
@@ -244,12 +249,19 @@ func (c *Client) ask(ctx context.Context, method, path string, body []byte, out 
 			e = &entry{at: now, raw: raw, notFound: notFound}
 			c.mu.Lock()
 			c.m[key] = e
-			if len(c.m) > 4096 { // forget what is long past use
+			// Questions come from whoever knocks (a login is looked up
+			// before its key is checked), so what is remembered is bounded:
+			// past use first, and all of it if that is not enough.
+			if len(c.m) > maxRemembered && now.Sub(c.pruned) > time.Second {
+				c.pruned = now
 				for k, v := range c.m {
 					if now.Sub(v.at) > c.o.Grace {
 						delete(c.m, k)
 					}
 				}
+			}
+			if len(c.m) > 4*maxRemembered {
+				c.m = map[string]*entry{key: e}
 			}
 			c.mu.Unlock()
 		case errors.Is(err, ErrConsoleAway) && e != nil && now.Sub(e.at) <= c.o.Grace:

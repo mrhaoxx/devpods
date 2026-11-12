@@ -354,19 +354,39 @@ func (s *Server) writeGatewayStatus(name string, report *gwlink.Report) {
 	})
 }
 
-// eachCluster calls fn for the clusters a gateway's question covers.
+// eachCluster calls fn for the clusters a gateway's question covers:
+// those whose agent is connected. What the console holds of a cluster
+// that is away (or paused) is its last known state, and nobody is let in
+// on the strength of that.
 func (s *Server) eachCluster(cluster string, fn func(*clusters.ClusterClients)) {
 	s.Clusters.Each(func(cc *clusters.ClusterClients) {
+		if _, stale := s.Clusters.Stale(cc.Name); stale {
+			return
+		}
 		if cluster == "" || cluster == cc.Name {
 			fn(cc)
 		}
 	})
 }
 
-// forGateway is a DevPod as a gateway needs it.
+// forGateway is a DevPod as a gateway needs it: which it is, who may log
+// in, whether and where it runs, and which of its ports are open to
+// whom. Not its Pod spec — images, environment, volumes are none of a
+// gateway's business.
 func forGateway(dp *devpodv1alpha1.DevPod) *devpodv1alpha1.DevPod {
-	out := dp.DeepCopy()
-	out.ManagedFields = nil
+	out := &devpodv1alpha1.DevPod{
+		ObjectMeta: metav1.ObjectMeta{Name: dp.Name, Namespace: dp.Namespace, UID: dp.UID},
+		Spec:       devpodv1alpha1.DevPodSpec{Owner: dp.Spec.Owner, Collaborators: slices.Clone(dp.Spec.Collaborators), Running: dp.Spec.Running},
+		Status:     devpodv1alpha1.DevPodStatus{Phase: dp.Status.Phase, Endpoint: dp.Status.Endpoint},
+	}
+	for _, k := range []string{httpauth.IDAnnotation, httpauth.PublicPortsAnnotation, httpauth.UserPortsAnnotation} {
+		if v, ok := dp.Annotations[k]; ok {
+			if out.Annotations == nil {
+				out.Annotations = map[string]string{}
+			}
+			out.Annotations[k] = v
+		}
+	}
 	return out
 }
 
@@ -397,7 +417,9 @@ func (s *Server) handleGatewayLookup(w http.ResponseWriter, r *http.Request) {
 			failed = err
 		}
 	})
-	if failed != nil {
+	// a cluster that cannot be read fails the question about that cluster,
+	// not the logins to the others
+	if failed != nil && q.Cluster != "" {
 		s.writeErr(w, http.StatusInternalServerError, "INTERNAL", failed.Error(), nil)
 		return
 	}
@@ -557,4 +579,17 @@ func (s *Server) httpProxies(ctx context.Context) []*HTTPProxy {
 		}
 	}
 	return out
+}
+
+// loginCluster is the cluster to write in a login for the request's
+// DevPod: its name where a gateway of several clusters serves it, nothing
+// where the cluster's own gateway does (that one knows no cluster names).
+func (s *Server) loginCluster(r *http.Request) string {
+	if s.Clusters == nil {
+		return ""
+	}
+	if name := s.k(r).Name; s.gatewayOf(r.Context(), name) != nil {
+		return name
+	}
+	return ""
 }

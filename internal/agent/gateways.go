@@ -25,6 +25,12 @@ type Gateway struct {
 // GatewayProofContext is what a gateway's proof to an agent is made for.
 const GatewayProofContext = "devpod gateway accept v1"
 
+// AtGatewayContext is what an agent's proof to the gateway of that name
+// is made for. It is not the proof the console takes, nor the one another
+// gateway takes: a gateway cannot pass an agent's proof on and be taken
+// for that agent elsewhere.
+func AtGatewayContext(gateway string) string { return "devpod agent at gateway v1:" + gateway }
+
 // PurposeGateways: the console's list of gateways, as JSON values — the
 // whole list each time it changes.
 var PurposeGateways = mustPurpose("gateways")
@@ -78,7 +84,7 @@ func (a *Agent) setGateways(list []Gateway) {
 		opts := a.o.GatewayTunnel
 		opts.Dial = func(ctx context.Context) (net.Conn, error) { return a.o.DialGateway(ctx, g.Address) }
 		opts.Hello = tunnel.Hello{Kind: Kind, Name: a.o.Cluster}
-		opts.Sign = a.o.Identity.Sign
+		opts.Sign = func(nonce []byte) []byte { return a.o.Identity.SignFor(AtGatewayContext(g.Name), nonce) }
 		opts.Handle = a.handleGateway
 		// the gateway is the one the console named, or it gets nothing
 		opts.VerifyServer = func(_ string, nonce, proof []byte) error {

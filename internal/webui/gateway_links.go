@@ -46,7 +46,8 @@ func NewGatewayLinks(reader client.Reader, instance string, instances func() []s
 		Instance: instance, Instances: instances,
 		Authorize: func(ctx context.Context, hello tunnel.Hello, nonce, proof []byte) (string, error) {
 			name, replica, ok := strings.Cut(hello.Name, ".")
-			if hello.Kind != gwlink.LinkKind || !ok || replica == "" || len(name) > MaxClusterNameLen || !dns1123Label.MatchString(name) {
+			if hello.Kind != gwlink.LinkKind || !ok || len(name) > MaxClusterNameLen || !dns1123Label.MatchString(name) ||
+				len(replica) > 253 || !dns1123Subdomain.MatchString(replica) {
 				return "", errors.New("not a gateway")
 			}
 			var g devpodv1alpha1.Gateway
@@ -67,13 +68,14 @@ func (g *GatewayLinks) Accept(ctx context.Context, conn net.Conn) { g.srv.Accept
 // Close drops every connection.
 func (g *GatewayLinks) Close() { g.srv.Close() }
 
-// AddrOf is the address to give an HTTP client for the gateway replica
-// (Pod) of that name, if it holds a link to this console.
-func (g *GatewayLinks) AddrOf(pod string) (string, bool) {
-	for peer := range g.srv.Peers() {
-		if _, replica, _ := strings.Cut(peer, "."); replica == pod {
-			return peer + gatewayLinkHost + ":80", true
-		}
+// AddrOf is the address to give an HTTP client for the replica (Pod) of
+// that gateway, if it holds a link to this console. The gateway's name is
+// the one it proved with its key: a replica of one gateway is never taken
+// for a replica of another.
+func (g *GatewayLinks) AddrOf(gateway, pod string) (string, bool) {
+	peer := gateway + "." + pod
+	if _, ok := g.srv.Peers()[peer]; ok && gateway != "" && pod != "" {
+		return peer + gatewayLinkHost + ":80", true
 	}
 	return "", false
 }
@@ -92,17 +94,24 @@ func (g *GatewayLinks) DialContext(ctx context.Context, network, addr string) (n
 	return (&net.Dialer{}).DialContext(ctx, network, addr)
 }
 
-// Via has ls reach gateway replicas that hold a link over it, and the
-// rest as before.
+// Via has ls reach the replicas of gateways of several clusters over
+// their links, and the rest as before.
 func (ls *LiveSessions) Via(g *GatewayLinks) {
-	local := ls.resolve
-	ls.resolve = func(ctx context.Context, pod string) (string, error) {
-		if addr, ok := g.AddrOf(pod); ok {
+	ls.links = g
+	ls.client = &http.Client{Transport: &http.Transport{DialContext: g.DialContext}}
+}
+
+// addrOf is where the replica holding a session is reached: over its
+// link when the session came in at a gateway of several clusters (its
+// name is in the session's record), else at its address in this cluster.
+func (ls *LiveSessions) addrOf(ctx context.Context, gateway, pod string) (string, error) {
+	if ls.links != nil && gateway != "" {
+		if addr, ok := ls.links.AddrOf(gateway, pod); ok {
 			return addr, nil
 		}
-		return local(ctx, pod)
+		return "", fmt.Errorf("gateway %s (replica %s) is not connected to this console", gateway, pod)
 	}
-	ls.client = &http.Client{Transport: &http.Transport{DialContext: g.DialContext}}
+	return ls.resolve(ctx, pod)
 }
 
 // handleGatewayConnect: GET /gateway/connect — one connection of a

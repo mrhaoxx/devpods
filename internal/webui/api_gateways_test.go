@@ -126,6 +126,10 @@ func TestGateways(t *testing.T) {
 	if found[0].Cluster != "a" || found[1].Cluster != "b" || found[0].DevPod.Name != "gl-alice-x" || found[0].DevPod.Spec.Owner != "gl-alice" {
 		t.Fatalf("a name both clusters have: %+v", found)
 	}
+	// a gateway is told who may log in and where the DevPod runs — not what it runs
+	if dp := found[0].DevPod; dp.Spec.Pod != nil || dp.UID == "" || len(dp.ManagedFields) != 0 {
+		t.Fatalf("what a gateway is given of a DevPod: %+v", dp)
+	}
 	if found, _, err := gw.Lookup(ctx, "gl-alice", "x", "b"); err != nil || len(found) != 1 || found[0].Cluster != "b" {
 		t.Fatalf("with the cluster: %+v %v", found, err)
 	}
@@ -211,7 +215,7 @@ func TestGateways(t *testing.T) {
 	var addr string
 	w.until("the console holds a link to the replica", func() bool {
 		var ok bool
-		addr, ok = w.s.GatewayLinks.AddrOf("gw-pod-1")
+		addr, ok = w.s.GatewayLinks.AddrOf("b300", "gw-pod-1")
 		return ok
 	})
 	hc := &http.Client{Transport: &http.Transport{DialContext: w.s.GatewayLinks.DialContext}, Timeout: 10 * time.Second}
@@ -224,11 +228,15 @@ func TestGateways(t *testing.T) {
 	if string(lbody) != "live endpoint of gw-pod-1: GET /live/session-1" {
 		t.Fatalf("over the link: %q", lbody)
 	}
-	if _, ok := w.s.GatewayLinks.AddrOf("gw-imposter"); ok {
+	if _, ok := w.s.GatewayLinks.AddrOf("b300", "gw-imposter"); ok {
 		t.Fatal("a replica with another key got a link")
 	}
-	if _, ok := w.s.GatewayLinks.AddrOf("gw-pod-2"); ok {
+	if _, ok := w.s.GatewayLinks.AddrOf("b300", "gw-pod-2"); ok {
 		t.Fatal("a replica that never connected has an address")
+	}
+	// a replica is its gateway's: the same replica name under another gateway is nobody
+	if _, ok := w.s.GatewayLinks.AddrOf("other", "gw-pod-1"); ok {
+		t.Fatal("a replica was taken for a replica of another gateway")
 	}
 
 	// nobody else gets these answers
@@ -291,6 +299,21 @@ func TestGateways(t *testing.T) {
 	}
 	if code, out, _ := w.call("gl-alice", "POST", "/api/http/ticket", `{"host":"`+linkID+`-8080.apps.evil.example","rd":"/"}`); code != http.StatusBadRequest {
 		t.Fatalf("a ticket for a domain no gateway has: %d %v", code, out)
+	}
+
+	// A cluster whose agent is away: the console still shows what it last
+	// knew of it, but lets nobody in on the strength of that.
+	w.stopB()
+	w.until("b is away", func() bool { _, stale := w.s.Clusters.Stale("b"); return stale })
+	w.until("logins to b are no longer answered", func() bool {
+		found, _, err := gw.Lookup(ctx, "gl-alice", "only", "")
+		return err == nil && len(found) == 0
+	})
+	if found, _, err := gw.Lookup(ctx, "gl-alice", "x", ""); err != nil || len(found) != 1 || found[0].Cluster != "a" {
+		t.Fatalf("a name both had, with b away: %+v %v", found, err)
+	}
+	if _, _, err := gw.ByHTTPID(ctx, linkID); !errors.Is(err, gwlink.ErrNotFound) {
+		t.Fatalf("a port link of b, with b away: %v", err)
 	}
 
 	if code, _, _ := w.call("root", "DELETE", "/api/admin/gateways/b300", ""); code != http.StatusNoContent {

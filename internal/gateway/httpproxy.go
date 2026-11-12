@@ -45,10 +45,10 @@ type HTTPProxy struct {
 	Now      func() time.Time
 	// Net, when set, is how a DevPod's address is reached: through the
 	// agent of its cluster (see Dialer.Net). Nil: a plain TCP connection.
-	Net func(ctx context.Context, cluster, addr, purpose string) (net.Conn, error)
+	Net func(ctx context.Context, t Target) (net.Conn, error)
 
 	mu         sync.Mutex
-	transports map[string]*http.Transport // per cluster: idle connections are reused
+	transports map[string]*http.Transport // per DevPod: idle connections are reused
 }
 
 // idsTTL bounds how stale the id index may be (a reset id stops working
@@ -81,26 +81,35 @@ func (p *HTTPProxy) lookup(r *http.Request, id string) (*devpodv1alpha1.DevPod, 
 	return f.DevPod, f.Cluster, true
 }
 
-// transport is how the DevPods of cluster are reached; nil is Go's own.
-func (p *HTTPProxy) transport(cluster string) http.RoundTripper {
+// transport is how the DevPod of that uid in cluster is reached; nil is
+// Go's own. One per DevPod: a kept connection is never one that was made
+// to another DevPod, whatever became of the address.
+func (p *HTTPProxy) transport(cluster, uid string) http.RoundTripper {
 	if p.Net == nil {
 		return nil
 	}
+	key := cluster + "/" + uid
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	if t := p.transports[cluster]; t != nil {
+	if t := p.transports[key]; t != nil {
 		return t
+	}
+	if len(p.transports) > 2048 { // DevPods long gone: start over
+		for _, old := range p.transports {
+			old.CloseIdleConnections()
+		}
+		p.transports = nil
 	}
 	if p.transports == nil {
 		p.transports = map[string]*http.Transport{}
 	}
 	t := &http.Transport{
 		DialContext: func(ctx context.Context, _, addr string) (net.Conn, error) {
-			return p.Net(ctx, cluster, addr, PurposeHTTP)
+			return p.Net(ctx, Target{Cluster: cluster, Addr: addr, Purpose: PurposeHTTP, DevPodUID: uid})
 		},
-		MaxIdleConnsPerHost: 8, IdleConnTimeout: 60 * time.Second, ResponseHeaderTimeout: 0,
+		MaxIdleConnsPerHost: 8, IdleConnTimeout: 60 * time.Second,
 	}
-	p.transports[cluster] = t
+	p.transports[key] = t
 	return t
 }
 
@@ -219,7 +228,7 @@ func (p *HTTPProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			req.URL.Scheme = "http"
 			req.URL.Host = target
 		},
-		Transport:     p.transport(cluster),
+		Transport:     p.transport(cluster, string(dp.UID)),
 		FlushInterval: -1,
 		ErrorHandler: func(w http.ResponseWriter, _ *http.Request, err error) {
 			http.Error(w, fmt.Sprintf("nothing answers on port %d of this DevPod (%v)", port, err), http.StatusBadGateway)

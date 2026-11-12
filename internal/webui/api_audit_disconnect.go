@@ -36,7 +36,7 @@ func (s *Server) handleAuditDisconnect(w http.ResponseWriter, r *http.Request) {
 	if !s.logAccess(w, r, sess.User, "disconnect", d.Session.SessionID, "") {
 		return
 	}
-	addr, err := ls.resolve(r.Context(), d.Session.GatewayPod)
+	addr, err := ls.addrOf(r.Context(), d.Gateway, d.Session.GatewayPod)
 	if err != nil {
 		s.writeErr(w, http.StatusServiceUnavailable, "LIVE_UNAVAILABLE", "the session's gateway cannot be reached: "+err.Error(), nil)
 		return

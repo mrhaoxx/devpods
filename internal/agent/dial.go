@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"slices"
 	"strconv"
 	"time"
 
@@ -25,35 +26,48 @@ const (
 	ForHTTP = "http"
 )
 
-// DialPurpose is the purpose of a stream that asks for a connection to a
-// DevPod's address.
-func DialPurpose(addr, purpose string) []byte {
-	b, err := json.Marshal(Purpose{Kind: "dial", Addr: addr, For: purpose})
+// DialPurpose is the purpose of a stream that asks for a connection to
+// the DevPod of that uid, at addr, for purpose; user is who the SSH
+// session is for.
+func DialPurpose(addr, purpose, uid, user string) []byte {
+	b, err := json.Marshal(Purpose{Kind: "dial", Addr: addr, For: purpose, UID: uid, User: user})
 	if err != nil {
 		panic(err)
 	}
 	return b
 }
 
-// DialAllowed is the rule a gateway's request is held to: the address is
-// that of a running DevPod of the namespace; for SSH the port is that
-// DevPod's sshd, for HTTP any port but that one. Nothing else in the
-// cluster — no other workload, no node, not the API — can be reached
+// DialAllowed is the rule a gateway's request is held to, by what the
+// agent itself knows of the cluster right now — not by what the gateway
+// or the console believe:
+//
+//   - the DevPod of that uid is in the namespace and running, and the
+//     address is its own;
+//   - for SSH the port is its sshd, and the user is its owner or one of
+//     its collaborators;
+//   - for HTTP the port is any but its sshd.
+//
+// Nothing else in the cluster — no other workload, no node, not the API,
+// not another DevPod that has since taken the address — can be reached
 // through the agent, whoever asks.
 //
 // A DevPod on the host network has its node's address: for HTTP that is
 // any port of the node (as it is for a gateway in the cluster); for SSH
 // it is still only the DevPod's own sshd port.
-func DialAllowed(ctx context.Context, r client.Reader, namespace, addr, purpose string) error {
-	if purpose != ForSSH && purpose != ForHTTP {
-		return fmt.Errorf("unknown purpose %q", purpose)
+func DialAllowed(ctx context.Context, r client.Reader, namespace string, p Purpose) error {
+	if p.For != ForSSH && p.For != ForHTTP {
+		return fmt.Errorf("unknown purpose %q", p.For)
 	}
-	host, port, err := net.SplitHostPort(addr)
+	if p.UID == "" {
+		return errors.New("which DevPod is not said")
+	}
+	host, port, err := net.SplitHostPort(p.Addr)
 	if err != nil {
 		return errors.New("not an address")
 	}
 	ip := net.ParseIP(host)
-	if n, err := strconv.Atoi(port); ip == nil || err != nil || n < 1 || n > 65535 {
+	want, err := strconv.Atoi(port)
+	if ip == nil || err != nil || want < 1 || want > 65535 {
 		return errors.New("not an address")
 	}
 	var list devpodv1alpha1.DevPodList
@@ -62,21 +76,33 @@ func DialAllowed(ctx context.Context, r client.Reader, namespace, addr, purpose 
 	}
 	for i := range list.Items {
 		dp := &list.Items[i]
+		if string(dp.UID) != p.UID {
+			continue
+		}
 		if dp.Status.Phase != devpodv1alpha1.DevPodRunning || dp.Status.Endpoint == "" {
-			continue
+			return errors.New("the DevPod is not running")
 		}
-		h, sshPort, err := net.SplitHostPort(dp.Status.Endpoint)
-		if err != nil || !ip.Equal(net.ParseIP(h)) {
-			continue
+		h, sp, err := net.SplitHostPort(dp.Status.Endpoint)
+		sshPort, perr := strconv.Atoi(sp)
+		if err != nil || perr != nil || !ip.Equal(net.ParseIP(h)) {
+			return errors.New("not the DevPod's address")
 		}
-		switch {
-		case purpose == ForSSH && port == sshPort:
-			return nil
-		case purpose == ForHTTP && port != sshPort:
-			return nil
+		switch p.For {
+		case ForSSH:
+			if want != sshPort {
+				return errors.New("not the DevPod's sshd")
+			}
+			if p.User != dp.Spec.Owner && !slices.Contains(dp.Spec.Collaborators, p.User) {
+				return errors.New("not a DevPod this user may log in to")
+			}
+		case ForHTTP:
+			if want == sshPort {
+				return errors.New("the DevPod's sshd is not an HTTP service")
+			}
 		}
+		return nil
 	}
-	return errors.New("not a DevPod's address for " + purpose)
+	return errors.New("not a DevPod of this cluster")
 }
 
 // dialAnswer is the one line the agent says before a dial stream becomes
@@ -132,7 +158,7 @@ func (a *Agent) serveDial(ctx context.Context, p Purpose, conn net.Conn) {
 		return
 	}
 	cctx, cancel := context.WithTimeout(ctx, 5*time.Second)
-	err := DialAllowed(cctx, a.o.DevPods, a.o.Namespace, p.Addr, p.For)
+	err := DialAllowed(cctx, a.o.DevPods, a.o.Namespace, p)
 	var target net.Conn
 	if err == nil {
 		target, err = (&net.Dialer{}).DialContext(cctx, "tcp", p.Addr)
