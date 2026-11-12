@@ -23,6 +23,7 @@ import { BulkDialog, type BulkKind } from "./BulkDialog";
 import { useNow } from "../../lib/useNow";
 import { TableCtx, devpodColumns, toRow, type Row } from "./columns";
 import { groupRows } from "./groups";
+import { groupUsage, usage, usageKeys, type UsageKey } from "./usage";
 
 const PHASES = ["Running", "Pending", "Stopped", "Failed"] as const;
 
@@ -103,6 +104,8 @@ function GroupMenu({ r, onRun, onAsk }: { r: Row; onRun: (action: string, fn: (m
   );
 }
 
+const running = (r: Row) => r.phase === "Running";
+
 /** flat: a selection with each group row standing for its members */
 const flat = (rows: Row[]): Row[] => {
   const seen = new Set<string>();
@@ -134,6 +137,9 @@ export function DevPodTable({ scope }: { scope: "mine" | "all" }) {
 
   const rows = useMemo(() => (list.data?.items ?? []).map((dp) => toRow(dp, list.data?.pods[dp.metadata.name])), [list.data]);
   const idle = useLiveValues<LiveItem>(spec, admin && url.idle ? rows.map((r) => r.name) : [], 5000, admin && url.idle);
+  // sorting by what DevPods use: their values, taken every 5 s so the rows do not jump every second
+  const byUsage = usageKeys.includes(url.sort.replace(/^-/, "") as UsageKey);
+  const used = useLiveValues<LiveItem>(spec, byUsage ? rows.map((r) => r.name) : [], 5000, byUsage);
 
   const filter = useMemo(() => parseFilter(url.q), [url.q]);
   const byQuery = useMemo(
@@ -159,6 +165,8 @@ export function DevPodTable({ scope }: { scope: "mine" | "all" }) {
         admin,
         me,
         groups: { open, toggle },
+        usage: (r, key) =>
+          r.group ? groupUsage(r.group.members.map((m) => (running(m) ? used.get(m.name) : undefined)), key) : running(r) ? usage(used.get(r.name), key) : undefined,
         actions: (r) =>
           r.group ? (
             <GroupMenu
@@ -171,7 +179,7 @@ export function DevPodTable({ scope }: { scope: "mine" | "all" }) {
           ),
       }),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [admin, me, open],
+    [admin, me, open, used],
   );
 
   const failed = outcome?.results.filter((r) => !r.ok) ?? [];

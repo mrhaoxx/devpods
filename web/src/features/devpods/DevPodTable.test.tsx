@@ -4,6 +4,9 @@ import { DevPodTable } from "./DevPodTable";
 import { collabPatch, migrateTargets } from "./BulkDialog";
 import { renderWithProviders, stubFetch, stubMe } from "../../test/render";
 import type { DevPod } from "../../data/api";
+import { act } from "@testing-library/react";
+import { LiveHub } from "../../data/live/LiveHub";
+import type { SseHandlers } from "../../data/sse";
 
 const mk = (name: string, owner: string, phase: string, running = true): DevPod => ({
   metadata: { name, uid: name },
@@ -184,4 +187,20 @@ describe("DevPodTable", () => {
     fireEvent.click(within(row).getByRole("button", { name: "展开 alice-t" }));
     expect(await screen.findByRole("link", { name: "alice-t-0" })).toBeTruthy();
   });
+
+  it("sorts by what DevPods use now: CPU most first, those not running last either way", async () => {
+    stubFetch({ "/api/devpods": list });
+    const conns: { url: string; h: SseHandlers }[] = [];
+    const hub = new LiveHub({ open: (url, h) => (conns.push({ url, h }), () => {}) });
+    renderWithProviders(<DevPodTable scope="all" />, { me: stubMe({ admin: true }), hub, liveEnabled: true, route: "/admin/devpods?sort=-cpu" });
+    await screen.findByRole("link", { name: "alice-a" });
+    const item = (name: string, cpu: number | null) => ({ name, owner: "x", cpu, cpuLimit: 4, mem: null, memLimit: 0, gpu: [], netRx: null, netTx: null, netKind: "", rdmaRx: null, rdmaTx: null, rdmaKind: "", ioR: null, ioW: null, sessions: [], idle: false });
+    await waitFor(() => expect(conns.length).toBeGreaterThan(0));
+    act(() => conns.forEach((c) => c.h.onMessage({ ts: new Date().toISOString(), items: [item("alice-a", 1), item("bob-c", 3), item("bob-d", 2)] })));
+    // bob-d failed and alice-b is stopped: nothing to sort them by (bob-d's numbers are not shown either)
+    await waitFor(() => expect(rowNames()).toEqual(["bob-c", "alice-a", "alice-b", "bob-d"]), { timeout: 7000 });
+    // the other way: least first, those still last
+    fireEvent.click(screen.getByRole("button", { name: /CPU/ }));
+    await waitFor(() => expect(rowNames()).toEqual(["alice-a", "bob-c", "alice-b", "bob-d"]));
+  }, 15000);
 });

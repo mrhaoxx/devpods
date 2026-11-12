@@ -14,6 +14,7 @@ import { fmtAge, fmtBytes, fmtCores, fmtRate, parseQuantity } from "../../lib/fo
 import { phaseSummary, reservationNotes } from "./status";
 import { sparkSeries } from "../../lib/spark";
 import { provenance } from "./provenance";
+import type { UsageKey } from "./usage";
 
 export type Row = {
   dp: DevPod;
@@ -181,7 +182,11 @@ export function devpodColumns(opts: {
   me?: Me;
   actions: (r: Row) => React.ReactNode;
   groups?: { open: ReadonlySet<string>; toggle: (id: string) => void };
+  /** usage: what a row uses now (undefined: not known), to sort by */
+  usage?: (r: Row, key: UsageKey) => number | undefined;
 }): ColumnDef<Row, unknown>[] {
+  // a usage column: most first on the first click, rows with nothing known last
+  const by = (key: UsageKey) => ({ accessorFn: (r: Row) => opts.usage?.(r, key), sortDescFirst: true, sortUndefined: "last" as const });
   const cols: ColumnDef<Row, unknown>[] = [
     {
       id: "name",
@@ -211,12 +216,12 @@ export function devpodColumns(opts: {
   ];
   if (opts.admin) cols.push({ id: "owner", header: "Owner", accessorFn: (r) => r.owner, meta: { priority: 2, width: 90, mono: true } });
   cols.push(
-    { id: "cpu", header: "CPU", enableSorting: false, meta: { priority: 2, width: 140 }, cell: own((r) => <CpuCell r={r} />) },
-    { id: "mem", header: "内存", enableSorting: false, meta: { priority: 3, width: 140 }, cell: own((r) => <MemCell r={r} />) },
+    { id: "cpu", header: "CPU", ...by("cpu"), meta: { priority: 2, width: 140 }, cell: own((r) => <CpuCell r={r} />) },
+    { id: "mem", header: "内存", ...by("mem"), meta: { priority: 3, width: 140 }, cell: own((r) => <MemCell r={r} />) },
     {
       id: "gpu",
       header: "GPU",
-      accessorFn: (r) => r.gpu,
+      ...by("gpu"),
       meta: { priority: 4, width: 110 },
       cell: ({ row }) => (row.original.group ? row.original.gpu > 0 ? <span className="mono">{row.original.gpu}</span> : null : <GpuCell r={row.original} />),
     },
@@ -229,8 +234,8 @@ export function devpodColumns(opts: {
       meta: { priority: 6, width: 80 },
       cell: own((r) => <UptimeCell r={r} />),
     },
-    { id: "net", header: "网络 ↓/↑", enableSorting: false, meta: { priority: 7, width: 150 }, cell: own((r) => <NetCell r={r} />) },
-    { id: "rdma", header: "RDMA ↓/↑", enableSorting: false, meta: { priority: 8, width: 150 }, cell: own((r) => <RdmaCell r={r} />) },
+    { id: "net", header: "网络 ↓/↑", ...by("net"), meta: { priority: 7, width: 150 }, cell: own((r) => <NetCell r={r} />) },
+    { id: "rdma", header: "RDMA ↓/↑", ...by("rdma"), meta: { priority: 8, width: 150 }, cell: own((r) => <RdmaCell r={r} />) },
     { id: "node", header: "节点", accessorFn: (r) => r.node, meta: { priority: 9, width: 90, mono: true } },
     { id: "image", header: "镜像", accessorFn: (r) => r.image, meta: { priority: 10, width: 170, mono: true }, cell: ({ getValue }) => <span title={String(getValue())}>{String(getValue())}</span> },
     { id: "actions", header: "", enableSorting: false, meta: { priority: 1, width: 36, align: "right" }, cell: ({ row }) => opts.actions(row.original) },
