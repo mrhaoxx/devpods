@@ -2,7 +2,8 @@
 // rail that expands on hover; < 700 px the shell shows it in a drawer.
 import { NavLink } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
-import { listAlerts, listDevPods, listNodes, listAdminUsers, type Me } from "../data/api";
+import { listAlerts, listDevPods, listNodes, listAdminUsers, meIn, type Me } from "../data/api";
+import { useClusterFilter } from "../data/clusterFilter";
 import { qk } from "../data/queries";
 
 type Item = { to: string; label: string; icon: string; count?: string; countTone?: "fail"; end?: boolean; hint?: string };
@@ -47,6 +48,7 @@ const dayAgo = () => new Date(Date.now() - 24 * 3600 * 1000).toISOString();
 export function Sidebar({ me, onNavigate }: { me: Me; onNavigate?: () => void }) {
   const admin = me.admin;
   const audit = !!me.features.audit;
+  const { filter } = useClusterFilter();
   // counts share the pages' query keys; the pages' own watches keep them fresh
   const mine = useQuery({ queryKey: qk.devpods("mine"), queryFn: () => listDevPods("mine"), staleTime: 30_000 });
   const all = useQuery({ queryKey: qk.devpods("all"), queryFn: () => listDevPods("all"), staleTime: 30_000, enabled: admin });
@@ -84,7 +86,9 @@ export function Sidebar({ me, onNavigate }: { me: Me; onNavigate?: () => void })
     { to: "/audit/alerts", label: "告警", icon: "⚠", count: alertCount && alertCount !== "0" ? alertCount : undefined, countTone: "fail" },
     { to: "/audit/access-log", label: "访问记录 · 策略", icon: "☰" },
   ];
-  const quotaMax = me.quota.maxDevPods;
+  // quotas are counted per cluster: the filtered one's, or the console's
+  const quota = meIn(me, filter)!;
+  const quotaMax = quota.quota.maxDevPods;
   return (
     <nav aria-label="主导航" className="side-inner flex h-full flex-col gap-1 bg-surface px-2 py-3">
       <div className="flex items-center gap-2 px-2 pb-2">
@@ -110,7 +114,7 @@ export function Sidebar({ me, onNavigate }: { me: Me; onNavigate?: () => void })
       <div className="side-label mt-auto space-y-0.5 px-2 pt-3 text-[11px] text-muted">
         <div className="mono truncate text-ink">{me.user}</div>
         <div className="mono">
-          配额 {me.usage.devpods}/{quotaMax ?? "∞"}
+          配额 {quota.usage.devpods}/{quotaMax ?? "∞"}
         </div>
       </div>
     </nav>

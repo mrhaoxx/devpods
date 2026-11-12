@@ -8,7 +8,7 @@ import { useEffect, useMemo, useState } from "react";
 import { parse } from "yaml";
 import { Link } from "react-router-dom";
 import { useQueryClient } from "@tanstack/react-query";
-import { ApiFailure } from "../../data/api";
+import { ApiFailure, meIn } from "../../data/api";
 import { useMe } from "../../data/queries";
 import { Button } from "../../design/Button";
 import { Field, Input, Notice } from "../../design/Form";
@@ -166,8 +166,10 @@ export function LaunchForm({
     return ys.length ? requested(ys) : null;
   }, [outcome]);
   const left = (key: string) => {
-    const lim = me?.quota.compute?.[key];
-    return lim ? parseQuantity(lim) - parseQuantity(me?.usage.compute?.[key]) : null;
+    // quotas are counted per cluster: the target's
+    const q = meIn(me, cluster);
+    const lim = q?.quota.compute?.[key];
+    return lim ? parseQuantity(lim) - parseQuantity(q?.usage.compute?.[key]) : null;
   };
   const made = outcome?.kind === "created" ? outcome.items.filter((i) => i.ok).length : 0;
   const failed = outcome?.kind === "created" ? outcome.items.length - made : 0;
