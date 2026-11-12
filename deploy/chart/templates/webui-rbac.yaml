@@ -74,6 +74,9 @@ rules:
 - apiGroups: ["devpod.io"]
   resources: ["clusters", "clusters/status"]
   verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+- apiGroups: ["devpod.io"]
+  resources: ["gateways", "gateways/status"]
+  verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
 {{- end }}
 # Read-only: the audit policy endpoints show the cluster default.
 - apiGroups: ["devpod.io"]

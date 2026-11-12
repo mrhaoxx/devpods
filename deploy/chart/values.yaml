@@ -80,6 +80,20 @@ gateway:
   cli:
     enabled: false
     user: devpod
+  # One gateway for several clusters. Instead of the cluster it runs in,
+  # it serves the clusters the console manages: it asks the console
+  # (hub.console) which DevPod a login means and for users' keys, and the
+  # clusters' agents connect to it (Service devpod-gateway-agents, port
+  # 80 → /agent/connect, a WebSocket; put a route with TLS and long-lived
+  # connections in front, and register that address at the console as
+  # the gateway's "agent 连接地址"). Register the gateway under 集群 →
+  # 网关 first; the console shows the join token once.
+  hub:
+    enabled: false
+    name: ""                     # as registered at the console
+    console: ""                  # the console's address, e.g. https://devpod.example.com
+    joinToken: ""                # or joinTokenSecret: a Secret of your own with the key "token"
+    joinTokenSecret: ""
   # SSH front proxies allowed to log in on behalf of users, as
   # [{alias: openng, pubkey: "ssh-ed25519 AAAA… openng"}].
   trustedProxyKeys: []

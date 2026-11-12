@@ -223,6 +223,22 @@ which answers a join token once (and the command to run in the new cluster);
 agent that had joined; `PATCH` takes `displayName`, `paused`, `defaultQuota`;
 `DELETE` stops managing it (its DevPods stay).
 
+### One gateway for several clusters
+
+A gateway can serve every cluster the console manages (`GET /api/gateways`:
+where to connect by SSH, the port-link domain). Admins register one with
+`POST /api/admin/gateways {name, displayName?, sshAddress?, httpBaseDomain?,
+httpSuffix?, httpPort?, agentAddress?}` (a join token, once, as for a cluster),
+edit it with `PATCH` (the same fields, and `paused`), and point a cluster at it
+with `PATCH /api/admin/clusters/{name} {gateway}`; a cluster that names none
+uses the only gateway there is, or the console's own settings.
+
+The login on such a gateway is `<user>+<devpod>[+<cluster>]`. The cluster can
+always be written, and has to be when two clusters have a DevPod of that name
+you may log in to — the gateway then says so, once your key was accepted.
+`GET /api/me` gives, per cluster (`clusters.<name>.ssh`), the address and the
+cluster to put in the login; port links (`…/http`) are on that gateway's domain.
+
 ## Without a token: the CLI over SSH
 
 `ssh <user>+devpod@<gateway> <command>` runs the same operations authenticated by

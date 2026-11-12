@@ -1,3 +1,11 @@
+{{- $hub := dig "hub" dict .Values.gateway }}
+{{- $hubOn := dig "enabled" false $hub }}
+{{- if $hubOn }}
+{{- if not $hub.name }}{{ fail "gateway.hub.enabled needs gateway.hub.name: the name the gateway was registered under at the console" }}{{ end }}
+{{- if not $hub.console }}{{ fail "gateway.hub.enabled needs gateway.hub.console: the console's address" }}{{ end }}
+{{- end }}
+{{- $hubJoin := "" }}
+{{- if $hubOn }}{{ $hubJoin = $hub.joinTokenSecret | default (ternary "devpod-gateway-join" "" (not (empty $hub.joinToken))) }}{{ end }}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -50,6 +58,18 @@ spec:
         - --http-auth-key-file=/etc/devpod/http/key
         - --http-login-url={{ required "webui.baseURL is required with gateway.http" .Values.webui.baseURL }}/http-auth
         {{- end }}
+        {{- if $hubOn }}
+        # one gateway for several clusters: DevPods and keys from the
+        # console, the way to a DevPod through its cluster's agent
+        - --console={{ $hub.console }}
+        - --gateway-name={{ $hub.name }}
+        - --gateway-namespace={{ .Values.namespaces.system }}
+        - --agent-listen=:8443
+        - --instance-selector=app.kubernetes.io/name=devpod-gateway
+        {{- if $hubJoin }}
+        - --join-token-file=/etc/devpod/gateway/join/token
+        {{- end }}
+        {{- end }}
         {{- if include "devpod.cli.on" $ }}
         - --cli-user={{ .Values.gateway.cli.user | default "devpod" }}
         - --cli-api-url=http://devpod-webui.{{ .Values.namespaces.system }}.svc:{{ .Values.webui.service.port }}
@@ -64,6 +84,9 @@ spec:
         ports:
         - {name: ssh,     containerPort: 22}
         - {name: metrics, containerPort: 8080}
+        {{- if $hubOn }}
+        - {name: agents, containerPort: 8443}
+        {{- end }}
         {{- if include "devpod.audit.on" $ }}
         - {name: live, containerPort: 8082}
         {{- end }}
@@ -86,6 +109,9 @@ spec:
         - name: internal-key
           mountPath: /etc/devpod/gateway/internal
           readOnly: true
+        {{- if $hubJoin }}
+        - {name: hub-join, mountPath: /etc/devpod/gateway/join, readOnly: true}
+        {{- end }}
         {{- if include "devpod.audit.on" $ }}
         - {name: audit-spool, mountPath: /var/spool/devpod-audit}
         - {name: live-key, mountPath: /etc/devpod/live, readOnly: true}
@@ -116,6 +142,11 @@ spec:
       - name: internal-key
         secret:
           secretName: devpod-gateway-internal-key
+      {{- if $hubJoin }}
+      - name: hub-join
+        secret:
+          secretName: {{ $hubJoin }}
+      {{- end }}
       {{- if include "devpod.audit.on" $ }}
       - name: audit-spool
         emptyDir: {sizeLimit: {{ .Values.audit.spool.sizeLimit }}}
@@ -162,3 +193,60 @@ spec:
   ports:
   - port: {{ .Values.gateway.service.port }}
     targetPort: ssh
+{{- if $hubOn }}
+---
+# Where the clusters' agents reach this gateway (/agent/connect).
+apiVersion: v1
+kind: Service
+metadata:
+  name: devpod-gateway-agents
+  namespace: {{ .Values.namespaces.system }}
+  labels: {{ include "devpod.labels" . | nindent 4 }}
+spec:
+  selector:
+    app.kubernetes.io/name: devpod-gateway
+  ports:
+  - {name: agents, port: 80, targetPort: agents}
+---
+# The gateway's own key (one Secret, made on its first start), and the
+# names of its replicas, which agents are told to connect to.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: devpod-gateway-hub
+  namespace: {{ .Values.namespaces.system }}
+  labels: {{ include "devpod.labels" . | nindent 4 }}
+rules:
+- apiGroups: [""]
+  resources: ["secrets"]
+  resourceNames: ["devpod-gateway-identity"]
+  verbs: ["get"]
+- apiGroups: [""]
+  resources: ["secrets"]
+  verbs: ["create"]
+- apiGroups: [""]
+  resources: ["pods"]
+  verbs: ["get", "list"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: devpod-gateway-hub
+  namespace: {{ .Values.namespaces.system }}
+  labels: {{ include "devpod.labels" . | nindent 4 }}
+roleRef: {apiGroup: rbac.authorization.k8s.io, kind: Role, name: devpod-gateway-hub}
+subjects:
+- {kind: ServiceAccount, name: devpod-gateway, namespace: {{ .Values.namespaces.system }}}
+{{- if $hub.joinToken }}
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: devpod-gateway-join
+  namespace: {{ .Values.namespaces.system }}
+  labels: {{ include "devpod.labels" . | nindent 4 }}
+type: Opaque
+data:
+  token: {{ $hub.joinToken | b64enc | quote }}
+{{- end }}
+{{- end }}
