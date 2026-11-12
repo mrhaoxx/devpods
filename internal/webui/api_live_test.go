@@ -263,11 +263,11 @@ func TestDevPodByUID(t *testing.T) {
 	createFor(t, s, forge(sm, "gl-alice", false), "gl-alice-dev1")
 	t.Cleanup(func() { cleanupDevPods(t) })
 	dp := waitDevPod(t, "gl-alice-dev1")
-	got, ok := s.DevPodByUID(context.Background(), string(dp.UID))
+	got, _, ok := s.DevPodByUID(context.Background(), string(dp.UID))
 	if !ok || got.Name != "gl-alice-dev1" || got.Spec.Owner != "gl-alice" {
 		t.Fatalf("%v %+v", ok, got)
 	}
-	if _, ok := s.DevPodByUID(context.Background(), "no-such-uid"); ok {
+	if _, _, ok := s.DevPodByUID(context.Background(), "no-such-uid"); ok {
 		t.Fatal("unknown uid found")
 	}
 }

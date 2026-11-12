@@ -101,7 +101,8 @@ func newRig(t *testing.T, spoolMax int64) *rig {
 }
 
 func (g *rig) start(pol policy.Effective) *Session {
-	return g.r.Start(SessionMeta{ID: NewSessionID(time.Now()), User: "alice", DevPod: "alice-dev", DevPodUID: "uid-1", Owner: "alice", OpenedAt: time.Now()}, pol)
+	return g.r.Start(SessionMeta{ID: NewSessionID(time.Now()), User: "alice", DevPod: "alice-dev", DevPodUID: "uid-1", Owner: "alice", OpenedAt: time.Now(),
+		Cluster: "zjusct", Gateway: "gw"}, pol)
 }
 
 func (g *rig) drain() store.Batch {
@@ -168,6 +169,10 @@ func TestSession_ExecCommandRecorded(t *testing.T) {
 	}
 	if closed.ClosedAt == nil || closed.CloseReason != "client_disconnect" || closed.BytesIn != 10 || closed.PolicySnapshot == "" {
 		t.Fatalf("closed session row %+v", closed)
+	}
+	// every row of the session says its DevPod's cluster; the session, its gateway
+	if closed.Cluster != "zjusct" || closed.Gateway != "gw" || last.Cluster != "zjusct" || all.Channels[0].Cluster != "zjusct" {
+		t.Fatalf("cluster: session %q/%q, command %q, channel %q", closed.Cluster, closed.Gateway, last.Cluster, all.Channels[0].Cluster)
 	}
 }
 

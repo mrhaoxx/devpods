@@ -13,6 +13,8 @@ import (
 // Container-side telemetry rows (spec §8.2, migration 0002).
 
 type ContainerMetricRow struct {
+	// Cluster: the cluster of its DevPod, in a console of several ("" in a console of one).
+	Cluster       string    `ch:"cluster" json:"cluster,omitempty"`
 	TS            time.Time `ch:"ts"`
 	DevPodUID     string    `ch:"devpod_uid"`
 	BootID        string    `ch:"boot_id"`
@@ -44,6 +46,8 @@ type ContainerMetricRow struct {
 }
 
 type GPUMetricRow struct {
+	// Cluster: the cluster of its DevPod, in a console of several ("" in a console of one).
+	Cluster   string    `ch:"cluster" json:"cluster,omitempty"`
 	TS        time.Time `ch:"ts"`
 	DevPodUID string    `ch:"devpod_uid"`
 	GPUUUID   string    `ch:"gpu_uuid"`
@@ -60,6 +64,8 @@ type GPUMetricRow struct {
 }
 
 type RDMAMetricRow struct {
+	// Cluster: the cluster of its DevPod, in a console of several ("" in a console of one).
+	Cluster   string            `ch:"cluster" json:"cluster,omitempty"`
 	TS        time.Time         `ch:"ts"`
 	DevPodUID string            `ch:"devpod_uid"`
 	IBDev     string            `ch:"ibdev"`
@@ -73,6 +79,8 @@ type RDMAMetricRow struct {
 }
 
 type ProcMetricRow struct {
+	// Cluster: the cluster of its DevPod, in a console of several ("" in a console of one).
+	Cluster   string    `ch:"cluster" json:"cluster,omitempty"`
 	TS        time.Time `ch:"ts"`
 	DevPodUID string    `ch:"devpod_uid"`
 	BootID    string    `ch:"boot_id"`
@@ -94,6 +102,8 @@ type ProcMetricRow struct {
 // ProcessRow is one process's lifetime record; attribution backfill
 // re-inserts it with a higher Version (spec §8.3).
 type ProcessRow struct {
+	// Cluster: the cluster of its DevPod, in a console of several ("" in a console of one).
+	Cluster     string     `ch:"cluster" json:"cluster,omitempty"`
 	DevPodUID   string     `ch:"devpod_uid" json:"devpod_uid"`
 	BootID      string     `ch:"boot_id" json:"boot_id"`
 	Pid         uint32     `ch:"pid" json:"pid"`
@@ -113,6 +123,8 @@ type ProcessRow struct {
 }
 
 type SSHConnRow struct {
+	// Cluster: the cluster of its DevPod, in a console of several ("" in a console of one).
+	Cluster   string     `ch:"cluster" json:"cluster,omitempty"`
 	DevPodUID string     `ch:"devpod_uid" json:"devpod_uid"`
 	BootID    string     `ch:"boot_id" json:"boot_id"`
 	Pid       uint32     `ch:"pid" json:"pid"`
@@ -126,6 +138,8 @@ type SSHConnRow struct {
 }
 
 type ContainerInfoRow struct {
+	// Cluster: the cluster of its DevPod, in a console of several ("" in a console of one).
+	Cluster   string    `ch:"cluster" json:"cluster,omitempty"`
 	TS        time.Time `ch:"ts" json:"ts"`
 	DevPodUID string    `ch:"devpod_uid" json:"devpod_uid"`
 	BootID    string    `ch:"boot_id" json:"boot_id"`
@@ -134,6 +148,8 @@ type ContainerInfoRow struct {
 }
 
 type SnapshotRow struct {
+	// Cluster: the cluster of its DevPod, in a console of several ("" in a console of one).
+	Cluster   string    `ch:"cluster" json:"cluster,omitempty"`
 	TS        time.Time `ch:"ts" json:"ts"`
 	DevPodUID string    `ch:"devpod_uid" json:"devpod_uid"`
 	Data      string    `ch:"data" json:"data"` // wire.Snapshot JSON
@@ -151,6 +167,40 @@ type TelemetryBatch struct {
 	Infos      []ContainerInfoRow
 	Snapshots  []SnapshotRow
 	Alerts     []AlertRow
+}
+
+// SetCluster says every row of b is of a DevPod in cluster.
+func (b *TelemetryBatch) SetCluster(cluster string) {
+	for i := range b.Containers {
+		b.Containers[i].Cluster = cluster
+	}
+	for i := range b.GPUs {
+		b.GPUs[i].Cluster = cluster
+	}
+	for i := range b.RDMAs {
+		b.RDMAs[i].Cluster = cluster
+	}
+	for i := range b.Procs {
+		b.Procs[i].Cluster = cluster
+	}
+	for i := range b.ProcRows {
+		b.ProcRows[i].Cluster = cluster
+	}
+	for i := range b.SSHConns {
+		b.SSHConns[i].Cluster = cluster
+	}
+	for i := range b.Commands {
+		b.Commands[i].Cluster = cluster
+	}
+	for i := range b.Infos {
+		b.Infos[i].Cluster = cluster
+	}
+	for i := range b.Snapshots {
+		b.Snapshots[i].Cluster = cluster
+	}
+	for i := range b.Alerts {
+		b.Alerts[i].Cluster = cluster
+	}
 }
 
 // Empty reports whether the batch has no rows.

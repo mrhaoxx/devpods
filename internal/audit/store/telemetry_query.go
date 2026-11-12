@@ -176,14 +176,14 @@ func (c *CH) MetricsRange(ctx context.Context, uid string, from, to time.Time, s
 func (c *CH) LatestInfo(ctx context.Context, uid string, since time.Time) (*ContainerInfoRow, *SnapshotRow, error) {
 	ctx = c.readCtx(ctx)
 	var infos []ContainerInfoRow
-	if err := c.conn.Select(ctx, &infos, fmt.Sprintf("SELECT * FROM %s.container_info WHERE devpod_uid = ? AND ts >= ? ORDER BY ts DESC LIMIT 1", c.db), uid, since); err != nil {
+	if err := c.conn.Select(ctx, &infos, fmt.Sprintf("SELECT %s FROM %s.container_info WHERE devpod_uid = ? AND ts >= ? ORDER BY ts DESC LIMIT 1", columns[ContainerInfoRow](), c.db), uid, since); err != nil {
 		return nil, nil, fmt.Errorf("container info: %w", err)
 	}
 	if len(infos) == 0 {
 		return nil, nil, ErrNotFound
 	}
 	var snaps []SnapshotRow
-	if err := c.conn.Select(ctx, &snaps, fmt.Sprintf("SELECT * FROM %s.container_snapshots WHERE devpod_uid = ? AND ts >= ? ORDER BY ts DESC LIMIT 1", c.db), uid, since); err != nil {
+	if err := c.conn.Select(ctx, &snaps, fmt.Sprintf("SELECT %s FROM %s.container_snapshots WHERE devpod_uid = ? AND ts >= ? ORDER BY ts DESC LIMIT 1", columns[SnapshotRow](), c.db), uid, since); err != nil {
 		return nil, nil, fmt.Errorf("container snapshot: %w", err)
 	}
 	var snap *SnapshotRow
@@ -235,7 +235,7 @@ func (c *CH) IdleCandidates(ctx context.Context, now time.Time, cpuPct, gpuPct f
 // not known yet when they were ingested (spec §5.4 backfill).
 func (c *CH) PendingAttributions(ctx context.Context, since time.Time) ([]SSHConnRow, error) {
 	var out []SSHConnRow
-	err := c.conn.Select(c.readCtx(ctx), &out, fmt.Sprintf("SELECT * FROM %s.ssh_conns FINAL WHERE first_seen >= ? AND session_id = 'pending'", c.db), since)
+	err := c.conn.Select(c.readCtx(ctx), &out, fmt.Sprintf("SELECT %s FROM %s.ssh_conns FINAL WHERE first_seen >= ? AND session_id = 'pending'", columns[SSHConnRow](), c.db), since)
 	if err != nil {
 		return nil, fmt.Errorf("pending attributions: %w", err)
 	}
@@ -282,10 +282,10 @@ func (c *CH) OpenSessionsByBackend(ctx context.Context, since time.Time) (map[st
 // (spec §5.8).
 func (c *CH) HookMissing(ctx context.Context, from, to time.Time) ([]SessionRow, error) {
 	lo := from.Add(-7 * 24 * time.Hour)
-	q := fmt.Sprintf(`SELECT * FROM %[1]s.sessions FINAL
+	q := fmt.Sprintf(`SELECT %[2]s FROM %[1]s.sessions FINAL
 		WHERE opened_at >= ? AND closed_at >= ? AND closed_at < ? AND dateDiff('second', opened_at, closed_at) >= 60
 		  AND session_id IN (SELECT session_id FROM %[1]s.channels WHERE opened_at >= ? AND pty AND bytes_in >= 1024)
-		  AND session_id NOT IN (SELECT session_id FROM %[1]s.commands WHERE ts >= ? AND source = 'shell_hook')`, c.db)
+		  AND session_id NOT IN (SELECT session_id FROM %[1]s.commands WHERE ts >= ? AND source = 'shell_hook')`, c.db, columns[SessionRow]())
 	var out []SessionRow
 	if err := c.conn.Select(c.readCtx(ctx), &out, q, lo, from, to, lo, lo); err != nil {
 		return nil, fmt.Errorf("hook missing: %w", err)
@@ -316,7 +316,7 @@ func (c *CH) LastSessionByUser(ctx context.Context, since time.Time) (map[string
 // ingest (spec §5.4 backfill).
 func (c *CH) PendingProcesses(ctx context.Context, since time.Time) ([]ProcessRow, error) {
 	var out []ProcessRow
-	err := c.conn.Select(c.readCtx(ctx), &out, fmt.Sprintf("SELECT * FROM %s.processes FINAL WHERE first_seen >= ? AND session_id = 'pending'", c.db), since)
+	err := c.conn.Select(c.readCtx(ctx), &out, fmt.Sprintf("SELECT %s FROM %s.processes FINAL WHERE first_seen >= ? AND session_id = 'pending'", columns[ProcessRow](), c.db), since)
 	if err != nil {
 		return nil, fmt.Errorf("pending processes: %w", err)
 	}
@@ -338,7 +338,7 @@ type PendingCommand struct {
 func (c *CH) PendingCommands(ctx context.Context, since, procSince time.Time) ([]PendingCommand, error) {
 	q := fmt.Sprintf(`SELECT c.event_id AS event_id, c.ts AS ts, c.session_id AS session_id, c.devpod_uid AS devpod_uid, c.user AS user,
 			c.source AS source, c.channel_id AS channel_id, c.pid AS pid, c.cwd AS cwd, c.cmdline AS cmdline, c.exit_code AS exit_code,
-			c.duration_ms AS duration_ms, c.attribution AS attribution, c.version AS version,
+			c.duration_ms AS duration_ms, c.attribution AS attribution, c.version AS version, c.cluster AS cluster,
 			p.peer AS peer, p.attribution AS proc_attribution, p.first_seen AS proc_first_seen
 		FROM (SELECT * FROM %[1]s.commands FINAL WHERE ts >= ? AND session_id = 'pending') AS c
 		INNER JOIN (SELECT devpod_uid, pid, peer, attribution, first_seen, exit_seen FROM %[1]s.processes FINAL
@@ -430,24 +430,31 @@ func (c *CH) HooksSince(ctx context.Context, since time.Time) (map[string]time.T
 
 // UnattributedCounts counts, per DevPod, processes first seen in
 // [from, to) that no rule attributed (the minute's unattributed alert).
-func (c *CH) UnattributedCounts(ctx context.Context, from, to time.Time) (map[string]uint64, error) {
-	q := fmt.Sprintf(`SELECT devpod_uid, count() FROM %s.processes FINAL
+func (c *CH) UnattributedCounts(ctx context.Context, from, to time.Time) (map[string]Unattributed, error) {
+	q := fmt.Sprintf(`SELECT devpod_uid, any(cluster), count() FROM %s.processes FINAL
 		WHERE first_seen >= ? AND first_seen < ? AND attribution = 'unattributed' AND pid != 1 GROUP BY devpod_uid`, c.db)
 	rows, err := c.conn.Query(c.readCtx(ctx), q, from, to)
 	if err != nil {
 		return nil, fmt.Errorf("unattributed counts: %w", err)
 	}
 	defer rows.Close()
-	out := map[string]uint64{}
+	out := map[string]Unattributed{}
 	for rows.Next() {
-		var uid string
+		var uid, cluster string
 		var n uint64
-		if err := rows.Scan(&uid, &n); err != nil {
+		if err := rows.Scan(&uid, &cluster, &n); err != nil {
 			return nil, err
 		}
-		out[uid] = n
+		out[uid] = Unattributed{Cluster: cluster, N: n}
 	}
 	return out, rows.Err()
+}
+
+// Unattributed: how many processes of a DevPod no rule attributed, and
+// the cluster it is in.
+type Unattributed struct {
+	Cluster string
+	N       uint64
 }
 
 // RecentSeries is a short CPU / memory history for many DevPods at once

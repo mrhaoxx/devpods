@@ -12,21 +12,19 @@ import { Panel } from "../../design/Panel";
 import { Notice } from "../../design/Form";
 import { Badge } from "../../design/Badge";
 import { useUrlState, type Schema } from "../../lib/urlState";
-import { AuditError, FilterBox, LoadMore, RangePicker, fmtTS, fromTo, usePaged } from "./common";
+import { AuditError, FilterBox, LoadMore, RangePicker, fmtTS, fromTo, usePaged, withCluster } from "./common";
 
 const alertSchema = { range: { kind: "string", default: "7d" }, devpod: { kind: "string", default: "" } } satisfies Schema;
 
 export function AlertsPage() {
   const [url, setUrl] = useUrlState(alertSchema);
   const [sorting, setSorting] = useState<SortingState>([]);
-  const q = usePaged<AlertRow>("alerts", fromTo(url.range), listAlerts);
+  // the filtered cluster's alerts (by their DevPod's cluster)
+  const { filter, several } = useClusterFilter();
+  const q = usePaged<AlertRow>("alerts", { ...fromTo(url.range), cluster: filter }, listAlerts);
   const pods = useQuery({ queryKey: qk.devpods("all"), queryFn: () => listDevPods("all") });
   const byUID = useMemo(() => new Map((pods.data?.items ?? []).map((d) => [d.metadata.uid ?? "", d.metadata.name])), [pods.data]);
-  // an alert's cluster is its DevPod's (a uid is in one cluster)
-  const { matches } = useClusterFilter();
-  const clusterOf = useMemo(() => new Map((pods.data?.items ?? []).map((d) => [d.metadata.uid ?? "", d.cluster])), [pods.data]);
-  const inFilter = q.items.filter((a) => matches({ cluster: clusterOf.get(a.devpod_uid) }));
-  const rows = url.devpod ? inFilter.filter((a) => (byUID.get(a.devpod_uid) ?? "").includes(url.devpod)) : inFilter;
+  const rows = url.devpod ? q.items.filter((a) => (byUID.get(a.devpod_uid) ?? "").includes(url.devpod)) : q.items;
   const columns: ColumnDef<AlertRow, unknown>[] = [
     { id: "ts", header: "时间", accessorKey: "ts", meta: { priority: 2, width: 150 }, cell: ({ getValue }) => fmtTS(String(getValue())) },
     { id: "kind", header: "类型", accessorKey: "kind", meta: { priority: 1, width: 120 }, cell: ({ getValue }) => <Badge tone="fail">{String(getValue())}</Badge> },
@@ -45,7 +43,7 @@ export function AlertsPage() {
         <AuditError error={q.error} />
       ) : (
         <>
-          <DataTable<AlertRow> storageKey="alerts" data={rows} columns={columns} getRowId={(a) => `${a.ts}:${a.kind}:${a.session_id}:${a.detail}`} sorting={sorting} onSortingChange={setSorting} empty={<EmptyState title={q.isLoading ? "加载中…" : "这段时间没有告警"} />} />
+          <DataTable<AlertRow> storageKey="alerts" data={rows} columns={withCluster(columns, several)} getRowId={(a) => `${a.ts}:${a.kind}:${a.session_id}:${a.detail}`} sorting={sorting} onSortingChange={setSorting} empty={<EmptyState title={q.isLoading ? "加载中…" : "这段时间没有告警"} />} />
           <LoadMore hasMore={q.hasNextPage} busy={q.isFetchingNextPage} onClick={() => void q.fetchNextPage()} />
         </>
       )}

@@ -371,7 +371,7 @@ func (l *lazyCH) HooksSince(ctx context.Context, since time.Time) (map[string]ti
 	return c.HooksSince(ctx, since)
 }
 
-func (l *lazyCH) UnattributedCounts(ctx context.Context, from, to time.Time) (map[string]uint64, error) {
+func (l *lazyCH) UnattributedCounts(ctx context.Context, from, to time.Time) (map[string]store.Unattributed, error) {
 	c, err := l.get(ctx)
 	if err != nil {
 		return nil, err

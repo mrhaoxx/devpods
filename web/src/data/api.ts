@@ -281,6 +281,8 @@ export type ChannelRow = {
   raw_recorded: boolean;
 };
 export type CommandRow = {
+  /** its DevPod's cluster, in a console of several */
+  cluster?: string;
   event_id: string;
   ts: string;
   session_id: string;
@@ -294,6 +296,7 @@ export type CommandRow = {
   attribution: string;
 };
 export type FileEventRow = {
+  cluster?: string;
   event_id: string;
   ts: string;
   session_id: string;
@@ -310,7 +313,7 @@ export type FileEventRow = {
   s3_key: string;
 };
 export type PolicyEventRow = { ts: string; session_id: string; user: string; rule: string; action: string; detail: string };
-export type AlertRow = { ts: string; devpod_uid: string; session_id: string; kind: string; source: string; detail: string };
+export type AlertRow = { cluster?: string; ts: string; devpod_uid: string; session_id: string; kind: string; source: string; detail: string };
 export type AccessLogRow = { ts: string; viewer: string; action: string; target_session: string; target_file: string; client_ip: string };
 export type SessionDetail = {
   session: SessionRow;

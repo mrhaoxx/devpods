@@ -19,6 +19,10 @@ import (
 	"github.com/mrhaoxx/devpod/internal/webui/live"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/types"
+	"sigs.k8s.io/controller-runtime/pkg/client"
+
+	devpodv1alpha1 "github.com/mrhaoxx/devpod/api/v1alpha1"
 )
 
 // Lists that are a cluster's cover every cluster when the request names
@@ -149,5 +153,39 @@ func TestListsWithAClusterAway(t *testing.T) {
 		if code, out, _ := w.call("gl-alice", "GET", path, ""); code != http.StatusOK {
 			t.Fatalf("%s with b away: %d %v", path, code, out)
 		}
+	}
+}
+
+// An Event about a DevPod is written in the cluster the DevPod is in.
+func TestDevPodEventInItsCluster(t *testing.T) {
+	w := setupWorld(t)
+	ctx := context.Background()
+	if code, out, _ := w.call("gl-alice", "POST", "/api/clusters/b/devpods", `{"name":"ev","image":"ubuntu:24.04","cpu":"1","memory":"1Gi"}`); code != http.StatusCreated {
+		t.Fatalf("create in b: %d %v", code, out)
+	}
+	var dp devpodv1alpha1.DevPod
+	w.until("b has the DevPod", func() bool {
+		return w.b.Get(ctx, types.NamespacedName{Namespace: "devpods", Name: "gl-alice-ev"}, &dp) == nil
+	})
+	w.until("the console sees it", func() bool {
+		_, cluster, ok := w.s.DevPodByUID(ctx, string(dp.UID))
+		return ok && cluster == "b"
+	})
+	if err := w.s.DevPodEvent(ctx, string(dp.UID), "Warning", "TelemetryAlert", "agent_silent: no telemetry"); err != nil {
+		t.Fatal(err)
+	}
+	count := func(c client.Client) int {
+		var evs corev1.EventList
+		_ = c.List(ctx, &evs, client.InNamespace("devpods"))
+		n := 0
+		for _, e := range evs.Items {
+			if e.InvolvedObject.UID == dp.UID && e.Reason == "TelemetryAlert" {
+				n++
+			}
+		}
+		return n
+	}
+	if count(w.b) != 1 || count(w.a) != 0 {
+		t.Fatalf("events: in b %d, in a %d", count(w.b), count(w.a))
 	}
 }

@@ -12,7 +12,7 @@ import { Badge } from "../../design/Badge";
 import { EmptyState } from "../../design/EmptyState";
 import { useUrlState, type Schema } from "../../lib/urlState";
 import { fmtBytes } from "../../lib/format";
-import { AuditError, FilterBox, LoadMore, RangePicker, confirmDownload, fmtTS, fromTo, usePaged } from "./common";
+import { AuditError, FilterBox, LoadMore, RangePicker, confirmDownload, fmtTS, fromTo, usePaged, withCluster } from "./common";
 
 function Tabs() {
   const cls = ({ isActive }: { isActive: boolean }) => `-mb-px border-b-2 px-3 py-1.5 ${isActive ? "border-accent font-semibold text-accent" : "border-transparent text-muted hover:text-ink"}`;
@@ -34,9 +34,9 @@ export function CommandsPage() {
   const admin = !!useMe().data?.admin;
   const [url, setUrl] = useUrlState(cmdSchema);
   const [sorting, setSorting] = useState<SortingState>([]);
-  // a DevPod name is looked up in the filtered cluster (a name can be in two)
-  const { filter } = useClusterFilter();
-  const q = usePaged<CommandRow>("commands", { ...fromTo(url.range), q: url.q, user: admin ? url.user : "", devpod: url.devpod, cluster: url.devpod ? filter : "" }, searchCommands);
+  // the filtered cluster's commands (a DevPod name is looked up there too)
+  const { filter, several } = useClusterFilter();
+  const q = usePaged<CommandRow>("commands", { ...fromTo(url.range), q: url.q, user: admin ? url.user : "", devpod: url.devpod, cluster: filter }, searchCommands);
   const columns: ColumnDef<CommandRow, unknown>[] = [
     { id: "ts", header: "时间", accessorKey: "ts", meta: { priority: 2, width: 150 }, cell: ({ getValue }) => fmtTS(String(getValue())) },
     { id: "user", header: "用户", accessorKey: "user", meta: { priority: 3, width: 90, mono: true } },
@@ -58,7 +58,7 @@ export function CommandsPage() {
         <AuditError error={q.error} />
       ) : (
         <>
-          <DataTable<CommandRow> storageKey="commands" data={q.items} columns={columns} getRowId={(c) => c.event_id} sorting={sorting} onSortingChange={setSorting} empty={<EmptyState title={q.isLoading ? "加载中…" : "这段时间没有命令"} />} />
+          <DataTable<CommandRow> storageKey="commands" data={q.items} columns={withCluster(columns, several)} getRowId={(c) => c.event_id} sorting={sorting} onSortingChange={setSorting} empty={<EmptyState title={q.isLoading ? "加载中…" : "这段时间没有命令"} />} />
           <LoadMore hasMore={q.hasNextPage} busy={q.isFetchingNextPage} onClick={() => void q.fetchNextPage()} />
         </>
       )}
@@ -72,7 +72,8 @@ export function FilesPage() {
   const admin = !!useMe().data?.admin;
   const [url, setUrl] = useUrlState(fileSchema);
   const [sorting, setSorting] = useState<SortingState>([]);
-  const q = usePaged<FileEventRow>("files", { ...fromTo(url.range), path: url.path, sha256: url.sha256, user: admin ? url.user : "" }, searchFiles);
+  const { filter, several } = useClusterFilter();
+  const q = usePaged<FileEventRow>("files", { ...fromTo(url.range), path: url.path, sha256: url.sha256, user: admin ? url.user : "", cluster: filter }, searchFiles);
   const columns: ColumnDef<FileEventRow, unknown>[] = [
     { id: "ts", header: "时间", accessorKey: "ts", meta: { priority: 2, width: 150 }, cell: ({ getValue }) => fmtTS(String(getValue())) },
     { id: "user", header: "用户", accessorKey: "user", meta: { priority: 3, width: 90, mono: true } },
@@ -114,7 +115,7 @@ export function FilesPage() {
         <AuditError error={q.error} />
       ) : (
         <>
-          <DataTable<FileEventRow> storageKey="files" data={q.items} columns={columns} getRowId={(f) => f.event_id} sorting={sorting} onSortingChange={setSorting} empty={<EmptyState title={q.isLoading ? "加载中…" : "这段时间没有文件传输"} />} />
+          <DataTable<FileEventRow> storageKey="files" data={q.items} columns={withCluster(columns, several)} getRowId={(f) => f.event_id} sorting={sorting} onSortingChange={setSorting} empty={<EmptyState title={q.isLoading ? "加载中…" : "这段时间没有文件传输"} />} />
           <LoadMore hasMore={q.hasNextPage} busy={q.isFetchingNextPage} onClick={() => void q.fetchNextPage()} />
         </>
       )}

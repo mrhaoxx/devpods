@@ -28,15 +28,15 @@ export function SessionsPage({ mine }: { mine?: boolean }) {
   const me = useMe().data;
   const admin = !!me?.admin && !mine;
   const [url, setUrl] = useUrlState(schema);
-  const { matches, filter } = useClusterFilter();
+  const { filter } = useClusterFilter();
   const now = useNow(10_000);
   const [sorting, setSorting] = useState<SortingState>([]);
   const filters = {
     ...fromTo(url.range),
     user: mine ? (me?.user ?? "") : admin ? url.user : "",
     devpod: url.devpod,
-    // a DevPod name is looked up in the filtered cluster (a name can be in two)
-    cluster: url.devpod ? filter : "",
+    // the filtered cluster's sessions (a DevPod name is looked up there too)
+    cluster: filter,
     hasFiles: url.files ? "true" : "",
     hasAlerts: url.alerts ? "true" : "",
   };
@@ -116,7 +116,7 @@ export function SessionsPage({ mine }: { mine?: boolean }) {
         <>
           <DataTable<SessionSummary>
           storageKey="sessions"
-            data={q.items.filter(matches)}
+            data={q.items}
             columns={columns}
             getRowId={(s) => s.session_id}
             sorting={sorting}

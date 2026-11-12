@@ -45,8 +45,9 @@ type Handler struct {
 	IsLeader func() bool
 	Writer   *Writer
 	State    *live.State
-	// DevPods reports a live DevPod by UID.
-	DevPods func(uid string) (owner, name string, ok bool)
+	// DevPods reports a live DevPod by UID, and the cluster it is in ("" in
+	// a console of one): every row written for it says that cluster.
+	DevPods func(uid string) (owner, name, cluster string, ok bool)
 	// Resolver maps peers to sessions; nil leaves them pending.
 	Resolver *Resolver
 	// Events records a k8s Event (reason TelemetryAlert) on the DevPod;
@@ -59,7 +60,7 @@ type Handler struct {
 	inflight int64
 	decoding chan struct{}
 	written  map[stream]uint64
-	known    map[string]time.Time // DevPod UID → valid until
+	known    map[string]knownDevPod // DevPod UID → its cluster, valid until
 	limiters map[string]*rate.Limiter
 	evented  map[[2]string]time.Time
 }
@@ -111,7 +112,8 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
 		return
 	}
-	if !h.knownDevPod(uid) {
+	cluster, ok := h.knownDevPod(uid)
+	if !ok {
 		http.Error(w, "unknown DevPod", http.StatusUnauthorized)
 		return
 	}
@@ -153,6 +155,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		h.State.Apply(uid, recs)
 	}
 	b := h.rows(hd, recs)
+	b.SetCluster(cluster)
 	if !b.Empty() {
 		done := make(chan error, 1)
 		h.Writer.Submit(fmt.Sprintf("%s/%s/%d-%d", uid, hd.BootID, hd.FromSeq, hd.Seq), b, func(err error) { done <- err })
@@ -176,25 +179,31 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	writeAck(w, hd.Seq)
 }
 
-// knownDevPod checks the UID against the DevPods, caching a hit for
-// authCacheTTL (every batch is authenticated).
-func (h *Handler) knownDevPod(uid string) bool {
+type knownDevPod struct {
+	cluster string
+	until   time.Time
+}
+
+// knownDevPod checks the UID against the DevPods, caching a hit (and the
+// cluster the DevPod is in) for authCacheTTL.
+func (h *Handler) knownDevPod(uid string) (string, bool) {
 	h.mu.Lock()
-	until, ok := h.known[uid]
+	k, ok := h.known[uid]
 	h.mu.Unlock()
-	if ok && time.Now().Before(until) {
-		return true
+	if ok && time.Now().Before(k.until) {
+		return k.cluster, true
 	}
-	if _, _, ok := h.DevPods(uid); !ok {
-		return false
+	_, _, cluster, ok := h.DevPods(uid)
+	if !ok {
+		return "", false
 	}
 	h.mu.Lock()
 	if h.known == nil {
-		h.known = map[string]time.Time{}
+		h.known = map[string]knownDevPod{}
 	}
-	h.known[uid] = time.Now().Add(authCacheTTL)
+	h.known[uid] = knownDevPod{cluster: cluster, until: time.Now().Add(authCacheTTL)}
 	h.mu.Unlock()
-	return true
+	return cluster, true
 }
 
 type tooLargeError struct{}

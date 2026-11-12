@@ -36,13 +36,14 @@ type JobStore interface {
 	HookMissing(ctx context.Context, from, to time.Time) ([]store.SessionRow, error)
 	InfoSeen(ctx context.Context, since time.Time) (map[string]time.Time, error)
 	HooksSince(ctx context.Context, since time.Time) (map[string]time.Time, error)
-	UnattributedCounts(ctx context.Context, from, to time.Time) (map[string]uint64, error)
+	UnattributedCounts(ctx context.Context, from, to time.Time) (map[string]store.Unattributed, error)
 	InsertTelemetry(ctx context.Context, b store.TelemetryBatch, token string) error
 }
 
 // RunningDevPod is a Running DevPod and when its Pod was created.
 type RunningDevPod struct {
 	UID, Name string
+	Cluster   string // in a console of several
 	PodStart  time.Time
 }
 
@@ -201,7 +202,7 @@ func (j *Jobs) crossCheck(ctx context.Context, now time.Time) error {
 		if s.ClosedAt != nil {
 			at = *s.ClosedAt
 		}
-		alerts = append(alerts, store.AlertRow{TS: at, DevPodUID: s.DevPodUID, SessionID: s.SessionID, Kind: "hook_missing", Source: "webui",
+		alerts = append(alerts, store.AlertRow{TS: at, DevPodUID: s.DevPodUID, SessionID: s.SessionID, Cluster: s.Cluster, Kind: "hook_missing", Source: "webui",
 			Detail: fmt.Sprintf("%s typed into a terminal for %s but no shell-hook command was recorded", s.User, at.Sub(s.OpenedAt).Truncate(time.Second))})
 	}
 
@@ -212,8 +213,8 @@ func (j *Jobs) crossCheck(ctx context.Context, now time.Time) error {
 		return err
 	}
 	for uid, n := range counts {
-		alerts = append(alerts, store.AlertRow{TS: to, DevPodUID: uid, Kind: "unattributed", Source: "webui",
-			Detail: fmt.Sprintf("%d new process(es) attributed to no SSH session", n)})
+		alerts = append(alerts, store.AlertRow{TS: to, DevPodUID: uid, Cluster: n.Cluster, Kind: "unattributed", Source: "webui",
+			Detail: fmt.Sprintf("%d new process(es) attributed to no SSH session", n.N)})
 	}
 
 	running := j.Running(ctx)
@@ -242,7 +243,7 @@ func (j *Jobs) crossCheck(ctx context.Context, now time.Time) error {
 		}
 		if !j.silent[d.UID] {
 			j.silent[d.UID] = true
-			alerts = append(alerts, store.AlertRow{TS: now, DevPodUID: d.UID, Kind: "agent_silent", Source: "webui",
+			alerts = append(alerts, store.AlertRow{TS: now, DevPodUID: d.UID, Cluster: d.Cluster, Kind: "agent_silent", Source: "webui",
 				Detail: fmt.Sprintf("%s: no telemetry for %s", d.Name, now.Sub(quiet).Truncate(time.Second))})
 		}
 	}

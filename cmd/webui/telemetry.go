@@ -143,19 +143,19 @@ func (tf *telemetryFlags) startTelemetry(ctx context.Context, cfg *rest.Config, 
 	state.ResolveUser = resolver.User
 	writer := ingest.NewWriter(ch)
 	writer.IsLeader = el.IsLeader
-	recorder := mgr.GetEventRecorderFor("devpod-webui")
 	h := &ingest.Handler{
 		Key: key, IsLeader: el.IsLeader, Writer: writer, State: state, Resolver: resolver,
-		DevPods: func(uid string) (string, string, bool) {
-			dp, ok := srv.DevPodByUID(context.Background(), uid)
+		DevPods: func(uid string) (string, string, string, bool) {
+			dp, cluster, ok := srv.DevPodByUID(context.Background(), uid)
 			if !ok {
-				return "", "", false
+				return "", "", "", false
 			}
-			return dp.Spec.Owner, dp.Name, true
+			return dp.Spec.Owner, dp.Name, cluster, true
 		},
+		// on the DevPod, in the cluster it is in
 		Events: func(uid, kind, detail string) {
-			if dp, ok := srv.DevPodByUID(context.Background(), uid); ok {
-				recorder.Eventf(dp, corev1.EventTypeWarning, "TelemetryAlert", "%s: %s", kind, detail)
+			if err := srv.DevPodEvent(context.Background(), uid, corev1.EventTypeWarning, "TelemetryAlert", kind+": "+detail); err != nil {
+				slog.Warn("telemetry: devpod event", "uid", uid, "err", err)
 			}
 		},
 	}
@@ -171,7 +171,7 @@ func (tf *telemetryFlags) startTelemetry(ctx context.Context, cfg *rest.Config, 
 		var out []leader.RunningDevPod
 		for _, d := range inputs.Build(ctx).DevPods {
 			if d.Phase == "Running" {
-				out = append(out, leader.RunningDevPod{UID: d.UID, Name: d.Name, PodStart: d.PhaseSince})
+				out = append(out, leader.RunningDevPod{UID: d.UID, Name: d.Name, Cluster: d.Cluster, PodStart: d.PhaseSince})
 			}
 		}
 		return out

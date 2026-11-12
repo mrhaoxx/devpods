@@ -68,9 +68,6 @@ func (g *segFile) Close() error {
 func newSession(r *Recorder, meta SessionMeta, pol policy.Effective) *Session {
 	s := &Session{r: r, meta: meta, pol: pol, done: make(chan struct{}), lastFlush: r.cfg.Now()}
 	s.buf.Sessions = append(s.buf.Sessions, s.row(1, nil, "", 0, 0))
-	if meta.Cluster != "" || meta.Gateway != "" {
-		s.buf.Origins = append(s.buf.Origins, store.OriginRow{SessionID: meta.ID, Cluster: meta.Cluster, Gateway: meta.Gateway, OpenedAt: meta.OpenedAt, Version: 1})
-	}
 	return s
 }
 
@@ -82,6 +79,7 @@ func (s *Session) row(version uint64, closedAt *time.Time, reason string, in, ou
 		AuthKind: s.meta.AuthKind, ProxyAlias: s.meta.ProxyAlias, BackendLocalAddr: s.backend,
 		OpenedAt: s.meta.OpenedAt, ClosedAt: closedAt, CloseReason: reason, BytesIn: in, BytesOut: out,
 		PolicySnapshot: string(snap), Gaps: s.gaps.Load(), Version: version,
+		Cluster: s.meta.Cluster, Gateway: s.meta.Gateway,
 	}
 }
 
@@ -208,6 +206,8 @@ func (s *Session) flushLocked(now time.Time) {
 	if s.buf.Empty() {
 		return
 	}
+	// everything recorded in the session is of its DevPod, in its cluster
+	s.buf.SetCluster(s.meta.Cluster)
 	if err := s.r.spool.WriteBatch(s.buf); err != nil {
 		GapsTotal.Inc() // rows lost: the spool is completely full
 	}

@@ -23,7 +23,7 @@ type fakeJobStore struct {
 	hook     []store.SessionRow
 	info     map[string]time.Time
 	hooks    map[string]time.Time
-	unattr   map[string]uint64
+	unattr   map[string]store.Unattributed
 	idle     []string
 	block    bool
 	inserts  []store.TelemetryBatch
@@ -61,7 +61,7 @@ func (f *fakeJobStore) InfoSeen(ctx context.Context, _ time.Time) (map[string]ti
 func (f *fakeJobStore) HooksSince(ctx context.Context, _ time.Time) (map[string]time.Time, error) {
 	return f.hooks, f.wait(ctx)
 }
-func (f *fakeJobStore) UnattributedCounts(ctx context.Context, _, _ time.Time) (map[string]uint64, error) {
+func (f *fakeJobStore) UnattributedCounts(ctx context.Context, _, _ time.Time) (map[string]store.Unattributed, error) {
 	return f.unattr, f.wait(ctx)
 }
 func (f *fakeJobStore) InsertTelemetry(_ context.Context, b store.TelemetryBatch, _ string) error {
@@ -230,13 +230,13 @@ func TestJobs_HookMissingOnlyWhereHooksRun(t *testing.T) {
 // unattributed is one alert per DevPod per minute with the count (spec
 // §5.8 cross-check), not one per batch (review #7).
 func TestJobs_UnattributedPerMinute(t *testing.T) {
-	st := &fakeJobStore{unattr: map[string]uint64{"u1": 3}}
+	st := &fakeJobStore{unattr: map[string]store.Unattributed{"u1": {Cluster: "zjusct", N: 3}}}
 	if err := newJobs(st).RunOnce(context.Background(), time.Now().UTC()); err != nil {
 		t.Fatal(err)
 	}
 	var n int
 	for _, a := range st.all().Alerts {
-		if a.Kind == "unattributed" && a.DevPodUID == "u1" && strings.Contains(a.Detail, "3") {
+		if a.Kind == "unattributed" && a.DevPodUID == "u1" && a.Cluster == "zjusct" && strings.Contains(a.Detail, "3") {
 			n++
 		}
 	}

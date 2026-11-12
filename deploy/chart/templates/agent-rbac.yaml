@@ -20,6 +20,10 @@ rules:
 - apiGroups: [""]
   resources: ["pods", "events"]
   verbs: ["get", "list", "watch"]
+# Events on DevPods (telemetry alerts), written in the DevPod's cluster.
+- apiGroups: [""]
+  resources: ["events"]
+  verbs: ["create"]
 # Redeploy: delete a DevPod's Pod so the controller recreates it.
 - apiGroups: [""]
   resources: ["pods"]

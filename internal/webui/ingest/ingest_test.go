@@ -58,11 +58,11 @@ func newHandler(st Store, leader *atomic.Bool, interval time.Duration) *Handler 
 	w.IsLeader = leader.Load
 	return &Handler{
 		Key: testKey, IsLeader: leader.Load, Writer: w, State: live.NewState(nil),
-		DevPods: func(uid string) (string, string, bool) {
+		DevPods: func(uid string) (string, string, string, bool) {
 			if strings.HasPrefix(uid, "u") {
-				return "alice", "dp-" + uid, true
+				return "alice", "dp-" + uid, "zjusct", true
 			}
-			return "", "", false
+			return "", "", "", false
 		},
 	}
 }
@@ -286,6 +286,10 @@ func TestIngest_RowsAlertsAndEvents(t *testing.T) {
 	if len(b.Commands) != 1 || b.Commands[0].Source != "shell_hook" || b.Commands[0].DurationMS != 2000 || *b.Commands[0].ExitCode != 2 || b.Commands[0].Attribution != "pending" {
 		t.Fatalf("commands %+v", b.Commands)
 	}
+	// every row says the cluster its DevPod is in
+	if b.Commands[0].Cluster != "zjusct" || b.ProcRows[0].Cluster != "zjusct" || b.SSHConns[0].Cluster != "zjusct" || b.Alerts[0].Cluster != "zjusct" {
+		t.Fatalf("cluster: command %q, process %q, ssh %q, alert %q", b.Commands[0].Cluster, b.ProcRows[0].Cluster, b.SSHConns[0].Cluster, b.Alerts[0].Cluster)
+	}
 	kinds := map[string]bool{}
 	for _, a := range b.Alerts {
 		if a.Source != "supervisor" || a.DevPodUID != "u1" {
@@ -364,7 +368,7 @@ func TestWriter_Stats(t *testing.T) {
 func TestIngest_AuthLookupCached(t *testing.T) {
 	h := newHandler(&fakeStore{}, leaderTrue(), 5*time.Millisecond)
 	lookups := 0
-	h.DevPods = func(uid string) (string, string, bool) { lookups++; return "alice", "dp", uid == "u1" }
+	h.DevPods = func(uid string) (string, string, string, bool) { lookups++; return "alice", "dp", "", uid == "u1" }
 	for s := uint64(1); s <= 5; s++ {
 		acked(t, postSeq(t, h, "u1", s, s))
 	}

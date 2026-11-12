@@ -231,7 +231,7 @@ func TestBackfillQueries(t *testing.T) {
 		t.Fatalf("hooks since %v %v (only u2 runs hooks)", hooks, err)
 	}
 	un, err := c.UnattributedCounts(ctx, shellAt.Add(-time.Second), shellAt.Add(time.Second))
-	if err != nil || len(un) != 1 || un["u2"] != 2 {
+	if err != nil || len(un) != 1 || un["u2"].N != 2 {
 		t.Fatalf("unattributed %v %v", un, err)
 	}
 }

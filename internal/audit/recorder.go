@@ -55,7 +55,18 @@ type Recorder struct {
 
 	mu       sync.Mutex
 	sessions map[*Session]struct{}
+	// ended: the cluster of sessions that ended lately, by id — what
+	// they left in the spool may still be uploading when a gap is told
+	ended map[string]endedSession
 }
+
+type endedSession struct {
+	cluster string
+	at      time.Time
+}
+
+// endedKeep: how long an ended session's cluster is kept.
+const endedKeep = time.Hour
 
 // NewRecorder opens the spool (recovering what a previous process left).
 func NewRecorder(cfg Config) (*Recorder, error) {
@@ -78,7 +89,7 @@ func NewRecorder(cfg Config) (*Recorder, error) {
 	if err != nil {
 		return nil, err
 	}
-	r := &Recorder{cfg: cfg, spool: sp, sessions: map[*Session]struct{}{}}
+	r := &Recorder{cfg: cfg, spool: sp, sessions: map[*Session]struct{}{}, ended: map[string]endedSession{}}
 	r.up = &spool.Uploader{Spool: sp, Objects: cfg.Objects, Events: cfg.Events, OnLag: UploadLag.Set}
 	return r, nil
 }
@@ -112,6 +123,13 @@ func (r *Recorder) snapshot() []*Session {
 
 func (r *Recorder) tick(now time.Time) {
 	SpoolBytes.Set(float64(r.spool.Usage()))
+	r.mu.Lock()
+	for id, e := range r.ended {
+		if now.Sub(e.at) > endedKeep {
+			delete(r.ended, id)
+		}
+	}
+	r.mu.Unlock()
 	full := r.spool.Level() == spool.LevelFull
 	for _, s := range r.snapshot() {
 		s.tick(now)
@@ -133,7 +151,20 @@ func (r *Recorder) Start(meta SessionMeta, pol policy.Effective) *Session {
 func (r *Recorder) remove(s *Session) {
 	r.mu.Lock()
 	delete(r.sessions, s)
+	r.ended[s.meta.ID] = endedSession{cluster: s.meta.Cluster, at: r.cfg.Now()}
 	r.mu.Unlock()
+}
+
+// clusterOf: the cluster of a session this recorder recorded.
+func (r *Recorder) clusterOf(id string) string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for s := range r.sessions {
+		if s.meta.ID == id {
+			return s.meta.Cluster
+		}
+	}
+	return r.ended[id].cluster
 }
 
 // Drain seals and flushes every session, then uploads until the spool is
@@ -174,7 +205,7 @@ func (r *Recorder) alertUnuploaded() {
 			continue
 		}
 		seen[parts[4]] = true
-		b.Alerts = append(b.Alerts, store.AlertRow{TS: now, SessionID: parts[4], Kind: "gap", Source: "gateway", Detail: "gateway stopped before audit data was uploaded"})
+		b.Alerts = append(b.Alerts, store.AlertRow{TS: now, SessionID: parts[4], Cluster: r.clusterOf(parts[4]), Kind: "gap", Source: "gateway", Detail: "gateway stopped before audit data was uploaded"})
 	}
 	if len(b.Alerts) == 0 {
 		return

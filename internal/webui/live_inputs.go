@@ -6,6 +6,8 @@ package webui
 
 import (
 	"context"
+	"fmt"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"strings"
 	"sync"
 	"time"
@@ -252,12 +254,44 @@ func (li *LiveInputs) UIDs(ctx context.Context) (map[string]bool, error) {
 
 // DevPodByUID finds a DevPod in the cache by UID (an index lookup: the
 // ingest authenticates every batch with it).
-func (s *Server) DevPodByUID(ctx context.Context, uid string) (*devpodv1alpha1.DevPod, bool) {
-	for _, cc := range s.ksc(ctx) { // in whichever cluster it is
+func (s *Server) DevPodByUID(ctx context.Context, uid string) (*devpodv1alpha1.DevPod, string, bool) {
+	dp, cc, ok := s.devpodByUID(ctx, uid)
+	if !ok {
+		return nil, "", false
+	}
+	return dp, s.clusterLabel(cc), true
+}
+
+// devpodByUID finds a DevPod by uid in whichever cluster it is.
+func (s *Server) devpodByUID(ctx context.Context, uid string) (*devpodv1alpha1.DevPod, *clusters.ClusterClients, bool) {
+	for _, cc := range s.ksc(ctx) {
 		var list devpodv1alpha1.DevPodList
 		if err := cc.Client.List(ctx, &list, client.InNamespace(s.NS), client.MatchingFields{uidIndex: uid}); err == nil && len(list.Items) > 0 {
-			return &list.Items[0], true
+			return &list.Items[0], cc, true
 		}
 	}
-	return nil, false
+	return nil, nil, false
+}
+
+// DevPodEvent records a Kubernetes Event about the DevPod with uid, in
+// the cluster it is in (where kubectl describe and the console's events
+// tab look for it).
+func (s *Server) DevPodEvent(ctx context.Context, uid, eventType, reason, message string) error {
+	dp, cc, ok := s.devpodByUID(ctx, uid)
+	if !ok {
+		return fmt.Errorf("no DevPod %s", uid)
+	}
+	now := metav1.Now()
+	ev := &corev1.Event{
+		ObjectMeta: metav1.ObjectMeta{GenerateName: dp.Name + ".", Namespace: dp.Namespace},
+		InvolvedObject: corev1.ObjectReference{
+			APIVersion: devpodv1alpha1.GroupVersion.String(), Kind: "DevPod",
+			Namespace: dp.Namespace, Name: dp.Name, UID: dp.UID, ResourceVersion: dp.ResourceVersion,
+		},
+		Type: eventType, Reason: reason, Message: message,
+		FirstTimestamp: now, LastTimestamp: now, Count: 1,
+		Source:              corev1.EventSource{Component: "devpod-webui"},
+		ReportingController: "devpod-webui", ReportingInstance: "devpod-webui",
+	}
+	return cc.Client.Create(ctx, ev)
 }

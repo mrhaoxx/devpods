@@ -12,6 +12,11 @@ import "time"
 // SessionRow is one SSH connection through the gateway. Written twice:
 // version 1 at open, version 2 (complete) at close.
 type SessionRow struct {
+	// Cluster: the cluster of its DevPod, in a console of several ("" in a console of one).
+	Cluster string `ch:"cluster" json:"cluster,omitempty"`
+	// Gateway: the registered gateway it came in at, for a gateway of
+	// several clusters.
+	Gateway          string     `ch:"gateway" json:"gateway,omitempty"`
 	SessionID        string     `ch:"session_id" json:"session_id"`
 	User             string     `ch:"user" json:"user"`
 	DevPod           string     `ch:"devpod" json:"devpod"`
@@ -33,19 +38,10 @@ type SessionRow struct {
 	Version          uint64     `ch:"version" json:"version"`
 }
 
-// OriginRow says where a session came in (the gateway, by its registered
-// name) and which cluster its DevPod is in: written by a gateway that
-// serves several clusters.
-type OriginRow struct {
-	SessionID string    `ch:"session_id" json:"session_id"`
-	Cluster   string    `ch:"cluster" json:"cluster"`
-	Gateway   string    `ch:"gateway" json:"gateway"`
-	OpenedAt  time.Time `ch:"opened_at" json:"opened_at"`
-	Version   uint64    `ch:"version" json:"version"`
-}
-
 // ChannelRow is one SSH channel of a session (versioned like SessionRow).
 type ChannelRow struct {
+	// Cluster: the cluster of its DevPod, in a console of several ("" in a console of one).
+	Cluster     string     `ch:"cluster" json:"cluster,omitempty"`
 	SessionID   string     `ch:"session_id" json:"session_id"`
 	ChannelID   uint32     `ch:"channel_id" json:"channel_id"`
 	Type        string     `ch:"type" json:"type"`
@@ -66,6 +62,8 @@ type ChannelRow struct {
 // CommandRow is one command: an exec request (gateway) or a shell-hook
 // record (container, phase 2).
 type CommandRow struct {
+	// Cluster: the cluster of its DevPod, in a console of several ("" in a console of one).
+	Cluster     string    `ch:"cluster" json:"cluster,omitempty"`
 	EventID     string    `ch:"event_id" json:"event_id"`
 	TS          time.Time `ch:"ts" json:"ts"`
 	SessionID   string    `ch:"session_id" json:"session_id"`
@@ -84,6 +82,8 @@ type CommandRow struct {
 
 // FileEventRow is one file transfer or file operation.
 type FileEventRow struct {
+	// Cluster: the cluster of its DevPod, in a console of several ("" in a console of one).
+	Cluster   string    `ch:"cluster" json:"cluster,omitempty"`
 	EventID   string    `ch:"event_id" json:"event_id"`
 	TS        time.Time `ch:"ts" json:"ts"`
 	SessionID string    `ch:"session_id" json:"session_id"`
@@ -103,6 +103,8 @@ type FileEventRow struct {
 
 // PolicyEventRow is one policy enforcement.
 type PolicyEventRow struct {
+	// Cluster: the cluster of its DevPod, in a console of several ("" in a console of one).
+	Cluster   string    `ch:"cluster" json:"cluster,omitempty"`
 	TS        time.Time `ch:"ts" json:"ts"`
 	SessionID string    `ch:"session_id" json:"session_id"`
 	User      string    `ch:"user" json:"user"`
@@ -114,6 +116,8 @@ type PolicyEventRow struct {
 
 // RawSegmentRow indexes one uploaded raw segment.
 type RawSegmentRow struct {
+	// Cluster: the cluster of its DevPod, in a console of several ("" in a console of one).
+	Cluster         string    `ch:"cluster" json:"cluster,omitempty"`
 	SessionID       string    `ch:"session_id" json:"session_id"`
 	Seq             uint32    `ch:"seq" json:"seq"`
 	S3Key           string    `ch:"s3_key" json:"s3_key"`
@@ -125,6 +129,8 @@ type RawSegmentRow struct {
 
 // AlertRow is a cross-check or data-loss alert.
 type AlertRow struct {
+	// Cluster: the cluster of its DevPod, in a console of several ("" in a console of one).
+	Cluster   string    `ch:"cluster" json:"cluster,omitempty"`
 	TS        time.Time `ch:"ts" json:"ts"`
 	DevPodUID string    `ch:"devpod_uid" json:"devpod_uid"`
 	SessionID string    `ch:"session_id" json:"session_id"`
@@ -152,11 +158,35 @@ type Batch struct {
 	PolicyEvents []PolicyEventRow `json:"policy_events,omitempty"`
 	RawSegments  []RawSegmentRow  `json:"raw_segments,omitempty"`
 	Alerts       []AlertRow       `json:"alerts,omitempty"`
-	Origins      []OriginRow      `json:"origins,omitempty"`
 }
 
 // Empty reports whether the batch has no rows.
 func (b Batch) Empty() bool {
 	return len(b.Sessions)+len(b.Channels)+len(b.Commands)+len(b.FileEvents)+
-		len(b.PolicyEvents)+len(b.RawSegments)+len(b.Alerts)+len(b.Origins) == 0
+		len(b.PolicyEvents)+len(b.RawSegments)+len(b.Alerts) == 0
+}
+
+// SetCluster says every row of b is of a DevPod in cluster.
+func (b *Batch) SetCluster(cluster string) {
+	for i := range b.Sessions {
+		b.Sessions[i].Cluster = cluster
+	}
+	for i := range b.Channels {
+		b.Channels[i].Cluster = cluster
+	}
+	for i := range b.Commands {
+		b.Commands[i].Cluster = cluster
+	}
+	for i := range b.FileEvents {
+		b.FileEvents[i].Cluster = cluster
+	}
+	for i := range b.PolicyEvents {
+		b.PolicyEvents[i].Cluster = cluster
+	}
+	for i := range b.RawSegments {
+		b.RawSegments[i].Cluster = cluster
+	}
+	for i := range b.Alerts {
+		b.Alerts[i].Cluster = cluster
+	}
 }

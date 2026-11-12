@@ -34,6 +34,7 @@ const (
 // SessionFilter selects sessions opened in [From, To).
 type SessionFilter struct {
 	User, DevPodUID     string
+	Cluster             string // the cluster of its DevPod
 	From, To            time.Time
 	HasFiles, HasAlerts bool // HasAlerts: any alert, policy hit or gap
 	Cursor              string
@@ -43,14 +44,10 @@ type SessionFilter struct {
 // SessionSummary is a session plus per-session counters.
 type SessionSummary struct {
 	SessionRow
-	// Cluster and Gateway: for a session through a gateway of several
-	// clusters ("" otherwise).
-	Cluster    string `json:"cluster,omitempty"`
-	Gateway    string `json:"gateway,omitempty"`
-	Commands   int    `json:"commands"`
-	Files      int    `json:"files"`
-	PolicyHits int    `json:"policy_hits"`
-	Alerts     int    `json:"alerts"`
+	Commands   int `json:"commands"`
+	Files      int `json:"files"`
+	PolicyHits int `json:"policy_hits"`
+	Alerts     int `json:"alerts"`
 }
 
 // SessionDetail is everything recorded for one session.
@@ -69,6 +66,7 @@ type SessionDetail struct {
 // CommandFilter searches commands by substring.
 type CommandFilter struct {
 	User, DevPodUID, Q string
+	Cluster            string // the cluster of its DevPod
 	From, To           time.Time
 	Cursor             string
 	Limit              int
@@ -77,6 +75,7 @@ type CommandFilter struct {
 // FileFilter searches file events by path substring or exact sha256.
 type FileFilter struct {
 	User, DevPodUID, Path, SHA256 string
+	Cluster                       string // the cluster of its DevPod
 	From, To                      time.Time
 	Cursor                        string
 	Limit                         int
@@ -85,8 +84,11 @@ type FileFilter struct {
 // TimeFilter pages a time-ordered log.
 type TimeFilter struct {
 	From, To time.Time
-	Cursor   string
-	Limit    int
+	// Cluster: the cluster of the row's DevPod, for a log whose rows are
+	// a DevPod's (alerts); the access log has none.
+	Cluster string
+	Cursor  string
+	Limit   int
 }
 
 func (c *CH) readCtx(ctx context.Context) context.Context {
@@ -169,6 +171,9 @@ func (c *CH) ListSessions(ctx context.Context, f SessionFilter) ([]SessionSummar
 	if f.DevPodUID != "" {
 		w.add("devpod_uid = ?", f.DevPodUID)
 	}
+	if f.Cluster != "" {
+		w.add("cluster = ?", f.Cluster)
+	}
 	if f.HasFiles {
 		w.add(fmt.Sprintf("session_id IN (SELECT session_id FROM %s.file_events WHERE ts >= ?)", c.db), f.From)
 	}
@@ -179,7 +184,7 @@ func (c *CH) ListSessions(ctx context.Context, f SessionFilter) ([]SessionSummar
 		return nil, "", err
 	}
 	var rows []SessionRow
-	q := fmt.Sprintf("SELECT * FROM %s.sessions FINAL WHERE %s ORDER BY opened_at DESC, session_id DESC LIMIT %d", c.db, w.sql(), limit+1)
+	q := fmt.Sprintf("SELECT %s FROM %s.sessions FINAL WHERE %s ORDER BY opened_at DESC, session_id DESC LIMIT %d", columns[SessionRow](), c.db, w.sql(), limit+1)
 	if err := c.conn.Select(ctx, &rows, q, w.args...); err != nil {
 		return nil, "", fmt.Errorf("list sessions: %w", err)
 	}
@@ -198,13 +203,6 @@ func (c *CH) ListSessions(ctx context.Context, f SessionFilter) ([]SessionSummar
 	for i, r := range rows {
 		out[i] = SessionSummary{SessionRow: r}
 		counts[r.SessionID] = &out[i]
-	}
-	if len(ids) > 0 { // where each came in: best effort, the list stands without it
-		if origins, err := c.origins(ctx, ids, rows[len(rows)-1].OpenedAt); err == nil {
-			for id, o := range origins {
-				counts[id].Cluster, counts[id].Gateway = o.Cluster, o.Gateway
-			}
-		}
 	}
 	if len(ids) > 0 {
 		// Events never predate their session: bound the counts by the
@@ -270,32 +268,29 @@ func (c *CH) GetSession(ctx context.Context, id string) (*SessionDetail, error) 
 	}
 	ctx = c.readCtx(ctx)
 	var sessions []SessionRow
-	if err := c.conn.Select(ctx, &sessions, fmt.Sprintf("SELECT * FROM %s.sessions FINAL WHERE session_id = ? AND opened_at >= ? AND opened_at < ? LIMIT 1", c.db),
+	if err := c.conn.Select(ctx, &sessions, fmt.Sprintf("SELECT %s FROM %s.sessions FINAL WHERE session_id = ? AND opened_at >= ? AND opened_at < ? LIMIT 1", columns[SessionRow](), c.db),
 		id, at.Add(-idSkew), at.Add(idSkew)); err != nil {
 		return nil, fmt.Errorf("get session: %w", err)
 	}
 	if len(sessions) == 0 {
 		return nil, ErrNotFound
 	}
-	d := &SessionDetail{Session: sessions[0]}
-	if o, err := c.origins(ctx, []string{id}, d.Session.OpenedAt); err == nil {
-		d.Cluster, d.Gateway = o[id].Cluster, o[id].Gateway
-	}
+	d := &SessionDetail{Session: sessions[0], Cluster: sessions[0].Cluster, Gateway: sessions[0].Gateway}
 	lo := d.Session.OpenedAt.Add(-eventSkew)
-	sel := func(dst any, table, cond, order string, args ...any) error {
-		q := fmt.Sprintf("SELECT * FROM %s.%s WHERE session_id = ? AND %s ORDER BY %s", c.db, table, cond, order)
+	sel := func(dst any, cols, table, cond, order string, args ...any) error {
+		q := fmt.Sprintf("SELECT %s FROM %s.%s WHERE session_id = ? AND %s ORDER BY %s", cols, c.db, table, cond, order)
 		return c.conn.Select(ctx, dst, q, append([]any{id}, args...)...)
 	}
 	uid := d.Session.DevPodUID
 	if err := errors.Join(
 		// Latest version per channel without FINAL: FINAL would apply
 		// the opened_at filter only after merging, losing partition pruning.
-		sel(&d.Channels, "channels", "opened_at >= ?", "channel_id, version DESC LIMIT 1 BY channel_id", lo),
-		sel(&d.Commands, "commands FINAL", "devpod_uid = ? AND ts >= ?", "ts, event_id", uid, lo),
-		sel(&d.Files, "file_events", "devpod_uid = ? AND ts >= ?", "ts, event_id", uid, lo),
-		sel(&d.Policy, "policy_events", "ts >= ?", "ts", lo),
-		sel(&d.Alerts, "alerts", "ts >= ?", "ts", lo),
-		sel(&d.Segments, "raw_segments", "first_ts >= ?", "seq", lo),
+		sel(&d.Channels, columns[ChannelRow](), "channels", "opened_at >= ?", "channel_id, version DESC LIMIT 1 BY channel_id", lo),
+		sel(&d.Commands, columns[CommandRow](), "commands FINAL", "devpod_uid = ? AND ts >= ?", "ts, event_id", uid, lo),
+		sel(&d.Files, columns[FileEventRow](), "file_events", "devpod_uid = ? AND ts >= ?", "ts, event_id", uid, lo),
+		sel(&d.Policy, columns[PolicyEventRow](), "policy_events", "ts >= ?", "ts", lo),
+		sel(&d.Alerts, columns[AlertRow](), "alerts", "ts >= ?", "ts", lo),
+		sel(&d.Segments, columns[RawSegmentRow](), "raw_segments", "first_ts >= ?", "seq", lo),
 	); err != nil {
 		return nil, fmt.Errorf("get session %s: %w", id, err)
 	}
@@ -315,6 +310,9 @@ func (c *CH) SearchCommands(ctx context.Context, f CommandFilter) ([]CommandRow,
 	if f.DevPodUID != "" {
 		w.add("devpod_uid = ?", f.DevPodUID)
 	}
+	if f.Cluster != "" {
+		w.add("cluster = ?", f.Cluster)
+	}
 	if f.Q != "" {
 		w.add("cmdline LIKE concat('%', ?, '%')", likeEscape(f.Q))
 	}
@@ -323,7 +321,7 @@ func (c *CH) SearchCommands(ctx context.Context, f CommandFilter) ([]CommandRow,
 	}
 	limit := limitOf(f.Limit)
 	var rows []CommandRow
-	q := fmt.Sprintf("SELECT * FROM %s.commands FINAL WHERE %s ORDER BY ts DESC, event_id DESC LIMIT %d", c.db, w.sql(), limit+1)
+	q := fmt.Sprintf("SELECT %s FROM %s.commands FINAL WHERE %s ORDER BY ts DESC, event_id DESC LIMIT %d", columns[CommandRow](), c.db, w.sql(), limit+1)
 	if err := c.conn.Select(c.readCtx(ctx), &rows, q, w.args...); err != nil {
 		return nil, "", fmt.Errorf("search commands: %w", err)
 	}
@@ -348,6 +346,9 @@ func (c *CH) SearchFiles(ctx context.Context, f FileFilter) ([]FileEventRow, str
 	if f.DevPodUID != "" {
 		w.add("devpod_uid = ?", f.DevPodUID)
 	}
+	if f.Cluster != "" {
+		w.add("cluster = ?", f.Cluster)
+	}
 	if f.Path != "" {
 		w.add("path LIKE concat('%', ?, '%')", likeEscape(f.Path))
 	}
@@ -359,7 +360,7 @@ func (c *CH) SearchFiles(ctx context.Context, f FileFilter) ([]FileEventRow, str
 	}
 	limit := limitOf(f.Limit)
 	var rows []FileEventRow
-	q := fmt.Sprintf("SELECT * FROM %s.file_events WHERE %s ORDER BY ts DESC, event_id DESC LIMIT %d", c.db, w.sql(), limit+1)
+	q := fmt.Sprintf("SELECT %s FROM %s.file_events WHERE %s ORDER BY ts DESC, event_id DESC LIMIT %d", columns[FileEventRow](), c.db, w.sql(), limit+1)
 	if err := c.conn.Select(c.readCtx(ctx), &rows, q, w.args...); err != nil {
 		return nil, "", fmt.Errorf("search files: %w", err)
 	}
@@ -378,7 +379,7 @@ func (c *CH) GetFileEvent(ctx context.Context, eventID string) (*FileEventRow, e
 	if !ok {
 		return nil, ErrNotFound
 	}
-	if err := c.conn.Select(c.readCtx(ctx), &rows, fmt.Sprintf("SELECT * FROM %s.file_events WHERE event_id = ? AND ts >= ? AND ts < ? LIMIT 1", c.db),
+	if err := c.conn.Select(c.readCtx(ctx), &rows, fmt.Sprintf("SELECT %s FROM %s.file_events WHERE event_id = ? AND ts >= ? AND ts < ? LIMIT 1", columns[FileEventRow](), c.db),
 		eventID, at.Add(-idSkew), at.Add(idSkew)); err != nil {
 		return nil, fmt.Errorf("get file event: %w", err)
 	}
@@ -396,7 +397,7 @@ const (
 // ListAlerts pages alerts newest first.
 func (c *CH) ListAlerts(ctx context.Context, f TimeFilter) ([]AlertRow, string, error) {
 	var rows []AlertRow
-	next, err := c.listLog(ctx, &rows, "alerts", alertKey, f, func() (time.Time, string, int) {
+	next, err := c.listLog(ctx, &rows, columns[AlertRow](), "alerts", alertKey, f, func() (time.Time, string, int) {
 		if len(rows) == 0 {
 			return time.Time{}, "", 0
 		}
@@ -409,7 +410,7 @@ func (c *CH) ListAlerts(ctx context.Context, f TimeFilter) ([]AlertRow, string, 
 // ListAccessLog pages the access log newest first.
 func (c *CH) ListAccessLog(ctx context.Context, f TimeFilter) ([]AccessLogRow, string, error) {
 	var rows []AccessLogRow
-	next, err := c.listLog(ctx, &rows, "access_log", accessKey, f, func() (time.Time, string, int) {
+	next, err := c.listLog(ctx, &rows, columns[AccessLogRow](), "access_log", accessKey, f, func() (time.Time, string, int) {
 		if len(rows) == 0 {
 			return time.Time{}, "", 0
 		}
@@ -419,17 +420,20 @@ func (c *CH) ListAccessLog(ctx context.Context, f TimeFilter) ([]AccessLogRow, s
 	return rows, next, err
 }
 
-func (c *CH) listLog(ctx context.Context, dst any, table, keyExpr string, f TimeFilter, last func() (time.Time, string, int), trim func(int)) (string, error) {
+func (c *CH) listLog(ctx context.Context, dst any, cols, table, keyExpr string, f TimeFilter, last func() (time.Time, string, int), trim func(int)) (string, error) {
 	if f.From.IsZero() || f.To.IsZero() {
 		return "", ErrRangeRequired
 	}
 	w := &where{}
 	w.add("ts >= ? AND ts < ?", f.From, f.To)
+	if f.Cluster != "" && table == "alerts" {
+		w.add("cluster = ?", f.Cluster)
+	}
 	if err := w.cursor(f.Cursor, "ts", keyExpr); err != nil {
 		return "", err
 	}
 	limit := limitOf(f.Limit)
-	q := fmt.Sprintf("SELECT * FROM %s.%s WHERE %s ORDER BY ts DESC, %s DESC LIMIT %d", c.db, table, w.sql(), keyExpr, limit+1)
+	q := fmt.Sprintf("SELECT %s FROM %s.%s WHERE %s ORDER BY ts DESC, %s DESC LIMIT %d", cols, c.db, table, w.sql(), keyExpr, limit+1)
 	if err := c.conn.Select(c.readCtx(ctx), dst, q, w.args...); err != nil {
 		return "", fmt.Errorf("list %s: %w", table, err)
 	}
@@ -444,7 +448,7 @@ func (c *CH) listLog(ctx context.Context, dst any, table, keyExpr string, f Time
 // InsertAccessLog records one access. Identical rows are all kept.
 func (c *CH) InsertAccessLog(ctx context.Context, r AccessLogRow) error {
 	ctx = clickhouse.Context(ctx, clickhouse.WithSettings(clickhouse.Settings{"insert_deduplicate": 0}))
-	batch, err := c.conn.PrepareBatch(ctx, fmt.Sprintf("INSERT INTO %s.access_log", c.db))
+	batch, err := c.conn.PrepareBatch(ctx, fmt.Sprintf("INSERT INTO %s.access_log (%s)", c.db, columns[AccessLogRow]()))
 	if err != nil {
 		return err
 	}
@@ -480,19 +484,4 @@ func (c *CH) Presence(ctx context.Context, devpodUIDs []string) (map[string][]st
 		out[uid] = users
 	}
 	return out, rows.Err()
-}
-
-// origins returns where the sessions of ids came in; since bounds the
-// partitions read (no session of ids opened before it).
-func (c *CH) origins(ctx context.Context, ids []string, since time.Time) (map[string]OriginRow, error) {
-	var rows []OriginRow
-	q := fmt.Sprintf("SELECT * FROM %s.session_origin FINAL WHERE has(?, session_id) AND opened_at >= ?", c.db)
-	if err := c.conn.Select(ctx, &rows, q, ids, since.Add(-time.Minute)); err != nil {
-		return nil, err
-	}
-	out := make(map[string]OriginRow, len(rows))
-	for _, r := range rows {
-		out[r.SessionID] = r
-	}
-	return out, nil
 }

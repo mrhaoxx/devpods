@@ -6,6 +6,7 @@ import { ApiFailure, type Page } from "../../data/api";
 import { EmptyState } from "../../design/EmptyState";
 import { Button } from "../../design/Button";
 import { Input } from "../../design/Form";
+import type { ColumnDef } from "@tanstack/react-table";
 
 export const RANGES: Record<string, number> = { "24h": 1, "7d": 7, "30d": 30, "90d": 90 };
 
@@ -75,4 +76,16 @@ export const fmtTS = (iso: string) => new Date(iso).toLocaleString();
 /** confirmDownload: every audited download says it is logged first. */
 export function confirmDownload(e: React.MouseEvent | MouseEvent) {
   if (!window.confirm("此操作将被记录")) e.preventDefault();
+}
+
+/** clusterColumn: an audit row's cluster (its DevPod's), shown in a console of several. */
+export function clusterColumn<T extends { cluster?: string }>(): ColumnDef<T, unknown> {
+  return { id: "cluster", header: "集群", accessorFn: (r) => r.cluster ?? "", meta: { priority: 3, width: 90, mono: true } };
+}
+
+/** withCluster puts the 集群 column after 用户 when there are several clusters. */
+export function withCluster<T extends { cluster?: string }>(cols: ColumnDef<T, unknown>[], several: boolean): ColumnDef<T, unknown>[] {
+  if (!several) return cols;
+  const at = cols.findIndex((c) => c.id === "user");
+  return [...cols.slice(0, at + 1), clusterColumn<T>(), ...cols.slice(at + 1)];
 }

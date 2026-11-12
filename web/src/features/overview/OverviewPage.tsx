@@ -146,11 +146,11 @@ function TopUsers({ users }: { users: UserLive[] }) {
 function RecentAudit() {
   const me = useMe().data;
   const audit = !!me?.features.audit;
-  const q = useAuditSessions({ limit: "20" }, { enabled: audit, refetchInterval: 5000 });
-  const { matches } = useClusterFilter();
+  const { filter } = useClusterFilter();
+  const q = useAuditSessions({ limit: "20", cluster: filter }, { enabled: audit, refetchInterval: 5000 });
   if (!audit) return <EmptyState title="审计未开启" />;
   if (q.isError) return <EmptyState tone="error" title="审计数据暂不可用" hint={q.error instanceof ApiFailure ? q.error.body.message : String(q.error)} />;
-  const items = (q.data?.items ?? []).filter(matches);
+  const items = q.data?.items ?? [];
   if (!items.length) return <EmptyState title={q.isLoading ? "加载中…" : "最近没有会话"} />;
   return (
     <ul className="divide-y divide-line text-xs">

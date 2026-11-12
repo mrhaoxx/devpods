@@ -179,7 +179,7 @@ func (s *Server) handleAuditSessions(w http.ResponseWriter, r *http.Request) {
 	}
 	q := r.URL.Query()
 	items, next, err := s.Audit.Store.ListSessions(r.Context(), store.SessionFilter{
-		User: scopeUser(sess, r), DevPodUID: uid, From: from, To: to,
+		User: scopeUser(sess, r), DevPodUID: uid, Cluster: s.namedCluster(r.Context()), From: from, To: to,
 		HasFiles: q.Get("hasFiles") == "true", HasAlerts: q.Get("hasAlerts") == "true",
 		Cursor: q.Get("cursor"), Limit: queryLimit(r),
 	})
@@ -350,7 +350,7 @@ func (s *Server) handleAuditCommands(w http.ResponseWriter, r *http.Request) {
 	}
 	q := r.URL.Query()
 	items, next, err := s.Audit.Store.SearchCommands(r.Context(), store.CommandFilter{
-		User: scopeUser(sess, r), DevPodUID: uid, Q: q.Get("q"), From: from, To: to, Cursor: q.Get("cursor"), Limit: queryLimit(r),
+		User: scopeUser(sess, r), DevPodUID: uid, Cluster: s.namedCluster(r.Context()), Q: q.Get("q"), From: from, To: to, Cursor: q.Get("cursor"), Limit: queryLimit(r),
 	})
 	if err != nil {
 		s.auditStoreErr(w, err)
@@ -382,7 +382,7 @@ func (s *Server) handleAuditFiles(w http.ResponseWriter, r *http.Request) {
 	}
 	q := r.URL.Query()
 	items, next, err := s.Audit.Store.SearchFiles(r.Context(), store.FileFilter{
-		User: scopeUser(sess, r), DevPodUID: uid, Path: q.Get("path"), SHA256: q.Get("sha256"),
+		User: scopeUser(sess, r), DevPodUID: uid, Cluster: s.namedCluster(r.Context()), Path: q.Get("path"), SHA256: q.Get("sha256"),
 		From: from, To: to, Cursor: q.Get("cursor"), Limit: queryLimit(r),
 	})
 	if err != nil {
@@ -404,7 +404,8 @@ func (s *Server) handleAuditAlerts(w http.ResponseWriter, r *http.Request) {
 		s.writeErr(w, http.StatusBadRequest, "BAD_REQUEST", err.Error(), nil)
 		return
 	}
-	items, next, err := s.Audit.Store.ListAlerts(r.Context(), store.TimeFilter{From: from, To: to, Cursor: r.URL.Query().Get("cursor"), Limit: queryLimit(r)})
+	// asked through a cluster: that cluster's (each row says its DevPod's cluster)
+	items, next, err := s.Audit.Store.ListAlerts(r.Context(), store.TimeFilter{From: from, To: to, Cluster: s.namedCluster(r.Context()), Cursor: r.URL.Query().Get("cursor"), Limit: queryLimit(r)})
 	if err != nil {
 		s.auditStoreErr(w, err)
 		return

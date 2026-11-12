@@ -11,6 +11,7 @@ import (
 	"crypto/rand"
 	"errors"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -120,10 +121,9 @@ func TestListSessions_FinalUsesLatestVersion(t *testing.T) {
 // came in at and which cluster its DevPod is in; the others say nothing.
 func TestListSessions_Origin(t *testing.T) {
 	c := freshDB(t)
-	mustInsert(t, c, Batch{
-		Sessions: []SessionRow{sess("S1", "alice", "u1", base, 1, false), sess("S2", "alice", "u2", base.Add(time.Minute), 1, false)},
-		Origins:  []OriginRow{{SessionID: "S2", Cluster: "mulan", Gateway: "b300", OpenedAt: base.Add(time.Minute), Version: 1}},
-	}, "v1")
+	s2 := sess("S2", "alice", "u2", base.Add(time.Minute), 1, false)
+	s2.Cluster, s2.Gateway = "mulan", "b300"
+	mustInsert(t, c, Batch{Sessions: []SessionRow{sess("S1", "alice", "u1", base, 1, false), s2}}, "v1")
 	rows, _, err := c.ListSessions(context.Background(), day())
 	if err != nil {
 		t.Fatal(err)
@@ -386,4 +386,87 @@ func TestReadQueries_UseDateIndex(t *testing.T) {
 	check("HooksSince", err)
 	_, err = c.UnattributedCounts(ctx, time.Now().Add(-time.Minute), time.Now())
 	check("UnattributedCounts", err)
+}
+
+// Rows say their DevPod's cluster as written; the lists, and the
+// minute rollups, keep it.
+func TestCluster_Written(t *testing.T) {
+	c := freshDB(t)
+	ctx := context.Background()
+	b := Batch{
+		Sessions: []SessionRow{sess("S1", "alice", "u1", base, 1, false)},
+		Commands: []CommandRow{{EventID: "c1", TS: base, SessionID: "S1", DevPodUID: "u1", User: "alice", Cmdline: "ls", Version: 1}},
+		Alerts:   []AlertRow{{TS: base, DevPodUID: "u1", SessionID: "S1", Kind: "gap"}},
+	}
+	b.SetCluster("a")
+	mustInsert(t, c, b, "a")
+	other := Batch{Sessions: []SessionRow{sess("S2", "alice", "u2", base.Add(time.Minute), 1, false)},
+		Commands: []CommandRow{{EventID: "c2", TS: base.Add(time.Minute), SessionID: "S2", DevPodUID: "u2", User: "alice", Cmdline: "pwd", Version: 1}}}
+	other.SetCluster("b")
+	mustInsert(t, c, other, "b")
+	tb := TelemetryBatch{Containers: []ContainerMetricRow{{TS: base, DevPodUID: "u2", CPU: 1}}}
+	tb.SetCluster("b")
+	if err := c.InsertTelemetry(ctx, tb, "t"); err != nil {
+		t.Fatal(err)
+	}
+	f := day()
+	f.Cluster = "b"
+	if rows, _, err := c.ListSessions(ctx, f); err != nil || len(rows) != 1 || rows[0].SessionID != "S2" || rows[0].Cluster != "b" {
+		t.Fatalf("b's sessions %+v %v", rows, err)
+	}
+	if rows, _, err := c.SearchCommands(ctx, CommandFilter{From: f.From, To: f.To, Cluster: "a"}); err != nil || len(rows) != 1 || rows[0].EventID != "c1" || rows[0].Cluster != "a" {
+		t.Fatalf("a's commands %+v %v", rows, err)
+	}
+	if rows, _, err := c.ListAlerts(ctx, TimeFilter{From: f.From, To: f.To, Cluster: "a"}); err != nil || len(rows) != 1 {
+		t.Fatalf("a's alerts %+v %v", rows, err)
+	}
+	var cl string
+	if err := c.conn.QueryRow(ctx, fmt.Sprintf("SELECT any(cluster) FROM %s.metrics_container_1m WHERE devpod_uid = 'u2'", c.db)).Scan(&cl); err != nil || cl != "b" {
+		t.Fatalf("the minute rollup's cluster %q %v", cl, err)
+	}
+}
+
+// What was recorded before rows said their cluster takes it from the
+// session it was recorded in (or its DevPod's sessions), as the gateway
+// of several clusters wrote it into session_origin, which then goes.
+func TestCluster_OldRecords(t *testing.T) {
+	ctx := context.Background()
+	db := fmt.Sprintf("q_%d", time.Now().UnixNano())
+	c := openTestCH(t, db)
+	t.Cleanup(func() { _ = c.conn.Exec(context.Background(), "DROP DATABASE IF EXISTS "+db) })
+	if err := migrate(ctx, c, DefaultRetention(30), 3); err != nil {
+		t.Fatal(err)
+	}
+	for _, q := range []string{
+		"INSERT INTO %s.sessions (session_id, user, devpod, devpod_uid, opened_at, version) VALUES ('S1', 'alice', 'alice-x', 'u1', ?, 1), ('S2', 'alice', 'alice-y', 'u2', ?, 1)",
+		"INSERT INTO %s.session_origin (session_id, cluster, gateway, opened_at, version) VALUES ('S1', 'a', 'g', ?, 1)",
+		"INSERT INTO %s.commands (event_id, ts, session_id, devpod_uid, user, cmdline, version) VALUES ('c1', ?, 'S1', 'u1', 'alice', 'ls', 1), ('c2', ?, 'S2', 'u2', 'alice', 'pwd', 1)",
+		"INSERT INTO %s.alerts (ts, devpod_uid, session_id, kind) VALUES (?, 'u1', '', 'agent_silent'), (?, 'u2', '', 'agent_silent')",
+	} {
+		args := []any{base}
+		if strings.Count(q, "?") == 2 {
+			args = append(args, base.Add(time.Minute))
+		}
+		if err := c.conn.Exec(ctx, fmt.Sprintf(q, db), args...); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := Migrate(ctx, c, DefaultRetention(30)); err != nil {
+		t.Fatal(err)
+	}
+	f := day()
+	f.Cluster = "a"
+	if rows, _, err := c.ListSessions(ctx, f); err != nil || len(rows) != 1 || rows[0].SessionID != "S1" || rows[0].Gateway != "g" {
+		t.Fatalf("a's sessions %+v %v", rows, err)
+	}
+	if rows, _, err := c.SearchCommands(ctx, CommandFilter{From: f.From, To: f.To, Cluster: "a"}); err != nil || len(rows) != 1 || rows[0].EventID != "c1" {
+		t.Fatalf("a's commands %+v %v", rows, err)
+	}
+	if rows, _, err := c.ListAlerts(ctx, TimeFilter{From: f.From, To: f.To, Cluster: "a"}); err != nil || len(rows) != 1 || rows[0].DevPodUID != "u1" {
+		t.Fatalf("a's alerts (by their DevPod's sessions) %+v %v", rows, err)
+	}
+	var gone uint8
+	if err := c.conn.QueryRow(ctx, fmt.Sprintf("EXISTS TABLE %s.session_origin", db)).Scan(&gone); err != nil || gone != 0 {
+		t.Fatalf("session_origin still there: %d %v", gone, err)
+	}
 }

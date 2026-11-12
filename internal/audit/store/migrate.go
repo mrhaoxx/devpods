@@ -43,7 +43,6 @@ func auditDays(r Retention) int { return r.AuditDays }
 // ttlRules maps every table to its TTL column and retention class.
 var ttlRules = map[string]ttlRule{
 	"sessions":             {"opened_at", "DAY", auditDays},
-	"session_origin":       {"opened_at", "DAY", auditDays},
 	"channels":             {"opened_at", "DAY", auditDays},
 	"commands":             {"ts", "DAY", auditDays},
 	"file_events":          {"ts", "DAY", auditDays},
@@ -64,10 +63,19 @@ var ttlRules = map[string]ttlRule{
 	"metrics_rdma_1m":      {"ts", "DAY", func(r Retention) int { return r.Metrics1mDays }},
 }
 
+// steps run after a migration's SQL, before it is recorded: what SQL
+// alone cannot say (a value per distinct row).
+var steps = map[uint32]func(context.Context, *CH) error{4: foldOrigins}
+
 // Migrate creates the database, applies pending migrations in order
 // (recorded in schema_migrations) and (re)applies the retention TTLs.
 // Safe to run on every helm upgrade.
 func Migrate(ctx context.Context, c *CH, r Retention) error {
+	return migrate(ctx, c, r, ^uint32(0))
+}
+
+// migrate is Migrate up to version upTo (a test sets up an older schema).
+func migrate(ctx context.Context, c *CH, r Retention, upTo uint32) error {
 	for table, rule := range ttlRules {
 		if rule.n(r) <= 0 {
 			return fmt.Errorf("retention for %s must be positive, got %d", table, rule.n(r))
@@ -106,7 +114,7 @@ func Migrate(ctx context.Context, c *CH, r Retention) error {
 		if err != nil {
 			return fmt.Errorf("migration %s: bad version prefix", e.Name())
 		}
-		if applied[uint32(v)] {
+		if applied[uint32(v)] || uint32(v) > upTo {
 			continue
 		}
 		body, err := migrationFS.ReadFile("migrations/" + e.Name())
@@ -115,6 +123,11 @@ func Migrate(ctx context.Context, c *CH, r Retention) error {
 		}
 		for _, stmt := range splitStatements(strings.ReplaceAll(string(body), "{db}", c.db)) {
 			if err := c.conn.Exec(ctx, stmt); err != nil {
+				return fmt.Errorf("migration %s: %w", e.Name(), err)
+			}
+		}
+		if step := steps[uint32(v)]; step != nil {
+			if err := step(ctx, c); err != nil {
 				return fmt.Errorf("migration %s: %w", e.Name(), err)
 			}
 		}
@@ -160,4 +173,68 @@ func splitStatements(sql string) []string {
 	}
 	flush()
 	return out
+}
+
+// foldOrigins (0004): each session takes the cluster and gateway that
+// session_origin held for it; what was recorded in a session takes its
+// cluster (commands, file events, policy events and alerts outside any
+// session: that of their DevPod's sessions); then session_origin goes.
+// Rows of DevPods that never had a session through a gateway of several
+// clusters keep "" — what wrote them did not say.
+func foldOrigins(ctx context.Context, c *CH) error {
+	ctx = clickhouse.Context(ctx, clickhouse.WithSettings(clickhouse.Settings{"mutations_sync": 2, "allow_nondeterministic_mutations": 1}))
+	db := c.db
+	exists := uint8(0)
+	if err := c.conn.QueryRow(ctx, fmt.Sprintf("EXISTS TABLE %s.session_origin", db)).Scan(&exists); err != nil {
+		return err
+	}
+	if exists == 1 {
+		pairs, err := distinct2(ctx, c, fmt.Sprintf("SELECT DISTINCT cluster, gateway FROM %s.session_origin", db))
+		if err != nil {
+			return err
+		}
+		for _, p := range pairs {
+			if err := c.conn.Exec(ctx, fmt.Sprintf("ALTER TABLE %[1]s.sessions UPDATE cluster = ?, gateway = ? WHERE session_id IN (SELECT session_id FROM %[1]s.session_origin WHERE cluster = ? AND gateway = ?)", db),
+				p[0], p[1], p[0], p[1]); err != nil {
+				return fmt.Errorf("sessions: %w", err)
+			}
+		}
+	}
+	clusters, err := distinct2(ctx, c, fmt.Sprintf("SELECT DISTINCT cluster, '' FROM %s.sessions WHERE cluster != ''", db))
+	if err != nil {
+		return err
+	}
+	for _, cl := range clusters {
+		for _, t := range []string{"channels", "commands", "file_events", "policy_events", "raw_segments", "alerts"} {
+			if err := c.conn.Exec(ctx, fmt.Sprintf("ALTER TABLE %[1]s.%[2]s UPDATE cluster = ? WHERE cluster = '' AND session_id IN (SELECT session_id FROM %[1]s.sessions WHERE cluster = ?)", db, t),
+				cl[0], cl[0]); err != nil {
+				return fmt.Errorf("%s: %w", t, err)
+			}
+		}
+		for _, t := range []string{"commands", "file_events", "policy_events", "alerts"} {
+			if err := c.conn.Exec(ctx, fmt.Sprintf("ALTER TABLE %[1]s.%[2]s UPDATE cluster = ? WHERE cluster = '' AND devpod_uid != '' AND devpod_uid IN (SELECT devpod_uid FROM %[1]s.sessions WHERE cluster = ?)", db, t),
+				cl[0], cl[0]); err != nil {
+				return fmt.Errorf("%s by devpod: %w", t, err)
+			}
+		}
+	}
+	return c.conn.Exec(ctx, fmt.Sprintf("DROP TABLE IF EXISTS %s.session_origin", db))
+}
+
+// distinct2 reads a two-column query.
+func distinct2(ctx context.Context, c *CH, q string) ([][2]string, error) {
+	rows, err := c.conn.Query(ctx, q)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out [][2]string
+	for rows.Next() {
+		var a, b string
+		if err := rows.Scan(&a, &b); err != nil {
+			return nil, err
+		}
+		out = append(out, [2]string{a, b})
+	}
+	return out, rows.Err()
 }
