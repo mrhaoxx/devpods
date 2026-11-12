@@ -313,6 +313,9 @@ func (s *Server) handleListReservations(w http.ResponseWriter, r *http.Request) 
 	items := []reservationView{}
 	for _, cc := range s.ks(r) {
 		all, err := s.allReservations(s.in(r.Context(), cc))
+		if away(err) {
+			continue
+		}
 		if err != nil {
 			s.writeErr(w, http.StatusInternalServerError, "INTERNAL", err.Error(), nil)
 			return
@@ -748,6 +751,9 @@ func (s *Server) handleNodes(w http.ResponseWriter, r *http.Request) {
 	items := []nodeChoice{}
 	for _, cc := range s.ks(r) {
 		part, err := s.nodeChoicesIn(s.in(r.Context(), cc), sess)
+		if away(err) {
+			continue
+		}
 		if err != nil {
 			s.writeErr(w, http.StatusInternalServerError, "INTERNAL", err.Error(), nil)
 			return

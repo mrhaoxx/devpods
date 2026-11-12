@@ -108,8 +108,28 @@ func (s *Server) handleLiveOverview(w http.ResponseWriter, r *http.Request) {
 	if _, ok := s.requireAdmin(w, r); !ok || s.liveDisabled(w) {
 		return
 	}
+	// a request naming a cluster gets that cluster's numbers
+	only := s.namedCluster(r.Context())
 	s.streamLive(w, r, func(_ context.Context, snap live.Snapshot) (any, error) {
-		return map[string]any{"ts": snap.TS, "kpi": snap.KPI, "nodes": snap.Nodes, "users": snap.Users, "attention": snap.Attention}, nil
+		if only == "" {
+			return map[string]any{"ts": snap.TS, "kpi": snap.KPI, "nodes": snap.Nodes, "users": snap.Users, "attention": snap.Attention}, nil
+		}
+		part := snap.Clusters[only]
+		nodes, attention := []live.NodeLive{}, []live.AttentionItem{}
+		for _, n := range snap.Nodes {
+			if n.Cluster == only {
+				nodes = append(nodes, n)
+			}
+		}
+		for _, a := range snap.Attention {
+			if a.Cluster == only {
+				attention = append(attention, a)
+			}
+		}
+		if part.Users == nil {
+			part.Users = []live.UserLive{}
+		}
+		return map[string]any{"ts": snap.TS, "kpi": part.KPI, "nodes": nodes, "users": part.Users, "attention": attention}, nil
 	})
 }
 

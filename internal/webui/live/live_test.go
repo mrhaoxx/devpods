@@ -98,6 +98,38 @@ func TestRollup_Attention(t *testing.T) {
 	}
 }
 
+// Two clusters with a node of the same name: two nodes, each with its
+// own DevPods; the cluster's own numbers beside the console's; a quota
+// is judged in the cluster it is set for.
+func TestRollup_PerCluster(t *testing.T) {
+	now := time.Unix(100000, 0)
+	s := NewState(clock(&now))
+	in := Inputs{
+		Nodes: []NodeRef{
+			{Cluster: "a", Name: "m602", Ready: true, CPUAllocatable: 64},
+			{Cluster: "b", Name: "m602", Ready: true, CPUAllocatable: 8},
+		},
+		DevPods: []DevPodRef{
+			{Cluster: "a", UID: "1", Name: "x", Owner: "dave", Node: "m602", Phase: "Running", CPURequest: 2, CPULimit: 2},
+			{Cluster: "b", UID: "2", Name: "x", Owner: "dave", Node: "m602", Phase: "Running", CPURequest: 4, CPULimit: 7.6},
+		},
+		Quotas: map[string]Quota{QuotaKey("b", "dave"): {CPU: 8}},
+	}
+	snap := s.Snapshot(in)
+	if len(snap.Nodes) != 2 || snap.Nodes[0].Cluster != "a" || snap.Nodes[0].CPUAllocated != 2 || snap.Nodes[1].Cluster != "b" || snap.Nodes[1].CPUAllocated != 4 {
+		t.Fatalf("nodes %+v", snap.Nodes)
+	}
+	if snap.KPI.CPUAllocatable != 72 || snap.KPI.Running != 2 {
+		t.Fatalf("the console's kpi %+v", snap.KPI)
+	}
+	if b := snap.Clusters["b"]; b.KPI.CPUAllocatable != 8 || b.KPI.Running != 1 || len(b.Users) != 1 || b.Users[0].Running != 1 {
+		t.Fatalf("b's own numbers %+v", b)
+	}
+	if len(snap.Attention) != 1 || snap.Attention[0].Kind != "quota_high" || snap.Attention[0].Cluster != "b" {
+		t.Fatalf("b's quota, judged in b: %+v", snap.Attention)
+	}
+}
+
 func TestSnapshot_JSONFieldNames(t *testing.T) {
 	b, _ := json.Marshal(DevPodLive{})
 	var m map[string]any

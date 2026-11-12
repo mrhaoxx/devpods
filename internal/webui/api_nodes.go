@@ -91,8 +91,13 @@ func (s *Server) nodeViews(ctx context.Context) ([]NodeView, live.Snapshot, live
 			}
 		}
 	}
+	// the live snapshot covers every cluster: this cluster's nodes only
+	label := s.clusterLabel(s.kc(ctx))
 	out := make([]NodeView, 0, len(snap.Nodes))
 	for _, n := range snap.Nodes {
+		if n.Cluster != label {
+			continue
+		}
 		v := NodeView{Name: n.Name, Ready: n.Ready, Labels: n.Labels, DevPods: n.DevPods,
 			CPU:  resView{Allocatable: n.CPUAllocatable, Allocated: n.CPUAllocated},
 			Mem:  resView{Allocatable: n.MemAllocatable, Allocated: n.MemAllocated},

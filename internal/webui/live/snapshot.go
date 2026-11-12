@@ -57,6 +57,9 @@ type CardLive struct {
 
 // NodeLive is a node's rollup. Allocated counts DevPod requests only.
 type NodeLive struct {
+	// Cluster: the cluster it is in, in a console of several (a name can
+	// be in two).
+	Cluster        string            `json:"cluster,omitempty"`
 	Name           string            `json:"name"`
 	Ready          bool              `json:"ready"`
 	Labels         map[string]string `json:"labels,omitempty"`
@@ -102,12 +105,13 @@ type KPI struct {
 
 // AttentionItem is one "needs attention" row (UI spec §5.3).
 type AttentionItem struct {
-	Kind   string    `json:"kind"` // alert | idle_gpu | pending_long | quota_high
-	UID    string    `json:"uid,omitempty"`
-	DevPod string    `json:"devpod,omitempty"`
-	Owner  string    `json:"owner,omitempty"`
-	Since  time.Time `json:"since"`
-	Detail string    `json:"detail,omitempty"`
+	Cluster string    `json:"cluster,omitempty"`
+	Kind    string    `json:"kind"` // alert | idle_gpu | pending_long | quota_high
+	UID     string    `json:"uid,omitempty"`
+	DevPod  string    `json:"devpod,omitempty"`
+	Owner   string    `json:"owner,omitempty"`
+	Since   time.Time `json:"since"`
+	Detail  string    `json:"detail,omitempty"`
 }
 
 // Snapshot is the per-second state pushed to browsers and followers.
@@ -118,6 +122,24 @@ type Snapshot struct {
 	Users     []UserLive            `json:"users"`
 	KPI       KPI                   `json:"kpi"`
 	Attention []AttentionItem       `json:"attention"`
+	// Clusters: each cluster's own numbers, in a console of several (the
+	// fields above are the console's; nodes and attention say their cluster).
+	Clusters map[string]ClusterLive `json:"clusters,omitempty"`
+}
+
+// ClusterLive is one cluster's share of a snapshot.
+type ClusterLive struct {
+	KPI   KPI        `json:"kpi"`
+	Users []UserLive `json:"users"`
+}
+
+// QuotaKey is where Inputs.Quotas holds an owner's quota in a cluster
+// (quotas are counted per cluster; no cluster: the owner alone).
+func QuotaKey(cluster, owner string) string {
+	if cluster == "" {
+		return owner
+	}
+	return cluster + "/" + owner
 }
 
 // ProcLive is one process line for the detail page.
@@ -141,7 +163,7 @@ type ProcLive struct {
 type Inputs struct {
 	DevPods  []DevPodRef
 	Nodes    []NodeRef
-	Quotas   map[string]Quota // by owner; zero fields = unlimited
+	Quotas   map[string]Quota // by QuotaKey(cluster, owner); zero fields = unlimited
 	Idle     map[string]bool  // by DevPod UID
 	Alerts   []AlertRef
 	Presence map[string][]string // DevPod UID → users (audit sessions), used when telemetry has none
@@ -149,6 +171,7 @@ type Inputs struct {
 
 // DevPodRef is a DevPod as the cluster sees it.
 type DevPodRef struct {
+	Cluster                       string // in a console of several
 	UID, Name, Owner, Node, Phase string
 	PhaseSince                    time.Time
 	CPULimit, MemLimit            float64
@@ -158,6 +181,7 @@ type DevPodRef struct {
 
 // NodeRef is a node's capacity.
 type NodeRef struct {
+	Cluster        string // in a console of several
 	Name           string
 	Ready          bool
 	Labels         map[string]string

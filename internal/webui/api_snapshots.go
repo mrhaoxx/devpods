@@ -445,6 +445,9 @@ func (s *Server) handleListSnapshots(w http.ResponseWriter, r *http.Request) {
 	items := []snapshotView{}
 	for _, cc := range s.ks(r) {
 		list, err := s.ownedSnapshots(s.in(r.Context(), cc), owner)
+		if away(err) {
+			continue
+		}
 		if err != nil {
 			s.writeErr(w, http.StatusInternalServerError, "INTERNAL", err.Error(), nil)
 			return

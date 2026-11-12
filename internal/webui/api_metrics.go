@@ -259,12 +259,16 @@ func (s *Server) handleNodesRecent(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	_, _, in, _ := s.nodeViews(r.Context())
+	// every cluster's nodes, keyed <cluster>/<name> in a console of several
+	in := (&LiveInputs{S: s}).Build(r.Context())
 	nodeOf := map[string]string{}
 	uids := make([]string, 0, len(in.DevPods))
 	for _, ref := range in.DevPods {
 		if ref.Node != "" && ref.UID != "" {
 			nodeOf[ref.UID] = ref.Node
+			if ref.Cluster != "" {
+				nodeOf[ref.UID] = ref.Cluster + "/" + ref.Node
+			}
 			uids = append(uids, ref.UID)
 		}
 	}

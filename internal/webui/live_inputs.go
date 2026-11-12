@@ -16,6 +16,7 @@ import (
 	devpodv1alpha1 "github.com/mrhaoxx/devpod/api/v1alpha1"
 	"github.com/mrhaoxx/devpod/internal/audit/store"
 	"github.com/mrhaoxx/devpod/internal/render"
+	"github.com/mrhaoxx/devpod/internal/webui/clusters"
 	"github.com/mrhaoxx/devpod/internal/webui/live"
 )
 
@@ -117,10 +118,11 @@ func (li *LiveInputs) Build(ctx context.Context) live.Inputs {
 	s := li.S
 	in := live.Inputs{Quotas: map[string]live.Quota{}}
 	// every cluster the console manages (its own, when it manages no
-	// others): a DevPod's uid tells them apart
-	owners := map[string]bool{}
-	var nodes corev1.NodeList
+	// others); in a console of several each ref says its cluster
+	owners := map[ownerIn]bool{}
+	var nodes []nodeIn
 	for n, cc := range s.ksc(ctx) {
+		label := s.clusterLabel(cc)
 		var dps devpodv1alpha1.DevPodList
 		if err := cc.Client.List(ctx, &dps, client.InNamespace(s.NS), client.UnsafeDisableDeepCopy); err != nil {
 			if n == 0 && s.Clusters == nil {
@@ -132,25 +134,39 @@ func (li *LiveInputs) Build(ctx context.Context) live.Inputs {
 		_ = cc.Client.List(ctx, &pods, client.InNamespace(s.NS), client.HasLabels{render.LabelDevPod}, client.UnsafeDisableDeepCopy)
 		var ns corev1.NodeList
 		if err := cc.Client.List(ctx, &ns, client.UnsafeDisableDeepCopy); err == nil {
-			nodes.Items = append(nodes.Items, ns.Items...)
+			for i := range ns.Items {
+				nodes = append(nodes, nodeIn{cluster: label, node: &ns.Items[i]})
+			}
 		}
-		li.devpodRefs(&in, owners, dps.Items, pods.Items)
+		li.devpodRefs(&in, label, cc, owners, dps.Items, pods.Items)
 	}
-	li.finish(ctx, &in, owners, nodes.Items)
+	li.finish(ctx, &in, owners, nodes)
 	return in
 }
 
+// ownerIn: an owner of DevPods in a cluster (quotas are per cluster).
+type ownerIn struct {
+	cluster, owner string
+	cc             *clusters.ClusterClients
+}
+
+// nodeIn: a node and the cluster it is in.
+type nodeIn struct {
+	cluster string
+	node    *corev1.Node
+}
+
 // devpodRefs adds one cluster's DevPods to in.
-func (li *LiveInputs) devpodRefs(in *live.Inputs, owners map[string]bool, dps []devpodv1alpha1.DevPod, pods []corev1.Pod) {
+func (li *LiveInputs) devpodRefs(in *live.Inputs, cluster string, cc *clusters.ClusterClients, owners map[ownerIn]bool, dps []devpodv1alpha1.DevPod, pods []corev1.Pod) {
 	podOf := map[string]*corev1.Pod{}
 	for i := range pods {
 		podOf[pods[i].Labels[render.LabelDevPod]] = &pods[i]
 	}
 	for i := range dps {
 		dp := &dps[i]
-		ref := live.DevPodRef{UID: string(dp.UID), Name: dp.Name, Owner: dp.Spec.Owner, Phase: string(dp.Status.Phase),
+		ref := live.DevPodRef{Cluster: cluster, UID: string(dp.UID), Name: dp.Name, Owner: dp.Spec.Owner, Phase: string(dp.Status.Phase),
 			PhaseSince: dp.CreationTimestamp.Time}
-		owners[dp.Spec.Owner] = true
+		owners[ownerIn{cluster: cluster, owner: dp.Spec.Owner, cc: cc}] = true
 		var spec *corev1.PodSpec
 		if pod := podOf[dp.Name]; pod != nil {
 			spec, ref.Node, ref.PhaseSince = &pod.Spec, pod.Spec.NodeName, pod.CreationTimestamp.Time
@@ -167,12 +183,12 @@ func (li *LiveInputs) devpodRefs(in *live.Inputs, owners map[string]bool, dps []
 }
 
 // finish adds the nodes, the owners' quotas and what the audit store said.
-func (li *LiveInputs) finish(ctx context.Context, in *live.Inputs, owners map[string]bool, nodes []corev1.Node) {
+func (li *LiveInputs) finish(ctx context.Context, in *live.Inputs, owners map[ownerIn]bool, nodes []nodeIn) {
 	s := li.S
 	{
-		for i := range nodes {
-			n := &nodes[i]
-			ref := live.NodeRef{Name: n.Name, Labels: map[string]string{}, GPUModel: n.Labels[gpuProductLabel],
+		for _, ni := range nodes {
+			n := ni.node
+			ref := live.NodeRef{Cluster: ni.cluster, Name: n.Name, Labels: map[string]string{}, GPUModel: n.Labels[gpuProductLabel],
 				CPUAllocatable: cores(n.Status.Allocatable), MemAllocatable: bytesOf(n.Status.Allocatable), GPUAllocatable: gpus(n.Status.Allocatable)}
 			for k, v := range n.Labels {
 				if keepNodeLabel(k) {
@@ -195,9 +211,12 @@ func (li *LiveInputs) finish(ctx context.Context, in *live.Inputs, owners map[st
 			byName[users.Items[i].Name] = &users.Items[i]
 		}
 	}
-	for owner := range owners {
-		q := EffectiveQuota(byName[owner], "", s.DefaultQuota)
-		in.Quotas[owner] = live.Quota{CPU: cores(q.Compute), Mem: bytesOf(q.Compute), GPU: gpus(q.Compute)}
+	for o := range owners {
+		q := EffectiveQuota(byName[o.owner], "", s.DefaultQuota)
+		if s.Clusters != nil && o.cc != nil {
+			q = EffectiveQuota(byName[o.owner], o.cc.Name, s.clusterQuota(ctx, o.cc))
+		}
+		in.Quotas[live.QuotaKey(o.cluster, o.owner)] = live.Quota{CPU: cores(q.Compute), Mem: bytesOf(q.Compute), GPU: gpus(q.Compute)}
 	}
 
 	li.mu.Lock()

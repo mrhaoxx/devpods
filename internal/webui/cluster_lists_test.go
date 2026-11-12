@@ -15,6 +15,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/mrhaoxx/devpod/internal/webui"
+	"github.com/mrhaoxx/devpod/internal/webui/live"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
@@ -40,11 +42,11 @@ func TestListsCoverEveryCluster(t *testing.T) {
 		_ = w.a.Delete(ctx, &corev1.Node{ObjectMeta: metav1.ObjectMeta{Name: "fl-n1"}})
 		_ = w.b.Delete(ctx, &corev1.Node{ObjectMeta: metav1.ObjectMeta{Name: "fl-n1"}})
 	})
-	clustersOf := func(path string) string {
+	clustersOf := func(user, path string) string {
 		t.Helper()
 		var got []string
 		w.until(path+" lists fl-n1", func() bool {
-			code, out, _ := w.call("gl-alice", "GET", path, "")
+			code, out, _ := w.call(user, "GET", path, "")
 			got = nil
 			if code != http.StatusOK {
 				return false
@@ -62,11 +64,21 @@ func TestListsCoverEveryCluster(t *testing.T) {
 		sort.Strings(got)
 		return strings.Join(got, ",")
 	}
-	if got := clustersOf("/api/nodes"); got != "a,b" {
+	if got := clustersOf("gl-alice", "/api/nodes"); got != "a,b" {
 		t.Fatalf("/api/nodes: fl-n1 in %q, want a,b", got)
 	}
-	if got := clustersOf("/api/clusters/a/nodes"); got != "a" {
+	if got := clustersOf("gl-alice", "/api/clusters/a/nodes"); got != "a" {
 		t.Fatalf("/api/clusters/a/nodes: fl-n1 in %q, want a", got)
+	}
+	// with live data, which covers every cluster at once: still each
+	// cluster's nodes under it, once
+	w.s.Live = &webui.LiveDeps{Snapshot: func(context.Context) (live.Snapshot, bool) {
+		return live.NewState(nil).Snapshot((&webui.LiveInputs{S: w.s}).Build(context.Background())), true
+	}}
+	for _, path := range []string{"/api/nodes", "/api/admin/nodes"} {
+		if got := clustersOf("root", path); got != "a,b" {
+			t.Fatalf("%s with live data: fl-n1 in %q, want a,b", path, got)
+		}
 	}
 }
 
@@ -122,6 +134,20 @@ func TestWatchCoversEveryCluster(t *testing.T) {
 			got[c] = true
 		case <-deadline:
 			t.Fatalf("events seen from %v, want a and b", got)
+		}
+	}
+}
+
+// A cluster that is away does not take the lists of the others down.
+func TestListsWithAClusterAway(t *testing.T) {
+	w := setupWorld(t)
+	w.s.Reservations = &webui.ReservationRules{Granularity: 30 * time.Minute, MaxDuration: 24 * time.Hour, MaxAdvance: 14 * 24 * time.Hour,
+		ClearNotice: 30 * time.Minute, Now: time.Now}
+	w.stopB()
+	w.until("b is stale", func() bool { _, stale := w.s.Clusters.Stale("b"); return stale })
+	for _, path := range []string{"/api/nodes", "/api/reservations"} {
+		if code, out, _ := w.call("gl-alice", "GET", path, ""); code != http.StatusOK {
+			t.Fatalf("%s with b away: %d %v", path, code, out)
 		}
 	}
 }

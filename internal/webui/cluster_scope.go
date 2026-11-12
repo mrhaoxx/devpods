@@ -403,6 +403,23 @@ func (s *Server) clusterQuota(ctx context.Context, cc *clusters.ClusterClients) 
 	return out
 }
 
+// namedCluster: the cluster a request named, in a console of several
+// ("" when it named none, or the console has one).
+func (s *Server) namedCluster(ctx context.Context) string {
+	if s.Clusters == nil {
+		return ""
+	}
+	if sc, _ := ctx.Value(scopeKey{}).(*reqScope); sc != nil && sc.cc != nil {
+		return sc.cc.Name
+	}
+	return ""
+}
+
+// away: a read asked a cluster whose agent is not connected. A list over
+// every cluster leaves that cluster's items out rather than fail (the
+// console names the clusters that are offline).
+func away(err error) bool { return errors.Is(err, clusters.ErrClusterOffline) }
+
 // clusterLabel is what a list says an item's cluster is: cc's name in a
 // console of several clusters, nothing in a console of its own one.
 func (s *Server) clusterLabel(cc *clusters.ClusterClients) string {

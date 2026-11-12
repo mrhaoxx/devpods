@@ -7,6 +7,7 @@ package live
 import (
 	"fmt"
 	"sort"
+	"strings"
 	"time"
 )
 
@@ -19,27 +20,113 @@ const (
 
 var attentionOrder = map[string]int{"alert": 0, "idle_gpu": 1, "pending_long": 2, "quota_high": 3}
 
-// Snapshot renders the state against the cluster's objects.
+// nodeKey: a node in its cluster (a name can be in two clusters).
+func nodeKey(cluster, name string) string { return cluster + "/" + name }
+
+// tally is the numbers kept for the console and for each cluster.
+type tally struct {
+	kpi          KPI
+	users        map[string]*UserLive
+	sessionUsers map[string]bool
+}
+
+func newTally() *tally { return &tally{users: map[string]*UserLive{}, sessionUsers: map[string]bool{}} }
+
+func (t *tally) node(n NodeRef) {
+	if n.Ready {
+		t.kpi.CPUAllocatable += n.CPUAllocatable
+		t.kpi.MemAllocatable += n.MemAllocatable
+		t.kpi.GPUTotal += n.GPUAllocatable
+	}
+}
+
+func (t *tally) devpod(ref DevPodRef, d DevPodLive) {
+	running := ref.Phase == "Running"
+	switch ref.Phase {
+	case "Running":
+		t.kpi.Running++
+	case "Pending":
+		t.kpi.Pending++
+	case "Failed":
+		t.kpi.Failed++
+	default:
+		t.kpi.Stopped++
+	}
+	t.kpi.Sessions += len(d.Sessions)
+	for _, se := range d.Sessions {
+		t.sessionUsers[se.User] = true
+	}
+	u := t.users[ref.Owner]
+	if u == nil {
+		u = &UserLive{User: ref.Owner}
+		t.users[ref.Owner] = u
+	}
+	u.DevPods++
+	if d.CPU != nil {
+		u.CPU += *d.CPU
+		t.kpi.CPUUsed += *d.CPU
+	}
+	if d.Mem != nil {
+		u.Mem += *d.Mem
+		t.kpi.MemUsed += *d.Mem
+	}
+	if d.RDMARx != nil {
+		t.kpi.RDMA += *d.RDMARx + *d.RDMATx
+	}
+	if running {
+		u.Running++
+		u.GPU += ref.GPURequest
+		t.kpi.GPUUsed += ref.GPURequest
+	}
+}
+
+// done: the KPI and the users, the busiest first.
+func (t *tally) done() (KPI, []UserLive) {
+	t.kpi.SessionUsers = len(t.sessionUsers)
+	users := make([]UserLive, 0, len(t.users))
+	for _, u := range t.users {
+		users = append(users, *u)
+	}
+	sort.Slice(users, func(i, j int) bool {
+		if users[i].CPU != users[j].CPU {
+			return users[i].CPU > users[j].CPU
+		}
+		return users[i].User < users[j].User
+	})
+	return t.kpi, users
+}
+
+// Snapshot renders the state against the clusters' objects: the
+// console's numbers, and in a console of several each cluster's too.
 func (s *State) Snapshot(in Inputs) Snapshot {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	now := s.now()
 	snap := Snapshot{TS: now.UTC(), DevPods: map[string]DevPodLive{}, Nodes: []NodeLive{}, Users: []UserLive{}, Attention: []AttentionItem{}}
 
+	all := newTally()
+	parts := map[string]*tally{} // by cluster, in a console of several
+	partOf := func(cluster string) *tally {
+		if cluster == "" {
+			return nil
+		}
+		if parts[cluster] == nil {
+			parts[cluster] = newTally()
+		}
+		return parts[cluster]
+	}
 	nodes := map[string]*NodeLive{}
 	for _, n := range in.Nodes {
-		nl := &NodeLive{Name: n.Name, Ready: n.Ready, Labels: n.Labels, CPUAllocatable: n.CPUAllocatable,
+		nl := &NodeLive{Cluster: n.Cluster, Name: n.Name, Ready: n.Ready, Labels: n.Labels, CPUAllocatable: n.CPUAllocatable,
 			MemAllocatable: n.MemAllocatable, GPUTotal: n.GPUAllocatable, GPUModel: n.GPUModel}
-		nodes[n.Name] = nl
-		if n.Ready {
-			snap.KPI.CPUAllocatable += n.CPUAllocatable
-			snap.KPI.MemAllocatable += n.MemAllocatable
-			snap.KPI.GPUTotal += n.GPUAllocatable
+		nodes[nodeKey(n.Cluster, n.Name)] = nl
+		all.node(n)
+		if p := partOf(n.Cluster); p != nil {
+			p.node(n)
 		}
 	}
-	users := map[string]*UserLive{}
-	requested := map[string]Quota{} // owner → limits of running DevPods (quota is limit-based)
-	sessionUsers := map[string]bool{}
+	requested := map[string]Quota{}  // QuotaKey(cluster, owner) → limits of running DevPods (quota is limit-based)
+	clusterOf := map[string]string{} // QuotaKey → cluster
 
 	for _, ref := range in.DevPods {
 		d := s.devpodLive(ref, now)
@@ -51,46 +138,18 @@ func (s *State) Snapshot(in Inputs) Snapshot {
 		d.Idle = in.Idle[ref.UID]
 		snap.DevPods[ref.UID] = d
 		running := ref.Phase == "Running"
-		switch ref.Phase {
-		case "Running":
-			snap.KPI.Running++
-		case "Pending":
-			snap.KPI.Pending++
-		case "Failed":
-			snap.KPI.Failed++
-		default:
-			snap.KPI.Stopped++
-		}
-		snap.KPI.Sessions += len(d.Sessions)
-		for _, se := range d.Sessions {
-			sessionUsers[se.User] = true
-		}
-		u := users[ref.Owner]
-		if u == nil {
-			u = &UserLive{User: ref.Owner}
-			users[ref.Owner] = u
-		}
-		u.DevPods++
-		if d.CPU != nil {
-			u.CPU += *d.CPU
-			snap.KPI.CPUUsed += *d.CPU
-		}
-		if d.Mem != nil {
-			u.Mem += *d.Mem
-			snap.KPI.MemUsed += *d.Mem
-		}
-		if d.RDMARx != nil {
-			snap.KPI.RDMA += *d.RDMARx + *d.RDMATx
+		all.devpod(ref, d)
+		if p := partOf(ref.Cluster); p != nil {
+			p.devpod(ref, d)
 		}
 		if running {
-			u.Running++
-			u.GPU += ref.GPURequest
-			snap.KPI.GPUUsed += ref.GPURequest
-			q := requested[ref.Owner]
+			k := QuotaKey(ref.Cluster, ref.Owner)
+			q := requested[k]
 			q.CPU, q.Mem, q.GPU = q.CPU+ref.CPULimit, q.Mem+ref.MemLimit, q.GPU+ref.GPURequest
-			requested[ref.Owner] = q
+			requested[k] = q
+			clusterOf[k] = ref.Cluster
 		}
-		if n := nodes[ref.Node]; n != nil && ref.Node != "" {
+		if n := nodes[nodeKey(ref.Cluster, ref.Node)]; n != nil && ref.Node != "" {
 			n.DevPods++
 			if running {
 				n.CPUAllocated += ref.CPURequest
@@ -111,17 +170,15 @@ func (s *State) Snapshot(in Inputs) Snapshot {
 		// needs attention
 		switch {
 		case running && ref.GPURequest > 0 && in.Idle[ref.UID]:
-			snap.Attention = append(snap.Attention, AttentionItem{Kind: "idle_gpu", UID: ref.UID, DevPod: ref.Name, Owner: ref.Owner,
+			snap.Attention = append(snap.Attention, AttentionItem{Cluster: ref.Cluster, Kind: "idle_gpu", UID: ref.UID, DevPod: ref.Name, Owner: ref.Owner,
 				Detail: fmt.Sprintf("holds %d GPU, idle for 24h", ref.GPURequest)})
 		case ref.Phase == "Pending" && !ref.PhaseSince.IsZero() && now.Sub(ref.PhaseSince) > PendingLong:
-			snap.Attention = append(snap.Attention, AttentionItem{Kind: "pending_long", UID: ref.UID, DevPod: ref.Name, Owner: ref.Owner,
+			snap.Attention = append(snap.Attention, AttentionItem{Cluster: ref.Cluster, Kind: "pending_long", UID: ref.UID, DevPod: ref.Name, Owner: ref.Owner,
 				Since: ref.PhaseSince, Detail: fmt.Sprintf("pending for %s", now.Sub(ref.PhaseSince).Truncate(time.Minute))})
 		}
 	}
-	snap.KPI.SessionUsers = len(sessionUsers)
-
-	for owner, used := range requested {
-		q, ok := in.Quotas[owner]
+	for key, used := range requested {
+		q, ok := in.Quotas[key]
 		if !ok {
 			continue
 		}
@@ -135,7 +192,8 @@ func (s *State) Snapshot(in Inputs) Snapshot {
 			over = fmt.Sprintf("GPU %d / %d", used.GPU, q.GPU)
 		}
 		if over != "" {
-			snap.Attention = append(snap.Attention, AttentionItem{Kind: "quota_high", Owner: owner, Detail: over})
+			owner := strings.TrimPrefix(key, clusterOf[key]+"/")
+			snap.Attention = append(snap.Attention, AttentionItem{Cluster: clusterOf[key], Kind: "quota_high", Owner: owner, Detail: over})
 		}
 	}
 	names := map[string]DevPodRef{}
@@ -147,7 +205,7 @@ func (s *State) Snapshot(in Inputs) Snapshot {
 			continue
 		}
 		ref := names[a.DevPodUID]
-		snap.Attention = append(snap.Attention, AttentionItem{Kind: "alert", UID: a.DevPodUID, DevPod: ref.Name, Owner: ref.Owner,
+		snap.Attention = append(snap.Attention, AttentionItem{Cluster: ref.Cluster, Kind: "alert", UID: a.DevPodUID, DevPod: ref.Name, Owner: ref.Owner,
 			Since: a.TS, Detail: a.Kind + ": " + a.Detail})
 	}
 	sort.SliceStable(snap.Attention, func(i, j int) bool {
@@ -162,15 +220,19 @@ func (s *State) Snapshot(in Inputs) Snapshot {
 		sort.Slice(n.Cards, func(i, j int) bool { return n.Cards[i].Index < n.Cards[j].Index })
 		snap.Nodes = append(snap.Nodes, *n)
 	}
-	sort.Slice(snap.Nodes, func(i, j int) bool { return snap.Nodes[i].Name < snap.Nodes[j].Name })
-	for _, u := range users {
-		snap.Users = append(snap.Users, *u)
-	}
-	sort.Slice(snap.Users, func(i, j int) bool {
-		if snap.Users[i].CPU != snap.Users[j].CPU {
-			return snap.Users[i].CPU > snap.Users[j].CPU
+	sort.Slice(snap.Nodes, func(i, j int) bool {
+		if snap.Nodes[i].Cluster != snap.Nodes[j].Cluster {
+			return snap.Nodes[i].Cluster < snap.Nodes[j].Cluster
 		}
-		return snap.Users[i].User < snap.Users[j].User
+		return snap.Nodes[i].Name < snap.Nodes[j].Name
 	})
+	snap.KPI, snap.Users = all.done()
+	if len(parts) > 0 {
+		snap.Clusters = map[string]ClusterLive{}
+		for c, p := range parts {
+			kpi, users := p.done()
+			snap.Clusters[c] = ClusterLive{KPI: kpi, Users: users}
+		}
+	}
 	return snap
 }
