@@ -90,23 +90,49 @@ func proofMessage(nonce []byte) []byte { return append([]byte(proofContext), non
 // Sign proves the identity over a nonce the console sent.
 func (i *Identity) Sign(nonce []byte) []byte { return ed25519.Sign(i.priv, proofMessage(nonce)) }
 
+// SignFor signs msg for one use, named by context: a signature made for
+// one use is not one for another.
+func (i *Identity) SignFor(context string, msg []byte) []byte {
+	return ed25519.Sign(i.priv, append([]byte(context+"\n"), msg...))
+}
+
+// VerifyFor checks a SignFor signature against a registered public key.
+func VerifyFor(publicKey, context string, msg, sig []byte) error {
+	ed, err := parseKey(publicKey)
+	if err != nil {
+		return err
+	}
+	if !ed25519.Verify(ed, append([]byte(context+"\n"), msg...), sig) {
+		return errors.New("the signature does not match the registered key")
+	}
+	return nil
+}
+
 // Verify checks a proof against a registered public key (an
 // authorized_keys line holding an Ed25519 key).
 func Verify(publicKey string, nonce, proof []byte) error {
-	pk, _, _, _, err := ssh.ParseAuthorizedKey([]byte(publicKey))
+	ed, err := parseKey(publicKey)
 	if err != nil {
-		return fmt.Errorf("registered key: %w", err)
-	}
-	cpk, ok := pk.(ssh.CryptoPublicKey)
-	if !ok {
-		return errors.New("registered key: not usable")
-	}
-	ed, ok := cpk.CryptoPublicKey().(ed25519.PublicKey)
-	if !ok {
-		return errors.New("registered key: not an Ed25519 key")
+		return err
 	}
 	if !ed25519.Verify(ed, proofMessage(nonce), proof) {
 		return errors.New("the proof does not match the registered key")
 	}
 	return nil
+}
+
+func parseKey(publicKey string) (ed25519.PublicKey, error) {
+	pk, _, _, _, err := ssh.ParseAuthorizedKey([]byte(publicKey))
+	if err != nil {
+		return nil, fmt.Errorf("registered key: %w", err)
+	}
+	cpk, ok := pk.(ssh.CryptoPublicKey)
+	if !ok {
+		return nil, errors.New("registered key: not usable")
+	}
+	ed, ok := cpk.CryptoPublicKey().(ed25519.PublicKey)
+	if !ok {
+		return nil, errors.New("registered key: not an Ed25519 key")
+	}
+	return ed, nil
 }
