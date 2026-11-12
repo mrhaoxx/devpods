@@ -1,7 +1,7 @@
 // 保存为镜像 (snapshot spec v2): a form, then the same dialog shows the
 // snapshot happening — the three steps, elapsed time, the Job's log tail
 // — with a cancel button. Closing the dialog cancels nothing.
-import type { Ref } from "../../data/cluster";
+import { keyOf, type Ref } from "../../data/cluster";
 import * as Dialog from "@radix-ui/react-dialog";
 import { useEffect, useRef, useState } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
@@ -143,6 +143,7 @@ export function SnapshotProgressView({ snapshot, onClose }: { snapshot: Pick<Sna
 
 function CreateForm({ devpod: ref, owner, onCreated }: { devpod: Ref; owner: string; onCreated: (s: SnapshotView) => void }) {
   const devpod = ref.name;
+  const remembered = keyOf(ref); // the image last used for it, kept per cluster/name
   const me = useMe().data;
   const hasDefault = !!me?.features.snapshotDefaultRegistry;
   // the address used last time (this DevPod's, else the user's last one)
@@ -172,12 +173,12 @@ function CreateForm({ devpod: ref, owner, onCreated }: { devpod: Ref; owner: str
   };
   useEffect(() => {
     setTagModeState(lastTagMode(user));
-    const last = lastImage(user, devpod);
+    const last = lastImage(user, remembered);
     if (last && !touched.current) {
       setImageState(last);
       setTargetState("custom");
     }
-  }, [user, devpod]);
+  }, [user, remembered]);
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [pause, setPause] = useState(true);
@@ -190,7 +191,7 @@ function CreateForm({ devpod: ref, owner, onCreated }: { devpod: Ref; owner: str
     mutationFn: (body: SnapshotRequest) => createSnapshot(ref, body),
     onSuccess: (s) => {
       setPassword(""); // used once; not kept in the page
-      if (target === "custom") rememberImage(user, devpod, image);
+      if (target === "custom") rememberImage(user, remembered, image);
       onCreated(ref.cluster ? { ...s, cluster: ref.cluster } : s);
     },
   });

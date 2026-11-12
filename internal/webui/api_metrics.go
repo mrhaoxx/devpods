@@ -12,7 +12,6 @@ import (
 	"strconv"
 	"time"
 
-	devpodv1alpha1 "github.com/mrhaoxx/devpod/api/v1alpha1"
 	"github.com/mrhaoxx/devpod/internal/audit/store"
 	"github.com/mrhaoxx/devpod/internal/webui/live"
 )
@@ -159,31 +158,31 @@ const (
 )
 
 // handleLiveRecent serves GET /api/live/devpods/recent?scope=mine|all or
-// ?name=<devpod>: CPU and memory sparkline history keyed by DevPod name.
+// ?name=<devpod>: CPU and memory sparkline history keyed by DevPod
+// (<cluster>/<name> in a console of several clusters).
 func (s *Server) handleLiveRecent(w http.ResponseWriter, r *http.Request) {
 	sess, ok := s.sessionFrom(w, r)
 	if !ok {
 		return
 	}
-	var dps []devpodv1alpha1.DevPod
+	var dps []InCluster
 	if name := r.URL.Query().Get("name"); name != "" {
 		dp, ok := s.getOwned(w, r, sess, name)
 		if !ok {
 			return
 		}
-		dps = []devpodv1alpha1.DevPod{*dp}
+		dps = []InCluster{{DevPod: *dp, Cluster: s.namedCluster(r.Context())}}
 	} else {
 		all, ok := s.listScope(w, r, sess)
 		if !ok {
 			return
 		}
-		var err error
+		owner := sess.User
 		if all {
-			dps, err = s.allDevPods(r)
-		} else {
-			dps, err = s.ownedDevPods(r, sess.User)
+			owner = ""
 		}
-		if err != nil {
+		var err error
+		if dps, err = s.devPods(r, owner); err != nil {
 			s.writeErr(w, http.StatusInternalServerError, "INTERNAL", err.Error(), nil)
 			return
 		}
@@ -198,7 +197,7 @@ func (s *Server) handleLiveRecent(w http.ResponseWriter, r *http.Request) {
 		if !dp.Spec.Running {
 			continue // hibernated: nothing recent to draw
 		}
-		names[string(dp.UID)] = dp.Name
+		names[string(dp.UID)] = dp.key(s)
 		uids = append(uids, string(dp.UID))
 	}
 	to := time.Now().UTC()

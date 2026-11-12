@@ -28,13 +28,15 @@ export function SessionsPage({ mine }: { mine?: boolean }) {
   const me = useMe().data;
   const admin = !!me?.admin && !mine;
   const [url, setUrl] = useUrlState(schema);
-  const { matches } = useClusterFilter();
+  const { matches, filter } = useClusterFilter();
   const now = useNow(10_000);
   const [sorting, setSorting] = useState<SortingState>([]);
   const filters = {
     ...fromTo(url.range),
     user: mine ? (me?.user ?? "") : admin ? url.user : "",
     devpod: url.devpod,
+    // a DevPod name is looked up in the filtered cluster (a name can be in two)
+    cluster: url.devpod ? filter : "",
     hasFiles: url.files ? "true" : "",
     hasAlerts: url.alerts ? "true" : "",
   };

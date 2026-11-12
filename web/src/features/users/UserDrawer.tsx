@@ -1,7 +1,7 @@
 // One user (UI spec §5.5): quota with current usage beside each field
 // (blank = default), DevPods, recent sessions, policy override, SSH keys,
 // 设为管理员 / 删除用户 behind confirmation.
-import { devpodHref } from "../../data/cluster";
+import { devpodHref, keyOf } from "../../data/cluster";
 import { refOf } from "../../data/api";
 import { useClusterList } from "../../data/clusterFilter";
 import { useState } from "react";
@@ -50,6 +50,10 @@ function Quota({ u, def }: { u: AdminUserRow; def: UserQuota }) {
 function QuotaEditor({ u, def, cluster }: { u: AdminUserRow; def: UserQuota; cluster: string }) {
   const qc = useQueryClient();
   const q = cluster ? u.quotas?.[cluster] : u.quota;
+  // in one cluster: what is used there, against that cluster's default
+  const inC = cluster ? u.clusters?.[cluster] : undefined;
+  const used = inC ? { devpods: inC.devpods, ...inC.usage } : { devpods: u.devpods, ...u.usage };
+  const dflt = inC ? inC.default : def;
   const [f, setF] = useState({
     maxDevPods: q?.maxDevPods?.toString() ?? "",
     cpu: q?.compute?.cpu ?? "",
@@ -59,11 +63,11 @@ function QuotaEditor({ u, def, cluster }: { u: AdminUserRow; def: UserQuota; clu
   });
   const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
   const rows: [keyof typeof f, string, string | undefined, string | undefined][] = [
-    ["maxDevPods", "DevPod 数", String(u.devpods), def.maxDevPods?.toString()],
-    ["cpu", "CPU", u.usage.cpu ?? "0", def.compute?.cpu],
-    ["memory", "内存", u.usage.memory ?? "0", def.compute?.memory],
-    ["gpu", "GPU", u.usage.gpu ?? "0", def.compute?.["nvidia.com/gpu"]],
-    ["storage", "存储", u.usage.storage ?? "0", def.storage],
+    ["maxDevPods", "DevPod 数", String(used.devpods), dflt.maxDevPods?.toString()],
+    ["cpu", "CPU", used.cpu ?? "0", dflt.compute?.cpu],
+    ["memory", "内存", used.memory ?? "0", dflt.compute?.memory],
+    ["gpu", "GPU", used.gpu ?? "0", dflt.compute?.["nvidia.com/gpu"]],
+    ["storage", "存储", used.storage ?? "0", dflt.storage],
   ];
   const save = async () => {
     setMsg(null);
@@ -157,9 +161,10 @@ export function UserDrawer({ u, def, onClose }: { u?: AdminUserRow; def: UserQuo
             ) : (
               <ul className="divide-y divide-line text-xs">
                 {mine.map((d) => (
-                  <li key={d.metadata.name} className="flex items-center gap-2 px-3 py-1">
+                  <li key={keyOf({ cluster: d.cluster, name: d.metadata.name })} className="flex items-center gap-2 px-3 py-1">
                     <StatusDot phase={d.status?.phase} />
                     <span className="mono min-w-0 flex-1 truncate">{d.metadata.name}</span>
+                    {d.cluster && <span className="text-faint">{d.cluster}</span>}
                     <Link to={devpodHref(refOf(d))} className="text-accent hover:underline">
                       打开
                     </Link>

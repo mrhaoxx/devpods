@@ -1,4 +1,5 @@
 // 告警, 访问记录 and 策略 (UI spec §5.8), admins only.
+import { useClusterFilter } from "../../data/clusterFilter";
 import { useMemo, useState } from "react";
 import { Link, NavLink } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
@@ -21,7 +22,11 @@ export function AlertsPage() {
   const q = usePaged<AlertRow>("alerts", fromTo(url.range), listAlerts);
   const pods = useQuery({ queryKey: qk.devpods("all"), queryFn: () => listDevPods("all") });
   const byUID = useMemo(() => new Map((pods.data?.items ?? []).map((d) => [d.metadata.uid ?? "", d.metadata.name])), [pods.data]);
-  const rows = url.devpod ? q.items.filter((a) => (byUID.get(a.devpod_uid) ?? "").includes(url.devpod)) : q.items;
+  // an alert's cluster is its DevPod's (a uid is in one cluster)
+  const { matches } = useClusterFilter();
+  const clusterOf = useMemo(() => new Map((pods.data?.items ?? []).map((d) => [d.metadata.uid ?? "", d.cluster])), [pods.data]);
+  const inFilter = q.items.filter((a) => matches({ cluster: clusterOf.get(a.devpod_uid) }));
+  const rows = url.devpod ? inFilter.filter((a) => (byUID.get(a.devpod_uid) ?? "").includes(url.devpod)) : inFilter;
   const columns: ColumnDef<AlertRow, unknown>[] = [
     { id: "ts", header: "时间", accessorKey: "ts", meta: { priority: 2, width: 150 }, cell: ({ getValue }) => fmtTS(String(getValue())) },
     { id: "kind", header: "类型", accessorKey: "kind", meta: { priority: 1, width: 120 }, cell: ({ getValue }) => <Badge tone="fail">{String(getValue())}</Badge> },

@@ -237,4 +237,23 @@ describe("DevPodTable", () => {
     await screen.findByText("na");
     expect(screen.getAllByRole("link", { name: "alice-x" })).toHaveLength(1);
   });
+
+  it("live numbers of same-named DevPods in two clusters: each row its own", async () => {
+    const x = (cluster: string) => ({ ...mk("alice-x", "alice", "Running"), cluster });
+    stubFetch({ "/api/devpods": { items: [x("a"), x("b")], pods: { "a/alice-x": { node: "na" }, "b/alice-x": { node: "nb" } } } });
+    const conns: { url: string; h: SseHandlers }[] = [];
+    const hub = new LiveHub({ open: (url, h) => (conns.push({ url, h }), () => {}) });
+    const clusters = [
+      { name: "a", connected: true },
+      { name: "b", connected: true },
+    ];
+    renderWithProviders(<DevPodTable scope="mine" />, { hub, liveEnabled: true, clusters });
+    await waitFor(() => expect(screen.getAllByRole("link", { name: "alice-x" })).toHaveLength(2));
+    const item = (cluster: string, cpu: number) => ({ cluster, name: "alice-x", owner: "alice", cpu, cpuLimit: 4, mem: null, memLimit: 0, gpu: [], netRx: null, netTx: null, netKind: "", rdmaRx: null, rdmaTx: null, rdmaKind: "", ioR: null, ioW: null, sessions: [], idle: false });
+    await waitFor(() => expect(conns.length).toBeGreaterThan(0));
+    act(() => conns.forEach((c) => c.h.onMessage({ ts: new Date().toISOString(), items: [item("a", 1), item("b", 3)] })));
+    const rowOf = (node: string) => screen.getAllByRole("row").find((r) => within(r).queryByText(node))!;
+    await waitFor(() => expect(rowOf("na").textContent).toContain("1/4"));
+    expect(rowOf("nb").textContent).toContain("3/4");
+  });
 });

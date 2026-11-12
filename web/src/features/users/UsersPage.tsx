@@ -1,6 +1,7 @@
 // 用户与配额 (UI spec §5.5): one table, quick filters, batch actions, CSV
 // import and a drawer per user (?user=).
 import { useMemo, useState } from "react";
+import { useClusterFilter } from "../../data/clusterFilter";
 import { useQueryClient } from "@tanstack/react-query";
 import type { ColumnDef, SortingState } from "@tanstack/react-table";
 import { createUser, ApiFailure, type AdminUserRow, type BatchOp, type UserQuota } from "../../data/api";
@@ -36,7 +37,9 @@ const sourceLabel = { oidc: "GitLab", password: "密码", ldap: "LDAP" } as cons
 
 function BarCell({ b, fmt }: { b: Bar | null; fmt: (n: number) => string }) {
   if (!b) return <span className="text-faint">不限</span>;
-  return <Meter used={b.used} limit={b.limit} width={44} label={`${fmt(b.used)}/${fmt(b.limit)}${b.custom ? "*" : ""}`} />;
+  const meter = <Meter used={b.used} limit={b.limit} width={44} label={`${fmt(b.used)}/${fmt(b.limit)}${b.custom ? "*" : ""}`} />;
+  // in a console of several clusters: whose quota this is
+  return b.cluster ? <span title={`集群 ${b.cluster}`}>{meter}</span> : meter;
 }
 
 function NewUserDialog({ onClose }: { onClose: (changed: boolean) => void }) {
@@ -74,6 +77,7 @@ export function UsersPage() {
   const q = useUsers();
   const qc = useQueryClient();
   const [url, setUrl] = useUrlState(schema);
+  const { filter } = useClusterFilter();
   const now = useNow(60_000);
   const [batch, setBatch] = useState<{ op: BatchOp; names: string[]; clear: () => void } | null>(null);
   const [dialog, setDialog] = useState<"import" | "new" | null>(null);
@@ -104,13 +108,15 @@ export function UsersPage() {
         accessorKey: "devpods",
         meta: { priority: 2, width: 70, mono: true },
         cell: ({ row: { original: u } }) => {
-          const b = bars(u, def).pods;
-          return `${u.running}/${u.devpods}${b ? ` · ${b.limit}${b.custom ? "*" : ""}` : ""}`;
+          // the counts of the filtered cluster, or of every cluster
+          const c = filter ? u.clusters?.[filter] : undefined;
+          const b = bars(u, def, filter).pods;
+          return `${c ? c.running : u.running}/${c ? c.devpods : u.devpods}${b ? ` · ${b.limit}${b.custom ? "*" : ""}` : ""}`;
         },
       },
-      { id: "cpu", header: "CPU", enableSorting: false, meta: { priority: 3, width: 130 }, cell: ({ row }) => <BarCell b={bars(row.original, def).cpu} fmt={fmtCores} /> },
-      { id: "mem", header: "内存", enableSorting: false, meta: { priority: 4, width: 150 }, cell: ({ row }) => <BarCell b={bars(row.original, def).mem} fmt={fmtBytes} /> },
-      { id: "gpu", header: "GPU", enableSorting: false, meta: { priority: 5, width: 100 }, cell: ({ row }) => <BarCell b={bars(row.original, def).gpu} fmt={(n) => String(n)} /> },
+      { id: "cpu", header: "CPU", enableSorting: false, meta: { priority: 3, width: 130 }, cell: ({ row }) => <BarCell b={bars(row.original, def, filter).cpu} fmt={fmtCores} /> },
+      { id: "mem", header: "内存", enableSorting: false, meta: { priority: 4, width: 150 }, cell: ({ row }) => <BarCell b={bars(row.original, def, filter).mem} fmt={fmtBytes} /> },
+      { id: "gpu", header: "GPU", enableSorting: false, meta: { priority: 5, width: 100 }, cell: ({ row }) => <BarCell b={bars(row.original, def, filter).gpu} fmt={(n) => String(n)} /> },
       {
         id: "last",
         header: "最近会话",
@@ -120,13 +126,13 @@ export function UsersPage() {
       },
       { id: "policy", header: "策略", accessorFn: (u) => u.customPolicy, meta: { priority: 8, width: 60 }, cell: ({ row }) => (row.original.customPolicy ? <Badge tone="warm">自定义</Badge> : null) },
     ],
-    [def, now],
+    [def, now, filter],
   );
 
   const shown = items.filter(
     (u) =>
       (!url.running || u.running > 0) &&
-      (!url.high || isHigh(u, def)) &&
+      (!url.high || isHigh(u, def, filter)) &&
       (!url.custom || !!u.quota) &&
       (!url.policy || u.customPolicy) &&
       (!url.admin || u.admin) &&
@@ -135,7 +141,7 @@ export function UsersPage() {
   const sorting: SortingState = url.sort ? [{ id: url.sort.replace(/^-/, ""), desc: url.sort.startsWith("-") }] : [];
   const chips: [keyof typeof url, string, number][] = [
     ["running", "有运行中", items.filter((u) => u.running > 0).length],
-    ["high", "配额 >80%", items.filter((u) => isHigh(u, def)).length],
+    ["high", "配额 >80%", items.filter((u) => isHigh(u, def, filter)).length],
     ["custom", "自定义配额", items.filter((u) => u.quota).length],
     ["policy", "自定义审计策略", items.filter((u) => u.customPolicy).length],
     ["admin", "管理员", items.filter((u) => u.admin).length],

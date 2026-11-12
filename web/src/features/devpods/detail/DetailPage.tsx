@@ -126,7 +126,7 @@ export function DetailPage() {
   }, [live, r, onDetail, onEvent]);
 
   const audit = !!me?.features.audit;
-  const sessions = useAuditSessions({ devpod: name }, { enabled: audit && (url.tab === "overview" || url.tab === "sessions"), refetchInterval: 10_000 });
+  const sessions = useAuditSessions({ devpod: name, cluster }, { enabled: audit && (url.tab === "overview" || url.tab === "sessions"), refetchInterval: 10_000 });
 
   const d = detail ?? q.data ?? null;
   const notFound = q.error instanceof ApiFailure && q.error.status === 404;

@@ -3,7 +3,7 @@
 // the YAML are listed as it is typed — the same reading as the server's —
 // each with a type and a description. A save is checked first.
 import { Badge } from "../../design/Badge";
-import { devpodHref } from "../../data/cluster";
+import { devpodHref, keyOf } from "../../data/cluster";
 import { refOf } from "../../data/api";
 import { launchCluster } from "../../data/cluster";
 import { useClusterList } from "../../data/clusterFilter";
@@ -84,7 +84,7 @@ function MadeFrom({ name }: { name: string }) {
         ) : (
           <ul className="space-y-0.5">
             {made.map((dp) => (
-              <li key={dp.metadata.name} className="flex items-center gap-1.5">
+              <li key={keyOf(refOf(dp))} className="flex items-center gap-1.5">
                 <StatusDot phase={dp.status?.phase} showLabel={false} />
                 <Link
                   to={devpodHref(refOf(dp))}
@@ -92,6 +92,7 @@ function MadeFrom({ name }: { name: string }) {
                 >
                   {dp.metadata.name}
                 </Link>
+                {dp.cluster && <span className="text-faint">{dp.cluster}</span>}
                 {me?.admin && dp.spec.owner !== me.user && (
                   <span className="text-faint">{dp.spec.owner}</span>
                 )}

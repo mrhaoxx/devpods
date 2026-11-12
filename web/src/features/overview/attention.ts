@@ -12,7 +12,7 @@ export function attentionAction(a: AttentionItem): AttentionAction | null {
     case "pending_long":
       return { label: "事件", href: devpodHref({ cluster: a.cluster, name: a.devpod ?? "" }, "events") };
     case "alert":
-      return { label: "回放", href: `/audit/alerts?devpod=${a.devpod ?? ""}` };
+      return { label: "回放", href: `/audit/alerts?devpod=${a.devpod ?? ""}${a.cluster ? `&cluster=${encodeURIComponent(a.cluster)}` : ""}` };
     case "quota_high":
       return { label: "调整", href: `/admin/users?user=${a.owner ?? ""}` };
     default:

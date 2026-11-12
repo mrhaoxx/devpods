@@ -203,12 +203,16 @@ export type AdminUserRow = {
   quota?: UserQuota;
   /** per cluster, in a console of several */
   quotas?: Record<string, UserQuota>;
+  /** the user in each cluster, in a console of several: what is used there
+   *  and the quota that holds there (the fields above add up every cluster) */
+  clusters?: Record<string, UserInCluster>;
   liveUsage?: { cpu: number; mem: number; gpu: number; devpodsRunning: number };
   lastSession?: string;
   source: "oidc" | "password" | "ldap";
   customPolicy: boolean;
   pubkeys: number;
 };
+export type UserInCluster = { devpods: number; running: number; usage: AdminUserRow["usage"]; quota: UserQuota; default: UserQuota };
 export type BatchOp = "setQuota" | "setPolicy" | "resetPassword" | "hibernateAll";
 export type BatchRequest = { names: string[]; op: BatchOp; args?: { quota?: QuotaForm; policy?: unknown } };
 export type BatchResult = { name: string; ok: boolean; error?: string; password?: string; hibernated?: number };

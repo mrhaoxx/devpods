@@ -2,7 +2,7 @@
 // their own row of the live stream, so a per-second update re-renders
 // only them.
 import type { Cluster } from "../clusters/api";
-import { devpodHref } from "../../data/cluster";
+import { devpodHref, keyOf } from "../../data/cluster";
 import { createContext, useContext } from "react";
 import { Link } from "react-router-dom";
 import type { ColumnDef } from "@tanstack/react-table";
@@ -56,6 +56,7 @@ export function toRow(dp: DevPod, pod?: PodInfo): Row {
 /** Shared by the cells: scope of the live stream and a coarse clock. */
 export const TableCtx = createContext<{ scope: "mine" | "all"; now: Date; recent?: RecentFrame }>({ scope: "mine", now: new Date() });
 
+/** useLive: a row's live values — keyed <cluster>/<name> (keyOf), as the stream keys them. */
 function useLive(name: string) {
   const { scope } = useContext(TableCtx);
   return useLiveRow<LiveItem>(devpodsStream(scope), name).row;
@@ -65,7 +66,7 @@ const running = (r: Row) => r.phase === "Running";
 
 function CpuCell({ r }: { r: Row }) {
   const { now, recent } = useContext(TableCtx);
-  const live = useLive(r.name);
+  const live = useLive(keyOf(r));
   if (!running(r)) {
     const s = phaseSummary(r.dp, r.pod, now) ?? "";
     return (
@@ -81,7 +82,7 @@ function CpuCell({ r }: { r: Row }) {
       value={v}
       text={v == null ? undefined : `${fmtCores(v)}/${fmtCores(limit)}`}
       spark={sparkSeries(
-        recent?.items[r.name] && { ts: recent.ts, v: recent.items[r.name].cpu },
+        recent?.items[keyOf(r)] && { ts: recent.ts, v: recent.items[keyOf(r)].cpu },
         (live?.history ?? []).map((h) => ({ ts: h.ts, v: h.value.cpu })),
         Date.now(),
       )}
@@ -91,7 +92,7 @@ function CpuCell({ r }: { r: Row }) {
 }
 
 function MemCell({ r }: { r: Row }) {
-  const live = useLive(r.name);
+  const live = useLive(keyOf(r));
   if (!running(r)) return null;
   const v = live?.value.mem ?? null;
   const limit = live?.value.memLimit || r.memLimit;
@@ -99,7 +100,7 @@ function MemCell({ r }: { r: Row }) {
 }
 
 function GpuCell({ r }: { r: Row }) {
-  const live = useLive(r.name);
+  const live = useLive(keyOf(r));
   if (!running(r)) return null;
   const cards = live?.value.gpu ?? [];
   if (cards.length === 0) return r.gpu > 0 ? <MetricCell value={null} /> : null;
@@ -120,7 +121,7 @@ function GpuCell({ r }: { r: Row }) {
 }
 
 function SessionsCell({ r }: { r: Row }) {
-  const live = useLive(r.name);
+  const live = useLive(keyOf(r));
   const users = [...new Set((live?.value.sessions ?? []).map((s) => s.user).filter(Boolean))];
   if (!running(r) || users.length === 0) return null;
   return (
@@ -131,7 +132,7 @@ function SessionsCell({ r }: { r: Row }) {
 }
 
 function NetCell({ r }: { r: Row }) {
-  const live = useLive(r.name);
+  const live = useLive(keyOf(r));
   if (!running(r)) return null;
   const rx = live?.value.netRx ?? null;
   return (
@@ -143,7 +144,7 @@ function NetCell({ r }: { r: Row }) {
 }
 
 function RdmaCell({ r }: { r: Row }) {
-  const live = useLive(r.name);
+  const live = useLive(keyOf(r));
   if (!running(r)) return null;
   const kind = live?.value.rdmaKind;
   if (!kind && live) return null; // no RDMA device

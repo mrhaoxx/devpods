@@ -1,6 +1,7 @@
 // 命令 · 文件 检索 (UI spec §5.8): full-width tables, substring / path /
 // sha256 search, time range in the URL; the server limits non-admins to
 // their own events.
+import { useClusterFilter } from "../../data/clusterFilter";
 import { useState } from "react";
 import { Link, NavLink } from "react-router-dom";
 import type { ColumnDef, SortingState } from "@tanstack/react-table";
@@ -33,7 +34,9 @@ export function CommandsPage() {
   const admin = !!useMe().data?.admin;
   const [url, setUrl] = useUrlState(cmdSchema);
   const [sorting, setSorting] = useState<SortingState>([]);
-  const q = usePaged<CommandRow>("commands", { ...fromTo(url.range), q: url.q, user: admin ? url.user : "", devpod: url.devpod }, searchCommands);
+  // a DevPod name is looked up in the filtered cluster (a name can be in two)
+  const { filter } = useClusterFilter();
+  const q = usePaged<CommandRow>("commands", { ...fromTo(url.range), q: url.q, user: admin ? url.user : "", devpod: url.devpod, cluster: url.devpod ? filter : "" }, searchCommands);
   const columns: ColumnDef<CommandRow, unknown>[] = [
     { id: "ts", header: "时间", accessorKey: "ts", meta: { priority: 2, width: 150 }, cell: ({ getValue }) => fmtTS(String(getValue())) },
     { id: "user", header: "用户", accessorKey: "user", meta: { priority: 3, width: 90, mono: true } },

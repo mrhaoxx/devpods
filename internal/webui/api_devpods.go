@@ -160,6 +160,16 @@ func (s *Server) devPods(r *http.Request, owner string) ([]InCluster, error) {
 	return out, nil
 }
 
+// key is where a list keyed by DevPod puts this one: <cluster>/<name> in
+// a console of several clusters (a name can be in two), the name alone
+// otherwise.
+func (d InCluster) key(s *Server) string {
+	if s.Clusters == nil || d.Cluster == "" {
+		return d.Name
+	}
+	return d.Cluster + "/" + d.Name
+}
+
 func plainDevPods(in []InCluster, err error) ([]devpodv1alpha1.DevPod, error) {
 	if err != nil {
 		return nil, err

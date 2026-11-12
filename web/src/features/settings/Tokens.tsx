@@ -29,6 +29,10 @@ function groups(scopes: TokenScope[]): [string, TokenScope[]][] {
 function CreateForm({ scopes, onDone }: { scopes: TokenScope[]; onDone: (token: string) => void }) {
   const qc = useQueryClient();
   const mine = useDevPods("mine").data?.items ?? [];
+  // a token is limited to DevPods by name: a name in two clusters is one
+  // choice, and covers both
+  const names = [...new Set(mine.map((d) => d.metadata.name))].sort();
+  const where = (n: string) => mine.filter((d) => d.metadata.name === n && d.cluster).map((d) => d.cluster!);
   const [name, setName] = useState("");
   const [picked, setPicked] = useState<Set<string>>(new Set(["devpods:read"]));
   const [limit, setLimit] = useState(false);
@@ -100,10 +104,11 @@ function CreateForm({ scopes, onDone }: { scopes: TokenScope[]; onDone: (token: 
         </label>
         {limit && (
           <div className="flex flex-wrap gap-x-4 gap-y-1 pl-5">
-            {mine.map((d) => (
-              <label key={d.metadata.name} className="mono flex items-center gap-1.5 text-xs">
-                <input type="checkbox" checked={devpods.has(d.metadata.name)} onChange={() => setDevpods(toggle(devpods, d.metadata.name))} />
-                {d.metadata.name}
+            {names.map((n) => (
+              <label key={n} className="mono flex items-center gap-1.5 text-xs">
+                <input type="checkbox" checked={devpods.has(n)} onChange={() => setDevpods(toggle(devpods, n))} />
+                {n}
+                {where(n).length > 1 && <span className="font-sans text-[11px] text-faint">（{where(n).join("、")} 都有，都算）</span>}
               </label>
             ))}
             {mine.length === 0 && <span className="text-xs text-faint">你还没有 DevPod</span>}

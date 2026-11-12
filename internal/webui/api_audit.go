@@ -96,21 +96,29 @@ func scopeUser(sess Session, r *http.Request) string {
 	return r.URL.Query().Get("user")
 }
 
-// devpodUID resolves a DevPod name filter; ok=false means "no such
-// DevPod", which callers answer with an empty page.
-func (s *Server) devpodUID(r *http.Request) (uid string, ok bool) {
+// devpodUID resolves a DevPod name filter; found=false means "no such
+// DevPod", which callers answer with an empty page. In whichever cluster
+// it is — the request's, when it names one; a name in two clusters,
+// without one named, is answered 409 AMBIGUOUS_CLUSTER (answered=true).
+func (s *Server) devpodUID(w http.ResponseWriter, r *http.Request) (uid string, found, answered bool) {
 	name := r.URL.Query().Get("devpod")
 	if name == "" {
-		return "", true
+		return "", true, false
 	}
-	// in whichever cluster it is; the first of that name when two have one
+	var cands []Candidate
 	for _, cc := range s.ks(r) {
 		var dp devpodv1alpha1.DevPod
 		if err := cc.Client.Get(r.Context(), types.NamespacedName{Namespace: s.NS, Name: name}, &dp); err == nil {
-			return string(dp.UID), true
+			uid = string(dp.UID)
+			cands = append(cands, Candidate{Cluster: cc.Name, Name: name})
 		}
 	}
-	return "", false
+	if len(cands) > 1 {
+		s.writeErr(w, http.StatusConflict, "AMBIGUOUS_CLUSTER",
+			"several clusters have a DevPod named "+name+": say which with ?cluster=", cands)
+		return "", false, true
+	}
+	return uid, len(cands) == 1, false
 }
 
 func (s *Server) auditStoreErr(w http.ResponseWriter, err error) {
@@ -161,7 +169,10 @@ func (s *Server) handleAuditSessions(w http.ResponseWriter, r *http.Request) {
 		s.writeErr(w, http.StatusBadRequest, "BAD_REQUEST", err.Error(), nil)
 		return
 	}
-	uid, found := s.devpodUID(r)
+	uid, found, answered := s.devpodUID(w, r)
+	if answered {
+		return
+	}
 	if !found {
 		s.writeJSON(w, http.StatusOK, page[store.SessionSummary]{Items: []store.SessionSummary{}})
 		return
@@ -329,7 +340,10 @@ func (s *Server) handleAuditCommands(w http.ResponseWriter, r *http.Request) {
 		s.writeErr(w, http.StatusBadRequest, "BAD_REQUEST", err.Error(), nil)
 		return
 	}
-	uid, found := s.devpodUID(r)
+	uid, found, answered := s.devpodUID(w, r)
+	if answered {
+		return
+	}
 	if !found {
 		s.writeJSON(w, http.StatusOK, page[store.CommandRow]{Items: []store.CommandRow{}})
 		return
@@ -358,7 +372,10 @@ func (s *Server) handleAuditFiles(w http.ResponseWriter, r *http.Request) {
 		s.writeErr(w, http.StatusBadRequest, "BAD_REQUEST", err.Error(), nil)
 		return
 	}
-	uid, found := s.devpodUID(r)
+	uid, found, answered := s.devpodUID(w, r)
+	if answered {
+		return
+	}
 	if !found {
 		s.writeJSON(w, http.StatusOK, page[store.FileEventRow]{Items: []store.FileEventRow{}})
 		return
@@ -430,26 +447,20 @@ func (s *Server) handleAuditPresence(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	var dps []devpodv1alpha1.DevPod
+	owner := sess.User
 	if sess.Admin && r.URL.Query().Get("scope") == "all" {
-		all, err := s.allDevPods(r)
-		if err != nil {
-			s.writeErr(w, http.StatusInternalServerError, "INTERNAL", err.Error(), nil)
-			return
-		}
-		dps = all
-	} else {
-		owned, err := s.ownedDevPods(r, sess.User)
-		if err != nil {
-			s.writeErr(w, http.StatusInternalServerError, "INTERNAL", err.Error(), nil)
-			return
-		}
-		dps = owned
+		owner = ""
 	}
+	dps, err := s.devPods(r, owner)
+	if err != nil {
+		s.writeErr(w, http.StatusInternalServerError, "INTERNAL", err.Error(), nil)
+		return
+	}
+	// keyed <cluster>/<name> in a console of several clusters
 	byUID := map[string]string{}
 	uids := make([]string, 0, len(dps))
 	for _, dp := range dps {
-		byUID[string(dp.UID)] = dp.Name
+		byUID[string(dp.UID)] = dp.key(s)
 		uids = append(uids, string(dp.UID))
 	}
 	got, err := s.Audit.Store.Presence(r.Context(), uids)

@@ -18,6 +18,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	devpodv1alpha1 "github.com/mrhaoxx/devpod/api/v1alpha1"
+	"github.com/mrhaoxx/devpod/internal/webui/clusters"
 )
 
 // requireAdmin authenticates and enforces the admin bit. Reading and
@@ -55,6 +56,10 @@ type adminUser struct {
 	Quota       *devpodv1alpha1.UserQuota `json:"quota,omitempty"`
 	// Quotas: per cluster, in a console of several.
 	Quotas map[string]devpodv1alpha1.UserQuota `json:"quotas,omitempty"`
+	// Clusters: in a console of several, the user in each cluster — what
+	// is used there and the quota that holds there (quotas are counted per
+	// cluster; the fields above add up every cluster).
+	Clusters map[string]adminUserIn `json:"clusters,omitempty"`
 	// LiveUsage is measured usage from the live layer (absent without it).
 	LiveUsage *liveUsage `json:"liveUsage,omitempty"`
 	// LastSession is the user's latest SSH session (absent without ClickHouse).
@@ -77,6 +82,60 @@ func userSource(u *devpodv1alpha1.User) string {
 	}
 }
 
+// adminUserIn is a user in one cluster.
+type adminUserIn struct {
+	DevPods int        `json:"devpods"`
+	Running int        `json:"running"`
+	Usage   adminUsage `json:"usage"`
+	// Quota: the one that holds (the user's own over the cluster's default).
+	Quota devpodv1alpha1.UserQuota `json:"quota"`
+	// Default: the cluster's default quota.
+	Default devpodv1alpha1.UserQuota `json:"default"`
+}
+
+// usageAgg adds up DevPods the way quotas count them: compute over
+// running ones, storage over all.
+type usageAgg struct {
+	total, running int
+	compute        corev1.ResourceList
+	storage        resource.Quantity
+}
+
+func (a *usageAgg) add(dp *devpodv1alpha1.DevPod) {
+	if a.compute == nil {
+		a.compute = corev1.ResourceList{}
+	}
+	a.total++
+	if dp.Spec.Persistence != nil {
+		a.storage.Add(dp.Spec.Persistence.Size)
+	}
+	if dp.Spec.Running && dp.Spec.Pod != nil {
+		a.running++
+		for name, qty := range PodLimits(&dp.Spec.Pod.Spec) {
+			cur := a.compute[name]
+			cur.Add(qty)
+			a.compute[name] = cur
+		}
+	}
+}
+
+func (a *usageAgg) usage() adminUsage {
+	var u adminUsage
+	if c := a.compute.Cpu(); !c.IsZero() {
+		u.CPU = c.String()
+	}
+	if m := a.compute.Memory(); !m.IsZero() {
+		u.Memory = m.String()
+	}
+	if g, ok := a.compute[resourceGPU]; ok && !g.IsZero() {
+		u.GPU = g.String()
+	}
+	if !a.storage.IsZero() {
+		u.Storage = a.storage.String()
+	}
+	return u
+}
+
 type liveUsage struct {
 	CPU            float64 `json:"cpu"`
 	Mem            float64 `json:"mem"`
@@ -96,37 +155,41 @@ func (s *Server) handleListUsers(w http.ResponseWriter, r *http.Request) {
 		s.writeErr(w, http.StatusInternalServerError, "INTERNAL", err.Error(), nil)
 		return
 	}
-	var dps devpodv1alpha1.DevPodList
-	var err error
-	if dps.Items, err = s.allDevPods(r); err != nil { // of every cluster
+	dps, err := s.devPods(r, "") // of every cluster
+	if err != nil {
 		s.writeErr(w, http.StatusInternalServerError, "INTERNAL", err.Error(), nil)
 		return
 	}
-	// Per-owner aggregates mirror the quota accounting: compute over
-	// running DevPods, storage over all.
-	type agg struct {
-		total, running int
-		compute        corev1.ResourceList
-		storage        resource.Quantity
-	}
-	byOwner := map[string]*agg{}
-	for _, dp := range dps.Items {
+	// per owner over every cluster, and per owner in each cluster
+	byOwner := map[string]*usageAgg{}
+	byOwnerIn := map[string]map[string]*usageAgg{}
+	for i := range dps {
+		dp := &dps[i].DevPod
 		a := byOwner[dp.Spec.Owner]
 		if a == nil {
-			a = &agg{compute: corev1.ResourceList{}}
+			a = &usageAgg{}
 			byOwner[dp.Spec.Owner] = a
 		}
-		a.total++
-		if dp.Spec.Persistence != nil {
-			a.storage.Add(dp.Spec.Persistence.Size)
-		}
-		if dp.Spec.Running && dp.Spec.Pod != nil {
-			a.running++
-			for name, qty := range PodLimits(&dp.Spec.Pod.Spec) {
-				cur := a.compute[name]
-				cur.Add(qty)
-				a.compute[name] = cur
+		a.add(dp)
+		if s.Clusters != nil {
+			if byOwnerIn[dp.Spec.Owner] == nil {
+				byOwnerIn[dp.Spec.Owner] = map[string]*usageAgg{}
 			}
+			in := byOwnerIn[dp.Spec.Owner][dps[i].Cluster]
+			if in == nil {
+				in = &usageAgg{}
+				byOwnerIn[dp.Spec.Owner][dps[i].Cluster] = in
+			}
+			in.add(dp)
+		}
+	}
+	// each cluster's default quota, once
+	var clusterList []*clusters.ClusterClients
+	defaults := map[string]devpodv1alpha1.UserQuota{}
+	if s.Clusters != nil {
+		clusterList = s.ks(r)
+		for _, cc := range clusterList {
+			defaults[cc.Name] = s.clusterQuota(r.Context(), cc)
 		}
 	}
 	live := map[string]liveUsage{}
@@ -164,19 +227,16 @@ func (s *Server) handleListUsers(w http.ResponseWriter, r *http.Request) {
 			au.LastSession = &t
 		}
 		if a := byOwner[u.Name]; a != nil {
-			au.DevPods = a.total
-			au.Running = a.running
-			if c := a.compute.Cpu(); !c.IsZero() {
-				au.Usage.CPU = c.String()
-			}
-			if m := a.compute.Memory(); !m.IsZero() {
-				au.Usage.Memory = m.String()
-			}
-			if g, ok := a.compute[resourceGPU]; ok && !g.IsZero() {
-				au.Usage.GPU = g.String()
-			}
-			if !a.storage.IsZero() {
-				au.Usage.Storage = a.storage.String()
+			au.DevPods, au.Running, au.Usage = a.total, a.running, a.usage()
+		}
+		if len(clusterList) > 0 {
+			au.Clusters = map[string]adminUserIn{}
+			for _, cc := range clusterList {
+				in := adminUserIn{Quota: EffectiveQuota(&u, cc.Name, defaults[cc.Name]), Default: defaults[cc.Name]}
+				if a := byOwnerIn[u.Name][cc.Name]; a != nil {
+					in.DevPods, in.Running, in.Usage = a.total, a.running, a.usage()
+				}
+				au.Clusters[cc.Name] = in
 			}
 		}
 		items = append(items, au)

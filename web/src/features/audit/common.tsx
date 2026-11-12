@@ -54,6 +54,8 @@ export function usePaged<T>(key: string, filters: Record<string, string>, fetch:
 }
 
 export function AuditError({ error }: { error: unknown }) {
+  if (error instanceof ApiFailure && error.code === "AMBIGUOUS_CLUSTER")
+    return <EmptyState title="多个集群都有这个名字的 DevPod" hint="在顶栏的集群筛选里选一个集群，再按 DevPod 查。" />;
   return <EmptyState tone="error" title="审计数据暂不可用" hint={error instanceof ApiFailure ? error.body.message : String(error)} />;
 }
 
