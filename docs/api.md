@@ -246,9 +246,13 @@ curl -H "$auth" -X POST $base/api/clusters/mulan/devpods -d '{"name":"x","image"
 curl -H "$auth" -X POST $base/api/clusters/mulan/configs/me-sg/launch -d '{"vars":{"NAME":"sg"}}'
 ```
 
-- `GET /api/devpods` (and the admin list, and search) without a cluster covers
-  every cluster; each item carries `cluster`, and `pods` is keyed
-  `<cluster>/<name>`.
+- Lists without a cluster cover every cluster, each item carrying `cluster`:
+  `GET /api/devpods` (and its `?watch=true` stream, whose events carry
+  `cluster`; and the admin list, live rows and search), `GET /api/nodes`,
+  `GET /api/admin/nodes`, `GET /api/reservations` and `GET /api/snapshots`.
+  The `pods` of the DevPod list are keyed `<cluster>/<name>`. Narrowing to
+  one cluster is the caller's choice: name it in the path, or filter the
+  items (the console does the latter, with its cluster filter).
 - A path naming a DevPod (`/api/devpods/{name}…`) without a cluster finds it
   among your DevPods of every cluster. The same name in two clusters is
   `409 AMBIGUOUS_CLUSTER`, with `detail: [{cluster, name}, …]`.
