@@ -155,6 +155,7 @@ var apiRoutes = []apiRoute{
 	{"POST /api/configs", "configs:write", "Save a config: {id, title, description?, content, sharedWith?, public?, variables?, official? (admins)}"},
 	{"PATCH /api/configs/{name}", "configs:write", "Change a config of mine: title, description, content, sharedWith, public, variables; admins: official"},
 	{"DELETE /api/configs/{name}", "configs:write", "Delete a config"},
+	{"POST /api/configs:check", "configs:write", "Check a config before saving: {content, variables?, vars?} → {problems}"},
 	{"POST /api/configs/{name}/launch", "configs:read", "Create DevPods from a config (also needs devpods:create): {vars, nodes?, count?, dryRun?}"},
 
 	{"GET /api/me/pubkeys", "keys:read", "My SSH public keys"},

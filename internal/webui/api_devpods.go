@@ -410,15 +410,18 @@ func (s *Server) prepareDevPod(r *http.Request, sess Session, req CreateRequest,
 	if apiErr != nil {
 		return nil, apiErr
 	}
-	if apiErr := koreErr(sess, dp); apiErr != nil {
-		return nil, apiErr
-	}
-	// What the user wrote themselves (the YAML path) may not reach
-	// Secrets or a service account token. Checked before a template is
-	// applied: an admin's preset is not the user's writing.
-	if !sess.Admin && dp.Spec.Pod != nil {
-		if apiErr := guardUserPodSpec(&dp.Spec.Pod.Spec, sess.User); apiErr != nil {
+	if req.TemplateRef == "" {
+		if apiErr := s.checkWriting(sess, dp); apiErr != nil {
 			return nil, apiErr
+		}
+	} else {
+		if apiErr := koreErr(sess, dp); apiErr != nil {
+			return nil, apiErr
+		}
+		if !sess.Admin && dp.Spec.Pod != nil {
+			if apiErr := guardUserPodSpec(&dp.Spec.Pod.Spec, sess.User); apiErr != nil {
+				return nil, apiErr
+			}
 		}
 	}
 
@@ -478,6 +481,25 @@ func (s *Server) prepareDevPod(r *http.Request, sess Session, req CreateRequest,
 		}
 	}
 	return dp, nil
+}
+
+// checkWriting is what a person may write in a DevPod themselves: no
+// Kore annotations unless an admin, nothing that reaches Secrets or a
+// service account token, a pod (not a VM) unless an admin.
+func (s *Server) checkWriting(sess Session, dp *devpodv1alpha1.DevPod) *serverErr {
+	if apiErr := koreErr(sess, dp); apiErr != nil {
+		return apiErr
+	}
+	if sess.Admin {
+		return nil
+	}
+	if dp.Spec.VM != nil {
+		return &serverErr{http.StatusBadRequest, "BAD_REQUEST", "vm workloads cannot be metered for quota; admins only", nil}
+	}
+	if dp.Spec.Pod == nil {
+		return &serverErr{http.StatusBadRequest, "BAD_REQUEST", "spec.pod is required", nil}
+	}
+	return guardUserPodSpec(&dp.Spec.Pod.Spec, sess.User)
 }
 
 // rejected is the message for something the API server refused: what was
