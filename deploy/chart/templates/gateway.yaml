@@ -207,6 +207,32 @@ spec:
     app.kubernetes.io/name: devpod-gateway
   ports:
   - {name: agents, port: 80, targetPort: agents}
+{{- $ar := dig "route" dict .Values.gateway.hub }}
+{{- if dig "enabled" false $ar }}
+---
+# The agents' endpoint for clusters outside this one: their agents dial
+# it (one address in front of every replica; each handshake says which
+# replica was reached, and an agent dials until it has them all).
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: devpod-gateway-agents
+  namespace: {{ .Values.namespaces.system }}
+  labels: {{ include "devpod.labels" . | nindent 4 }}
+spec:
+  parentRefs:
+  - name: {{ required "gateway.hub.route.gateway.name is required" $ar.gateway.name }}
+    namespace: {{ $ar.gateway.namespace | default .Values.namespaces.system }}
+    {{- with $ar.httpsListener }}
+    sectionName: {{ . }}
+    {{- end }}
+  hostnames:
+  - {{ required "gateway.hub.route.hostname is required" $ar.hostname }}
+  rules:
+  - backendRefs:
+    - name: devpod-gateway-agents
+      port: 80
+{{- end }}
 ---
 # The gateway's own key (one Secret, made on its first start), and the
 # names of its replicas, which agents are told to connect to.

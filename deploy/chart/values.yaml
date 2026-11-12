@@ -94,6 +94,16 @@ gateway:
     console: ""                  # the console's address, e.g. https://devpod.example.com
     joinToken: ""                # or joinTokenSecret: a Secret of your own with the key "token"
     joinTokenSecret: ""
+    # The agents' endpoint (Service devpod-gateway-agents) published at
+    # https://<hostname> through a Gateway API route, for agents of
+    # clusters outside this one; register that address at the console as
+    # the gateway's agent address. The route must allow WebSockets and
+    # long-lived connections; every replica is reached through it.
+    route:
+      enabled: false
+      hostname: ""
+      gateway: {name: "", namespace: ""}
+      httpsListener: ""
   # SSH front proxies allowed to log in on behalf of users, as
   # [{alias: openng, pubkey: "ssh-ed25519 AAAA… openng"}].
   trustedProxyKeys: []
