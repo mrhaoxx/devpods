@@ -15,6 +15,7 @@ import (
 	"log/slog"
 	"net"
 	"slices"
+	"strings"
 	"sync"
 	"time"
 
@@ -51,6 +52,9 @@ type Options struct {
 	StatusInterval time.Duration
 	// Heartbeat and Dead are the tunnel's; zero = its defaults.
 	Heartbeat, Dead time.Duration
+	// GatewaysInterval: how often the list of gateways told to agents is
+	// looked at again. Default 5 s.
+	GatewaysInterval time.Duration
 
 	// Scheme, when set, has the registry keep a client and a cache for
 	// each cluster (see ClusterClients). Indexes registers field indexes
@@ -83,6 +87,9 @@ type Registry struct {
 func New(o Options) *Registry {
 	if o.StatusInterval <= 0 {
 		o.StatusInterval = 30 * time.Second
+	}
+	if o.GatewaysInterval <= 0 {
+		o.GatewaysInterval = 5 * time.Second
 	}
 	if o.Instances == nil {
 		o.Instances = func() []string { return []string{o.Instance} }
@@ -194,6 +201,7 @@ func (r *Registry) onPeer(cluster string, up bool) {
 	r.mu.Unlock()
 	if up {
 		go r.watchInfo(ctx, cluster)
+		go r.tellGateways(ctx, cluster)
 		go r.ensureClients(cluster)
 	}
 	// what is written is what holds at the time of writing, so the order
@@ -230,6 +238,65 @@ func (r *Registry) watchInfo(ctx context.Context, cluster string) {
 	}
 }
 
+// gatewayList is what agents are told: the gateways that joined, are not
+// paused and say where agents reach them.
+func (r *Registry) gatewayList(ctx context.Context) ([]agent.Gateway, error) {
+	var list devpodv1alpha1.GatewayList
+	if err := r.o.Reader.List(ctx, &list); err != nil {
+		return nil, err
+	}
+	out := []agent.Gateway{}
+	for i := range list.Items {
+		g := &list.Items[i]
+		if !g.Spec.Paused && g.Spec.PublicKey != "" && g.Spec.AgentAddress != "" {
+			out = append(out, agent.Gateway{Name: g.Name, Address: g.Spec.AgentAddress, PublicKey: g.Spec.PublicKey})
+		}
+	}
+	slices.SortFunc(out, func(a, b agent.Gateway) int { return strings.Compare(a.Name, b.Name) })
+	return out, nil
+}
+
+// tellGateways keeps a stream to the cluster's agent on which the list
+// of gateways is said: at once, and again whenever it changes.
+func (r *Registry) tellGateways(ctx context.Context, cluster string) {
+	for ctx.Err() == nil {
+		conn, err := r.srv.Dial(ctx, cluster, agent.PurposeGateways)
+		if err != nil {
+			return // offline: onPeer starts over when it is back
+		}
+		stop := context.AfterFunc(ctx, func() { _ = conn.Close() })
+		enc := json.NewEncoder(conn)
+		var last []agent.Gateway
+		first := true
+		tick := time.NewTicker(r.o.GatewaysInterval)
+	stream:
+		for {
+			if list, err := r.gatewayList(ctx); err == nil {
+				if first || !slices.Equal(list, last) {
+					if enc.Encode(list) != nil {
+						break stream
+					}
+					first, last = false, list
+				} else if _, err := conn.Write([]byte("\n")); err != nil {
+					break stream // (a blank line: the stream is not left silent)
+				}
+			}
+			select {
+			case <-tick.C:
+			case <-ctx.Done():
+				break stream
+			}
+		}
+		tick.Stop()
+		stop()
+		_ = conn.Close()
+		select {
+		case <-time.After(time.Second):
+		case <-ctx.Done():
+		}
+	}
+}
+
 // writeStatus records in the Cluster object what this instance sees. With
 // several console instances each writes its own view; one that still holds
 // the connection writes "connected" again within StatusInterval.
@@ -247,7 +314,7 @@ func (r *Registry) writeStatus(cluster string) {
 		in, _ := r.Info(cluster)
 		st := devpodv1alpha1.ClusterStatus{
 			Connected: connected, AgentVersion: in.AgentVersion, ControllerVersion: in.ControllerVersion,
-			KubernetesVersion: in.KubernetesVersion, Capabilities: in.Capabilities, Gateways: c.Status.Gateways,
+			KubernetesVersion: in.KubernetesVersion, Capabilities: in.Capabilities, Gateways: in.Gateways,
 		}
 		if !seen.IsZero() {
 			t := metav1.NewTime(seen.Truncate(time.Second))
@@ -256,6 +323,7 @@ func (r *Registry) writeStatus(cluster string) {
 		if !connected { // keep what was last known of a cluster that is away
 			st.AgentVersion, st.ControllerVersion = c.Status.AgentVersion, c.Status.ControllerVersion
 			st.KubernetesVersion, st.Capabilities = c.Status.KubernetesVersion, c.Status.Capabilities
+			st.Gateways = nil
 		}
 		c.Status = st
 		return r.o.Hub.Status().Update(ctx, c)

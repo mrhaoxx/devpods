@@ -12,6 +12,7 @@ import (
 	"net/http/httptest"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -319,5 +320,101 @@ func TestRegistry(t *testing.T) {
 		}
 		runAgent(t, ctx, r, "rekey", fresh)
 		eventually(t, "the new agent connects", func() bool { return connected(r, "rekey") })
+	})
+}
+
+// The console tells every connected agent which gateways there are —
+// those that joined and are not paused — and again when that changes.
+func TestRegistry_TellsAgentsOfGateways(t *testing.T) {
+	h := startHub(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	r := clusters.New(clusters.Options{
+		Hub: h.c, Reader: h.c, Instance: "console-0", StatusInterval: time.Hour,
+		Heartbeat: 30 * time.Millisecond, Dead: 300 * time.Millisecond, GatewaysInterval: 30 * time.Millisecond,
+	})
+	go r.Run(ctx)
+	mk := func(name, address, key string, paused bool) {
+		t.Helper()
+		g := &devpodv1alpha1.Gateway{ObjectMeta: metav1.ObjectMeta{Name: name},
+			Spec: devpodv1alpha1.GatewaySpec{AgentAddress: address, PublicKey: key, Paused: paused}}
+		if err := h.c.Create(ctx, g); err != nil {
+			t.Fatal(err)
+		}
+	}
+	gwKey := newIdentity(t).PublicKey()
+	mk("b300", "https://gw-b300.example", gwKey, false)
+	mk("unjoined", "https://gw-unjoined.example", "", false)
+	mk("paused", "https://gw-paused.example", gwKey, true)
+	mk("nowhere", "", gwKey, false)
+
+	token := register(t, ctx, h, "c1")
+	id := newIdentity(t)
+	if err := r.Join(ctx, "c1", token, id.PublicKey()); err != nil {
+		t.Fatal(err)
+	}
+	var mu sync.Mutex
+	dialled := map[string]int{}
+	api := httptest.NewServer(http.NotFoundHandler())
+	defer api.Close()
+	a, err := agent.New(agent.Options{
+		Cluster: "c1", Identity: id, API: &rest.Config{Host: api.URL},
+		DialGateway: func(_ context.Context, address string) (net.Conn, error) {
+			mu.Lock()
+			dialled[address]++
+			mu.Unlock()
+			return nil, errors.New("not in this test")
+		},
+		GatewayTunnel: tunnel.ClientOptions{BackoffMin: 5 * time.Millisecond, BackoffMax: 20 * time.Millisecond},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	go func() {
+		_ = a.Run(ctx, tunnel.ClientOptions{
+			Idle: 2, Heartbeat: 30 * time.Millisecond, Dead: 300 * time.Millisecond, BackoffMin: 5 * time.Millisecond, BackoffMax: 40 * time.Millisecond,
+			Dial: func(context.Context) (net.Conn, error) {
+				x, y := net.Pipe()
+				go r.Accept(ctx, y)
+				return x, nil
+			},
+		})
+	}()
+	tried := func(address string) bool {
+		mu.Lock()
+		defer mu.Unlock()
+		return dialled[address] > 0
+	}
+	eventually(t, "the agent goes for the joined gateway", func() bool { return tried("https://gw-b300.example") })
+	if tried("https://gw-unjoined.example") || tried("https://gw-paused.example") || tried("") {
+		t.Fatalf("the agent was told of a gateway it should not be: %v", dialled)
+	}
+	// one more joins
+	mk("mulan", "https://gw-mulan.example", gwKey, false)
+	eventually(t, "the agent goes for the new one too", func() bool { return tried("https://gw-mulan.example") })
+	// one is paused: the agent stops going for it
+	change := func() {
+		for i := 0; ; i++ {
+			var g devpodv1alpha1.Gateway
+			if err := h.c.Get(ctx, types.NamespacedName{Name: "b300"}, &g); err != nil {
+				t.Fatal(err)
+			}
+			g.Spec.Paused = true
+			if err := h.c.Update(ctx, &g); err == nil {
+				return
+			} else if !apierrors.IsConflict(err) || i > 20 {
+				t.Fatal(err)
+			}
+		}
+	}
+	change()
+	eventually(t, "the agent leaves the paused gateway alone", func() bool {
+		mu.Lock()
+		before := dialled["https://gw-b300.example"]
+		mu.Unlock()
+		time.Sleep(150 * time.Millisecond)
+		mu.Lock()
+		defer mu.Unlock()
+		return dialled["https://gw-b300.example"] == before
 	})
 }
