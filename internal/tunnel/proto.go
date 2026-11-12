@@ -47,6 +47,8 @@ type serverHello struct {
 }
 
 type clientHello struct {
+	// Nonce, when set, asks the server to prove itself over it.
+	Nonce []byte `json:"nonce,omitempty"`
 	Hello Hello  `json:"hello"`
 	Role  string `json:"role"`
 	Proof []byte `json:"proof"`
@@ -55,6 +57,7 @@ type clientHello struct {
 type result struct {
 	OK    bool   `json:"ok"`
 	Error string `json:"error,omitempty"`
+	Proof []byte `json:"proof,omitempty"` // the server's, over the initiator's nonce
 }
 
 // ctrlMsg is all a control connection carries after the handshake.

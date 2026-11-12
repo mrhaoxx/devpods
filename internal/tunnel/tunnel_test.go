@@ -380,6 +380,52 @@ func TestClient_RetriesWithBackoffWhileTheServerIsAway(t *testing.T) {
 	eventually(t, "connects once a server is there", func() bool { return settled(c, []string{"i0"}, 1) })
 }
 
+// The initiator can ask the server to prove itself too: over a nonce of
+// the initiator's choosing, checked before anything is handed over.
+func TestServerProvesItself(t *testing.T) {
+	ctx, s := setup(t)
+	srv := tunnel.NewServer(tunnel.ServerOptions{
+		Instance: "gw-0", Instances: func() []string { return []string{"gw-0"} },
+		Authorize: func(_ context.Context, h tunnel.Hello, _, _ []byte) (string, error) { return h.Name, nil },
+		Sign:      func(nonce []byte) []byte { return append([]byte("gw:"), nonce...) },
+		Heartbeat: 20 * time.Millisecond, Dead: 500 * time.Millisecond,
+	})
+	s.mu.Lock()
+	s.instances, s.names = append(s.instances, srv), append(s.names, "gw-0")
+	s.mu.Unlock()
+	mk := func(name string, verify func(instance string, nonce, proof []byte) error) *tunnel.Client {
+		c := tunnel.NewClient(tunnel.ClientOptions{
+			Dial: s.dial, Hello: tunnel.Hello{Kind: "agent", Name: name}, Sign: func(n []byte) []byte { return n }, Idle: 1,
+			Handle:       func(context.Context, []byte, net.Conn) {},
+			VerifyServer: verify,
+			Heartbeat:    20 * time.Millisecond, Dead: 500 * time.Millisecond, BackoffMin: 5 * time.Millisecond, BackoffMax: 20 * time.Millisecond,
+		})
+		go func() { _ = c.Run(ctx) }()
+		return c
+	}
+	var seen atomic.Int64
+	good := mk("mulan", func(instance string, nonce, proof []byte) error {
+		seen.Add(1)
+		if instance != "gw-0" || len(nonce) < 16 || !bytes.Equal(proof, append([]byte("gw:"), nonce...)) {
+			return errors.New("not the gateway")
+		}
+		return nil
+	})
+	eventually(t, "a server that proves itself is used", func() bool { return settled(good, []string{"gw-0"}, 1) && seen.Load() >= 2 })
+
+	// one that cannot is not: nothing is kept on it
+	wary := mk("st2", func(string, []byte, []byte) error { return errors.New("not the gateway I was told of") })
+	time.Sleep(100 * time.Millisecond)
+	for name, st := range wary.Status() {
+		if st.Control || st.Idle != 0 {
+			t.Fatalf("connections kept on %s, which did not prove itself: %+v", name, st)
+		}
+	}
+	if err := wary.LastError(); err == nil || !bytes.Contains([]byte(err.Error()), []byte("not the gateway I was told of")) {
+		t.Fatalf("why: %v", err)
+	}
+}
+
 func TestAuthorize(t *testing.T) {
 	ctx, s := setup(t)
 	srv := s.add(t, "i0", func(_ context.Context, h tunnel.Hello, nonce, proof []byte) (string, error) {

@@ -31,6 +31,9 @@ type ClientOptions struct {
 	// wait between attempts that fail.
 	Heartbeat, Dead        time.Duration
 	BackoffMin, BackoffMax time.Duration
+	// VerifyServer, when set, has the server prove itself over a nonce of
+	// this side's choosing; a server that does not is not used.
+	VerifyServer func(instance string, nonce, proof []byte) error
 	// OnError is told why an attempt failed, once per distinct reason in
 	// a row (a refusal repeats for as long as it lasts).
 	OnError func(error)
@@ -249,7 +252,11 @@ func (c *Client) connect(ctx context.Context) (used bool, err error) {
 		return false, nil
 	}
 
-	if err := writeFrame(nc, clientHello{Hello: c.o.Hello, Role: role, Proof: c.o.Sign(sh.Nonce)}); err != nil {
+	var nonce []byte
+	if c.o.VerifyServer != nil {
+		nonce = newNonce()
+	}
+	if err := writeFrame(nc, clientHello{Nonce: nonce, Hello: c.o.Hello, Role: role, Proof: c.o.Sign(sh.Nonce)}); err != nil {
 		_ = nc.Close()
 		return false, err
 	}
@@ -261,6 +268,12 @@ func (c *Client) connect(ctx context.Context) (used bool, err error) {
 	if !res.OK {
 		_ = nc.Close()
 		return false, errors.New("tunnel: refused by " + sh.Instance + ": " + res.Error)
+	}
+	if c.o.VerifyServer != nil {
+		if err := c.o.VerifyServer(sh.Instance, nonce, res.Proof); err != nil {
+			_ = nc.Close()
+			return false, errors.New("tunnel: " + sh.Instance + " did not prove itself: " + err.Error())
+		}
 	}
 	_ = nc.SetDeadline(time.Time{})
 

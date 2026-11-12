@@ -32,6 +32,9 @@ type ServerOptions struct {
 	// Authorize decides who an initiator is from what it says and its
 	// proof over the nonce it was sent. The returned name is the peer.
 	Authorize func(ctx context.Context, hello Hello, nonce, proof []byte) (peer string, err error)
+	// Sign, when set, proves this server to an initiator that asks, over
+	// the nonce the initiator sent.
+	Sign func(nonce []byte) []byte
 	// OnPeer is told when a peer's control connection appears and goes.
 	OnPeer func(peer string, connected bool)
 	// Heartbeat and Dead: a control connection silent for Dead is dropped.
@@ -177,15 +180,19 @@ func (s *Server) Accept(ctx context.Context, nc net.Conn) {
 		_ = writeFrame(nc, result{Error: err.Error()})
 		return
 	}
+	ok := result{OK: true}
+	if s.o.Sign != nil && len(ch.Nonce) > 0 {
+		ok.Proof = s.o.Sign(ch.Nonce)
+	}
 	switch ch.Role {
 	case roleControl:
-		s.control(ctx, name, nc)
+		s.control(ctx, name, nc, ok)
 	case roleData:
-		s.data(ctx, name, nc)
+		s.data(ctx, name, nc, ok)
 	}
 }
 
-func (s *Server) control(ctx context.Context, name string, nc net.Conn) {
+func (s *Server) control(ctx context.Context, name string, nc net.Conn, ok result) {
 	p := &peer{control: nc, arrive: make(chan struct{}, 1), gone: make(chan struct{}), since: time.Now()}
 	// a peer's coming and going are told in the order they happen
 	s.notify.Lock()
@@ -200,7 +207,7 @@ func (s *Server) control(ctx context.Context, name string, nc net.Conn) {
 	if old != nil { // the initiator started over: the new connection is the one
 		s.drop(name, old)
 	}
-	if err := writeFrame(nc, result{OK: true}); err != nil {
+	if err := writeFrame(nc, ok); err != nil {
 		s.drop(name, p)
 		return
 	}
@@ -250,7 +257,7 @@ func (s *Server) drop(name string, p *peer) {
 	}
 }
 
-func (s *Server) data(ctx context.Context, name string, nc net.Conn) {
+func (s *Server) data(ctx context.Context, name string, nc net.Conn, ok result) {
 	c := &conn{Conn: nc, done: make(chan struct{})}
 	s.mu.Lock()
 	p := s.peers[name]
@@ -260,7 +267,7 @@ func (s *Server) data(ctx context.Context, name string, nc net.Conn) {
 		return
 	}
 	s.mu.Unlock()
-	if err := writeFrame(nc, result{OK: true}); err != nil {
+	if err := writeFrame(nc, ok); err != nil {
 		return
 	}
 	_ = nc.SetDeadline(time.Time{})
