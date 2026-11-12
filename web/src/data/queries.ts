@@ -17,7 +17,6 @@ import {
   listNodeChoices,
   listNodes,
   listSnapshots,
-  listTemplates,
   me,
   patchDevPod,
   patchDevPodSpec,
@@ -31,7 +30,6 @@ export const qk = {
   me: ["me"] as const,
   devpods: (scope: "mine" | "all") => ["devpods", scope] as const,
   devpod: (name: string) => ["devpod", name] as const,
-  templates: ["templates"] as const,
   users: ["admin", "users"] as const,
   nodes: ["admin", "nodes"] as const,
   node: (name: string) => ["admin", "node", name] as const,
@@ -77,7 +75,6 @@ export function useDevPods(scope: "mine" | "all" = "mine", enabled = true) {
 }
 
 export const useDevPod = (name: string) => useQuery({ queryKey: qk.devpod(name), queryFn: () => getDevPod(name) });
-export const useTemplates = () => useQuery({ queryKey: qk.templates, queryFn: listTemplates, staleTime: 60_000 });
 export const useUsers = (enabled = true) =>
   useQuery({ queryKey: qk.users, queryFn: listAdminUsers, enabled, refetchInterval: 30_000 });
 export const useNodes = (enabled = true) => useQuery({ queryKey: qk.nodes, queryFn: listNodes, enabled, refetchInterval: 10_000 });

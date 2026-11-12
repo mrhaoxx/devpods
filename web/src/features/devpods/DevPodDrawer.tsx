@@ -6,7 +6,7 @@ import { useMemo, useState, type FormEvent } from "react";
 import { useNavigate } from "react-router-dom";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { createDevPod, patchDevPodSpec, ApiFailure, type DevPod, type SpecPatch } from "../../data/api";
-import { useMe, useTemplates } from "../../data/queries";
+import { useMe } from "../../data/queries";
 import { Drawer } from "../../design/Drawer";
 import { Button } from "../../design/Button";
 import { Field, Group, Input, Notice, Select } from "../../design/Form";
@@ -22,15 +22,12 @@ const target = (dp?: DevPod) => dp?.spec.pod?.spec?.containers?.[0];
 
 export function DevPodDrawer(p: Props) {
   const me = useMe().data;
-  const tpl = useTemplates();
   const nav = useNavigate();
   const qc = useQueryClient();
   const editing = p.mode === "edit";
   const c = target(p.devpod);
   const lim = c?.resources?.limits ?? {};
 
-  const [template, setTemplate] = useState("");
-  const [overlay, setOverlay] = useState("");
   const [yaml, setYaml] = useState<string | null>(null);
   const [name, setName] = useState("");
   const [image, setImage] = useState(c?.image ?? (p.mode === "create" ? p.initialImage : undefined) ?? "ubuntu:24.04");
@@ -52,10 +49,7 @@ export function DevPodDrawer(p: Props) {
       .then((c) => setYaml(c.content))
       .catch((e) => fail(e));
 
-  const templates = tpl.data?.items ?? [];
-  const presets = templates.filter((t) => t.spec.podPreset);
-  const overlays = templates.filter((t) => t.spec.binding && !t.spec.podPreset);
-  const preset = !!template;
+  const preset = false;
 
   const own = editing
     ? { cpu: parseQuantity(lim.cpu), memory: parseQuantity(lim.memory), gpu: parseQuantity(lim["nvidia.com/gpu"]), running: !!p.devpod?.spec.running }
@@ -107,14 +101,12 @@ export function DevPodDrawer(p: Props) {
         void qc.invalidateQueries({ queryKey: ["devpod", p.devpod.metadata.name] });
       } else {
         let body: Record<string, unknown>;
-        if (yaml !== null) body = { yaml, ...(overlay ? { templateRef: overlay } : {}) };
-        else if (preset) body = { name, templateRef: template };
+        if (yaml !== null) body = { yaml };
         else {
           body = { name, image, cpu, memory };
           if (gpu && gpu !== "0") body.gpu = gpu;
           if (shell) body.shell = shell;
           if (persist) body.persistence = { size: persist, mountPath: "/home/dev" };
-          if (overlay) body.templateRef = overlay;
         }
         if (yaml === null && node) body.node = node;
         if (yaml === null && collaborators.length) body.collaborators = collaborators;
@@ -166,18 +158,6 @@ export function DevPodDrawer(p: Props) {
           </>
         ) : (
           <>
-            {!editing && presets.length > 0 && (
-              <Field label="模板">
-                <Select aria-label="模板" value={template} onChange={(e) => setTemplate(e.target.value)}>
-                  <option value="">自定义</option>
-                  {presets.map((t) => (
-                    <option key={t.metadata.name} value={t.metadata.name}>
-                      {t.spec.displayName}
-                    </option>
-                  ))}
-                </Select>
-              </Field>
-            )}
             {!editing && (
               <Field label="名称" hint={`还可输入 ${budget - name.length} 个字符`} error={errs.count}>
                 <div className="flex items-center rounded-md border border-line-strong bg-surface focus-within:border-accent">
@@ -230,18 +210,6 @@ export function DevPodDrawer(p: Props) {
                   <Input aria-label="持久化 home" value={persist} onChange={(e) => setPersist(e.target.value)} className="mono" />
                 </Field>
               )
-            )}
-            {!editing && overlays.length > 0 && !preset && (
-              <Field label="CPU 绑定（Kore）">
-                <Select aria-label="CPU 绑定" value={overlay} onChange={(e) => setOverlay(e.target.value)}>
-                  <option value="">不绑定</option>
-                  {overlays.map((t) => (
-                    <option key={t.metadata.name} value={t.metadata.name}>
-                      {t.spec.displayName}
-                    </option>
-                  ))}
-                </Select>
-              </Field>
             )}
             <NodePicker value={node} onChange={setNode} />
             <Field label="协作者" hint="用户名，逗号分隔">

@@ -1,7 +1,7 @@
 // Which cluster the console is looking at.
 //
 // A console of several clusters keeps users, tokens and saved configs
-// itself; DevPods, nodes, reservations, snapshots and templates are a
+// itself; DevPods, nodes, reservations and snapshots are a
 // cluster's. One cluster is in use at a time (the switcher in the top
 // bar): every request for something that is a cluster's goes to
 // /api/clusters/<cluster>/…, so the pages need not know. In a console of
@@ -52,7 +52,6 @@ const owned = [
   "/api/nodes",
   "/api/reservations",
   "/api/snapshots",
-  "/api/templates",
   "/api/kore",
   "/api/live",
   "/api/admin/nodes",

@@ -24,7 +24,6 @@ function setup(opts: { route?: string; admin?: boolean; live?: boolean } = {}) {
   const cs = stubFetch({
     "/api/devpods/alice-x": { devpod: dp, pod: { node: "g206", ip: "10.1.2.3", startedAt: "2026-11-10T10:00:00Z" } },
     "/api/audit/sessions": { items: [], next: "" },
-    "/api/templates": { items: [] },
     "/api/devpods/alice-x/metrics": (u: URL) => ({ step: u.searchParams.get("range") === "15m" ? 1 : 5, ts: [Math.floor(Date.now() / 1000) - 60], series: { cpu: [2.5] } }),
   });
   calls = cs;

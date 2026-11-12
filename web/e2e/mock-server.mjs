@@ -170,7 +170,6 @@ const server = http.createServer((req, res) => {
     let m;
     if (p === "/api/me") return json(res, 200, me(u));
     if (p === "/api/me/pubkeys") return json(res, 200, { pubkeys: [] });
-    if (p === "/api/templates") return json(res, 200, { items: [] });
     if (p === "/api/devpods" && url.searchParams.get("watch") === "true") return sse(req, res, () => undefined, 0);
     if (p === "/api/devpods") {
       const items = visible(u, scope);

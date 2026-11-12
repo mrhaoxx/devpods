@@ -24,7 +24,6 @@ describe("cluster scope of API paths", () => {
       "/api/admin/devpods",
       "/api/reservations?from=a&to=b",
       "/api/snapshots/s1/progress",
-      "/api/templates",
       "/api/kore/topology",
       "/api/live/devpods",
       "/api/admin/live/overview",

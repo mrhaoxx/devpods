@@ -21,7 +21,7 @@ describe("DevPodDrawer", () => {
   afterEach(() => vi.unstubAllGlobals());
 
   it("opens from ?new=1 and clearing it closes", async () => {
-    stubFetch({ "/api/devpods": { items: [], pods: {} }, "/api/templates": { items: [] } });
+    stubFetch({ "/api/devpods": { items: [], pods: {} } });
     renderWithProviders(
       <>
         <MyDevPodsPage />
@@ -36,7 +36,7 @@ describe("DevPodDrawer", () => {
   });
 
   it("edit of image on a running DevPod shows the rebuild warning", async () => {
-    stubFetch({ "/api/templates": { items: [] } });
+    stubFetch({});
     renderWithProviders(<DevPodDrawer mode="edit" devpod={running} open onClose={() => {}} />);
     expect(screen.queryByText(/会重建 Pod 并断开所有会话/)).toBeNull();
     fireEvent.change(screen.getByLabelText("镜像"), { target: { value: "ubuntu:25.04" } });
@@ -44,7 +44,7 @@ describe("DevPodDrawer", () => {
   });
 
   it("CPU and memory may be left empty: no limit", () => {
-    stubFetch({ "/api/templates": { items: [] } });
+    stubFetch({});
     renderWithProviders(<DevPodDrawer mode="create" open onClose={() => {}} />);
     for (const label of ["CPU", "内存"]) {
       const input = screen.getByLabelText(label) as HTMLInputElement;
@@ -55,7 +55,6 @@ describe("DevPodDrawer", () => {
 
   it("server QUOTA_EXCEEDED shows next to the field", async () => {
     stubFetch({
-      "/api/templates": { items: [] },
       "POST /api/devpods": new Response(
         JSON.stringify({ code: "QUOTA_EXCEEDED", message: "quota exceeded", detail: [{ resource: "cpu", requested: "4", used: "6", limit: "8" }] }),
         { status: 409 },
@@ -70,7 +69,6 @@ describe("DevPodDrawer", () => {
 
   it("the YAML editor loads a saved config and hands its text over to be saved as one", async () => {
     stubFetch({
-      "/api/templates": { items: [] },
       "GET /api/configs": { items: [{ name: "bob-sg", owner: "bob", title: "SGLang", description: "", sharedWith: [], public: true, variables: [], mine: false, updatedAt: "2026-11-11T00:00:00Z" }] },
       "GET /api/configs/bob-sg": { name: "bob-sg", title: "SGLang", content: "kind: DevPod\nmetadata:\n  name: ${NAME}\n" },
     });

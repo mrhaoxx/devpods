@@ -209,16 +209,6 @@ export type DevPod = {
 export type PodInfo = { node: string; ip: string; startedAt?: string };
 export type Presence = { count: number; users: string[] };
 
-export type Template = {
-  metadata: { name: string };
-  spec: {
-    displayName: string;
-    description?: string;
-    binding?: { annotations: Record<string, string>; resources: unknown };
-    podPreset?: { image: string };
-  };
-};
-
 export type BindingInfo = {
   allocatedCpuset?: string;
   reservedNuma?: string;
@@ -243,7 +233,6 @@ export const createDevPod = (body: unknown) => req<DevPod>("POST", "/api/devpods
 export const patchDevPod = (n: string, running: boolean) => req<PatchResult>("PATCH", `/api/devpods/${n}`, { running });
 export const deleteDevPod = (n: string) => req<void>("DELETE", `/api/devpods/${n}`);
 export const getEvents = (n: string) => req<{ items: unknown[] }>("GET", `/api/devpods/${n}/events`);
-export const listTemplates = () => req<{ items: Template[] }>("GET", "/api/templates");
 export const getPubkeys = () => req<{ pubkeys: string[] | null }>("GET", "/api/me/pubkeys");
 export const putPubkeys = (pubkeys: string[]) => req<{ pubkeys: string[] }>("PUT", "/api/me/pubkeys", { pubkeys });
 
