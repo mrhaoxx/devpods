@@ -69,6 +69,12 @@ rules:
   resources: ["nodes"]
   verbs: ["patch"]
 {{- end }}
+{{- if dig "clusters" "enabled" false .Values.webui }}
+# The clusters this console manages.
+- apiGroups: ["devpod.io"]
+  resources: ["clusters", "clusters/status"]
+  verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+{{- end }}
 # Read-only: the audit policy endpoints show the cluster default.
 - apiGroups: ["devpod.io"]
   resources: ["gatewayconfigs"]
@@ -115,6 +121,31 @@ roleRef: {apiGroup: rbac.authorization.k8s.io, kind: Role, name: devpod-webui-le
 subjects:
 - {kind: ServiceAccount, name: devpod-webui, namespace: {{ .Values.namespaces.system }}}
 {{- end }}
+{{- end }}
+{{- if and .Values.webui.enabled (dig "clusters" "enabled" false .Values.webui) }}
+---
+# The console's replicas find each other's names, to tell agents how many
+# of them there are.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: devpod-webui-instances
+  namespace: {{ .Values.namespaces.system }}
+  labels: {{ include "devpod.labels" . | nindent 4 }}
+rules:
+- apiGroups: [""]
+  resources: ["pods"]
+  verbs: ["get", "list"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: devpod-webui-instances
+  namespace: {{ .Values.namespaces.system }}
+  labels: {{ include "devpod.labels" . | nindent 4 }}
+roleRef: {apiGroup: rbac.authorization.k8s.io, kind: Role, name: devpod-webui-instances}
+subjects:
+- {kind: ServiceAccount, name: devpod-webui, namespace: {{ .Values.namespaces.system }}}
 {{- end }}
 {{- if and .Values.webui.enabled (include "devpod.audit.on" $) }}
 ---

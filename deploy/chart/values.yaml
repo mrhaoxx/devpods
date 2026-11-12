@@ -17,6 +17,10 @@ image:
     repository: ghcr.io/mrhaoxx/devpod-webui
     tag: dev
     pullPolicy: IfNotPresent
+  agent:
+    repository: ghcr.io/mrhaoxx/devpod-agent
+    tag: dev
+    pullPolicy: IfNotPresent
 
 # Name of the cluster-scoped GatewayConfig this release creates and reads.
 # Change it to run a second gateway/webui pair next to an existing one.
@@ -106,8 +110,32 @@ gateway:
       namespace: ""            # secretRef.namespace (informational)
 
 
+# Several clusters under one console. The console (webui.clusters.enabled)
+# runs in one of them; every cluster whose DevPods it manages runs an
+# agent that dials out to it — the console never dials a cluster. A
+# cluster managed from elsewhere needs no console of its own
+# (webui.enabled=false).
+agent:
+  enabled: false
+  cluster: ""                    # the name this cluster was registered under at the console (集群 → 新建集群)
+  console: ""                    # the console's address, e.g. https://devpod.example.com
+  # The one-time join token the console showed on registering the cluster:
+  # either here (a Secret is made of it) or in a Secret of your own with
+  # the key "token". Needed for the first start only.
+  joinToken: ""
+  joinTokenSecret: ""
+  resources:
+    requests: {cpu: 50m, memory: 64Mi}
+    limits:   {cpu: "1", memory: 512Mi}
+
 webui:
   enabled: false
+  # The console of several clusters: agents connect to it (at
+  # <baseURL>/agent/connect, a WebSocket — the route in front of the
+  # console must allow long-lived connections), and admins register
+  # clusters under 集群.
+  clusters:
+    enabled: false
   replicas: 2
   resources:
     requests: {cpu: 100m, memory: 128Mi}

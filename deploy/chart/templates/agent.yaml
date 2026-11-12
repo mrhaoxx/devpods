@@ -1,0 +1,82 @@
+{{- if dig "enabled" false (.Values.agent | default dict) }}
+{{- $a := .Values.agent }}
+{{- if not $a.cluster }}{{ fail "agent.enabled needs agent.cluster: the name this cluster was registered under at the console" }}{{ end }}
+{{- if not $a.console }}{{ fail "agent.enabled needs agent.console: the console's address, e.g. https://devpod.example.com" }}{{ end }}
+{{- $caps := list }}
+{{- if dig "enabled" false (.Values.snapshot | default dict) }}{{ $caps = append $caps "snapshots" }}{{ end }}
+{{- if dig "enabled" false (.Values.reservation | default dict) }}{{ $caps = append $caps "reservations" }}{{ end }}
+{{- $joinSecret := $a.joinTokenSecret | default (ternary "devpod-agent-join" "" (not (empty $a.joinToken))) }}
+# The agent dials out to the console that manages this cluster and
+# forwards what the console asks to this cluster's API server, as its own
+# service account: what the console may do here is this account's RBAC.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: devpod-agent
+  namespace: {{ .Values.namespaces.system }}
+  labels: {{ include "devpod.labels" . | nindent 4 }}
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: devpod-agent
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: devpod-agent
+    spec:
+      serviceAccountName: devpod-agent
+      {{- with $.Values.imagePullSecrets }}
+      imagePullSecrets: {{- toYaml . | nindent 8 }}
+      {{- end }}
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        seccompProfile: {type: RuntimeDefault}
+      containers:
+      - name: agent
+        image: "{{ .Values.image.agent.repository }}:{{ .Values.image.agent.tag }}"
+        imagePullPolicy: {{ .Values.image.agent.pullPolicy }}
+        args:
+        - --cluster={{ $a.cluster }}
+        - --console={{ $a.console }}
+        - --namespace={{ .Values.namespaces.system }}
+        {{- if $joinSecret }}
+        - --join-token-file=/etc/devpod/agent/join/token
+        {{- end }}
+        {{- if $caps }}
+        - --capabilities={{ join "," $caps }}
+        {{- end }}
+        resources: {{- toYaml $a.resources | nindent 10 }}
+        securityContext:
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: true
+          capabilities: {drop: ["ALL"]}
+        {{- if $joinSecret }}
+        volumeMounts:
+        - name: join
+          mountPath: /etc/devpod/agent/join
+          readOnly: true
+        {{- end }}
+      {{- if $joinSecret }}
+      volumes:
+      - name: join
+        secret:
+          secretName: {{ $joinSecret }}
+      {{- end }}
+{{- if $a.joinToken }}
+---
+# The one-time join token (agent.joinToken). It stops working once used;
+# remove it from the values afterwards, or keep it in a Secret of your
+# own (agent.joinTokenSecret).
+apiVersion: v1
+kind: Secret
+metadata:
+  name: devpod-agent-join
+  namespace: {{ .Values.namespaces.system }}
+  labels: {{ include "devpod.labels" . | nindent 4 }}
+type: Opaque
+data:
+  token: {{ $a.joinToken | b64enc | quote }}
+{{- end }}
+{{- end }}

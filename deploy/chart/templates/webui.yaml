@@ -50,6 +50,12 @@ spec:
         {{- if .Values.webui.baseURL }}
         - --external-url={{ .Values.webui.baseURL }}
         {{- end }}
+        {{- if dig "clusters" "enabled" false .Values.webui }}
+        - --clusters=true
+        # agents keep connections to every replica
+        - --instance-selector=app.kubernetes.io/name=devpod-webui
+        - --instance-namespace={{ .Values.namespaces.system }}
+        {{- end }}
         {{- if .Values.webui.passwordAuth }}
         - --password-auth=true
         - --password-min-length={{ .Values.webui.passwordMinLength }}
