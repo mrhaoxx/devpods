@@ -129,6 +129,19 @@ describe("DevPod detail", () => {
     await waitFor(() => expect(calls.some((c) => c.url.pathname === "/api/devpods/alice-x/metrics" && c.url.searchParams.get("range") === "1h")).toBe(true));
   });
 
+  it("the range picked last is the one it opens on next time", async () => {
+    localStorage.setItem("devpod.metricsRange", "6h");
+    setup();
+    await screen.findByRole("heading", { name: "alice-x" });
+    expect(screen.getByRole("radio", { name: "6h" }).getAttribute("aria-checked")).toBe("true");
+    await waitFor(() => expect(calls.some((c) => c.url.pathname === "/api/devpods/alice-x/metrics" && c.url.searchParams.get("range") === "6h")).toBe(true));
+    fireEvent.click(screen.getByRole("radio", { name: "24h" }));
+    expect(localStorage.getItem("devpod.metricsRange")).toBe("24h");
+    fireEvent.click(screen.getByRole("radio", { name: "1h" }));
+    expect(screen.getByRole("radio", { name: "1h" }).getAttribute("aria-checked")).toBe("true");
+    localStorage.clear();
+  });
+
   it("card sparklines come from history before any live sample", async () => {
     setup();
     await screen.findByRole("heading", { name: "alice-x" });

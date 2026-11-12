@@ -24,7 +24,25 @@ const RANGE_MS: Record<string, number> = {
   "7d": 7 * 24 * 3600e3,
 };
 const RANGES = Object.keys(RANGE_MS);
-const schema = { range: { kind: "string", default: "1h" } } satisfies Schema;
+const schema = { range: { kind: "string", default: "" } } satisfies Schema;
+
+// the range picked last, remembered in this browser: where it opens
+// when the address does not say
+const RANGE_KEY = "devpod.metricsRange";
+function lastRange(): string {
+  try {
+    return localStorage.getItem(RANGE_KEY) ?? "";
+  } catch {
+    return "";
+  }
+}
+function rememberRange(r: string) {
+  try {
+    localStorage.setItem(RANGE_KEY, r);
+  } catch {
+    // not kept: no matter
+  }
+}
 // series colors in fixed order (the validated chart palette)
 const palette = ["--chart-1", "--chart-2", "--chart-3", "--chart-4", "--chart-5", "--chart-6", "--chart-7", "--chart-8"];
 type GpuMetric = "util" | "mem" | "power" | "temp";
@@ -169,7 +187,7 @@ function Charts({ c, live }: { c: ChartSet; live: boolean }) {
 
 export function MonitorTab({ name, history }: { name: string; history?: ReadonlyArray<{ ts: number; value: DevPodSample }> }) {
   const [url, setUrl] = useUrlState(schema);
-  const range = RANGE_MS[url.range] ? url.range : "1h";
+  const range = RANGE_MS[url.range] ? url.range : RANGE_MS[lastRange()] ? lastRange() : "1h";
   const rangeMs = RANGE_MS[range];
   const hist = useMetrics(name, range as MetricRange);
   // the live tail extends the short ranges second by second
@@ -188,7 +206,10 @@ export function MonitorTab({ name, history }: { name: string; history?: Readonly
             type="button"
             role="radio"
             aria-checked={range === id}
-            onClick={() => setUrl({ range: id })}
+            onClick={() => {
+              rememberRange(id);
+              setUrl({ range: id });
+            }}
             className={`rounded px-2.5 py-0.5 ${range === id ? "bg-surface font-medium shadow-sm" : "text-muted hover:text-ink"}`}
           >
             {id}
