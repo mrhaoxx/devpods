@@ -18,9 +18,11 @@ import (
 )
 
 type watchEvent struct {
-	Type   string                 `json:"type"` // ADDED | MODIFIED | DELETED
-	DevPod *devpodv1alpha1.DevPod `json:"devpod"`
-	Pod    *PodInfo               `json:"pod,omitempty"`
+	// Cluster: the cluster it is in, in a console of several.
+	Cluster string                 `json:"cluster,omitempty"`
+	Type    string                 `json:"type"` // ADDED | MODIFIED | DELETED
+	DevPod  *devpodv1alpha1.DevPod `json:"devpod"`
+	Pod     *PodInfo               `json:"pod,omitempty"`
 }
 
 // handleWatchDevPods streams the session user's DevPod changes as
@@ -43,18 +45,6 @@ func (s *Server) handleWatchDevPods(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	informer, err := s.k(r).Cache.GetInformer(r.Context(), &devpodv1alpha1.DevPod{})
-	if err != nil {
-		s.writeErr(w, http.StatusInternalServerError, "INTERNAL", err.Error(), nil)
-		return
-	}
-
-	podInformer, err := s.k(r).Cache.GetInformer(r.Context(), &corev1.Pod{})
-	if err != nil {
-		s.writeErr(w, http.StatusInternalServerError, "INTERNAL", err.Error(), nil)
-		return
-	}
-
 	events := make(chan watchEvent, 64)
 	send := func(ev watchEvent) {
 		select {
@@ -62,58 +52,74 @@ func (s *Server) handleWatchDevPods(w http.ResponseWriter, r *http.Request) {
 		default: // slow consumer: drop; the client re-lists on reconnect
 		}
 	}
-	push := func(typ string, obj any) {
-		dp, ok := unwrap(obj).(*devpodv1alpha1.DevPod)
-		if !ok || dp.Namespace != s.NS || !visible(dp) {
+	// every cluster the request covers (its one, or all of them): their
+	// informers feed the one stream, each event saying its cluster
+	for _, cc := range s.ks(r) {
+		ctx := s.in(r.Context(), cc)
+		label := s.clusterLabel(cc)
+		informer, err := cc.Cache.GetInformer(ctx, &devpodv1alpha1.DevPod{})
+		if err != nil {
+			s.writeErr(w, http.StatusInternalServerError, "INTERNAL", err.Error(), nil)
 			return
 		}
-		ev := watchEvent{Type: typ, DevPod: dp}
-		if typ != "DELETED" {
-			ev.Pod = s.podInfo(r.Context(), dp)
-		}
-		send(ev)
-	}
-	// A Pod change (container start/restart, IP, node) re-pushes its
-	// DevPod so the list's Up column follows container restarts.
-	pushPod := func(obj any, deleted bool) {
-		pod, ok := unwrap(obj).(*corev1.Pod)
-		if !ok || pod.Namespace != s.NS {
+		podInformer, err := cc.Cache.GetInformer(ctx, &corev1.Pod{})
+		if err != nil {
+			s.writeErr(w, http.StatusInternalServerError, "INTERNAL", err.Error(), nil)
 			return
 		}
-		name := pod.Labels[render.LabelDevPod]
-		if name == "" {
+		push := func(typ string, obj any) {
+			dp, ok := unwrap(obj).(*devpodv1alpha1.DevPod)
+			if !ok || dp.Namespace != s.NS || !visible(dp) {
+				return
+			}
+			ev := watchEvent{Cluster: label, Type: typ, DevPod: dp}
+			if typ != "DELETED" {
+				ev.Pod = s.podInfo(ctx, dp)
+			}
+			send(ev)
+		}
+		// A Pod change (container start/restart, IP, node) re-pushes its
+		// DevPod so the list's Up column follows container restarts.
+		pushPod := func(obj any, deleted bool) {
+			pod, ok := unwrap(obj).(*corev1.Pod)
+			if !ok || pod.Namespace != s.NS {
+				return
+			}
+			name := pod.Labels[render.LabelDevPod]
+			if name == "" {
+				return
+			}
+			var dp devpodv1alpha1.DevPod
+			if err := cc.Client.Get(ctx, types.NamespacedName{Namespace: s.NS, Name: name}, &dp); err != nil || !visible(&dp) {
+				return
+			}
+			ev := watchEvent{Cluster: label, Type: "MODIFIED", DevPod: &dp}
+			if !deleted {
+				ev.Pod = PodInfoFor(&dp, pod)
+			}
+			send(ev)
+		}
+		podReg, err := podInformer.AddEventHandler(toolscache.ResourceEventHandlerFuncs{
+			AddFunc:    func(obj any) { pushPod(obj, false) },
+			UpdateFunc: func(_, obj any) { pushPod(obj, false) },
+			DeleteFunc: func(obj any) { pushPod(obj, true) },
+		})
+		if err != nil {
+			s.writeErr(w, http.StatusInternalServerError, "INTERNAL", err.Error(), nil)
 			return
 		}
-		var dp devpodv1alpha1.DevPod
-		if err := s.k(r).Client.Get(r.Context(), types.NamespacedName{Namespace: s.NS, Name: name}, &dp); err != nil || !visible(&dp) {
+		defer func() { _ = podInformer.RemoveEventHandler(podReg) }()
+		reg, err := informer.AddEventHandler(toolscache.ResourceEventHandlerFuncs{
+			AddFunc:    func(obj any) { push("ADDED", obj) },
+			UpdateFunc: func(_, obj any) { push("MODIFIED", obj) },
+			DeleteFunc: func(obj any) { push("DELETED", obj) },
+		})
+		if err != nil {
+			s.writeErr(w, http.StatusInternalServerError, "INTERNAL", err.Error(), nil)
 			return
 		}
-		ev := watchEvent{Type: "MODIFIED", DevPod: &dp}
-		if !deleted {
-			ev.Pod = PodInfoFor(&dp, pod)
-		}
-		send(ev)
+		defer func() { _ = informer.RemoveEventHandler(reg) }()
 	}
-	podReg, err := podInformer.AddEventHandler(toolscache.ResourceEventHandlerFuncs{
-		AddFunc:    func(obj any) { pushPod(obj, false) },
-		UpdateFunc: func(_, obj any) { pushPod(obj, false) },
-		DeleteFunc: func(obj any) { pushPod(obj, true) },
-	})
-	if err != nil {
-		s.writeErr(w, http.StatusInternalServerError, "INTERNAL", err.Error(), nil)
-		return
-	}
-	defer func() { _ = podInformer.RemoveEventHandler(podReg) }()
-	reg, err := informer.AddEventHandler(toolscache.ResourceEventHandlerFuncs{
-		AddFunc:    func(obj any) { push("ADDED", obj) },
-		UpdateFunc: func(_, obj any) { push("MODIFIED", obj) },
-		DeleteFunc: func(obj any) { push("DELETED", obj) },
-	})
-	if err != nil {
-		s.writeErr(w, http.StatusInternalServerError, "INTERNAL", err.Error(), nil)
-		return
-	}
-	defer func() { _ = informer.RemoveEventHandler(reg) }()
 
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")

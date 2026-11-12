@@ -5,11 +5,15 @@
 package webui_test
 
 import (
+	"bufio"
 	"context"
+	"encoding/json"
 	"net/http"
+	"net/http/httptest"
 	"sort"
 	"strings"
 	"testing"
+	"time"
 
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -63,5 +67,61 @@ func TestListsCoverEveryCluster(t *testing.T) {
 	}
 	if got := clustersOf("/api/clusters/a/nodes"); got != "a" {
 		t.Fatalf("/api/clusters/a/nodes: fl-n1 in %q, want a", got)
+	}
+}
+
+// The DevPod watch without a cluster carries every cluster's changes,
+// each saying its cluster.
+func TestWatchCoversEveryCluster(t *testing.T) {
+	w := setupWorld(t)
+	srv := httptest.NewServer(w.h)
+	t.Cleanup(srv.Close)
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	req, _ := http.NewRequestWithContext(ctx, "GET", srv.URL+"/api/devpods?watch=true", nil)
+	req.AddCookie(forge(w.sm, "gl-alice", false))
+	resp, err := srv.Client().Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = resp.Body.Close() })
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("watch: %d", resp.StatusCode)
+	}
+	seen := make(chan string, 64)
+	go func() {
+		sc := bufio.NewScanner(resp.Body)
+		for sc.Scan() {
+			line, ok := strings.CutPrefix(sc.Text(), "data: ")
+			if !ok {
+				continue
+			}
+			var ev struct {
+				Cluster string `json:"cluster"`
+				DevPod  struct {
+					Metadata struct {
+						Name string `json:"name"`
+					} `json:"metadata"`
+				} `json:"devpod"`
+			}
+			if json.Unmarshal([]byte(line), &ev) == nil && ev.DevPod.Metadata.Name == "gl-alice-wch" {
+				seen <- ev.Cluster
+			}
+		}
+	}()
+	for _, c := range []string{"a", "b"} {
+		if code, out, _ := w.call("gl-alice", "POST", "/api/clusters/"+c+"/devpods", `{"name":"wch","image":"ubuntu:24.04","cpu":"1","memory":"1Gi"}`); code != http.StatusCreated {
+			t.Fatalf("create in %s: %d %v", c, code, out)
+		}
+	}
+	got := map[string]bool{}
+	deadline := time.After(20 * time.Second)
+	for !(got["a"] && got["b"]) {
+		select {
+		case c := <-seen:
+			got[c] = true
+		case <-deadline:
+			t.Fatalf("events seen from %v, want a and b", got)
+		}
 	}
 }

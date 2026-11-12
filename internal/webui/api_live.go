@@ -34,8 +34,10 @@ type LiveDeps struct {
 
 // liveItem is one row of the DevPod list stream.
 type liveItem struct {
-	Name  string `json:"name"`
-	Owner string `json:"owner"`
+	// Cluster: the cluster it is in, in a console of several.
+	Cluster string `json:"cluster,omitempty"`
+	Name    string `json:"name"`
+	Owner   string `json:"owner"`
 	live.DevPodLive
 }
 
@@ -77,23 +79,26 @@ func (s *Server) handleLiveDevPods(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.streamLive(w, r, func(ctx context.Context, snap live.Snapshot) (any, error) {
-		var list devpodv1alpha1.DevPodList
+		items := []liveItem{}
 		for _, cc := range s.ksc(r.Context()) { // the request's cluster, or every one
 			var one devpodv1alpha1.DevPodList
 			if err := cc.Client.List(ctx, &one, client.InNamespace(s.NS), client.UnsafeDisableDeepCopy); err != nil {
 				return nil, err
 			}
-			list.Items = append(list.Items, one.Items...)
-		}
-		items := []liveItem{}
-		for i := range list.Items {
-			dp := &list.Items[i]
-			if !all && dp.Spec.Owner != sess.User {
-				continue
+			for i := range one.Items {
+				dp := &one.Items[i]
+				if !all && dp.Spec.Owner != sess.User {
+					continue
+				}
+				items = append(items, liveItem{Cluster: s.clusterLabel(cc), Name: dp.Name, Owner: dp.Spec.Owner, DevPodLive: emptyLive(snap.DevPods[string(dp.UID)])})
 			}
-			items = append(items, liveItem{Name: dp.Name, Owner: dp.Spec.Owner, DevPodLive: emptyLive(snap.DevPods[string(dp.UID)])})
 		}
-		sort.Slice(items, func(i, j int) bool { return items[i].Name < items[j].Name })
+		sort.Slice(items, func(i, j int) bool {
+			if items[i].Cluster != items[j].Cluster {
+				return items[i].Cluster < items[j].Cluster
+			}
+			return items[i].Name < items[j].Name
+		})
 		return map[string]any{"ts": snap.TS, "items": items}, nil
 	})
 }
