@@ -211,4 +211,30 @@ describe("DevPodTable", () => {
     const row = (await screen.findByRole("link", { name: "alice-a" })).closest("tr")!;
     expect(row.textContent).toContain("g206");
   });
+
+  it("every cluster's DevPods: same-named ones are two rows, each acted on in its cluster; the filter narrows them", async () => {
+    const x = (cluster: string) => ({ ...mk("alice-x", "alice", "Running"), cluster });
+    const calls = stubFetch({
+      "/api/devpods": { items: [x("a"), x("b")], pods: { "a/alice-x": { node: "na" }, "b/alice-x": { node: "nb" } } },
+      "PATCH /api/clusters/b/devpods/alice-x": { devpod: x("b"), rebuild: false },
+    });
+    const clusters = [
+      { name: "a", connected: true },
+      { name: "b", connected: false },
+    ];
+    const first = renderWithProviders(<DevPodTable scope="mine" />, { clusters });
+    await waitFor(() => expect(screen.getAllByRole("link", { name: "alice-x" })).toHaveLength(2));
+    const hrefs = screen.getAllByRole("link", { name: "alice-x" }).map((l) => l.getAttribute("href"));
+    expect(hrefs).toEqual(["/devpods/a/alice-x", "/devpods/b/alice-x"]);
+    const rowB = screen.getAllByRole("row").find((r) => within(r).queryByText("nb"))!;
+    expect(within(rowB).getByText("离线")).toBeTruthy();
+    fireEvent.keyDown(within(rowB).getByRole("button", { name: "alice-x 操作" }), { key: "Enter" });
+    fireEvent.click(await screen.findByRole("menuitem", { name: "休眠" }));
+    await waitFor(() => expect(calls.some((c) => c.method === "PATCH" && c.url.pathname === "/api/clusters/b/devpods/alice-x")).toBe(true));
+    first.unmount();
+
+    renderWithProviders(<DevPodTable scope="mine" />, { clusters, route: "/?cluster=a" });
+    await screen.findByText("na");
+    expect(screen.getAllByRole("link", { name: "alice-x" })).toHaveLength(1);
+  });
 });

@@ -1,6 +1,7 @@
 // The DevPod table's columns (UI spec §5.1). Metric cells subscribe to
 // their own row of the live stream, so a per-second update re-renders
 // only them.
+import type { Cluster } from "../clusters/api";
 import { devpodHref } from "../../data/cluster";
 import { createContext, useContext } from "react";
 import { Link } from "react-router-dom";
@@ -188,6 +189,8 @@ export function devpodColumns(opts: {
   groups?: { open: ReadonlySet<string>; toggle: (id: string) => void };
   /** usage: what a row uses now (undefined: not known), to sort by */
   usage?: (r: Row, key: UsageKey) => number | undefined;
+  /** the clusters, in a console of several: a 集群 column */
+  clusters?: Cluster[];
 }): ColumnDef<Row, unknown>[] {
   // a usage column: most first on the first click, rows with nothing known last
   const by = (key: UsageKey) => ({ accessorFn: (r: Row) => opts.usage?.(r, key), sortDescFirst: true, sortUndefined: "last" as const });
@@ -218,6 +221,24 @@ export function devpodColumns(opts: {
       ),
     },
   ];
+  if (opts.clusters) {
+    const of = new Map(opts.clusters.map((c) => [c.name, c]));
+    cols.push({
+      id: "cluster",
+      header: "集群",
+      accessorFn: (r) => r.cluster ?? "",
+      meta: { priority: 2, width: 100 },
+      cell: ({ row: { original: r } }) => {
+        const c = r.cluster ? of.get(r.cluster) : undefined;
+        return (
+          <span className="inline-flex min-w-0 items-center gap-1">
+            <span className="truncate">{c?.displayName || r.cluster}</span>
+            {c && !c.connected && <Badge tone="warm" title="这个集群离线：显示的是它最后的状态，修改会被拒绝">离线</Badge>}
+          </span>
+        );
+      },
+    });
+  }
   if (opts.admin) cols.push({ id: "owner", header: "Owner", accessorFn: (r) => r.owner, meta: { priority: 2, width: 90, mono: true } });
   cols.push(
     { id: "cpu", header: "CPU", ...by("cpu"), meta: { priority: 2, width: 140 }, cell: own((r) => <CpuCell r={r} />) },

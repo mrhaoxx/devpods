@@ -1,5 +1,6 @@
 // 我的 DevPod / 全部 DevPod (UI spec §5.1): one table, the admin view adds
 // Owner, the 空转 / GPU chips and bulk actions.
+import { useClusterFilter } from "../../data/clusterFilter";
 import { useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import { useQueryClient } from "@tanstack/react-query";
@@ -136,8 +137,12 @@ export function DevPodTable({ scope }: { scope: "mine" | "all" }) {
   const [dialog, setDialog] = useState<{ kind: BulkKind; rows: Row[]; clear: () => void } | null>(null);
   const { remove } = useDevPodMutations();
 
-  const rows = useMemo(() => (list.data?.items ?? []).map((dp) => toRow(dp, list.data?.pods[podKey(dp)])), [list.data]);
-  const idle = useLiveValues<LiveItem>(spec, admin && url.idle ? rows.map((r) => r.name) : [], 5000, admin && url.idle);
+  const { matches, several, clusters } = useClusterFilter();
+  const rows = useMemo(
+    () => (list.data?.items ?? []).filter(matches).map((dp) => toRow(dp, list.data?.pods[podKey(dp)])),
+    [list.data, matches],
+  );
+  const idle = useLiveValues<LiveItem>(spec, admin && url.idle ? rows.map(keyOf) : [], 5000, admin && url.idle);
   // sorting by what DevPods use: their values, taken every 5 s so the rows do not jump every second
   const byUsage = usageKeys.includes(url.sort.replace(/^-/, "") as UsageKey);
   const used = useLiveValues<LiveItem>(spec, byUsage ? rows.map(keyOf) : [], 5000, byUsage);
@@ -147,7 +152,7 @@ export function DevPodTable({ scope }: { scope: "mine" | "all" }) {
     () =>
       rows.filter(
         (r) =>
-          matchesFilter(r, filter) && (!admin || !url.gpu || r.gpu > 0) && (!admin || !url.idle || idle.get(r.name)?.idle === true),
+          matchesFilter(r, filter) && (!admin || !url.gpu || r.gpu > 0) && (!admin || !url.idle || idle.get(keyOf(r))?.idle === true),
       ),
     [rows, filter, admin, url.gpu, url.idle, idle],
   );
@@ -163,6 +168,7 @@ export function DevPodTable({ scope }: { scope: "mine" | "all" }) {
   const columns = useMemo(
     () =>
       devpodColumns({
+        clusters: several ? clusters : undefined,
         admin,
         me,
         groups: { open, toggle },
@@ -180,7 +186,7 @@ export function DevPodTable({ scope }: { scope: "mine" | "all" }) {
           ),
       }),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [admin, me, open, used],
+    [admin, me, open, used, several, clusters],
   );
 
   const failed = outcome?.results.filter((r) => !r.ok) ?? [];
