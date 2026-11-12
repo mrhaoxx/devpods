@@ -43,6 +43,7 @@ func auditDays(r Retention) int { return r.AuditDays }
 // ttlRules maps every table to its TTL column and retention class.
 var ttlRules = map[string]ttlRule{
 	"sessions":             {"opened_at", "DAY", auditDays},
+	"session_origin":       {"opened_at", "DAY", auditDays},
 	"channels":             {"opened_at", "DAY", auditDays},
 	"commands":             {"ts", "DAY", auditDays},
 	"file_events":          {"ts", "DAY", auditDays},

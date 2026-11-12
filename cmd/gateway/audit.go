@@ -209,6 +209,9 @@ type auditDeps struct {
 	rec          *audit.Recorder // nil = audit storage not configured
 	tmpl         *template.Template
 	sessionGrace time.Duration
+	// gatewayName: this gateway's registered name when it serves several
+	// clusters; recorded with each session.
+	gatewayName string
 }
 
 // gatewayConfig reads GatewayConfig/default from the informer cache, so
@@ -235,9 +238,13 @@ func (a *auditDeps) startSession(ctx context.Context, meta audit.SessionMeta) (a
 	if err := a.cache.Get(ctx, types.NamespacedName{Name: meta.User}, &u); err != nil {
 		up = nil // LDAP-only user: cluster default
 	}
-	var dp devpodv1alpha1.DevPod
-	if err := a.cache.Get(ctx, types.NamespacedName{Namespace: a.ns, Name: meta.DevPod}, &dp); err == nil {
-		meta.DevPodUID, meta.Owner = string(dp.UID), dp.Spec.Owner
+	// (a gateway of several clusters was told these with the login: the
+	// DevPod is not in the cluster it runs in)
+	if meta.DevPodUID == "" {
+		var dp devpodv1alpha1.DevPod
+		if err := a.cache.Get(ctx, types.NamespacedName{Namespace: a.ns, Name: meta.DevPod}, &dp); err == nil {
+			meta.DevPodUID, meta.Owner = string(dp.UID), dp.Spec.Owner
+		}
 	}
 	s := a.rec.Start(meta, sessionPolicy(gc, up))
 	return s, s

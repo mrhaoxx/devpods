@@ -183,12 +183,14 @@ func main() {
 	// a gateway of several clusters: DevPods and keys from the console,
 	// the way to a DevPod through its cluster's agent
 	var theHub *hub
+	hubName := "" // this gateway's registered name, when it serves several clusters
 	if hf.enabled() {
 		if theHub, err = hf.start(ctx, clientset); err != nil {
 			slog.Error("hub", "err", err)
 			os.Exit(1)
 		}
 		authn.WithDirectory(gateway.NewConsoleDirectory(theHub.link)).WithSources(theHub.sources(srcs))
+		hubName = *hf.name
 		dialer.Net = theHub.dial
 		slog.Info("gateway_of_several_clusters", "console", *hf.console, "name", *hf.name)
 	}
@@ -256,7 +258,7 @@ func main() {
 			}
 		}
 	}
-	ad := &auditDeps{cache: c, gcName: gcName, ns: devpodNamespace, rec: auditRec, tmpl: bannerTmpl, sessionGrace: sessionGrace}
+	ad := &auditDeps{cache: c, gcName: gcName, ns: devpodNamespace, rec: auditRec, tmpl: bannerTmpl, sessionGrace: sessionGrace, gatewayName: hubName}
 
 	runErr := run(ctx, listenAddr, gw.Spec.Listen, hostSigner, authn, dialer, proxyKeys, ad, recorder)
 
@@ -494,6 +496,8 @@ func handle(parent context.Context, id uint64, conn net.Conn, hostSigner ssh.Sig
 				"devpod.io/devpod":    res.DevPodName,
 				"devpod.io/endpoint":  res.Endpoint,
 				"devpod.io/cluster":   res.Cluster,
+				"devpod.io/uid":       res.DevPodUID,
+				"devpod.io/owner":     res.Owner,
 				"devpod.io/ambiguous": strings.Join(res.Ambiguous, " "),
 				"devpod.io/auth-path": string(apJSON),
 				"devpod.io/pubkey-fp": ssh.FingerprintSHA256(key),
@@ -539,6 +543,8 @@ func handle(parent context.Context, id uint64, conn net.Conn, hostSigner ssh.Sig
 	hooks, auditSess := ad.startSession(parent, audit.SessionMeta{
 		ID: sessionID, User: ap.User, DevPod: devpodName, ClientIP: clientIP, PubkeyFP: fp,
 		AuthKind: ap.Kind, ProxyAlias: ap.Alias, OpenedAt: start,
+		DevPodUID: srvConn.Permissions.Extensions["devpod.io/uid"], Owner: srvConn.Permissions.Extensions["devpod.io/owner"],
+		Cluster: srvConn.Permissions.Extensions["devpod.io/cluster"], Gateway: ad.gatewayName,
 	})
 
 	stats := &gateway.ProxyStats{}

@@ -50,6 +50,8 @@ type AuthResult struct {
 	AuthPath   AuthPath
 	// Cluster the DevPod is in; "" where the gateway serves one cluster.
 	Cluster string
+	// DevPodUID and Owner of the DevPod, for the audit record.
+	DevPodUID, Owner string
 	// Ambiguous, when set, replaces the rest: the key was good, but
 	// several clusters have a DevPod of that name this user may log in
 	// to. These are the logins that say which. Told only to someone whose
@@ -210,6 +212,8 @@ func (a *Authenticator) finalize(found []Found, user, pod string, ap AuthPath) (
 		Endpoint:   dp.Status.Endpoint,
 		AuthPath:   ap,
 		Cluster:    mine[0].Cluster,
+		DevPodUID:  string(dp.UID),
+		Owner:      dp.Spec.Owner,
 	}, nil
 }
 

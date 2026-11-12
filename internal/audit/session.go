@@ -68,6 +68,9 @@ func (g *segFile) Close() error {
 func newSession(r *Recorder, meta SessionMeta, pol policy.Effective) *Session {
 	s := &Session{r: r, meta: meta, pol: pol, done: make(chan struct{}), lastFlush: r.cfg.Now()}
 	s.buf.Sessions = append(s.buf.Sessions, s.row(1, nil, "", 0, 0))
+	if meta.Cluster != "" || meta.Gateway != "" {
+		s.buf.Origins = append(s.buf.Origins, store.OriginRow{SessionID: meta.ID, Cluster: meta.Cluster, Gateway: meta.Gateway, OpenedAt: meta.OpenedAt, Version: 1})
+	}
 	return s
 }
 

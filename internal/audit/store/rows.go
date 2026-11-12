@@ -33,6 +33,17 @@ type SessionRow struct {
 	Version          uint64     `ch:"version" json:"version"`
 }
 
+// OriginRow says where a session came in (the gateway, by its registered
+// name) and which cluster its DevPod is in: written by a gateway that
+// serves several clusters.
+type OriginRow struct {
+	SessionID string    `ch:"session_id" json:"session_id"`
+	Cluster   string    `ch:"cluster" json:"cluster"`
+	Gateway   string    `ch:"gateway" json:"gateway"`
+	OpenedAt  time.Time `ch:"opened_at" json:"opened_at"`
+	Version   uint64    `ch:"version" json:"version"`
+}
+
 // ChannelRow is one SSH channel of a session (versioned like SessionRow).
 type ChannelRow struct {
 	SessionID   string     `ch:"session_id" json:"session_id"`
@@ -141,10 +152,11 @@ type Batch struct {
 	PolicyEvents []PolicyEventRow `json:"policy_events,omitempty"`
 	RawSegments  []RawSegmentRow  `json:"raw_segments,omitempty"`
 	Alerts       []AlertRow       `json:"alerts,omitempty"`
+	Origins      []OriginRow      `json:"origins,omitempty"`
 }
 
 // Empty reports whether the batch has no rows.
 func (b Batch) Empty() bool {
 	return len(b.Sessions)+len(b.Channels)+len(b.Commands)+len(b.FileEvents)+
-		len(b.PolicyEvents)+len(b.RawSegments)+len(b.Alerts) == 0
+		len(b.PolicyEvents)+len(b.RawSegments)+len(b.Alerts)+len(b.Origins) == 0
 }

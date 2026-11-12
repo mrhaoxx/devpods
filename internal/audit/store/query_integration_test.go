@@ -110,6 +110,23 @@ func TestListSessions_FinalUsesLatestVersion(t *testing.T) {
 	}
 }
 
+// A session through a gateway of several clusters says which gateway it
+// came in at and which cluster its DevPod is in; the others say nothing.
+func TestListSessions_Origin(t *testing.T) {
+	c := freshDB(t)
+	mustInsert(t, c, Batch{
+		Sessions: []SessionRow{sess("S1", "alice", "u1", base, 1, false), sess("S2", "alice", "u2", base.Add(time.Minute), 1, false)},
+		Origins:  []OriginRow{{SessionID: "S2", Cluster: "mulan", Gateway: "b300", OpenedAt: base.Add(time.Minute), Version: 1}},
+	}, "v1")
+	rows, _, err := c.ListSessions(context.Background(), day())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 2 || rows[0].SessionID != "S2" || rows[0].Cluster != "mulan" || rows[0].Gateway != "b300" || rows[1].Cluster != "" || rows[1].Gateway != "" {
+		t.Fatalf("got %+v", rows)
+	}
+}
+
 func TestListSessions_HasFilesHasAlerts(t *testing.T) {
 	c := freshDB(t)
 	mustInsert(t, c, Batch{

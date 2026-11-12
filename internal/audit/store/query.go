@@ -43,15 +43,21 @@ type SessionFilter struct {
 // SessionSummary is a session plus per-session counters.
 type SessionSummary struct {
 	SessionRow
-	Commands   int `json:"commands"`
-	Files      int `json:"files"`
-	PolicyHits int `json:"policy_hits"`
-	Alerts     int `json:"alerts"`
+	// Cluster and Gateway: for a session through a gateway of several
+	// clusters ("" otherwise).
+	Cluster    string `json:"cluster,omitempty"`
+	Gateway    string `json:"gateway,omitempty"`
+	Commands   int    `json:"commands"`
+	Files      int    `json:"files"`
+	PolicyHits int    `json:"policy_hits"`
+	Alerts     int    `json:"alerts"`
 }
 
 // SessionDetail is everything recorded for one session.
 type SessionDetail struct {
 	Session  SessionRow       `json:"session"`
+	Cluster  string           `json:"cluster,omitempty"`
+	Gateway  string           `json:"gateway,omitempty"`
 	Channels []ChannelRow     `json:"channels"`
 	Commands []CommandRow     `json:"commands"`
 	Files    []FileEventRow   `json:"files"`
@@ -193,6 +199,13 @@ func (c *CH) ListSessions(ctx context.Context, f SessionFilter) ([]SessionSummar
 		out[i] = SessionSummary{SessionRow: r}
 		counts[r.SessionID] = &out[i]
 	}
+	if len(ids) > 0 { // where each came in: best effort, the list stands without it
+		if origins, err := c.origins(ctx, ids, rows[len(rows)-1].OpenedAt); err == nil {
+			for id, o := range origins {
+				counts[id].Cluster, counts[id].Gateway = o.Cluster, o.Gateway
+			}
+		}
+	}
 	if len(ids) > 0 {
 		// Events never predate their session: bound the counts by the
 		// page's oldest session so they prune partitions.
@@ -265,6 +278,9 @@ func (c *CH) GetSession(ctx context.Context, id string) (*SessionDetail, error) 
 		return nil, ErrNotFound
 	}
 	d := &SessionDetail{Session: sessions[0]}
+	if o, err := c.origins(ctx, []string{id}, d.Session.OpenedAt); err == nil {
+		d.Cluster, d.Gateway = o[id].Cluster, o[id].Gateway
+	}
 	lo := d.Session.OpenedAt.Add(-eventSkew)
 	sel := func(dst any, table, cond, order string, args ...any) error {
 		q := fmt.Sprintf("SELECT * FROM %s.%s WHERE session_id = ? AND %s ORDER BY %s", c.db, table, cond, order)
@@ -464,4 +480,19 @@ func (c *CH) Presence(ctx context.Context, devpodUIDs []string) (map[string][]st
 		out[uid] = users
 	}
 	return out, rows.Err()
+}
+
+// origins returns where the sessions of ids came in; since bounds the
+// partitions read (no session of ids opened before it).
+func (c *CH) origins(ctx context.Context, ids []string, since time.Time) (map[string]OriginRow, error) {
+	var rows []OriginRow
+	q := fmt.Sprintf("SELECT * FROM %s.session_origin FINAL WHERE has(?, session_id) AND opened_at >= ?", c.db)
+	if err := c.conn.Select(ctx, &rows, q, ids, since.Add(-time.Minute)); err != nil {
+		return nil, err
+	}
+	out := make(map[string]OriginRow, len(rows))
+	for _, r := range rows {
+		out[r.SessionID] = r
+	}
+	return out, nil
 }

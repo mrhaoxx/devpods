@@ -37,6 +37,9 @@ type Config struct {
 type SessionMeta struct {
 	ID, User, DevPod, DevPodUID, Owner, ClientIP, PubkeyFP, AuthKind, ProxyAlias string
 	OpenedAt                                                                     time.Time
+	// Cluster the DevPod is in and Gateway (by registered name) the
+	// session came in at: set by a gateway that serves several clusters.
+	Cluster, Gateway string
 }
 
 // NewSessionID returns a ULID for a session opened at t.
