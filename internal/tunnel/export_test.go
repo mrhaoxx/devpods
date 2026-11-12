@@ -1,0 +1,8 @@
+// Copyright 2026 The DevPod Authors.
+//
+// SPDX-License-Identifier: Apache-2.0
+
+package tunnel
+
+// NewNonceForTest exposes the nonce source.
+func NewNonceForTest() []byte { return newNonce() }
