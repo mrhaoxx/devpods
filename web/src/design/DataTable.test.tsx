@@ -233,6 +233,7 @@ describe("DataTable", () => {
 describe("a list page's table (fill)", () => {
   it("works out the rows in sight, and all of them while its height is unknown", () => {
     expect(rowWindow(1000, { top: 0, height: 0 }, 29, 29)).toEqual({ first: 0, last: 1000 });
+    expect(rowWindow(1000, { top: 0, height: -1 }, 29, 29)).toEqual({ first: 0, last: 60 }); // not read yet: a screenful
     // scrolled 100 rows down, 20 rows tall under a one-row header: rows 100–118 show, 12 more either side
     expect(rowWindow(1000, { top: 2900, height: 580 }, 29, 29)).toEqual({ first: 88, last: 131 });
     expect(rowWindow(1000, { top: 29_000, height: 580 }, 29, 29)).toEqual({ first: 988, last: 1000 });

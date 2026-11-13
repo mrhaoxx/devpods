@@ -45,10 +45,12 @@ export function phoneHidden(width: number, metas: { id: string; priority: number
 const PHONE = 640;
 
 /** useView: where a scroller is scrolled to and how tall it is, read once
- *  a frame while it scrolls or changes size (height 0: not known). */
+ *  a frame while it scrolls or changes size. Height -1: not read yet;
+ *  0: read, and there is no layout to go by. */
 export function useView(ref: React.RefObject<HTMLElement>, on: boolean): { top: number; height: number } {
-  const [view, setView] = useState({ top: 0, height: 0 });
-  useEffect(() => {
+  const [view, setView] = useState({ top: 0, height: -1 });
+  // before the first paint: the first draw is never of every row
+  useLayoutEffect(() => {
     const el = ref.current;
     if (!on || !el) return;
     let frame = 0;
@@ -74,13 +76,17 @@ export function useView(ref: React.RefObject<HTMLElement>, on: boolean): { top: 
 
 /** rowWindow: the rows to draw of n, each h tall under a header head tall,
  *  in a scroller at top showing height — those in sight and over rows
- *  either side; all of them while the height is not known. */
+ *  either side. Before the height is read: a first screenful (a thousand
+ *  rows are not drawn to be thrown away); with no layout at all: all. */
 export function rowWindow(n: number, view: { top: number; height: number }, h: number, head: number, over = 12): { first: number; last: number } {
-  if (view.height <= 0 || h <= 0) return { first: 0, last: n };
+  if (view.height < 0) return { first: 0, last: Math.min(n, FIRST_DRAW) };
+  if (view.height === 0 || h <= 0) return { first: 0, last: n };
   const first = Math.max(0, Math.floor(view.top / h) - over);
   const last = Math.min(n, Math.ceil((view.top + view.height - head) / h) + over);
   return { first: Math.min(first, last), last };
 }
+
+const FIRST_DRAW = 60;
 
 function useWidth(ref: React.RefObject<HTMLElement>): number {
   const [w, setW] = useState(0);
@@ -331,14 +337,17 @@ export function DataTable<T>(p: DataTableProps<T>) {
   // scrolled to where it was, once there are rows to scroll to
   const want = useRef<number | undefined>(undefined);
   if (want.current === undefined) want.current = p.fill ? readScroll(p.storageKey) : 0;
+  // (tried once, with the first rows: later the scroll is the reader's)
   useLayoutEffect(() => {
     const el = scroller.current;
     if (!el || !want.current || rows.length === 0) return;
     el.scrollTop = want.current;
-    if (el.scrollTop > 0 || el.clientHeight === 0) want.current = 0;
+    want.current = 0;
   });
   useEffect(() => {
-    if (p.fill && !want.current) writeScroll(p.storageKey, view.top);
+    if (!p.fill || want.current) return;
+    const t = setTimeout(() => writeScroll(p.storageKey, view.top), 250); // once the scrolling pauses
+    return () => clearTimeout(t);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [view.top]);
   // a row as tall as it is drawn (zoom, fonts): measured, not assumed

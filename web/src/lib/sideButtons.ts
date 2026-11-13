@@ -3,7 +3,7 @@
 // the browser has not moved through its history a moment later, the page
 // does it. Waiting (rather than always acting) keeps it to one step where
 // the browser acts too.
-const WAIT = 120; // ms: a browser's own step shows as popstate well within this
+const WAIT = 200; // ms: a browser's own step shows as popstate well within this
 
 /** installSideButtons listens on win; returns what removes it. */
 export function installSideButtons(win: Window = window): () => void {

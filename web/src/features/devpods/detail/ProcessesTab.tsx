@@ -100,9 +100,10 @@ export function ProcessTable({ procs, limit, live }: { procs?: ProcLive[]; limit
   const [tree, setTree] = useState(recallTree);
   // a moment without data (a late sample) keeps the last list: the table
   // does not empty and jump back to its top
-  const last = useRef<ProcLive[] | undefined>(undefined);
-  if (procs && procs.length > 0) last.current = procs;
-  const list = procs && procs.length === 0 && last.current ? last.current : procs;
+  // (ten seconds at most: a DevPod that stopped has no processes)
+  const last = useRef<{ at: number; procs: ProcLive[] } | undefined>(undefined);
+  if (procs && procs.length > 0) last.current = { at: Date.now(), procs };
+  const list = procs && procs.length === 0 && last.current && Date.now() - last.current.at < 10_000 ? last.current.procs : procs;
   // the order: worked out when the sort changes or every few seconds, then
   // held — new processes go to the end until the next time
   const order = useRef<{ at: number; key: string; ids: string[] }>({ at: 0, key: "", ids: [] });
