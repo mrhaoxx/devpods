@@ -35,14 +35,33 @@ describe("PortsPanel", () => {
     renderWithProviders(<PortsPanel r={{ name: "alice-a" }} />);
     const open = await screen.findByRole("link", { name: /打开/ });
     expect(open.getAttribute("href")).toBe("https://abcdefgh2345-8080-devpod.apps.test");
-    expect(screen.getByText("仅本人和协作者")).toBeTruthy();
     const sel = screen.getByLabelText("端口 8080 的访问方式") as HTMLSelectElement;
     expect(sel.value).toBe("private");
+    expect(sel.selectedOptions[0].textContent).toBe("仅本人和协作者");
     expect([...sel.options].map((o) => o.value)).toEqual(["private", "users", "public"]);
     fireEvent.change(sel, { target: { value: "public" } });
     await waitFor(() => expect(calls.some((c) => c.method === "PUT" && c.body === '{"publicPorts":[8080],"userPorts":[]}')).toBe(true));
     expect(await screen.findByText("公开")).toBeTruthy();
   });
+  it("a port nothing listens on yet gets its access set ahead, and is listed as 未监听", async () => {
+    const view = { id: "abcdefgh2345", urlTemplate: "https://abcdefgh2345-{port}-devpod.apps.test", publicPorts: [] as number[], userPorts: [] as number[] };
+    const calls = stubFetch({
+      "/api/devpods/alice-a/http": view,
+      "/api/devpods/alice-a/info": { info: { ts: "", cpu_limit: 1, mem_limit: 1 }, infoTs: "", snapshot: { ts: "", procs: 1, threads: 1, zombies: 0, listen: [] } },
+      "PUT /api/devpods/alice-a/http": { ...view, publicPorts: [8888] },
+    });
+    renderWithProviders(<PortsPanel r={{ name: "alice-a" }} sshPort={2222} />);
+    const port = await screen.findByLabelText("其他端口");
+    fireEvent.change(port, { target: { value: "2222" } });
+    expect((screen.getByRole("button", { name: "设置" }) as HTMLButtonElement).disabled).toBe(true); // the sshd port is never proxied
+    fireEvent.change(port, { target: { value: "8888" } });
+    fireEvent.change(screen.getByLabelText("其他端口的访问方式"), { target: { value: "public" } });
+    fireEvent.click(screen.getByRole("button", { name: "设置" }));
+    await waitFor(() => expect(calls.some((c) => c.method === "PUT" && c.body === '{"publicPorts":[8888],"userPorts":[]}')).toBe(true));
+    expect(await screen.findByText("未监听")).toBeTruthy();
+    expect((screen.getByLabelText("端口 8888 的访问方式") as HTMLSelectElement).value).toBe("public");
+  });
+
   it("three access levels; the container's sshd port is never listed", () => {
     const v = { publicPorts: [8080], userPorts: [8888] };
     expect([accessOf(v, 8080), accessOf(v, 8888), accessOf(v, 7000)]).toEqual(["public", "users", "private"]);

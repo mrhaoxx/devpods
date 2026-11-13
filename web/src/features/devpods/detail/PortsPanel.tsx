@@ -69,6 +69,7 @@ export function PortsPanel({ r, sshPort }: { r: Ref; /** the container's sshd po
   const http = useQuery({ queryKey: key, queryFn: () => getHttp(r), retry: false });
   const info = useInfo(r);
   const [other, setOther] = useState("");
+  const [otherAccess, setOtherAccess] = useState<PortAccess>("private");
   const [reset, setReset] = useState(false);
   const save = useMutation({
     mutationFn: (body: { publicPorts?: number[]; userPorts?: number[]; reset?: boolean }) => putHttp(r, body),
@@ -81,7 +82,8 @@ export function PortsPanel({ r, sshPort }: { r: Ref; /** the container's sshd po
   const rows = portRows(info.data?.snapshot?.listen ?? [], [...lists.publicPorts, ...lists.userPorts], sshPort);
   const setAccess = (port: number, access: PortAccess) => save.mutate(withAccess(lists, port, access));
   const otherPort = Number(other);
-  const otherOK = Number.isInteger(otherPort) && otherPort >= 1 && otherPort <= 65535;
+  // any port, listening or not yet — but never the container's sshd
+  const otherOK = Number.isInteger(otherPort) && otherPort >= 1 && otherPort <= 65535 && otherPort !== (sshPort ?? 22);
 
   return (
     <Panel
@@ -155,6 +157,17 @@ export function PortsPanel({ r, sshPort }: { r: Ref; /** the container's sshd po
           }}
         >
           <Input aria-label="其他端口" value={other} onChange={(e) => setOther(e.target.value.replace(/\D/g, ""))} placeholder="其他端口，如 8888" className="mono !w-40" inputMode="numeric" />
+          {/* a port nothing listens on yet can have its access set ahead */}
+          <Select aria-label="其他端口的访问方式" value={otherAccess} onChange={(e) => setOtherAccess(e.target.value as PortAccess)} className="!h-8 !w-auto">
+            {ACCESS.map(([id, label]) => (
+              <option key={id} value={id}>
+                {label}
+              </option>
+            ))}
+          </Select>
+          <Button type="button" disabled={!otherOK || save.isPending} onClick={() => setAccess(otherPort, otherAccess)}>
+            设置
+          </Button>
           <Button type="submit" disabled={!otherOK}>
             打开
           </Button>
