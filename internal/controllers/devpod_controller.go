@@ -546,11 +546,16 @@ func (r *DevPodReconciler) ensureHostKeySecret(ctx context.Context, dp *devpodv1
 func (r *DevPodReconciler) trustedKeys(ctx context.Context, ns string) ([]byte, error) {
 	var out []string
 	seen := map[string]bool{}
+	// a key is its type and its base64, whatever comment follows
 	add := func(text string) {
 		for _, l := range strings.Split(text, "\n") {
-			if l = strings.TrimSpace(l); l != "" && !seen[l] {
-				seen[l] = true
-				out = append(out, l)
+			f := strings.Fields(l)
+			if len(f) < 2 {
+				continue
+			}
+			if k := f[0] + " " + f[1]; !seen[k] {
+				seen[k] = true
+				out = append(out, strings.TrimSpace(l))
 			}
 		}
 	}

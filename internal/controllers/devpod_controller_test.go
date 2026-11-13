@@ -641,11 +641,12 @@ func TestDevPodReconciler_TrustsPublishedGatewayKeys(t *testing.T) {
 	waitFor("the published key too", func(s string) bool {
 		return strings.Contains(s, "test gateway-internal") && strings.Contains(s, "ssh-ed25519 BBBB hub-gateway")
 	})
-	cm.Data["authorized_keys"] = "ssh-ed25519 CCCC other-gateway\n"
+	// the local key published again (without its comment) is the same key: once
+	cm.Data["authorized_keys"] = "ssh-ed25519 AAAA\nssh-ed25519 CCCC other-gateway\n"
 	if err := env.Client.Update(env.Ctx, cm); err != nil {
 		t.Fatalf("update gateway keys: %v", err)
 	}
-	waitFor("the new key, not the old", func(s string) bool {
-		return strings.Contains(s, "CCCC other-gateway") && !strings.Contains(s, "BBBB")
+	waitFor("the new key, not the old, each key once", func(s string) bool {
+		return strings.Contains(s, "CCCC other-gateway") && !strings.Contains(s, "BBBB") && strings.Count(s, "ssh-ed25519 AAAA") == 1
 	})
 }
