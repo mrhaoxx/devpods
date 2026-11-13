@@ -152,6 +152,11 @@ agent:
   # the key "token". Needed for the first start only.
   joinToken: ""
   joinTokenSecret: ""
+  # What this cluster's controller can do, as the agent tells the console
+  # (snapshots, reservations, telemetry). Left out, it follows this
+  # release's snapshot/reservation/telemetry settings; give it when the
+  # controller is not this release's, e.g. an older install's: [] = none.
+  # capabilities: []
   # Telemetry of this cluster's DevPods (telemetry.enabled) goes to the
   # console's receiver through the agent, over its link: nothing to
   # address. The key DevPods sign with is the console's: copy its Secret
