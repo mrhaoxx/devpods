@@ -1,8 +1,8 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { fireEvent, render, screen, within } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import type { ColumnDef, SortingState } from "@tanstack/react-table";
 import { useState } from "react";
-import { DataTable, phoneHidden } from "./DataTable";
+import { DataTable, phoneHidden, rowWindow } from "./DataTable";
 
 type Row = { name: string; cpu: number };
 const rows: Row[] = [
@@ -227,5 +227,40 @@ describe("DataTable", () => {
       expect(last.style.position).toBe("sticky");
       expect(last.style.right).toBe("0px");
     });
+  });
+});
+
+describe("a list page's table (fill)", () => {
+  it("works out the rows in sight, and all of them while its height is unknown", () => {
+    expect(rowWindow(1000, { top: 0, height: 0 }, 29, 29)).toEqual({ first: 0, last: 1000 });
+    // scrolled 100 rows down, 20 rows tall under a one-row header: rows 100–118 show, 12 more either side
+    expect(rowWindow(1000, { top: 2900, height: 580 }, 29, 29)).toEqual({ first: 88, last: 131 });
+    expect(rowWindow(1000, { top: 29_000, height: 580 }, 29, 29)).toEqual({ first: 988, last: 1000 });
+  });
+
+  it("draws only those rows, with room for the rest, and follows the scroll", async () => {
+    const many = Array.from({ length: 1000 }, (_, i) => ({ name: `dev${i}`, cpu: i }));
+    const own = Object.getOwnPropertyDescriptor(HTMLElement.prototype, "clientHeight"); // jsdom: none (Element's)
+    Object.defineProperty(HTMLElement.prototype, "clientHeight", {
+      configurable: true,
+      get() {
+        return (this as HTMLElement).hasAttribute("data-table-scroller") ? 290 : 0;
+      },
+    });
+    try {
+      const { container } = render(<DataTable fill data={many} columns={columns} getRowId={(r) => r.name} sorting={[]} onSortingChange={() => {}} />);
+      const drawn = () => [...container.querySelectorAll("tbody tr[data-row]")].map((r) => r.getAttribute("data-row"));
+      expect(drawn().length).toBeLessThan(40);
+      expect(drawn()[0]).toBe("dev0");
+      const scroller = container.querySelector<HTMLElement>("[data-table-scroller]")!;
+      scroller.scrollTop = 29 * 500;
+      fireEvent.scroll(scroller);
+      await waitFor(() => expect(drawn()).toContain("dev500"));
+      expect(drawn()).not.toContain("dev0");
+      expect(drawn().length).toBeLessThan(40);
+    } finally {
+      if (own) Object.defineProperty(HTMLElement.prototype, "clientHeight", own);
+      else delete (HTMLElement.prototype as { clientHeight?: number }).clientHeight;
+    }
   });
 });

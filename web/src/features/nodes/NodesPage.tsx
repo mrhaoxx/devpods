@@ -299,7 +299,7 @@ function NodeDrawerBody({ r }: { r: Ref }) {
 
 export function NodesPage() {
   const q = useNodes();
-  const [url, setUrl] = useUrlState(schema);
+  const [url, setUrl] = useUrlState(schema, { key: "nodes", omit: ["node"] });
   const { matches, several, clusters } = useClusterFilter();
   const items = useMemo(() => (q.data?.items ?? []).filter(matches), [q.data, matches]);
   const cols = useMemo(() => (several ? withCluster(columns, clusters) : columns), [several, clusters]);
@@ -312,7 +312,7 @@ export function NodesPage() {
   );
   const sorting: SortingState = url.sort ? [{ id: url.sort.replace(/^-/, ""), desc: url.sort.startsWith("-") }] : [];
   return (
-    <>
+    <div className="flex h-full min-h-0 flex-col">
       <div className="flex flex-wrap items-center gap-2 border-b border-line px-3 py-2">
         <Chip active={url.ready} count={items.filter((n) => n.ready).length} onClick={() => setUrl({ ready: !url.ready, notready: false })}>
           可调度
@@ -328,22 +328,22 @@ export function NodesPage() {
       {q.isError ? (
         <EmptyState tone="error" title="无法加载节点" hint={String(q.error)} />
       ) : (
-        <DataTable<NodeView>
+        <DataTable<NodeView> fill
           storageKey="nodes"
           data={shown}
           columns={cols}
           getRowId={keyOf}
           sorting={sorting}
           onSortingChange={(s) => setUrl({ sort: s[0] ? `${s[0].desc ? "-" : ""}${s[0].id}` : "" })}
-          onRowClick={(n) => setUrl({ node: keyOf(n) })}
+          onRowClick={(n) => setUrl({ node: keyOf(n) }, "push")}
           empty={<EmptyState title={q.isLoading ? "加载中…" : "没有符合条件的节点"} />}
         />
       )}
       {url.node && (
-        <Drawer open onOpenChange={(o) => !o && setUrl({ node: "" })} title={`节点 ${refOfKey(url.node).name}`} width={620}>
+        <Drawer open onOpenChange={(o) => !o && setUrl({ node: "" }, "back")} title={`节点 ${refOfKey(url.node).name}`} width={620}>
           <NodeDrawerBody r={refOfKey(url.node)} />
         </Drawer>
       )}
-    </>
+    </div>
   );
 }

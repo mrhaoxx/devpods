@@ -135,7 +135,7 @@ export function ConfigsPage() {
   const admin = !!me?.admin;
   const nav = useNavigate();
   const qc = useQueryClient();
-  const [url, setUrl] = useUrlState(schema);
+  const [url, setUrl] = useUrlState(schema, { key: "configs" });
   const lists = {
     official: useConfigs("official"),
     mine: useConfigs("mine"),

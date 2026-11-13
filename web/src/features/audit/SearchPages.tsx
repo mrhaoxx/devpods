@@ -35,7 +35,7 @@ const cmdSchema = { range: { kind: "string", default: "7d" }, q: { kind: "string
 
 export function CommandsPage() {
   const admin = !!useMe().data?.admin;
-  const [url, setUrl] = useUrlState(cmdSchema);
+  const [url, setUrl] = useUrlState(cmdSchema, { key: "audit.commands" });
   const [sorting, setSorting] = useState<SortingState>([]);
   // the filtered cluster's commands (a DevPod name is looked up there too)
   const { filter, several } = useClusterFilter();
@@ -49,7 +49,7 @@ export function CommandsPage() {
     { id: "s", header: "", enableSorting: false, meta: { priority: 1, width: 50 }, cell: ({ row }) => row.original.session_id && <Link to={`/sessions/${row.original.session_id}`} className="text-accent hover:underline">会话</Link> },
   ];
   return (
-    <>
+    <div className="flex h-full min-h-0 flex-col">
       <Tabs />
       <div className="flex flex-wrap items-center gap-2 border-b border-line px-3 py-2">
         <RangePicker value={url.range} onChange={(range) => setUrl({ range })} />
@@ -61,11 +61,11 @@ export function CommandsPage() {
         <AuditError error={q.error} />
       ) : (
         <>
-          <DataTable<CommandRow> storageKey="commands" data={q.items} columns={withCluster(columns, several)} getRowId={(c) => c.event_id} sorting={sorting} onSortingChange={setSorting} empty={<EmptyState title={q.isLoading ? "加载中…" : "这段时间没有命令"} />} />
+          <DataTable<CommandRow> fill storageKey="commands" data={q.items} columns={withCluster(columns, several)} getRowId={(c) => c.event_id} sorting={sorting} onSortingChange={setSorting} empty={<EmptyState title={q.isLoading ? "加载中…" : "这段时间没有命令"} />} />
           <LoadMore hasMore={q.hasNextPage} busy={q.isFetchingNextPage} onClick={() => void q.fetchNextPage()} />
         </>
       )}
-    </>
+    </div>
   );
 }
 
@@ -73,7 +73,7 @@ const fileSchema = { range: { kind: "string", default: "7d" }, path: { kind: "st
 
 export function FilesPage() {
   const admin = !!useMe().data?.admin;
-  const [url, setUrl] = useUrlState(fileSchema);
+  const [url, setUrl] = useUrlState(fileSchema, { key: "audit.files" });
   const [sorting, setSorting] = useState<SortingState>([]);
   const { filter, several } = useClusterFilter();
   const q = usePaged<FileEventRow>("files", { ...fromTo(url.range), path: url.path, sha256: url.sha256, user: admin ? url.user : "", cluster: filter }, searchFiles);
@@ -106,7 +106,7 @@ export function FilesPage() {
     },
   ];
   return (
-    <>
+    <div className="flex h-full min-h-0 flex-col">
       <Tabs />
       <div className="flex flex-wrap items-center gap-2 border-b border-line px-3 py-2">
         <RangePicker value={url.range} onChange={(range) => setUrl({ range })} />
@@ -118,11 +118,11 @@ export function FilesPage() {
         <AuditError error={q.error} />
       ) : (
         <>
-          <DataTable<FileEventRow> storageKey="files" data={q.items} columns={withCluster(columns, several)} getRowId={(f) => f.event_id} sorting={sorting} onSortingChange={setSorting} empty={<EmptyState title={q.isLoading ? "加载中…" : "这段时间没有文件传输"} />} />
+          <DataTable<FileEventRow> fill storageKey="files" data={q.items} columns={withCluster(columns, several)} getRowId={(f) => f.event_id} sorting={sorting} onSortingChange={setSorting} empty={<EmptyState title={q.isLoading ? "加载中…" : "这段时间没有文件传输"} />} />
           <LoadMore hasMore={q.hasNextPage} busy={q.isFetchingNextPage} onClick={() => void q.fetchNextPage()} />
         </>
       )}
-    </>
+    </div>
   );
 }
 
@@ -139,7 +139,7 @@ const httpSchema = {
 // one per WebSocket connection).
 export function HTTPPage() {
   const admin = !!useMe().data?.admin;
-  const [url, setUrl] = useUrlState(httpSchema);
+  const [url, setUrl] = useUrlState(httpSchema, { key: "audit.http" });
   const [sorting, setSorting] = useState<SortingState>([]);
   const { filter, several } = useClusterFilter();
   const q = usePaged<HTTPRequestRow>(
@@ -171,7 +171,7 @@ export function HTTPPage() {
     },
   ];
   return (
-    <>
+    <div className="flex h-full min-h-0 flex-col">
       <Tabs />
       <div className="flex flex-wrap items-center gap-2 border-b border-line px-3 py-2">
         <RangePicker value={url.range} onChange={(range) => setUrl({ range })} />
@@ -185,7 +185,7 @@ export function HTTPPage() {
         <AuditError error={q.error} />
       ) : (
         <>
-          <DataTable<HTTPRequestRow>
+          <DataTable<HTTPRequestRow> fill
             storageKey="http"
             data={q.items}
             columns={withCluster(columns, several)}
@@ -197,6 +197,6 @@ export function HTTPPage() {
           <LoadMore hasMore={q.hasNextPage} busy={q.isFetchingNextPage} onClick={() => void q.fetchNextPage()} />
         </>
       )}
-    </>
+    </div>
   );
 }

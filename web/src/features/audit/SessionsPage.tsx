@@ -27,7 +27,7 @@ const schema = {
 export function SessionsPage({ mine }: { mine?: boolean }) {
   const me = useMe().data;
   const admin = !!me?.admin && !mine;
-  const [url, setUrl] = useUrlState(schema);
+  const [url, setUrl] = useUrlState(schema, { key: "audit.sessions" });
   const { filter } = useClusterFilter();
   const now = useNow(10_000);
   const [sorting, setSorting] = useState<SortingState>([]);
@@ -98,7 +98,7 @@ export function SessionsPage({ mine }: { mine?: boolean }) {
     },
   ];
   return (
-    <>
+    <div className="flex h-full min-h-0 flex-col">
       <div className="flex flex-wrap items-center gap-2 border-b border-line px-3 py-2">
         <RangePicker value={url.range} onChange={(range) => setUrl({ range })} />
         {admin && <FilterBox label="用户" value={url.user} onChange={(user) => setUrl({ user })} width="w-32" />}
@@ -114,7 +114,7 @@ export function SessionsPage({ mine }: { mine?: boolean }) {
         <AuditError error={q.error} />
       ) : (
         <>
-          <DataTable<SessionSummary>
+          <DataTable<SessionSummary> fill
           storageKey="sessions"
             data={q.items}
             columns={columns}
@@ -126,6 +126,6 @@ export function SessionsPage({ mine }: { mine?: boolean }) {
           <LoadMore hasMore={q.hasNextPage} busy={q.isFetchingNextPage} onClick={() => void q.fetchNextPage()} />
         </>
       )}
-    </>
+    </div>
   );
 }

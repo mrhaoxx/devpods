@@ -17,7 +17,7 @@ import { AuditError, FilterBox, LoadMore, RangePicker, fmtTS, fromTo, usePaged, 
 const alertSchema = { range: { kind: "string", default: "7d" }, devpod: { kind: "string", default: "" } } satisfies Schema;
 
 export function AlertsPage() {
-  const [url, setUrl] = useUrlState(alertSchema);
+  const [url, setUrl] = useUrlState(alertSchema, { key: "audit.alerts" });
   const [sorting, setSorting] = useState<SortingState>([]);
   // the filtered cluster's alerts (by their DevPod's cluster)
   const { filter, several } = useClusterFilter();
@@ -34,7 +34,7 @@ export function AlertsPage() {
     { id: "s", header: "", enableSorting: false, meta: { priority: 1, width: 50 }, cell: ({ row }) => row.original.session_id && <Link to={`/sessions/${row.original.session_id}`} className="text-accent hover:underline">回放</Link> },
   ];
   return (
-    <>
+    <div className="flex h-full min-h-0 flex-col">
       <div className="flex flex-wrap items-center gap-2 border-b border-line px-3 py-2">
         <RangePicker value={url.range} onChange={(range) => setUrl({ range })} />
         <FilterBox label="DevPod" value={url.devpod} onChange={(devpod) => setUrl({ devpod })} />
@@ -43,11 +43,11 @@ export function AlertsPage() {
         <AuditError error={q.error} />
       ) : (
         <>
-          <DataTable<AlertRow> storageKey="alerts" data={rows} columns={withCluster(columns, several)} getRowId={(a) => `${a.ts}:${a.kind}:${a.session_id}:${a.detail}`} sorting={sorting} onSortingChange={setSorting} empty={<EmptyState title={q.isLoading ? "加载中…" : "这段时间没有告警"} />} />
+          <DataTable<AlertRow> fill storageKey="alerts" data={rows} columns={withCluster(columns, several)} getRowId={(a) => `${a.ts}:${a.kind}:${a.session_id}:${a.detail}`} sorting={sorting} onSortingChange={setSorting} empty={<EmptyState title={q.isLoading ? "加载中…" : "这段时间没有告警"} />} />
           <LoadMore hasMore={q.hasNextPage} busy={q.isFetchingNextPage} onClick={() => void q.fetchNextPage()} />
         </>
       )}
-    </>
+    </div>
   );
 }
 
@@ -68,7 +68,7 @@ function AccessTabs() {
 const accessSchema = { range: { kind: "string", default: "7d" }, viewer: { kind: "string", default: "" } } satisfies Schema;
 
 export function AccessLogPage() {
-  const [url, setUrl] = useUrlState(accessSchema);
+  const [url, setUrl] = useUrlState(accessSchema, { key: "audit.access" });
   const [sorting, setSorting] = useState<SortingState>([]);
   const q = usePaged<AccessLogRow>("access", fromTo(url.range), listAccessLog);
   const rows = url.viewer ? q.items.filter((a) => a.viewer.includes(url.viewer)) : q.items;
@@ -94,7 +94,7 @@ export function AccessLogPage() {
     { id: "ip", header: "IP", accessorKey: "client_ip", meta: { priority: 5, width: 130, mono: true } },
   ];
   return (
-    <>
+    <div className="flex h-full min-h-0 flex-col">
       <AccessTabs />
       <div className="flex flex-wrap items-center gap-2 border-b border-line px-3 py-2">
         <RangePicker value={url.range} onChange={(range) => setUrl({ range })} />
@@ -104,11 +104,11 @@ export function AccessLogPage() {
         <AuditError error={q.error} />
       ) : (
         <>
-          <DataTable<AccessLogRow> storageKey="access-log" data={rows} columns={columns} getRowId={(a) => `${a.ts}:${a.viewer}:${a.action}:${a.target_session}:${a.target_file}`} sorting={sorting} onSortingChange={setSorting} empty={<EmptyState title={q.isLoading ? "加载中…" : "这段时间没有访问记录"} />} />
+          <DataTable<AccessLogRow> fill storageKey="access-log" data={rows} columns={columns} getRowId={(a) => `${a.ts}:${a.viewer}:${a.action}:${a.target_session}:${a.target_file}`} sorting={sorting} onSortingChange={setSorting} empty={<EmptyState title={q.isLoading ? "加载中…" : "这段时间没有访问记录"} />} />
           <LoadMore hasMore={q.hasNextPage} busy={q.isFetchingNextPage} onClick={() => void q.fetchNextPage()} />
         </>
       )}
-    </>
+    </div>
   );
 }
 

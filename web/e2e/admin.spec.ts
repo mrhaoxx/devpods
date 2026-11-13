@@ -23,6 +23,29 @@ test("400 DevPods with every column never scroll the page sideways (the table sc
   await shot(page, "all-devpods");
 });
 
+test("400 DevPods: the filters and header stay in view, only the rows in sight are drawn, and the choices come back", async ({ page }) => {
+  await page.goto("/admin/devpods");
+  await expect(page.getByRole("link", { name: "alice-train" })).toBeVisible();
+  const drawn = () => page.locator("tbody tr[data-row]").count();
+  expect(await drawn()).toBeLessThan(80);
+
+  const scroller = page.locator("[data-table-scroller]");
+  await scroller.evaluate((el) => (el.scrollTop = el.scrollHeight));
+  await expect(page.getByLabel("过滤")).toBeInViewport();
+  await expect(page.locator("thead")).toBeInViewport();
+  await expect(page.locator("tbody tr[data-row]").last()).toBeInViewport();
+  expect(await drawn()).toBeLessThan(80);
+  expect(await page.evaluate(() => document.querySelector("main")!.scrollTop)).toBe(0); // the page stays; the table scrolls
+  await shot(page, "all-devpods-scrolled");
+
+  await page.getByRole("button", { name: /^Running/ }).click();
+  await expect(page).toHaveURL(/phase=Running/);
+  await page.goto("/admin");
+  await page.goto("/admin/devpods");
+  await expect(page).toHaveURL(/phase=Running/);
+  await shot(page, "all-devpods-remembered");
+});
+
 test("overview shows live KPIs", async ({ page }) => {
   await page.goto("/admin");
   await expect(page.getByText("GPU 已占/总数")).toBeVisible();

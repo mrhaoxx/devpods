@@ -76,7 +76,7 @@ function NewUserDialog({ onClose }: { onClose: (changed: boolean) => void }) {
 export function UsersPage() {
   const q = useUsers();
   const qc = useQueryClient();
-  const [url, setUrl] = useUrlState(schema);
+  const [url, setUrl] = useUrlState(schema, { key: "users", omit: ["user"] });
   const { filter } = useClusterFilter();
   const now = useNow(60_000);
   const [batch, setBatch] = useState<{ op: BatchOp; names: string[]; clear: () => void } | null>(null);
@@ -159,7 +159,7 @@ export function UsersPage() {
     .join(" · ");
 
   return (
-    <>
+    <div className="flex h-full min-h-0 flex-col">
       <div className="flex flex-wrap items-center gap-2 border-b border-line px-3 py-2">
         {chips.map(([k, label, n]) => (
           <Chip key={k} active={!!url[k]} count={n} onClick={() => setUrl({ [k]: !url[k] })}>
@@ -175,7 +175,7 @@ export function UsersPage() {
       {q.isError ? (
         <EmptyState tone="error" title="无法加载用户" hint={String(q.error)} />
       ) : (
-        <DataTable<AdminUserRow>
+        <DataTable<AdminUserRow> fill
           storageKey="users"
           data={shown}
           columns={columns}
@@ -183,7 +183,7 @@ export function UsersPage() {
           sorting={sorting}
           onSortingChange={(s) => setUrl({ sort: s[0] ? `${s[0].desc ? "-" : ""}${s[0].id}` : "" })}
           selectable
-          onRowClick={(u) => setUrl({ user: u.name })}
+          onRowClick={(u) => setUrl({ user: u.name }, "push")}
           empty={<EmptyState title={q.isLoading ? "加载中…" : "没有符合条件的用户"} />}
           bulkBar={(sel, clear) =>
             (["setQuota", "setPolicy", "resetPassword", "hibernateAll"] as BatchOp[]).map((op) => (
@@ -222,7 +222,7 @@ export function UsersPage() {
           }}
         />
       )}
-      {url.user && q.data && <UserDrawer u={items.find((u) => u.name === url.user)} def={def} onClose={() => setUrl({ user: "" })} />}
-    </>
+      {url.user && q.data && <UserDrawer u={items.find((u) => u.name === url.user)} def={def} onClose={() => setUrl({ user: "" }, "back")} />}
+    </div>
   );
 }

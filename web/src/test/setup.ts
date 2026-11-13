@@ -2,7 +2,15 @@
 import { afterEach } from "vitest";
 import { cleanup } from "@testing-library/react";
 
-afterEach(() => cleanup());
+afterEach(() => {
+  cleanup();
+  // a list page's remembered choices (lib/urlState) do not reach the next test
+  try {
+    for (const k of Object.keys(localStorage)) if (k.startsWith("devpod.view.")) localStorage.removeItem(k);
+  } catch {
+    // no storage
+  }
+});
 
 if (typeof window !== "undefined") {
   // jsdom has no matchMedia: report "no match" (light scheme, wide screen).

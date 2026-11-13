@@ -127,7 +127,7 @@ export function DevPodTable({ scope }: { scope: "mine" | "all" }) {
   const admin = scope === "all" && !!me?.admin;
   const qc = useQueryClient();
   const list = useDevPods(scope);
-  const [url, setUrl] = useUrlState(schema);
+  const [url, setUrl] = useUrlState(schema, { key: `devpods.${scope}`, omit: ["group"] });
   const now = useNow(10_000);
   const spec = devpodsStream(scope);
   const { status } = useLiveRow(spec, "");
@@ -282,78 +282,81 @@ export function DevPodTable({ scope }: { scope: "mine" | "all" }) {
   const failed = outcome?.results.filter((r) => !r.ok) ?? [];
   return (
     <TableCtx.Provider value={{ scope, now, recent: recent.data, pending }}>
-      <div className="flex flex-wrap items-center gap-2 border-b border-line px-3 py-2">
-        <FilterBox value={url.q} onChange={(q) => setUrl({ q })} />
-        {PHASES.map((p) => (
-          <Chip
-            key={p}
-            active={url.phase.includes(p)}
-            count={counts[p]}
-            onClick={() => setUrl({ phase: url.phase.includes(p) ? url.phase.filter((x) => x !== p) : [...url.phase, p] })}
-          >
-            {p}
-          </Chip>
-        ))}
-        {admin && (
-          <>
-            <Chip active={url.idle} onClick={() => setUrl({ idle: !url.idle })}>
-              空转 &gt;24h
+      <div className="flex h-full min-h-0 flex-col">
+        <div className="flex flex-wrap items-center gap-2 border-b border-line px-3 py-2">
+          <FilterBox value={url.q} onChange={(q) => setUrl({ q })} />
+          {PHASES.map((p) => (
+            <Chip
+              key={p}
+              active={url.phase.includes(p)}
+              count={counts[p]}
+              onClick={() => setUrl({ phase: url.phase.includes(p) ? url.phase.filter((x) => x !== p) : [...url.phase, p] })}
+            >
+              {p}
             </Chip>
-            <Chip active={url.gpu} onClick={() => setUrl({ gpu: !url.gpu })}>
-              GPU only
-            </Chip>
-          </>
-        )}
-        <span className="flex-1" />
-        {scope === "mine" && (
-          <Link to="/?new=1" className="inline-flex h-7 items-center rounded-md bg-accent px-2.5 text-xs font-medium text-white hover:bg-accent-hi">
-            + 新建 DevPod
-          </Link>
-        )}
-      </div>
-      {progress && (
-        <div className="border-b border-line px-3 py-1.5">
-          <Notice tone="idle">
-            {progress.action}：进行中 {progress.done}/{progress.total}…{progress.failed > 0 && `（失败 ${progress.failed}）`}
-          </Notice>
+          ))}
+          {admin && (
+            <>
+              <Chip active={url.idle} onClick={() => setUrl({ idle: !url.idle })}>
+                空转 &gt;24h
+              </Chip>
+              <Chip active={url.gpu} onClick={() => setUrl({ gpu: !url.gpu })}>
+                GPU only
+              </Chip>
+            </>
+          )}
+          <span className="flex-1" />
+          {scope === "mine" && (
+            <Link to="/?new=1" className="inline-flex h-7 items-center rounded-md bg-accent px-2.5 text-xs font-medium text-white hover:bg-accent-hi">
+              + 新建 DevPod
+            </Link>
+          )}
         </div>
-      )}
-      {outcome && (
-        <div className="flex items-start gap-2 border-b border-line px-3 py-1.5">
-          <div className="flex-1">
-            <Notice tone={failed.length ? "warm" : "run"}>
-              {outcome.action}：成功 {outcome.results.length - failed.length}，失败 {failed.length}
-              {failed.length > 0 && <>（{failed.map((f) => `${f.item}：${f.error}`).join("；")}）</>}
+        {progress && (
+          <div className="border-b border-line px-3 py-1.5">
+            <Notice tone="idle">
+              {progress.action}：进行中 {progress.done}/{progress.total}…{progress.failed > 0 && `（失败 ${progress.failed}）`}
             </Notice>
           </div>
-          <button type="button" onClick={() => setOutcome(null)} className="text-xs text-muted hover:text-ink" aria-label="关闭结果">
-            ✕
-          </button>
-        </div>
-      )}
-      {list.isError ? (
-        <EmptyState tone="error" title="无法加载 DevPod 列表" hint={String(list.error)} />
-      ) : (
-        <DataTable<Row>
-          storageKey="devpods"
-          data={shown}
-          columns={columns}
-          getRowId={(r) => (r.group ? `group:${keyOf(r)}` : keyOf(r))}
-          sorting={toSorting(url.sort)}
-          onSortingChange={(s) => setUrl({ sort: fromSorting(s) })}
-          selectable
-          dim={status === "reconnecting"}
-          empty={<EmptyState title={list.isLoading ? "加载中…" : rows.length ? "没有符合条件的 DevPod" : "还没有 DevPod"} />}
-          bulkBar={(picked, clear) =>
-            bulkActions(picked, clear).map((a) => (
-              <Button key={a.label} variant={a.danger ? "danger" : undefined} disabled={a.disabled} title={a.title} onClick={a.onSelect}>
-                {a.label}
-              </Button>
-            ))
-          }
-          rowMenu={(picked, isBulk, clear) => (isBulk ? bulkActions(picked, clear) : rowActions(picked[0]))}
-        />
-      )}
+        )}
+        {outcome && (
+          <div className="flex items-start gap-2 border-b border-line px-3 py-1.5">
+            <div className="flex-1">
+              <Notice tone={failed.length ? "warm" : "run"}>
+                {outcome.action}：成功 {outcome.results.length - failed.length}，失败 {failed.length}
+                {failed.length > 0 && <>（{failed.map((f) => `${f.item}：${f.error}`).join("；")}）</>}
+              </Notice>
+            </div>
+            <button type="button" onClick={() => setOutcome(null)} className="text-xs text-muted hover:text-ink" aria-label="关闭结果">
+              ✕
+            </button>
+          </div>
+        )}
+        {list.isError ? (
+          <EmptyState tone="error" title="无法加载 DevPod 列表" hint={String(list.error)} />
+        ) : (
+          <DataTable<Row>
+            fill
+            storageKey="devpods"
+            data={shown}
+            columns={columns}
+            getRowId={(r) => (r.group ? `group:${keyOf(r)}` : keyOf(r))}
+            sorting={toSorting(url.sort)}
+            onSortingChange={(s) => setUrl({ sort: fromSorting(s) })}
+            selectable
+            dim={status === "reconnecting"}
+            empty={<EmptyState title={list.isLoading ? "加载中…" : rows.length ? "没有符合条件的 DevPod" : "还没有 DevPod"} />}
+            bulkBar={(picked, clear) =>
+              bulkActions(picked, clear).map((a) => (
+                <Button key={a.label} variant={a.danger ? "danger" : undefined} disabled={a.disabled} title={a.title} onClick={a.onSelect}>
+                  {a.label}
+                </Button>
+              ))
+            }
+            rowMenu={(picked, isBulk, clear) => (isBulk ? bulkActions(picked, clear) : rowActions(picked[0]))}
+          />
+        )}
+      </div>
       <BulkDialog
         key={dialog?.kind ?? "none"}
         kind={dialog?.kind ?? null}

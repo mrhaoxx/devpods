@@ -2,7 +2,10 @@
 // bulk bar floating at the bottom, columns of exact widths (dragged or by keyboard; the room they
 // leave goes to a filler, never into them), a 列 menu to choose the columns,
 // and sideways scrolling inside the table with the pinned columns staying.
-import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+// On a list page (fill) the table takes the rest of the page and scrolls
+// itself: its header stays in view, and only the rows in sight (and a few
+// around) are drawn — a thousand DevPods or nodes scroll as lightly as ten.
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import * as ContextMenu from "@radix-ui/react-context-menu";
 import * as Menu from "@radix-ui/react-dropdown-menu";
 import {
@@ -41,6 +44,44 @@ export function phoneHidden(width: number, metas: { id: string; priority: number
 }
 const PHONE = 640;
 
+/** useView: where a scroller is scrolled to and how tall it is, read once
+ *  a frame while it scrolls or changes size (height 0: not known). */
+function useView(ref: React.RefObject<HTMLElement>, on: boolean): { top: number; height: number } {
+  const [view, setView] = useState({ top: 0, height: 0 });
+  useEffect(() => {
+    const el = ref.current;
+    if (!on || !el) return;
+    let frame = 0;
+    const read = () => {
+      frame = 0;
+      setView((v) => (v.top === el.scrollTop && v.height === el.clientHeight ? v : { top: el.scrollTop, height: el.clientHeight }));
+    };
+    const soon = () => {
+      if (!frame) frame = requestAnimationFrame(read);
+    };
+    read();
+    el.addEventListener("scroll", soon, { passive: true });
+    const ro = typeof ResizeObserver === "undefined" ? undefined : new ResizeObserver(soon);
+    ro?.observe(el);
+    return () => {
+      el.removeEventListener("scroll", soon);
+      ro?.disconnect();
+      if (frame) cancelAnimationFrame(frame);
+    };
+  }, [ref, on]);
+  return view;
+}
+
+/** rowWindow: the rows to draw of n, each h tall under a header head tall,
+ *  in a scroller at top showing height — those in sight and over rows
+ *  either side; all of them while the height is not known. */
+export function rowWindow(n: number, view: { top: number; height: number }, h: number, head: number, over = 12): { first: number; last: number } {
+  if (view.height <= 0 || h <= 0) return { first: 0, last: n };
+  const first = Math.max(0, Math.floor(view.top / h) - over);
+  const last = Math.min(n, Math.ceil((view.top + view.height - head) / h) + over);
+  return { first: Math.min(first, last), last };
+}
+
 function useWidth(ref: React.RefObject<HTMLElement>): number {
   const [w, setW] = useState(0);
   useEffect(() => {
@@ -76,11 +117,38 @@ export type DataTableProps<T> = {
    *  row of a selection of several, for the selection (bulk). Nothing
    *  offered (or Shift held): the browser's own menu. */
   rowMenu?(rows: T[], bulk: boolean, clear: () => void): RowAction[];
+  /** fill: a list page's table — it takes the rest of its flex column and
+   *  scrolls itself, the header staying, drawing only the rows in sight */
+  fill?: boolean;
 };
 
 const MIN_COL = 48;
 const CHECK = 28; // the selection column
 const BAR_ROOM = 64; // under the last row while the bulk bar floats
+// where a list was scrolled to, per history entry: going back to it finds the place
+const scrollKey = (k: string) => `devpod.scroll.${k}`;
+const entry = () => String((window.history.state as { key?: string } | null)?.key ?? "");
+const isScrolls = (v: unknown): v is [string, number][] => Array.isArray(v);
+function readScroll(k: string | undefined): number {
+  if (!k) return 0;
+  try {
+    const v: unknown = JSON.parse(sessionStorage.getItem(scrollKey(k)) ?? "null");
+    return (isScrolls(v) ? v.find(([e]) => e === entry())?.[1] : 0) ?? 0;
+  } catch {
+    return 0;
+  }
+}
+function writeScroll(k: string | undefined, top: number) {
+  if (!k) return;
+  try {
+    const v: unknown = JSON.parse(sessionStorage.getItem(scrollKey(k)) ?? "null");
+    const rest = (isScrolls(v) ? v : []).filter(([e]) => e !== entry());
+    sessionStorage.setItem(scrollKey(k), JSON.stringify([[entry(), top], ...rest].slice(0, 30)));
+  } catch {
+    // not kept: no matter
+  }
+}
+const ROW_H = 29; // a row's height (h-7 and its border) until one is measured
 const sizesKey = (k: string) => `devpod.columns.${k}`;
 const hiddenKey = (k: string) => `devpod.columns-hidden.${k}`;
 function readJSON<T>(key: string | undefined, ok: (v: unknown) => v is T): T | undefined {
@@ -110,6 +178,10 @@ const pinnedBg = (selected: boolean) =>
 export function DataTable<T>(p: DataTableProps<T>) {
   const wrap = useRef<HTMLDivElement>(null);
   const width = useWidth(wrap);
+  const scroller = useRef<HTMLDivElement>(null);
+  const head = useRef<HTMLTableSectionElement>(null);
+  const view = useView(scroller, !!p.fill);
+  const [rowH, setRowH] = useState(ROW_H);
   const [selection, setSelection] = useState<RowSelectionState>({});
   // Each column is exactly as wide as it says (or as it was dragged to),
   // never as its cells happen to be, nor stretched to fill the row.
@@ -242,6 +314,35 @@ export function DataTable<T>(p: DataTableProps<T>) {
   }, [any]);
   const rows = table.getRowModel().rows;
   const colCount = shown.length + (p.selectable ? 1 : 0) + 1 + (menuHost ? 0 : 1);
+  // the rows drawn: those in sight on a list page; the others are room
+  const { first, last } = p.fill ? rowWindow(rows.length, view, rowH, head.current?.offsetHeight ?? ROW_H) : { first: 0, last: rows.length };
+  const drawn = first === 0 && last === rows.length ? rows : rows.slice(first, last);
+  const room = (n: number, key: string) =>
+    n > 0 && (
+      <tr key={key} aria-hidden="true" style={{ height: n * rowH }}>
+        <td colSpan={colCount} style={{ padding: 0, border: 0 }} />
+      </tr>
+    );
+  // back at a history entry (the browser's back, a mouse's side button):
+  // scrolled to where it was, once there are rows to scroll to
+  const want = useRef<number | undefined>(undefined);
+  if (want.current === undefined) want.current = p.fill ? readScroll(p.storageKey) : 0;
+  useLayoutEffect(() => {
+    const el = scroller.current;
+    if (!el || !want.current || rows.length === 0) return;
+    el.scrollTop = want.current;
+    if (el.scrollTop > 0 || el.clientHeight === 0) want.current = 0;
+  });
+  useEffect(() => {
+    if (p.fill && !want.current) writeScroll(p.storageKey, view.top);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [view.top]);
+  // a row as tall as it is drawn (zoom, fonts): measured, not assumed
+  useLayoutEffect(() => {
+    if (!p.fill) return;
+    const h = scroller.current?.querySelector("tbody tr[data-row]")?.getBoundingClientRect().height ?? 0;
+    if (h > 0 && Math.abs(h - rowH) > 0.25) setRowH(h);
+  });
 
   const menu = choosable.length > 0 && (
     <Menu.Root modal={false}>
@@ -270,19 +371,33 @@ export function DataTable<T>(p: DataTableProps<T>) {
       </Menu.Portal>
     </Menu.Root>
   );
-  const filler = (kind: "th" | "td") => (kind === "th" ? <th key="filler" data-filler aria-hidden="true" /> : <td key="filler" data-filler aria-hidden="true" />);
+  const filler = (kind: "th" | "td") =>
+    kind === "th" ? (
+      <th key="filler" data-filler aria-hidden="true" className="bg-surface shadow-[inset_0_-1px_0_var(--color-line)]" />
+    ) : (
+      <td key="filler" data-filler aria-hidden="true" />
+    );
 
   return (
     // while rows are chosen the bar floats over the window's bottom: room is
     // kept under the last row so it hides nothing, and nothing above moves
-    <div ref={wrap} className="min-w-0" style={selected.length > 0 ? { paddingBottom: BAR_ROOM } : undefined}>
-      <div className="overflow-x-auto">
+    <div
+      ref={wrap}
+      className={p.fill ? "flex min-h-0 min-w-0 flex-1 flex-col" : "min-w-0"}
+      style={selected.length > 0 && !p.fill ? { paddingBottom: BAR_ROOM } : undefined}
+    >
+      <div
+        ref={scroller}
+        data-table-scroller={p.fill ? "" : undefined}
+        className={p.fill ? "min-h-0 flex-1 overflow-auto" : "overflow-x-auto"}
+        style={selected.length > 0 && p.fill ? { paddingBottom: BAR_ROOM } : undefined}
+      >
         <table className="border-collapse text-xs" style={{ tableLayout: "fixed", width: "100%" }}>
-          <thead className="sticky top-0 z-[2] bg-surface">
+          <thead ref={head} className="sticky top-0 z-[2] bg-surface">
             {table.getHeaderGroups().map((hg) => (
               <tr key={hg.id} className="h-7 border-b border-line text-left text-[11px] text-muted">
                 {p.selectable && (
-                  <th className="bg-surface px-2" style={{ width: CHECK, position: "sticky", left: 0, zIndex: 1 }}>
+                  <th className="bg-surface px-2 shadow-[inset_0_-1px_0_var(--color-line)]" style={{ width: CHECK, position: "sticky", left: 0, zIndex: 1 }}>
                     <input
                       type="checkbox"
                       aria-label="全选"
@@ -306,7 +421,7 @@ export function DataTable<T>(p: DataTableProps<T>) {
                       key={h.id}
                       aria-sort={dir === "asc" ? "ascending" : dir === "desc" ? "descending" : undefined}
                       style={{ width: widthOf(id), ...sticky(id) }}
-                      className={`group/h relative bg-surface px-2 font-medium whitespace-nowrap ${right ? "text-right" : ""}`}
+                      className={`group/h relative bg-surface px-2 font-medium whitespace-nowrap shadow-[inset_0_-1px_0_var(--color-line)] ${right ? "text-right" : ""}`}
                     >
                       <span className="flex min-w-0 items-center gap-1">
                         {sortable ? (
@@ -340,7 +455,7 @@ export function DataTable<T>(p: DataTableProps<T>) {
                 })}
                 {!fillerBefore && filler("th")}
                 {!menuHost && (
-                  <th className="bg-surface px-1 text-right" style={{ width: 32, position: "sticky", right: 0, zIndex: 1 }}>
+                  <th className="bg-surface px-1 text-right shadow-[inset_0_-1px_0_var(--color-line)]" style={{ width: 32, position: "sticky", right: 0, zIndex: 1 }}>
                     {menu}
                   </th>
                 )}
@@ -353,7 +468,8 @@ export function DataTable<T>(p: DataTableProps<T>) {
                 <td colSpan={colCount}>{p.empty ?? <EmptyState title="没有数据" />}</td>
               </tr>
             )}
-            {rows.map((row) => {
+            {room(first, "room-above")}
+            {drawn.map((row) => {
               const sel = row.getIsSelected();
               return (
                 <tr
@@ -391,6 +507,7 @@ export function DataTable<T>(p: DataTableProps<T>) {
                 </tr>
               );
             })}
+            {room(rows.length - last, "room-below")}
           </Body>
         </table>
       </div>

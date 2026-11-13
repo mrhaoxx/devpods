@@ -204,7 +204,7 @@ export function DetailPage() {
         <Button onClick={() => nav("/configs/new", { state: { content: devpodToConfig(dp), title: dp.metadata.name } })} title="把这个 DevPod 的定义存成可复用、可分享的配置">
           存为配置
         </Button>
-        <Button onClick={() => setUrl({ tab: "yaml" })}>编辑</Button>
+        <Button onClick={() => setUrl({ tab: "yaml" }, "push")}>编辑</Button>
         <Button onClick={() => setRunning.mutate({ ref: r, running: !dp.spec.running })}>{dp.spec.running ? "休眠" : "启动"}</Button>
         <Button variant="danger" onClick={() => setConfirmDelete(true)}>
           删除
@@ -231,7 +231,7 @@ export function DetailPage() {
             role="tab"
             type="button"
             aria-selected={tab === id}
-            onClick={() => setUrl({ tab: id })}
+            onClick={() => setUrl({ tab: id }, "push")}
             // Monaco is large: start fetching it when the YAML tab is about to be opened
             onPointerEnter={id === "yaml" ? () => void preloadYamlEditor()?.catch(() => {}) : undefined}
             onFocus={id === "yaml" ? () => void preloadYamlEditor()?.catch(() => {}) : undefined}
