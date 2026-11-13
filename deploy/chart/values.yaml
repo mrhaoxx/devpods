@@ -165,6 +165,8 @@ agent:
 
 webui:
   enabled: false
+  nodeSelector: {}              # where the console runs, e.g. {storage: "true"}
+  tolerations: []
   # The console of several clusters: agents connect to it (at
   # <baseURL>/agent/connect, a WebSocket — the route in front of the
   # console must allow long-lived connections), and admins register
@@ -317,6 +319,8 @@ audit:
       image: {repository: clickhouse/clickhouse-server, tag: "26.8.36.3"}
       storage: 50Gi
       storageClass: ""
+      nodeSelector: {}          # where it runs, e.g. {storage: "true"}
+      tolerations: []
   # Routes to the bundled store for gateways that run in other clusters (a
   # gateway of several clusters elsewhere records here): ClickHouse's HTTP
   # port and S3, each at a hostname of its own, through a Gateway API

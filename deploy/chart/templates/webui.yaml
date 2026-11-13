@@ -28,6 +28,12 @@ spec:
         checksum/quota: {{ toYaml .Values.webui.defaultQuota | sha256sum }}
     spec:
       serviceAccountName: devpod-webui
+      {{- with $.Values.webui.nodeSelector }}
+      nodeSelector: {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with $.Values.webui.tolerations }}
+      tolerations: {{- toYaml . | nindent 8 }}
+      {{- end }}
       {{- with $.Values.imagePullSecrets }}
       imagePullSecrets: {{- toYaml . | nindent 8 }}
       {{- end }}

@@ -80,6 +80,12 @@ spec:
       annotations:
         checksum/users: {{ $db | sha256sum }}
     spec:
+      {{- with .Values.audit.clickhouse.bundled.nodeSelector }}
+      nodeSelector: {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.audit.clickhouse.bundled.tolerations }}
+      tolerations: {{- toYaml . | nindent 8 }}
+      {{- end }}
       securityContext:
         fsGroup: 101
       containers:
