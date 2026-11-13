@@ -1,5 +1,5 @@
 // Dense full-width table (UI spec §3, §5.1): sorting, multi-select with a
-// bulk bar, columns of exact widths (dragged or by keyboard; the room they
+// bulk bar floating at the bottom, columns of exact widths (dragged or by keyboard; the room they
 // leave goes to a filler, never into them), a 列 menu to choose the columns,
 // and sideways scrolling inside the table with the pinned columns staying.
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
@@ -72,6 +72,7 @@ export type DataTableProps<T> = {
 
 const MIN_COL = 48;
 const CHECK = 28; // the selection column
+const BAR_ROOM = 64; // under the last row while the bulk bar floats
 const sizesKey = (k: string) => `devpod.columns.${k}`;
 const hiddenKey = (k: string) => `devpod.columns-hidden.${k}`;
 function readJSON<T>(key: string | undefined, ok: (v: unknown) => v is T): T | undefined {
@@ -207,6 +208,16 @@ export function DataTable<T>(p: DataTableProps<T>) {
     return Object.keys(liveSelection).flatMap((id) => (byId.has(id) ? [byId.get(id)!] : []));
   }, [liveSelection, p.data, p.getRowId]);
   const clear = () => setSelection({});
+  // Esc lets go of the rows — unless it is closing a dialog or a menu
+  const any = selected.length > 0;
+  useEffect(() => {
+    if (!any) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape" && !e.defaultPrevented && !document.querySelector('[role="dialog"],[role="menu"],[role="alertdialog"]')) setSelection({});
+    };
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, [any]);
   const rows = table.getRowModel().rows;
   const colCount = shown.length + (p.selectable ? 1 : 0) + 1 + (menuHost ? 0 : 1);
 
@@ -240,16 +251,9 @@ export function DataTable<T>(p: DataTableProps<T>) {
   const filler = (kind: "th" | "td") => (kind === "th" ? <th key="filler" data-filler aria-hidden="true" /> : <td key="filler" data-filler aria-hidden="true" />);
 
   return (
-    <div ref={wrap} className="min-w-0">
-      {selected.length > 0 && (
-        <div role="toolbar" aria-label="批量操作" className="flex flex-wrap items-center gap-2 border-b border-line bg-accent-soft px-3 py-1 text-xs">
-          <span className="font-medium text-accent">已选 {selected.length}</span>
-          {p.bulkBar?.(selected, clear)}
-          <button type="button" onClick={clear} className="ml-auto text-muted hover:text-ink">
-            取消选择
-          </button>
-        </div>
-      )}
+    // while rows are chosen the bar floats over the window's bottom: room is
+    // kept under the last row so it hides nothing, and nothing above moves
+    <div ref={wrap} className="min-w-0" style={selected.length > 0 ? { paddingBottom: BAR_ROOM } : undefined}>
       <div className="overflow-x-auto">
         <table className="border-collapse text-xs" style={{ tableLayout: "fixed", width: "100%" }}>
           <thead className="sticky top-0 z-[2] bg-surface">
@@ -367,6 +371,21 @@ export function DataTable<T>(p: DataTableProps<T>) {
           </tbody>
         </table>
       </div>
+      {selected.length > 0 && (
+        <div className="pointer-events-none fixed inset-x-0 bottom-4 z-40 flex justify-center px-3">
+          <div
+            role="toolbar"
+            aria-label="批量操作"
+            className="pointer-events-auto flex max-w-full flex-wrap items-center gap-2 rounded-lg border border-line bg-surface px-3 py-1.5 text-xs shadow-lg"
+          >
+            <span className="font-medium text-accent">已选 {selected.length}</span>
+            {p.bulkBar?.(selected, clear)}
+            <button type="button" onClick={clear} title="Esc" className="ml-2 text-muted hover:text-ink">
+              取消选择
+            </button>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

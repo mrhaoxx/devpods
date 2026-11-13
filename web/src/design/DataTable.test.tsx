@@ -42,6 +42,17 @@ describe("DataTable", () => {
     expect(screen.getByRole("button", { name: "休眠 a,c" })).toBeTruthy();
   });
 
+  it("the bulk bar floats at the bottom: nothing above the table moves; Esc clears", () => {
+    const { container } = render(<Harness />);
+    const before = container.firstElementChild!.firstElementChild; // what the table sits under
+    fireEvent.click(screen.getByLabelText("选择 a"));
+    const bar = screen.getByRole("toolbar", { name: "批量操作" });
+    expect(bar.closest(".fixed")).toBeTruthy(); // out of the flow, at the window's bottom
+    expect(container.firstElementChild!.firstElementChild).toBe(before);
+    fireEvent.keyDown(document, { key: "Escape" });
+    expect(screen.queryByRole("toolbar", { name: "批量操作" })).toBeNull();
+  });
+
   it("header checkbox selects all shown rows", () => {
     render(<Harness />);
     fireEvent.click(screen.getByLabelText("全选"));
