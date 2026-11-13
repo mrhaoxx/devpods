@@ -5,7 +5,7 @@
 // asked for, or the one nearest its limit.
 import type { AdminUserRow, UserQuota } from "../../data/api";
 import { meterLevel } from "../../design/Meter";
-import { parseQuantity } from "../../lib/format";
+import { parseQuantity, GPU_TOTAL, gpuQuota } from "../../lib/format";
 
 /** cluster: whose usage and quota, in a console of several */
 export type Bar = { used: number; limit: number; custom: boolean; cluster?: string };
@@ -20,13 +20,14 @@ function barsIn(
 ): Bars {
   const custom = (get: (q: UserQuota) => unknown) => own.some((q) => q && get(q) !== undefined);
   const bar = (used: string | undefined, k: string): Bar | null => {
-    const l = quota.compute?.[k];
-    return l ? { used: parseQuantity(used), limit: parseQuantity(l), custom: custom((q) => q.compute?.[k]), cluster } : null;
+    const of = (q: UserQuota) => (k === GPU_TOTAL ? gpuQuota(q.compute) : q.compute?.[k]);
+    const l = of(quota);
+    return l ? { used: parseQuantity(used), limit: parseQuantity(l), custom: custom(of), cluster } : null;
   };
   return {
     cpu: bar(usage.cpu, "cpu"),
     mem: bar(usage.memory, "memory"),
-    gpu: bar(usage.gpu, "nvidia.com/gpu"),
+    gpu: bar(usage.gpu, GPU_TOTAL),
     pods: quota.maxDevPods != null ? { used: devpods, limit: quota.maxDevPods, custom: custom((q) => q.maxDevPods), cluster } : null,
   };
 }

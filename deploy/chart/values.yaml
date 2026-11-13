@@ -34,6 +34,14 @@ namespaces:
 # gateway, webui and audit-migrate pods, e.g. [{name: harbor-pull}].
 imagePullSecrets: []
 
+# The extended resources that are GPUs, the default kind first. A GPU
+# count (a node's, a DevPod's, a quota's devpod.io/gpu) is the sum over
+# them; `gpu: N` without a kind asks for the first. Empty: the built-in
+# kinds (nvidia.com/gpu, mthreads.com/gpu, metax-tech.com/gpu).
+gpuResources: []
+# - {resource: nvidia.com/gpu, label: NVIDIA}
+# - {resource: mthreads.com/gpu, label: Moore Threads}
+
 controller:
   replicas: 1
   # Host directory under which per-user home dirs live (hostPath homes,

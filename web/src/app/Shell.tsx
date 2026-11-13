@@ -11,6 +11,7 @@ import { EmptyState } from "../design/EmptyState";
 import { CommandPalette } from "../features/search/CommandPalette";
 import { OfflineBar } from "../features/clusters/ClusterFilter";
 import type { Me } from "../data/api";
+import { setGpuResources } from "../lib/format";
 
 export function Shell() {
   const me = useMe();
@@ -21,6 +22,7 @@ export function Shell() {
 }
 
 function ShellBody({ me: data, menu, setMenu }: { me: Me; menu: boolean; setMenu: (o: boolean) => void }) {
+  setGpuResources(data.gpuTypes?.map((t) => t.resource)); // before anything below counts GPUs
   const me = { data };
   return (
     <LiveEnabled enabled={!!me.data.features.telemetry}>

@@ -52,6 +52,8 @@ export interface Me {
   nameBudget: number;
   quota: { maxDevPods?: number; compute?: Record<string, string>; storage?: string };
   usage: { devpods: number; running: number; compute: Record<string, string>; storage: string };
+  /** the kinds of GPU here, the default first */
+  gpuTypes?: { resource: string; label: string }[];
   features: { pubkeySelfService: boolean; kore: boolean; passwordAuth: boolean; audit?: boolean; telemetry?: boolean; reservations?: boolean; clusters?: boolean; webshell?: boolean; httpProxy?: boolean; snapshots?: boolean; snapshotDefaultRegistry?: boolean };
   hasPassword: boolean;
   ssh: { host: string; port: number; loginSuffix?: string };

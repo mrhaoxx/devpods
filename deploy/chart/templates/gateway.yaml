@@ -42,6 +42,9 @@ spec:
         imagePullPolicy: {{ .Values.image.gateway.pullPolicy }}
         args:
         - --listen=:22
+        {{- with $.Values.gpuResources }}
+        - --gpu-resources={{ range $i, $g := . }}{{ if $i }},{{ end }}{{ $g.resource }}{{ with $g.label }}={{ . }}{{ end }}{{ end }}
+        {{- end }}
         - --host-key-dir=/etc/devpod/gateway
         - --gateway-config-name={{ $.Values.gatewayConfigName | default "default" }}
         {{- if include "devpod.audit.on" $ }}

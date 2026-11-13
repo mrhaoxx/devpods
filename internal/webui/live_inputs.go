@@ -19,6 +19,7 @@ import (
 	devpodv1alpha1 "github.com/mrhaoxx/devpod/api/v1alpha1"
 	"github.com/mrhaoxx/devpod/internal/agent"
 	"github.com/mrhaoxx/devpod/internal/audit/store"
+	"github.com/mrhaoxx/devpod/internal/gpures"
 	"github.com/mrhaoxx/devpod/internal/render"
 	"github.com/mrhaoxx/devpod/internal/webui/clusters"
 	"github.com/mrhaoxx/devpod/internal/webui/live"
@@ -105,12 +106,16 @@ func cores(l corev1.ResourceList) float64 { return l.Cpu().AsApproximateFloat64(
 func bytesOf(l corev1.ResourceList) float64 {
 	return l.Memory().AsApproximateFloat64()
 }
-func gpus(l corev1.ResourceList) int {
-	q, ok := l[corev1.ResourceName(resourceGPU)]
-	if !ok {
-		return 0
+func gpus(l corev1.ResourceList) int { return gpures.Count(l) }
+
+// gpuModel is what a node's cards are: the model NVIDIA's feature
+// discovery labels it with, or — other vendors' nodes carry no such
+// label — the vendor.
+func gpuModel(n *corev1.Node) string {
+	if m := n.Labels[gpuProductLabel]; m != "" {
+		return m
 	}
-	return int(q.Value())
+	return gpures.Vendor(n.Status.Allocatable)
 }
 
 // Build snapshots the cluster objects the rollups need.
@@ -201,7 +206,7 @@ func (li *LiveInputs) finish(ctx context.Context, in *live.Inputs, owners map[ow
 	{
 		for _, ni := range nodes {
 			n := ni.node
-			ref := live.NodeRef{Cluster: ni.cluster, Name: n.Name, Labels: map[string]string{}, GPUModel: n.Labels[gpuProductLabel],
+			ref := live.NodeRef{Cluster: ni.cluster, Name: n.Name, Labels: map[string]string{}, GPUModel: gpuModel(n),
 				CPUAllocatable: cores(n.Status.Allocatable), MemAllocatable: bytesOf(n.Status.Allocatable), GPUAllocatable: gpus(n.Status.Allocatable),
 				OtherCPU: ni.other.CPU, OtherMem: ni.other.Mem, OtherGPU: ni.other.GPU}
 			for k, v := range n.Labels {

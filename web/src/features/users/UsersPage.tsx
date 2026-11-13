@@ -15,7 +15,7 @@ import { EmptyState } from "../../design/EmptyState";
 import { ConfirmDialog } from "../../design/ConfirmDialog";
 import { Field, Input, Notice } from "../../design/Form";
 import { useUrlState, type Schema } from "../../lib/urlState";
-import { fmtAge, fmtBytes, fmtCores } from "../../lib/format";
+import { fmtAge, fmtBytes, fmtCores, gpuQuota } from "../../lib/format";
 import { useNow } from "../../lib/useNow";
 import { bars, isHigh, type Bar } from "./quota";
 import { BatchDialog } from "./BatchDialog";
@@ -151,7 +151,7 @@ export function UsersPage() {
   const defText = [
     def.compute?.cpu && `CPU ${def.compute.cpu}`,
     def.compute?.memory && `内存 ${def.compute.memory}`,
-    def.compute?.["nvidia.com/gpu"] && `GPU ${def.compute["nvidia.com/gpu"]}`,
+    gpuQuota(def.compute) && `GPU ${gpuQuota(def.compute)}`,
     def.maxDevPods != null && `DevPod ${def.maxDevPods}`,
     def.storage && `存储 ${def.storage}`,
   ]

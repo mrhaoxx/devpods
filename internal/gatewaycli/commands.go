@@ -22,6 +22,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 
 	devpodv1alpha1 "github.com/mrhaoxx/devpod/api/v1alpha1"
+	"github.com/mrhaoxx/devpod/internal/gpures"
 )
 
 // Exit statuses.
@@ -90,16 +91,18 @@ type command struct {
 var commands []*command
 
 func init() {
-	edit := []string{"image", "cpu", "memory", "gpu", "shell"}
+	edit := []string{"image", "cpu", "memory", "gpu", "gpu-type", "shell"}
 	commands = []*command{
 		{name: "help", args: "[command]", short: "this list, or one command in full", run: nil},
 		{group: "DevPods", name: "list", aliases: []string{"ls"}, args: "[--all] [--cluster C]", short: "list your DevPods (--all: everyone's, admin)", bools: []string{"all"}, run: runList},
 		{name: "show", aliases: []string{"status", "get"}, args: "<name>", short: "one DevPod in detail, with its Pod's state", run: runShow},
 		{name: "events", args: "<name>", short: "a DevPod's recent events (scheduling, pulls, restarts)", run: runEvents},
-		{name: "create", args: "<name> --image IMG [--cpu N] [--memory SIZE] [--gpu N] [--shell S] [--collab a,b] [--cluster C]", brief: "<name> --image IMG [flags]",
+		{name: "create", args: "<name> --image IMG [--cpu N] [--memory SIZE] [--gpu N [--gpu-type T] | --gpu kind=N,…] [--shell S] [--collab a,b] [--cluster C]", brief: "<name> --image IMG [flags]",
 			short: "create a DevPod",
 			long: "<name> is the part after your user name: `create dev1` makes <you>-dev1.\nNon-admins must give --cpu and --memory. To start from a saved config: config launch.\n" +
-				"With several clusters, say where: --cluster C, or <cluster>/<name> (create st2/dev1).",
+				"With several clusters, say where: --cluster C, or <cluster>/<name> (create st2/dev1).\n" +
+				"--gpu N asks for GPUs of the default kind; --gpu-type T for another (its name or resource, e.g. \"Moore Threads\" or mthreads.com/gpu);\n" +
+				"--gpu \"nvidia=1,moore threads=4\" for several kinds at once. In set, a kind not named keeps what it has, and kind=0 gives it up.",
 			vals: append([]string{"collab"}, edit...), run: runCreate},
 		{name: "start", args: "<name>…", short: "start (wake) DevPods", run: runRunning(true)},
 		{name: "stop", args: "<name>…", short: "stop (hibernate) DevPods; the home volume stays", run: runRunning(false)},
@@ -108,7 +111,7 @@ func init() {
 			long:  "A running DevPod's Pod is recreated (sessions drop; the home volume stays).\n--dry-run prints the YAML each would get and changes nothing.",
 			bools: []string{"dry-run"}, run: runRebuild},
 		{name: "delete", aliases: []string{"rm"}, args: "<name>… --yes", short: "delete DevPods and their data", bools: []string{"yes"}, run: runDelete},
-		{name: "set", args: "<name> [--image IMG] [--cpu N] [--memory SIZE] [--gpu N] [--shell S]", brief: "<name> [--image|--cpu|--memory|--gpu|--shell …]", short: "change a DevPod (a running one is rebuilt)", vals: edit, run: runSet},
+		{name: "set", args: "<name> [--image IMG] [--cpu N] [--memory SIZE] [--gpu N [--gpu-type T] | --gpu kind=N,…] [--shell S]", brief: "<name> [--image|--cpu|--memory|--gpu|--shell …]", short: "change a DevPod (a running one is rebuilt)", vals: edit, run: runSet},
 		{name: "yaml", args: "<name> [--apply]", short: "print a DevPod's YAML, or replace it with the YAML on standard input",
 			long:  "yaml <name> prints the DevPod as you may edit it. yaml <name> --apply reads a\nwhole new YAML from standard input and replaces the DevPod's spec with it\n(a running DevPod is rebuilt when its Pod changes):\n  ssh <you>+devpod@<gateway> yaml dev1 --apply < dev1.yaml",
 			bools: []string{"apply"}, run: runYAML},
@@ -406,6 +409,43 @@ func limit(c *corev1.Container, name corev1.ResourceName) string {
 	return ""
 }
 
+// gpuFlags reads --gpu in body: a number (of --gpu-type's kind, or the
+// default), or several kinds at once — "nvidia=1,moore threads=4".
+func gpuFlags(body map[string]any) error {
+	spec, _ := body["gpu"].(string)
+	if _, ok := body["gpuType"]; ok && spec == "" {
+		return errors.New("--gpu-type goes with --gpu N")
+	}
+	if !strings.Contains(spec, "=") {
+		return nil
+	}
+	if _, ok := body["gpuType"]; ok {
+		return errors.New("--gpu kind=N,… names the kinds itself: leave --gpu-type out")
+	}
+	several := map[string]string{}
+	for _, item := range strings.Split(spec, ",") {
+		kind, n, ok := strings.Cut(strings.TrimSpace(item), "=")
+		if kind, n = strings.TrimSpace(kind), strings.TrimSpace(n); !ok || kind == "" || n == "" {
+			return fmt.Errorf("--gpu %q: N, or kind=N,kind=N", spec)
+		}
+		several[kind] = n
+	}
+	delete(body, "gpu")
+	body["gpus"] = several
+	return nil
+}
+
+// gpuLimit is a container's GPUs, of every vendor ("" for none).
+func gpuLimit(c *corev1.Container) string {
+	if c == nil {
+		return ""
+	}
+	if n := gpures.Count(c.Resources.Limits); n > 0 {
+		return strconv.Itoa(n)
+	}
+	return ""
+}
+
 func image(c *corev1.Container) string {
 	if c == nil {
 		return ""
@@ -520,7 +560,7 @@ func runList(e *Env, a *parsed) int {
 				fmt.Fprintf(w, "%s\t", dash(it.Cluster))
 			}
 			fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n", dp.Name, dp.Spec.Owner, dash(string(dp.Status.Phase)), dash(list.Pods[joinRef(it.Cluster, dp.Name)].Node),
-				dash(image(c)), dash(limit(c, corev1.ResourceCPU)), dash(limit(c, corev1.ResourceMemory)), dash(limit(c, "nvidia.com/gpu")),
+				dash(image(c)), dash(limit(c, corev1.ResourceCPU)), dash(limit(c, corev1.ResourceMemory)), dash(gpuLimit(c)),
 				age(e.Now(), dp.CreationTimestamp.Time))
 		}
 	})
@@ -570,7 +610,7 @@ func runShow(e *Env, a *parsed) int {
 		kv = append(kv, [2]string{"node", d.Pod.Node}, [2]string{"ip", d.Pod.IP})
 	}
 	kv = append(kv, [2]string{"image", image(c)}, [2]string{"cpu", limit(c, corev1.ResourceCPU)}, [2]string{"memory", limit(c, corev1.ResourceMemory)},
-		[2]string{"gpu", limit(c, "nvidia.com/gpu")}, [2]string{"shell", dp.Spec.Shell}, [2]string{"collaborators", strings.Join(dp.Spec.Collaborators, ", ")})
+		[2]string{"gpu", gpuLimit(c)}, [2]string{"shell", dp.Spec.Shell}, [2]string{"collaborators", strings.Join(dp.Spec.Collaborators, ", ")})
 	if p := dp.Spec.Persistence; p != nil {
 		kv = append(kv, [2]string{"home", p.Size.String() + " at " + p.MountPath})
 	}
@@ -622,10 +662,13 @@ func runCreate(e *Env, a *parsed) int {
 	}
 	cluster, name := splitRef(a.pos[0])
 	body := map[string]any{"name": name}
-	for flag, field := range map[string]string{"image": "image", "cpu": "cpu", "memory": "memory", "gpu": "gpu", "shell": "shell"} {
+	for flag, field := range map[string]string{"image": "image", "cpu": "cpu", "memory": "memory", "gpu": "gpu", "gpu-type": "gpuType", "shell": "shell"} {
 		if v, ok := a.val[flag]; ok {
 			body[field] = v
 		}
+	}
+	if err := gpuFlags(body); err != nil {
+		return usage(e, c, err.Error())
 	}
 	if v, ok := a.val["collab"]; ok {
 		body["collaborators"] = splitList(v)
@@ -737,7 +780,13 @@ func runSet(e *Env, a *parsed) int {
 	}
 	body := map[string]any{}
 	for k, v := range a.val {
+		if k == "gpu-type" {
+			k = "gpuType"
+		}
 		body[k] = v
+	}
+	if err := gpuFlags(body); err != nil {
+		return usage(e, c, err.Error())
 	}
 	var r patchResult
 	raw, err := call(e, "PATCH", dpPath(e, a.pos[0]), body, &r)

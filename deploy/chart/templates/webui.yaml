@@ -47,6 +47,9 @@ spec:
         imagePullPolicy: {{ .Values.image.webui.pullPolicy }}
         args:
         - --listen=:8080
+        {{- with $.Values.gpuResources }}
+        - --gpu-resources={{ range $i, $g := . }}{{ if $i }},{{ end }}{{ $g.resource }}{{ with $g.label }}={{ . }}{{ end }}{{ end }}
+        {{- end }}
         - --session-key-file=/etc/devpod/webui/session/session-key
         - --default-quota-file=/etc/devpod/webui/default-quota.yaml
         - --devpod-namespace={{ .Values.namespaces.devpods }}

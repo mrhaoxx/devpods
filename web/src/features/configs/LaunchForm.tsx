@@ -12,7 +12,7 @@ import { ApiFailure, meIn } from "../../data/api";
 import { useMe } from "../../data/queries";
 import { Button } from "../../design/Button";
 import { Field, Input, Notice } from "../../design/Form";
-import { fmtBytes, fmtCores, parseQuantity } from "../../lib/format";
+import { fmtBytes, fmtCores, parseQuantity, gpuCount, GPU_TOTAL } from "../../lib/format";
 import { NodeList } from "../devpods/NodeList";
 import { launchConfig, type ConfigSummary, type LaunchBody, type LaunchItem } from "./api";
 import { COUNT, INDEX, LEADER, NAME, NODE, OWNER } from "./vars";
@@ -44,7 +44,7 @@ export function requested(yamls: string[]): { cpu: number; memory: number; gpu: 
       const lim = c.resources?.limits ?? {};
       out.cpu += parseQuantity(lim.cpu === undefined ? undefined : String(lim.cpu));
       out.memory += parseQuantity(lim.memory === undefined ? undefined : String(lim.memory));
-      out.gpu += parseQuantity(lim["nvidia.com/gpu"] === undefined ? undefined : String(lim["nvidia.com/gpu"]));
+      out.gpu += gpuCount(lim);
     }
   }
   return out;
@@ -241,11 +241,11 @@ export function LaunchForm({
           {asked && (
             <p aria-label="本次申请" className="rounded-md bg-sunk px-3 py-2 text-xs">
               本次申请 {fmtCores(asked.cpu)} 核 CPU · {fmtBytes(asked.memory)} 内存 · {asked.gpu} GPU
-              {[left("cpu"), left("memory"), left("nvidia.com/gpu")].some((x) => x !== null) && (
+              {[left("cpu"), left("memory"), left(GPU_TOTAL)].some((x) => x !== null) && (
                 <span className="text-muted">
                   {" "}
                   （剩余配额：{left("cpu") !== null ? `${fmtCores(Math.max(0, left("cpu")!))} 核` : "不限"} · {left("memory") !== null ? fmtBytes(Math.max(0, left("memory")!)) : "不限"} ·{" "}
-                  {left("nvidia.com/gpu") !== null ? `${Math.max(0, left("nvidia.com/gpu")!)} GPU` : "不限"}）
+                  {left(GPU_TOTAL) !== null ? `${Math.max(0, left(GPU_TOTAL)!)} GPU` : "不限"}）
                 </span>
               )}
             </p>

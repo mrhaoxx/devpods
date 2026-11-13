@@ -12,7 +12,7 @@ import { useLiveRow } from "../../data/live/hooks";
 import { MetricCell } from "../../design/MetricCell";
 import { StatusDot, phaseLabel } from "../../design/StatusDot";
 import { Badge } from "../../design/Badge";
-import { fmtAge, fmtBytes, fmtCores, fmtRate, parseQuantity } from "../../lib/format";
+import { fmtAge, fmtBytes, fmtCores, fmtRate, parseQuantity, gpuCount } from "../../lib/format";
 import { phaseSummary, reservationNotes } from "./status";
 import { sparkSeries } from "../../lib/spark";
 import { provenance } from "./provenance";
@@ -47,7 +47,7 @@ export function toRow(dp: DevPod, pod?: PodInfo): Row {
     phase: dp.status?.phase ?? (dp.spec.running ? "Pending" : "Stopped"),
     node: pod?.node ?? "",
     image: c?.image ?? "",
-    gpu: parseQuantity(lim["nvidia.com/gpu"]),
+    gpu: gpuCount(lim),
     cpuLimit: parseQuantity(lim.cpu),
     memLimit: parseQuantity(lim.memory),
   };

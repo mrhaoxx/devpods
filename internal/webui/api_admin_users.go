@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"slices"
 	"sort"
+	"strconv"
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
@@ -18,6 +19,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	devpodv1alpha1 "github.com/mrhaoxx/devpod/api/v1alpha1"
+	"github.com/mrhaoxx/devpod/internal/gpures"
 	"github.com/mrhaoxx/devpod/internal/webui/clusters"
 )
 
@@ -35,8 +37,6 @@ func (s *Server) requireAdmin(w http.ResponseWriter, r *http.Request) (Session, 
 	}
 	return sess, true
 }
-
-const resourceGPU = "nvidia.com/gpu"
 
 type adminUsage struct {
 	CPU     string `json:"cpu,omitempty"`
@@ -127,8 +127,8 @@ func (a *usageAgg) usage() adminUsage {
 	if m := a.compute.Memory(); !m.IsZero() {
 		u.Memory = m.String()
 	}
-	if g, ok := a.compute[resourceGPU]; ok && !g.IsZero() {
-		u.GPU = g.String()
+	if n := gpures.Count(a.compute); n > 0 {
+		u.GPU = strconv.Itoa(n)
 	}
 	if !a.storage.IsZero() {
 		u.Storage = a.storage.String()
@@ -418,7 +418,7 @@ func (p *quotaPatch) build() (*devpodv1alpha1.UserQuota, error) {
 	for name, val := range map[corev1.ResourceName]string{
 		corev1.ResourceCPU:    p.CPU,
 		corev1.ResourceMemory: p.Memory,
-		resourceGPU:           p.GPU,
+		gpures.Total:          p.GPU, // GPUs of every type together
 	} {
 		if val == "" {
 			continue

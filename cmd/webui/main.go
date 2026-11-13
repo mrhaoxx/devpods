@@ -33,6 +33,7 @@ import (
 	"sigs.k8s.io/yaml"
 
 	devpodv1alpha1 "github.com/mrhaoxx/devpod/api/v1alpha1"
+	"github.com/mrhaoxx/devpod/internal/gpures"
 	"github.com/mrhaoxx/devpod/internal/webui"
 )
 
@@ -104,7 +105,12 @@ func main() {
 	wf := addWebshellFlags(flag.CommandLine)
 	clf := addClusterFlags(flag.CommandLine)
 	gcName := flag.String("gateway-config-name", "default", "GatewayConfig holding the cluster default audit policy")
+	gpuResources := flag.String("gpu-resources", "", "the extended resources that are GPUs, the default kind first: resource=Label,… (default: nvidia.com/gpu=NVIDIA, mthreads.com/gpu=Moore Threads, metax-tech.com/gpu=MetaX)")
 	flag.Parse()
+	if err := gpures.Set(*gpuResources); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(2)
+	}
 
 	logger := slog.New(slog.NewJSONHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelInfo}))
 	slog.SetDefault(logger)

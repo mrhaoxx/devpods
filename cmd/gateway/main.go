@@ -42,6 +42,7 @@ import (
 	devpodv1alpha1 "github.com/mrhaoxx/devpod/api/v1alpha1"
 	"github.com/mrhaoxx/devpod/internal/audit"
 	"github.com/mrhaoxx/devpod/internal/gateway"
+	"github.com/mrhaoxx/devpod/internal/gpures"
 )
 
 var scheme = runtime.NewScheme()
@@ -107,7 +108,12 @@ func main() {
 	flag.DurationVar(&af.drainTimeout, "audit-drain-timeout", 220*time.Second, "on shutdown, how long to keep uploading spooled audit data")
 	flag.StringVar(&af.liveListen, "audit-live-listen", "", "address of the internal live session view endpoint for webui (empty disables it)")
 	flag.StringVar(&af.liveKeyFile, "audit-live-key-file", "", "file with the key webui presents to the live endpoint")
+	gpuResources := flag.String("gpu-resources", "", "the extended resources that are GPUs, the default kind first: resource=Label,… (default: nvidia.com/gpu=NVIDIA, mthreads.com/gpu=Moore Threads, metax-tech.com/gpu=MetaX)")
 	flag.Parse()
+	if err := gpures.Set(*gpuResources); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(2)
+	}
 
 	logger := slog.New(slog.NewJSONHandler(os.Stderr, &slog.HandlerOptions{
 		Level: slog.LevelInfo,

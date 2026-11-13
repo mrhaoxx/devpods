@@ -25,6 +25,7 @@ import (
 	"sigs.k8s.io/yaml"
 
 	devpodv1alpha1 "github.com/mrhaoxx/devpod/api/v1alpha1"
+	"github.com/mrhaoxx/devpod/internal/gpures"
 	"github.com/mrhaoxx/devpod/internal/webui/clusters"
 )
 
@@ -246,15 +247,20 @@ func (s *Server) quotaErrFor(r *http.Request, sess Session, proposed *devpodv1al
 // DevPod manifest) or the structured fields; TemplateRef composes
 // with both (preset templates require no pod, overlays require one).
 type CreateRequest struct {
-	Name          string                          `json:"name,omitempty"` // suffix; full name = "<owner>-<name>"
-	YAML          string                          `json:"yaml,omitempty"`
-	Image         string                          `json:"image,omitempty"`
-	CPU           string                          `json:"cpu,omitempty"`
-	Memory        string                          `json:"memory,omitempty"`
-	Shell         string                          `json:"shell,omitempty"`
-	Persistence   *devpodv1alpha1.PersistenceSpec `json:"persistence,omitempty"`
-	GPU           string                          `json:"gpu,omitempty"` // nvidia.com/gpu limit
-	Collaborators []string                        `json:"collaborators,omitempty"`
+	Name        string                          `json:"name,omitempty"` // suffix; full name = "<owner>-<name>"
+	YAML        string                          `json:"yaml,omitempty"`
+	Image       string                          `json:"image,omitempty"`
+	CPU         string                          `json:"cpu,omitempty"`
+	Memory      string                          `json:"memory,omitempty"`
+	Shell       string                          `json:"shell,omitempty"`
+	Persistence *devpodv1alpha1.PersistenceSpec `json:"persistence,omitempty"`
+	GPU         string                          `json:"gpu,omitempty"` // how many GPUs
+	// GPUType says which kind (a type's resource or label, see
+	// gpures); "" is the default type. GPUs gives several kinds at
+	// once: kind → how many.
+	GPUType       string            `json:"gpuType,omitempty"`
+	GPUs          map[string]string `json:"gpus,omitempty"`
+	Collaborators []string          `json:"collaborators,omitempty"`
 	// Node pins the DevPod to a node (form path; YAML sets the hostname
 	// node selector itself). Refused while someone else holds the node.
 	Node string `json:"node,omitempty"`
@@ -545,7 +551,12 @@ func (s *Server) buildDevPod(sess Session, req CreateRequest) (*devpodv1alpha1.D
 	}
 	if req.Image != "" { // absent for preset-template creates
 		limits := corev1.ResourceList{}
-		for res, val := range map[corev1.ResourceName]string{corev1.ResourceCPU: req.CPU, corev1.ResourceMemory: req.Memory, resourceGPU: req.GPU} {
+		want, serr := gpuLimits(req.GPU, req.GPUType, req.GPUs)
+		if serr != nil {
+			return nil, serr
+		}
+		want[corev1.ResourceCPU], want[corev1.ResourceMemory] = req.CPU, req.Memory
+		for res, val := range want {
 			if err := setLimit(limits, res, val); err != nil {
 				return nil, err
 			}
@@ -563,10 +574,44 @@ func (s *Server) buildDevPod(sess Session, req CreateRequest) (*devpodv1alpha1.D
 	return dp, nil
 }
 
+// gpuResource is the resource of the GPU type asked for ("": the default).
+func gpuResource(kind string) (corev1.ResourceName, *serverErr) {
+	res, ok := gpures.Resolve(kind)
+	if !ok {
+		var known []string
+		for _, t := range gpures.Types() {
+			known = append(known, t.Label+" ("+string(t.Resource)+")")
+		}
+		return "", &serverErr{http.StatusBadRequest, "BAD_REQUEST", fmt.Sprintf("unknown GPU type %q: %s", kind, strings.Join(known, ", ")), nil}
+	}
+	return res, nil
+}
+
+// gpuLimits is what a request asks of GPUs, by resource: n of kind (""
+// for n: nothing asked that way), and each of several kinds.
+func gpuLimits(n, kind string, several map[string]string) (map[corev1.ResourceName]string, *serverErr) {
+	out := map[corev1.ResourceName]string{}
+	if n != "" || kind != "" {
+		res, err := gpuResource(kind)
+		if err != nil {
+			return nil, err
+		}
+		out[res] = n
+	}
+	for k, v := range several {
+		res, err := gpuResource(k)
+		if err != nil {
+			return nil, err
+		}
+		out[res] = v
+	}
+	return out, nil
+}
+
 // setLimit parses val into limits[res]; "" (and "0" for the GPU) drops
 // the limit.
 func setLimit(limits corev1.ResourceList, res corev1.ResourceName, val string) *serverErr {
-	if val == "" || (res == resourceGPU && val == "0") {
+	if val == "" || (gpures.Is(res) && val == "0") {
 		delete(limits, res)
 		return nil
 	}
@@ -582,13 +627,17 @@ func setLimit(limits corev1.ResourceList, res corev1.ResourceName, val string) *
 // fields of the edit drawer (UI spec §5.6). Absent fields stay as they
 // are; persistence is immutable after creation.
 type PatchRequest struct {
-	Running       *bool     `json:"running,omitempty"`
-	Image         *string   `json:"image,omitempty"`
-	CPU           *string   `json:"cpu,omitempty"`
-	Memory        *string   `json:"memory,omitempty"`
-	GPU           *string   `json:"gpu,omitempty"`
-	Shell         *string   `json:"shell,omitempty"`
-	Collaborators *[]string `json:"collaborators,omitempty"`
+	Running *bool   `json:"running,omitempty"`
+	Image   *string `json:"image,omitempty"`
+	CPU     *string `json:"cpu,omitempty"`
+	Memory  *string `json:"memory,omitempty"`
+	GPU     *string `json:"gpu,omitempty"`
+	GPUType *string `json:"gpuType,omitempty"` // with GPU: which kind ("": the default)
+	// GPUs sets several kinds at once (kind → how many, "0" for none).
+	// A kind not named keeps what it has: a DevPod may have several.
+	GPUs          map[string]string `json:"gpus,omitempty"`
+	Shell         *string           `json:"shell,omitempty"`
+	Collaborators *[]string         `json:"collaborators,omitempty"`
 	// Node migrates the DevPod (admin only): it pins the Pod to that
 	// node through a hostname node selector; "" leaves the choice to
 	// the scheduler again.
@@ -643,7 +692,25 @@ func applyEdits(dp *devpodv1alpha1.DevPod, req *PatchRequest) *serverErr {
 	if c.Resources.Limits == nil {
 		c.Resources.Limits = corev1.ResourceList{}
 	}
-	for res, val := range map[corev1.ResourceName]*string{corev1.ResourceCPU: req.CPU, corev1.ResourceMemory: req.Memory, resourceGPU: req.GPU} {
+	gpuN, gpuType := "", ""
+	if req.GPU != nil {
+		gpuN = *req.GPU
+		if gpuN == "" {
+			gpuN = "0" // asked for: none of that kind
+		}
+	}
+	if req.GPUType != nil {
+		gpuType = *req.GPUType
+	}
+	gpus, serr := gpuLimits(gpuN, gpuType, req.GPUs)
+	if serr != nil {
+		return serr
+	}
+	want := map[corev1.ResourceName]*string{corev1.ResourceCPU: req.CPU, corev1.ResourceMemory: req.Memory}
+	for res, n := range gpus {
+		want[res] = &n
+	}
+	for res, val := range want {
 		if val == nil {
 			continue
 		}

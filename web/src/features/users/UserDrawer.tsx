@@ -1,6 +1,7 @@
 // One user (UI spec §5.5): quota with current usage beside each field
 // (blank = default), DevPods, recent sessions, policy override, SSH keys,
 // 设为管理员 / 删除用户 behind confirmation.
+import { gpuQuota } from "../../lib/format";
 import { devpodHref, keyOf } from "../../data/cluster";
 import { refOf } from "../../data/api";
 import { useClusterList } from "../../data/clusterFilter";
@@ -58,7 +59,7 @@ function QuotaEditor({ u, def, cluster }: { u: AdminUserRow; def: UserQuota; clu
     maxDevPods: q?.maxDevPods?.toString() ?? "",
     cpu: q?.compute?.cpu ?? "",
     memory: q?.compute?.memory ?? "",
-    gpu: q?.compute?.["nvidia.com/gpu"] ?? "",
+    gpu: gpuQuota(q?.compute) ?? "",
     storage: q?.storage ?? "",
   });
   const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
@@ -66,7 +67,7 @@ function QuotaEditor({ u, def, cluster }: { u: AdminUserRow; def: UserQuota; clu
     ["maxDevPods", "DevPod 数", String(used.devpods), dflt.maxDevPods?.toString()],
     ["cpu", "CPU", used.cpu ?? "0", dflt.compute?.cpu],
     ["memory", "内存", used.memory ?? "0", dflt.compute?.memory],
-    ["gpu", "GPU", used.gpu ?? "0", dflt.compute?.["nvidia.com/gpu"]],
+    ["gpu", "GPU", used.gpu ?? "0", gpuQuota(dflt.compute)],
     ["storage", "存储", used.storage ?? "0", dflt.storage],
   ];
   const save = async () => {

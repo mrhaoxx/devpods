@@ -67,6 +67,23 @@ export function parseQuantity(q?: string): number {
   return parseFloat(m[1]) * SUFFIX[m[2]];
 }
 
+// The resources that are GPUs — a cluster's cards are not all NVIDIA's.
+// The console says which (/api/me gpuTypes, the site's to configure);
+// until it has, the kinds the server knows by itself.
+let gpuResources = ["nvidia.com/gpu", "mthreads.com/gpu", "metax-tech.com/gpu"];
+export function setGpuResources(names: string[] | undefined) {
+  if (names && names.length > 0) gpuResources = names;
+}
+/** gpuCount: the GPUs among limits, of every kind. */
+export function gpuCount(limits: Record<string, unknown> | undefined): number {
+  return gpuResources.reduce((n, r) => n + parseQuantity(limits?.[r] === undefined ? undefined : String(limits[r])), 0);
+}
+/** GPU_TOTAL: a quota's (and a usage's) name for GPUs of every kind together. */
+export const GPU_TOTAL = "devpod.io/gpu";
+/** gpuQuota: a quota's GPU limit — the total; one written before there
+ *  were several kinds has it under NVIDIA's resource. */
+export const gpuQuota = (compute: Record<string, string | undefined> | undefined): string | undefined => compute?.[GPU_TOTAL] ?? compute?.["nvidia.com/gpu"];
+
 type ContainerLike = { resources?: { limits?: Record<string, string | undefined> } };
 
 // sumLimits adds the containers' cpu (cores), memory (bytes) and GPU limits.
@@ -76,7 +93,7 @@ export function sumLimits(spec?: { containers?: ContainerLike[] }): { cpu: numbe
     const l = c.resources?.limits ?? {};
     out.cpu += parseQuantity(l.cpu);
     out.memory += parseQuantity(l.memory);
-    out.gpu += parseQuantity(l["nvidia.com/gpu"]);
+    out.gpu += gpuCount(l);
   }
   out.cpu = Math.round(out.cpu * 1000) / 1000;
   return out;

@@ -34,6 +34,7 @@ import (
 
 	devpodv1alpha1 "github.com/mrhaoxx/devpod/api/v1alpha1"
 	"github.com/mrhaoxx/devpod/internal/agent"
+	"github.com/mrhaoxx/devpod/internal/gpures"
 	"github.com/mrhaoxx/devpod/internal/tunnel"
 )
 
@@ -59,7 +60,12 @@ func main() {
 	flag.StringVar(&controller, "controller-deployment", "devpod-controller", "the controller's Deployment, whose image tag is reported as its version")
 	flag.IntVar(&idle, "idle-connections", 8, "unused data connections kept on each instance of the console and of each gateway")
 	flag.StringVar(&telemetryListen, "telemetry-listen", "", "where the agent takes the telemetry batches of this cluster's DevPods, to take them to the console over its link (empty: no telemetry)")
+	gpuResources := flag.String("gpu-resources", "", "the extended resources that are GPUs, the default kind first: resource=Label,… (default: nvidia.com/gpu=NVIDIA, mthreads.com/gpu=Moore Threads, metax-tech.com/gpu=MetaX)")
 	flag.Parse()
+	if err := gpures.Set(*gpuResources); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(2)
+	}
 	slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stderr, nil)))
 	if cluster == "" || console == "" {
 		fatal(errors.New("--cluster and --console are required"))

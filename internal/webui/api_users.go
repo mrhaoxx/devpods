@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strconv"
 
 	"golang.org/x/crypto/ssh"
 	corev1 "k8s.io/api/core/v1"
@@ -16,6 +17,7 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 
 	devpodv1alpha1 "github.com/mrhaoxx/devpod/api/v1alpha1"
+	"github.com/mrhaoxx/devpod/internal/gpures"
 )
 
 type usageInfo struct {
@@ -68,6 +70,10 @@ func (s *Server) handleMe(w http.ResponseWriter, r *http.Request) {
 		for name, qty := range compute {
 			usage.Compute[string(name)] = qty.String()
 		}
+		// GPUs of every kind together, as a quota's total counts them
+		if n := gpures.Count(compute); n > 0 {
+			usage.Compute[string(gpures.Total)] = strconv.Itoa(n)
+		}
 		usage.Storage = storage.String()
 		return usage
 	}
@@ -96,6 +102,8 @@ func (s *Server) handleMe(w http.ResponseWriter, r *http.Request) {
 		"quota":      EffectiveQuota(userPtr, "", s.DefaultQuota),
 		"usage":      usage,
 		"clusters":   perCluster,
+		// the kinds of GPU here, the default first; quotas limit their sum as devpod.io/gpu
+		"gpuTypes": gpures.Types(),
 		"features": map[string]any{
 			"pubkeySelfService": s.PubkeySelfService,
 			"kore":              s.KoreEnabled,

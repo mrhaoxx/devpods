@@ -13,6 +13,7 @@ import (
 	"k8s.io/apimachinery/pkg/api/resource"
 
 	devpodv1alpha1 "github.com/mrhaoxx/devpod/api/v1alpha1"
+	"github.com/mrhaoxx/devpod/internal/gpures"
 )
 
 // QuotaViolation names one exceeded resource with the
@@ -45,6 +46,7 @@ func (e *QuotaError) Error() string {
 func EffectiveQuota(u *devpodv1alpha1.User, cluster string, def devpodv1alpha1.UserQuota) devpodv1alpha1.UserQuota {
 	out := def
 	if u == nil {
+		out.Compute = gpuTotalLimit(out.Compute)
 		return out
 	}
 	over := func(q *devpodv1alpha1.UserQuota) {
@@ -65,6 +67,25 @@ func EffectiveQuota(u *devpodv1alpha1.User, cluster string, def devpodv1alpha1.U
 	if q, ok := u.Spec.Quotas[cluster]; ok && cluster != "" {
 		over(&q)
 	}
+	out.Compute = gpuTotalLimit(out.Compute)
+	return out
+}
+
+// gpuTotalLimit reads a quota's GPU limit as one over every type of GPU.
+// A quota from before there were several types has it under NVIDIA's
+// resource: read as the total, unless a total is set beside it (then it
+// limits NVIDIA's cards alone, as any type's own resource does).
+func gpuTotalLimit(compute corev1.ResourceList) corev1.ResourceList {
+	old, has := compute[gpures.NVIDIA]
+	if _, total := compute[gpures.Total]; !has || total {
+		return compute
+	}
+	out := corev1.ResourceList{}
+	for k, v := range compute {
+		out[k] = v
+	}
+	delete(out, gpures.NVIDIA)
+	out[gpures.Total] = old
 	return out
 }
 
@@ -105,7 +126,7 @@ func CheckQuota(q devpodv1alpha1.UserQuota, existing []devpodv1alpha1.DevPod, pr
 		})
 	}
 
-	if len(q.Compute) > 0 && proposed.Spec.Running && proposed.Spec.Pod != nil {
+	if compute := gpuTotalLimit(q.Compute); len(compute) > 0 && proposed.Spec.Running && proposed.Spec.Pod != nil {
 		used := corev1.ResourceList{}
 		for _, dp := range existing {
 			if !dp.Spec.Running || dp.Spec.Pod == nil {
@@ -118,14 +139,17 @@ func CheckQuota(q devpodv1alpha1.UserQuota, existing []devpodv1alpha1.DevPod, pr
 			}
 		}
 		requested := PodLimits(&proposed.Spec.Pod.Spec)
-		names := make([]string, 0, len(q.Compute))
-		for name := range q.Compute {
+		// GPUs of every type together, under the name a total limit has
+		used[gpures.Total] = *resource.NewQuantity(int64(gpures.Count(used)), resource.DecimalSI)
+		requested[gpures.Total] = *resource.NewQuantity(int64(gpures.Count(requested)), resource.DecimalSI)
+		names := make([]string, 0, len(compute))
+		for name := range compute {
 			names = append(names, string(name))
 		}
 		sort.Strings(names)
 		for _, name := range names {
 			rn := corev1.ResourceName(name)
-			limit := q.Compute[rn]
+			limit := compute[rn]
 			req := requested[rn]
 			u := used[rn]
 			total := u.DeepCopy()

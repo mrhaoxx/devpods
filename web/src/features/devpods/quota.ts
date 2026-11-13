@@ -2,7 +2,7 @@
 // limit-based accounting as the server, so most violations show before
 // submitting. A blank quota field means unlimited.
 import type { Me } from "../../data/api";
-import { fmtBytes, fmtCores, parseQuantity } from "../../lib/format";
+import { fmtBytes, fmtCores, parseQuantity, GPU_TOTAL } from "../../lib/format";
 
 export type QuotaField = "cpu" | "memory" | "gpu" | "storage" | "count";
 type Form = { cpu: string; memory: string; gpu: string; storage?: string };
@@ -22,7 +22,7 @@ export function quotaErrors(f: Form, quota: Me["quota"], usage: Me["usage"], edi
   };
   check("cpu", "cpu", parseQuantity(f.cpu), fmtCores);
   check("memory", "memory", parseQuantity(f.memory), fmtBytes);
-  check("gpu", "nvidia.com/gpu", parseQuantity(f.gpu), (n) => String(n));
+  check("gpu", GPU_TOTAL, parseQuantity(f.gpu), (n) => String(n));
   if (!editing) {
     if (quota.storage && f.storage) {
       const rem = parseQuantity(quota.storage) - parseQuantity(usage.storage);
@@ -33,7 +33,7 @@ export function quotaErrors(f: Form, quota: Me["quota"], usage: Me["usage"], edi
   return out;
 }
 
-const fieldOf: Record<string, QuotaField> = { cpu: "cpu", memory: "memory", "nvidia.com/gpu": "gpu", storage: "storage", devpods: "count" };
+const fieldOf: Record<string, QuotaField> = { cpu: "cpu", memory: "memory", "nvidia.com/gpu": "gpu", [GPU_TOTAL]: "gpu", storage: "storage", devpods: "count" };
 
 /** serverQuotaErrors maps a QUOTA_EXCEEDED detail to the form's fields. */
 export function serverQuotaErrors(detail: unknown): Partial<Record<QuotaField, string>> {

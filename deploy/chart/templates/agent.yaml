@@ -45,6 +45,9 @@ spec:
         imagePullPolicy: {{ .Values.image.agent.pullPolicy }}
         args:
         - --cluster={{ $a.cluster }}
+        {{- with $.Values.gpuResources }}
+        - --gpu-resources={{ range $i, $g := . }}{{ if $i }},{{ end }}{{ $g.resource }}{{ with $g.label }}={{ . }}{{ end }}{{ end }}
+        {{- end }}
         - --console={{ $a.console }}
         - --namespace={{ .Values.namespaces.system }}
         {{- if $joinSecret }}

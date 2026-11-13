@@ -13,11 +13,9 @@ import (
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/tools/cache"
 
+	"github.com/mrhaoxx/devpod/internal/gpures"
 	"github.com/mrhaoxx/devpod/internal/render"
 )
-
-// resourceGPU is the device plugin's resource name for a GPU.
-const resourceGPU = corev1.ResourceName("nvidia.com/gpu")
 
 // NodeUsage is what pods other than DevPods hold on a node: the sum of
 // their requests.
@@ -64,9 +62,7 @@ func TallyNodes(pods []*corev1.Pod, devpodNamespace string) map[string]NodeUsage
 		u := out[p.Spec.NodeName]
 		u.CPU += req.Cpu().AsApproximateFloat64()
 		u.Mem += req.Memory().AsApproximateFloat64()
-		if g, ok := req[resourceGPU]; ok {
-			u.GPU += int(g.Value())
-		}
+		u.GPU += gpures.Count(req) // of every vendor
 		out[p.Spec.NodeName] = u
 	}
 	for n, u := range out {
