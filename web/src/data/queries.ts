@@ -93,11 +93,16 @@ export const useMetrics = (r: Ref, range: MetricRange | undefined) =>
     refetchInterval: range === "15m" || range === "1h" ? 10_000 : 60_000,
     retry: false,
   });
-/** useRecent: sparkline history (15 min) from ClickHouse, refreshed each minute. */
+// Sparkline history is refreshed each minute while the tab shows, and at
+// once when it shows again: in the background nothing is fetched and the
+// live tail keeps only a minute, so without this a curve came back with
+// the time away missing until the next minute's refresh.
+const sparkHistory = { refetchInterval: 60_000, refetchOnWindowFocus: "always", retry: false } as const;
+/** useRecent: sparkline history (15 min) from ClickHouse. */
 export const useRecent = (p: { scope?: "mine" | "all"; ref?: Ref }, enabled = true) =>
-  useQuery({ queryKey: ["recent", p.scope ?? "", p.ref?.cluster ?? "", p.ref?.name ?? ""], queryFn: () => getRecent(p), enabled, refetchInterval: 60_000, retry: false });
+  useQuery({ queryKey: ["recent", p.scope ?? "", p.ref?.cluster ?? "", p.ref?.name ?? ""], queryFn: () => getRecent(p), enabled, ...sparkHistory });
 /** useNodesRecent: the nodes' sparkline history, shared by every cell. */
-export const useNodesRecent = () => useQuery({ queryKey: ["recent", "nodes"], queryFn: getNodesRecent, refetchInterval: 60_000, retry: false });
+export const useNodesRecent = () => useQuery({ queryKey: ["recent", "nodes"], queryFn: getNodesRecent, ...sparkHistory });
 /** useNodeChoices: the nodes a DevPod can be pinned to, with reservation state. */
 export const useNodeChoices = (enabled = true) => useQuery({ queryKey: ["node-choices"], queryFn: listNodeChoices, enabled, refetchInterval: 30_000 });
 /** useSnapshots: saved images; refreshed while any is still being saved. */
