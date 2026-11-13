@@ -36,11 +36,12 @@ describe("filter syntax", () => {
     expect(hits("owner:ali owner:bob")).toEqual([]);
   });
 
-  it("a bare word is in the name or the owner — not the image or node", () => {
+  it("a bare word is in the name, the owner, the node or the image", () => {
     expect(hits("train")).toEqual(["alice-train"]);
     expect(hits("bob")).toEqual(["bob-box"]);
-    expect(hits("pytorch")).toEqual([]);
-    expect(hits("g206")).toEqual([]);
+    expect(hits("pytorch")).toEqual(["alice-train"]);
+    expect(hits("g206")).toEqual(["alice-train"]);
+    expect(hits("10.0.0")).toEqual([]); // the endpoint only by endpoint:
   });
 
   it("what fits no rule is a word; quotes keep spaces", () => {

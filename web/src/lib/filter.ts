@@ -3,7 +3,7 @@
 //   gpu>N gpu>=N gpu<N gpu<=N gpu=N      the GPU count
 //   phase:xx, or a bare Running / Pending / Stopped / Failed   the phase, exactly
 //   name: owner: (user:) node: image: cluster: endpoint:   a substring of that field
-//   any other word                       a substring of the name or the owner
+//   any other word                       a substring of the name, owner, node or image
 // Case never matters; "quoted text" is one term; a term that fits no rule
 // (gpu>x, foo:bar) is a word like any other — looked for, never dropped.
 export type Cmp = ">" | ">=" | "<" | "<=" | "=";
@@ -60,6 +60,6 @@ export function matchesFilter(r: Filterable, f: Filter): boolean {
     if ("gpu" in t) return cmp(r.gpu, t.gpu.op, t.gpu.n);
     if ("phase" in t) return (r.phase ?? "").toLowerCase() === t.phase;
     if ("field" in t) return has(r[t.field], t.v);
-    return has(r.name, t.word) || has(r.owner, t.word);
+    return has(r.name, t.word) || has(r.owner, t.word) || has(r.node, t.word) || has(r.image, t.word);
   });
 }
