@@ -153,7 +153,7 @@ export function DevPodTable({ scope }: { scope: "mine" | "all" }) {
     () =>
       rows.filter(
         (r) =>
-          matchesFilter(r, filter) && (!admin || !url.gpu || r.gpu > 0) && (!admin || !url.idle || idle.get(keyOf(r))?.idle === true),
+          matchesFilter({ ...r, endpoint: r.dp.status?.endpoint }, filter) && (!admin || !url.gpu || r.gpu > 0) && (!admin || !url.idle || idle.get(keyOf(r))?.idle === true),
       ),
     [rows, filter, admin, url.gpu, url.idle, idle],
   );
@@ -196,7 +196,7 @@ export function DevPodTable({ scope }: { scope: "mine" | "all" }) {
       <div className="flex flex-wrap items-center gap-2 border-b border-line px-3 py-2">
         <Input
           aria-label="过滤"
-          placeholder="过滤：名称 user: node: phase: gpu>0"
+          placeholder="过滤：Running gpu>0 owner: node: image:"
           value={url.q}
           onChange={(e) => setUrl({ q: e.target.value })}
           className="mono !h-7 w-72 text-xs max-[700px]:w-full"
