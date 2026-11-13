@@ -123,3 +123,13 @@ export function mergeLive(hist: ChartSet, live: ChartSet, rangeMs: number, nowMs
     io: group(hist.io, live.io, ["r", "w"]),
   };
 }
+
+/** activeRDMA: the RDMA ports with something to show for the metric looked
+ *  at (traffic, or CNP/retransmits) — a host has hundreds, nearly all idle —
+ *  and how many are left out. */
+export function activeRDMA(rdma: ChartSet["rdma"], health: boolean): { shown: [string, ChartSet["rdma"][string]][]; idle: number } {
+  const any = (s?: S) => !!s?.some((v) => v != null && v > 0);
+  const all = Object.entries(rdma);
+  const shown = all.filter(([, r]) => (health ? any(r.cnp) || any(r.retrans) : any(r.rx) || any(r.tx)));
+  return { shown, idle: all.length - shown.length };
+}

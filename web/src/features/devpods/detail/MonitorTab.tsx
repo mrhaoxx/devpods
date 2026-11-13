@@ -11,7 +11,7 @@ import { EmptyState } from "../../../design/EmptyState";
 import { Select } from "../../../design/Form";
 import { useUrlState, type Schema } from "../../../lib/urlState";
 import { fmtBytes, fmtCores, fmtRate } from "../../../lib/format";
-import { chartsFromLive, chartsFromSeries, lastLimit, mergeLive, type ChartSet } from "./monitor";
+import { activeRDMA, chartsFromLive, chartsFromSeries, lastLimit, mergeLive, type ChartSet } from "./monitor";
 
 // Grafana-like presets; history from ClickHouse, the live tail appended
 // for the short ones (UI feedback round 1).
@@ -60,6 +60,8 @@ function Charts({ c, live }: { c: ChartSet; live: boolean }) {
   const [rdmaHealth, setRdmaHealth] = useState(false);
   const gpus = Object.entries(c.gpu);
   const rdmas = Object.entries(c.rdma);
+  // ports with nothing to show are left out (and counted): a host has hundreds
+  const { shown: rdmaShown, idle: rdmaIdle } = activeRDMA(c.rdma, rdmaHealth && live);
   const net: ChartSeries[] = [
     { label: "↓ 接收", values: c.net.rx, color: "--chart-1" },
     { label: "↑ 发送", values: c.net.tx, color: "--chart-2" },
@@ -138,7 +140,7 @@ function Charts({ c, live }: { c: ChartSet; live: boolean }) {
         </div>
       </Panel>
       <Panel
-        title={`RDMA${rdmas.length ? ` · ${rdmas.map(([k, r]) => `${k}${r.scope ? `（${r.scope}）` : ""}`).join("，")}` : ""}`}
+        title={`RDMA${rdmaShown.length ? ` · ${rdmaShown.map(([k, r]) => `${k}${r.scope ? `（${r.scope}）` : ""}`).join("，")}` : ""}`}
         actions={
           live &&
           rdmas.length > 0 && (
@@ -148,11 +150,11 @@ function Charts({ c, live }: { c: ChartSet; live: boolean }) {
           )
         }
       >
-        {rdmas.length ? (
+        {rdmaShown.length ? (
           <div className="p-2">
             <TimeSeriesChart
               ts={c.ts}
-              series={rdmas.flatMap(([k, r], i) =>
+              series={rdmaShown.flatMap(([k, r], i) =>
                 rdmaHealth && live
                   ? [
                       { label: `${k} CNP/s`, values: r.cnp ?? [], color: palette[(2 * i) % palette.length] },
@@ -165,7 +167,10 @@ function Charts({ c, live }: { c: ChartSet; live: boolean }) {
               )}
               yFormat={rdmaHealth && live ? (v) => String(Math.round(v)) : fmtRate}
             />
+            {rdmaIdle > 0 && <p className="mt-1 text-[11px] text-muted">另有 {rdmaIdle} 个端口无流量，未显示</p>}
           </div>
+        ) : rdmas.length ? (
+          <EmptyState title={`${rdmas.length} 个 RDMA 端口都没有流量`} />
         ) : (
           <EmptyState title="没有 RDMA 设备" />
         )}

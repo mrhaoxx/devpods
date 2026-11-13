@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { chartsFromLive, chartsFromSeries, mergeLive } from "./monitor";
+import { activeRDMA, chartsFromLive, chartsFromSeries, mergeLive } from "./monitor";
 import type { DevPodSample, MetricSeries } from "../../../data/api";
 
 const series: MetricSeries = {
@@ -55,6 +55,20 @@ describe("monitor data", () => {
     expect(c.rdma["mlx5_0/1"].scope).toBe("VF");
     expect(c.cpu.used).toEqual([1, 1]);
   });
+  it("activeRDMA: only ports with something to show for the metric looked at; the rest counted", () => {
+    const rdma = {
+      "mlx5_0/1": { rx: [0, 5, null], tx: [0, 0, 0], cnp: [0, 0, 0], retrans: [0, 0, 0] },
+      "mlx5_bond_1/7": { rx: [0, 0, null], tx: [null, 0, 0], cnp: [0, 2, 0], retrans: [0, 0, 0] },
+      "mlx5_bond_1/8": { rx: [null, null, null], tx: [0, 0, 0] },
+    };
+    const traffic = activeRDMA(rdma, false);
+    expect(traffic.shown.map(([k]) => k)).toEqual(["mlx5_0/1"]);
+    expect(traffic.idle).toBe(2);
+    const health = activeRDMA(rdma, true);
+    expect(health.shown.map(([k]) => k)).toEqual(["mlx5_bond_1/7"]);
+    expect(health.idle).toBe(2);
+  });
+
   it("mergeLive appends only samples past the history's last bucket and keeps the window", () => {
     const hist = chartsFromSeries({ step: 5, ts: [0, 5], series: { cpu: [1, 2] } });
     const lv = chartsFromLive([4, 9, 11].map((s, i) => ({ ...live(s * 1000, {}), value: { ...live(0, {}).value, container: { cpu: [9, 3, 4][i] } as DevPodSample["container"] } })));
