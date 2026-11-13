@@ -51,11 +51,8 @@ func DevPodLabels(dp *devpodv1alpha1.DevPod) map[string]string {
 	return out
 }
 
-// PodName returns the deterministic name for a DevPod's rendered Pod.
-//
-// We prefix with owner so kubectl get pods is grouped by user even though
-// every DevPod shares the devpods namespace.
-//
+// PodName returns the deterministic name for a DevPod's rendered Pod: the
+// DevPod's own name (DevPod names are unique in the devpods namespace).
 func PodName(dp *devpodv1alpha1.DevPod) string {
 	return dp.Name
 }

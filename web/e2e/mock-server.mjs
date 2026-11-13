@@ -1,4 +1,4 @@
-// Mock API for the Playwright e2e (hack/e2e-ui.sh): serves web/dist and a
+// Mock API for the Playwright e2e: serves web/dist and a
 // fake /api with 400 DevPods, live streams that tick every second, nodes,
 // users and batch actions. Log in with alice/pw or admin/pw.
 import http from "node:http";

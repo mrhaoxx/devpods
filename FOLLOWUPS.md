@@ -325,9 +325,8 @@ v1beta1).
 - **CRD YAMLs are duplicated** between `config/crd/bases/` and
   `deploy/chart/templates/crds/`. Today they were copied manually.
   Future `go generate ./...` will regenerate the former without
-  touching the latter — silent skew. Either symlink, add a sync
-  script in `hack/`, or have controller-gen emit straight into the
-  chart.
+  touching the latter — silent skew. Done: `go generate` copies them
+  into `deploy/chart/crds/` and CI fails on any difference.
 
 ## LDAP source (from 2026-05-13 feature)
 

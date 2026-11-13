@@ -22,15 +22,16 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 )
 
-// Integration tests run against a ClickHouse and an S3 endpoint provided
-// by hack/test-integration.sh (test containers on a Kubernetes cluster,
-// reached through port-forwards). Without the env they are skipped.
+// Integration tests run against a ClickHouse and an S3 endpoint named by
+// AUDIT_IT_CLICKHOUSE_URL (_USER, _PASSWORD) and AUDIT_IT_S3_ENDPOINT
+// (_ACCESS_KEY, _SECRET_KEY): throwaway ones, never production's.
+// Without the env they are skipped.
 
 func testCH(t *testing.T) CHConfig {
 	t.Helper()
 	url := os.Getenv("AUDIT_IT_CLICKHOUSE_URL")
 	if url == "" {
-		t.Skip("AUDIT_IT_CLICKHOUSE_URL not set; run via hack/test-integration.sh")
+		t.Skip("AUDIT_IT_CLICKHOUSE_URL not set")
 	}
 	return CHConfig{URL: url, Username: os.Getenv("AUDIT_IT_CLICKHOUSE_USER"), Password: os.Getenv("AUDIT_IT_CLICKHOUSE_PASSWORD")}
 }
@@ -39,7 +40,7 @@ func testS3(t *testing.T) S3Config {
 	t.Helper()
 	ep := os.Getenv("AUDIT_IT_S3_ENDPOINT")
 	if ep == "" {
-		t.Skip("AUDIT_IT_S3_ENDPOINT not set; run via hack/test-integration.sh")
+		t.Skip("AUDIT_IT_S3_ENDPOINT not set")
 	}
 	return S3Config{Endpoint: ep, Region: "us-east-1", AccessKey: os.Getenv("AUDIT_IT_S3_ACCESS_KEY"),
 		SecretKey: os.Getenv("AUDIT_IT_S3_SECRET_KEY"), PathStyle: true}

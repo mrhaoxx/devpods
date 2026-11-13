@@ -38,6 +38,6 @@ web/node_modules/
 web/dist/assets/
 web/tsconfig.tsbuildinfo
 
-# Playwright output (hack/e2e-ui.sh)
+# Playwright output
 web/e2e/screenshots/
 web/test-results/

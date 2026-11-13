@@ -4,7 +4,7 @@
 
 // Package web embeds the built SPA. web/dist ships a committed
 // placeholder so `go build ./...` works without Node; the real bundle
-// is produced by hack/build-webui.sh (and inside images/webui).
+// is produced by `npm ci && npm run build` in web/ (and inside images/webui).
 package web
 
 import "embed"

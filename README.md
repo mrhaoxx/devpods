@@ -65,29 +65,26 @@ its own console and gateway. See `docs/api.md` for the API.
     # Generate deepcopy code + CRD manifests
     go generate ./...
 
-    # Unit + envtest tests
-    bash hack/test.sh
+    # Unit + envtest tests (envtest's API server and etcd for the controllers)
+    export KUBEBUILDER_ASSETS="$(go run sigs.k8s.io/controller-runtime/tools/setup-envtest@release-0.20 use 1.31.0 --bin-dir bin -p path)"
+    go test ./... -count=1 -race
 
     # Lint
     go run github.com/golangci/golangci-lint/cmd/golangci-lint@v1.62.0 run
 
-    # Build the web UI bundle (requires Node >= 20)
-    bash hack/build-webui.sh
+    # Web UI bundle, typecheck and unit/component tests (Node >= 20)
+    (cd web && npm ci && npm run build && npx tsc -b && npx vitest run)
 
-    # Web UI typecheck + unit/component tests, and the Playwright e2e
-    # against a mock API — both in a pod on a cluster, nothing local
-    KUBE_CONTEXT=<ctx> bash hack/remote-web.sh sh -c 'npx tsc -b && npx vitest run'
-    KUBE_CONTEXT=<ctx> bash hack/e2e-ui.sh
+    # Chart: render it in its configurations and check the wiring (helm)
+    bash deploy/test-chart.sh
 
-    # End-to-end (kind required)
-    bash hack/e2e-up.sh
-    go test -tags e2e ./test/e2e/... -count=1
+    # Audit store integration: against throwaway ClickHouse and S3
+    AUDIT_IT_CLICKHOUSE_URL=… AUDIT_IT_S3_ENDPOINT=… go test ./internal/audit/store/ -run Integration
 
-    # Web UI end-to-end (kind required, after e2e-up.sh)
-    bash hack/e2e-webui.sh
+    # Images: images/<name>/Dockerfile, built from the repository root, e.g.
+    docker buildx build -f images/gateway/Dockerfile -t REGISTRY/devpod-gateway:TAG .
 
-    # Audit: chart wiring, integration (needs a cluster for throwaway
-    # ClickHouse + S3 pods), and an isolated end-to-end run
-    bash hack/test-chart.sh
-    KUBE_CONTEXT=<ctx> bash hack/test-integration.sh
-    KUBE_CONTEXT=<ctx> bash hack/e2e-audit.sh
+CI (.github/workflows) runs the generate check, vet, lint, the tests, the
+web checks and the chart checks on every push; pushes to main and v* tags
+publish multi-arch images to ghcr.io/mrhaoxx/devpod-* (`dev` for main, the
+tag's name for a release).

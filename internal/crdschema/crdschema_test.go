@@ -121,9 +121,9 @@ func TestWebCopyIsCurrent(t *testing.T) {
 	}
 	got, err := os.ReadFile(filepath.Join("..", "..", "web", "src", "design", "yaml", "devpod.schema.json"))
 	if err != nil {
-		t.Fatalf("%v (go run ./hack/webschema)", err)
+		t.Fatalf("%v (go generate ./api/...)", err)
 	}
 	if !bytes.Equal(bytes.TrimSpace(got), bytes.TrimSpace(want)) {
-		t.Fatal("web/src/design/yaml/devpod.schema.json is not the CRD's schema: go run ./hack/webschema")
+		t.Fatal("web/src/design/yaml/devpod.schema.json is not the CRD's schema: go generate ./api/...")
 	}
 }

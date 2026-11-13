@@ -76,7 +76,7 @@ func TestDevPodReconciler_TelemetryKeysReconciled(t *testing.T) {
 	}
 	live.Annotations = map[string]string{"test/poke": "1"}
 	_ = env.Client.Update(env.Ctx, &live)
-	sec = waitSecret(t, env, "tel-dev", func(s *corev1.Secret) bool {
+	waitSecret(t, env, "tel-dev", func(s *corev1.Secret) bool {
 		var c config.Config
 		return json.Unmarshal(s.Data["telemetry.json"], &c) == nil && c.TopN == 20 && c.DevPodUID == string(live.UID)
 	})

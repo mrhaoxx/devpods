@@ -485,7 +485,7 @@ func handle(parent context.Context, id uint64, conn net.Conn, hostSigner ssh.Sig
 	cfg.PublicKeyCallback = func(meta ssh.ConnMetadata, key ssh.PublicKey) (*ssh.Permissions, error) {
 		ctx, cancel := context.WithTimeout(parent, 5*time.Second)
 		defer cancel()
-		if perms, err, isCLI := cliAuth(ctx, authn, id, meta, key); isCLI {
+		if perms, isCLI, err := cliAuth(ctx, authn, id, meta, key); isCLI {
 			return perms, err
 		}
 		res, err := authn.Authenticate(ctx, meta.User(), key)

@@ -15,12 +15,13 @@ import (
 	"testing"
 	"time"
 
-	"github.com/mrhaoxx/devpod/internal/webui"
-	"github.com/mrhaoxx/devpod/internal/webui/live"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+
+	"github.com/mrhaoxx/devpod/internal/webui"
+	"github.com/mrhaoxx/devpod/internal/webui/live"
 
 	devpodv1alpha1 "github.com/mrhaoxx/devpod/api/v1alpha1"
 )

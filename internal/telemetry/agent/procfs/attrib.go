@@ -37,7 +37,7 @@ type Attributor struct {
 	SSHDPid    int
 	SessionExe string
 	// SelfPid is the telemetry agent's process when it runs on its own
-	// (hack/agent-profile); it and its children are infrastructure like
+	// (when profiled outside a DevPod); it and its children are infrastructure like
 	// PID 1 and the sshd. Inside the supervisor it is PID 1 itself.
 	SelfPid int
 	// Infra reports processes the agent started (nvidia-smi): in-process

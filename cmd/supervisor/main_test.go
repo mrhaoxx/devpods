@@ -105,9 +105,9 @@ func TestSupervisor_ForwardsSIGTERM(t *testing.T) {
 	// Production use is PID 1 in a Linux container. macOS BSD signal
 	// semantics + Go runtime's TTY foreground-group handling make this
 	// test flaky on darwin in ways that don't reflect the real path.
-	// The real PID-1 SIGTERM forwarding gets validated by hack/e2e-v2.sh.
+	// The real PID-1 SIGTERM forwarding is seen in a DevPod on a cluster.
 	if runtime.GOOS != "linux" {
-		t.Skipf("SIGTERM forwarding test only valid on linux; see hack/e2e-v2.sh for live coverage")
+		t.Skipf("SIGTERM forwarding test only valid on linux")
 	}
 	sup := buildSupervisor(t)
 	script := "trap 'exit 42' TERM; sleep 60 & wait"

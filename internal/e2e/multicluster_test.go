@@ -55,7 +55,7 @@ type apiServer struct {
 
 // restrictedAgent gives the cluster an agent identity with exactly what
 // the chart grants (testdata/agent-rbac.yaml, kept equal to the chart's
-// render by hack/test-chart.sh) and returns a kubeconfig for it.
+// render by deploy/test-chart.sh) and returns a kubeconfig for it.
 func restrictedAgent(t *testing.T, env *envtest.Environment, c client.Client, dir, name string) string {
 	t.Helper()
 	ctx := context.Background()

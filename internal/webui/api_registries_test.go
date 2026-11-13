@@ -27,7 +27,7 @@ import (
 func TestRegistryHosts(t *testing.T) {
 	for in, want := range map[string]string{
 		"Harbor.Example.com":       "harbor.example.com",
-		" reg.example.com:5000 ":   "reg.example.com:5000",
+		" reg.example.com:5000 ":   "reg.example.com:5000", //nolint:gocritic // the spaces are what is tested
 		"index.docker.io":          "docker.io",
 		"localhost:5000":           "localhost:5000",
 		"https://reg.example.com":  "",

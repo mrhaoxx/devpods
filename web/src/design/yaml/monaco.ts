@@ -2,7 +2,7 @@
 // contributions (find, folding, hover, suggestions…), the YAML grammar,
 // and monaco-yaml — a YAML language server in a worker — which checks a
 // DevPod manifest against the DevPod schema (generated from the CRD by
-// hack/webschema), completes its fields and shows what each one is.
+// internal/crdschema/webschema), completes its fields and shows what each one is.
 // Loaded on demand — it is large — by YamlEditor.
 import * as monaco from "monaco-editor/esm/vs/editor/editor.api";
 import "monaco-editor/esm/vs/editor/edcore.main";

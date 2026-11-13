@@ -41,7 +41,10 @@ jobs:
       run: go build ./...
 
     - name: Test
-      run: bash hack/test.sh
+      run: |
+        # envtest's API server and etcd for the controller tests
+        export KUBEBUILDER_ASSETS="$(go run sigs.k8s.io/controller-runtime/tools/setup-envtest@release-0.20 use 1.31.0 --bin-dir "$PWD/bin" -p path)"
+        go test ./... -count=1 -race -timeout 45m   # internal/webui alone takes ~13 min under -race on 8 cores
 
   web:
     runs-on: ubuntu-22.04
@@ -69,4 +72,4 @@ jobs:
     - name: helm lint
       run: helm lint deploy/chart
     - name: chart assertions (audit wiring)
-      run: bash hack/test-chart.sh
+      run: bash deploy/test-chart.sh

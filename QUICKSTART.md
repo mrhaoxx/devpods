@@ -23,30 +23,29 @@ From zero to `ssh alice+pod@gateway` in ~10 minutes.
 
 ## 2. Build & load images
 
-For a fresh kind / orbstack / minikube cluster:
+The chart's defaults pull `ghcr.io/mrhaoxx/devpod-*:dev`, which CI builds
+from main (amd64 and arm64); a release's images carry its tag (`v0.9.16`).
+To use your own registry, build each image from the repository root:
 
 ```bash
-bash hack/e2e-up.sh
+for c in controller gateway supervisor agent webui snapshot; do
+  docker buildx build --platform linux/amd64,linux/arm64 \
+      -f images/$c/Dockerfile -t REGISTRY/devpod-$c:TAG --push .
+done
 ```
 
-That script cross-compiles the controller / gateway binaries, builds the
-three images locally (`devpod-controller:e2e`, `devpod-gateway:e2e`,
-`devpod-supervisor:e2e`), loads them into the cluster, applies the CRDs,
-helm-installs the chart, and auto-generates the gateway host keys.
-
-For a production cluster, build & push to your registry, then helm-install
-yourself:
+Then install (with your registry, `--set image.<name>.repository=… --set
+image.<name>.tag=…` for each image):
 
 ```bash
-# Build (substitute your registry / version)
-docker build -t REGISTRY/devpod-controller:v0.1.0 -f - . <<EOF
-FROM gcr.io/distroless/static
-COPY bin/devpod-controller /usr/local/bin/devpod-controller
-ENTRYPOINT ["/usr/local/bin/devpod-controller"]
-EOF
-docker build -t REGISTRY/devpod-gateway:v0.1.0 ...      # same shape
-docker buildx build -t REGISTRY/devpod-supervisor:v0.1.0 \
-    -f images/supervisor/Dockerfile --push .
+# The gateway's host keys, made once
+kubectl create namespace devpod-system
+ssh-keygen -t ed25519 -N '' -f host -q && ssh-keygen -t ed25519 -N '' -f internal -q
+for k in host internal; do
+  kubectl -n devpod-system create secret generic devpod-gateway-$k-key \
+      --from-file=ssh_host_ed25519_key=$k --from-file=ssh_host_ed25519_key.pub=$k.pub
+done
+rm -f host host.pub internal internal.pub
 
 # Apply CRDs (chart only installs them on first install)
 kubectl apply --server-side --force-conflicts -f deploy/chart/crds/
@@ -61,8 +60,7 @@ helm install devpod ./deploy/chart \
     --set image.supervisor.tag=v0.1.0
 ```
 
-Provision the two gateway host-key Secrets out of band before `helm install`,
-or let `hack/e2e-up.sh` generate them.
+The two key Secrets are provisioned out of band (above), never by the chart.
 
 ---
 

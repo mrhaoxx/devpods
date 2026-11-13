@@ -6,10 +6,11 @@ package webui_test
 
 import (
 	"context"
-	"github.com/mrhaoxx/devpod/internal/webui"
 	"path/filepath"
 	"testing"
 	"time"
+
+	"github.com/mrhaoxx/devpod/internal/webui"
 
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/runtime"

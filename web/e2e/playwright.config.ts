@@ -1,6 +1,6 @@
 import { defineConfig, devices } from "@playwright/test";
 
-// Runs on the cluster via hack/e2e-ui.sh (never locally): the mock API
+// Runs in a pod on a cluster (never locally): the mock API
 // serves the built SPA on :8080.
 export default defineConfig({
   testDir: ".",

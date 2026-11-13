@@ -61,7 +61,7 @@ func (r *EventRecorder) record(ctx context.Context, podName, eventType, reason, 
 		ReportingInstance:   eventSource,
 		Action:              reason,
 		FirstTimestamp:      now,
-		LastTimestamp:        now,
+		LastTimestamp:       now,
 	}
 	if _, err := r.clientset.CoreV1().Events(dp.Namespace).Create(ctx, event, metav1.CreateOptions{}); err != nil {
 		slog.Warn("failed to record devpod event", "devpod", dp.Name, "reason", reason, "err", err)

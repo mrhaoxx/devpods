@@ -20,7 +20,8 @@ linters:
 linters-settings:
   revive:
     rules:
-      - name: exported
+      - name: exported           # doc comments; live.LiveHandler-style names are fine
+        arguments: ["disableStutteringCheck"]
       - name: var-naming
       - name: context-as-argument
       - name: context-keys-type
@@ -36,14 +37,23 @@ linters-settings:
       - name: errorf
       - name: empty-block
       - name: superfluous-else
-      - name: unused-parameter
       - name: unreachable-code
-      - name: redefines-builtin-id
   goimports:
     local-prefixes: github.com/mrhaoxx/devpod
+  gocritic:
+    disabled-checks:
+      - exitAfterDefer   # os.Exit in main after a defer cancel(): nothing left to run
+      - appendAssign     # x = append(y[:0], …) and buf := append(carry, …) are meant
 
 issues:
+  max-issues-per-linter: 0
+  max-same-issues: 0
   exclude-rules:
+    # Deprecated, not broken: golang.org/x/net/http2 (the agent link's
+    # telemetry streams; net/http has it now) and the S3 upload manager
+    # (feature/s3/transfermanager). Moving off them is its own change.
+    - linters: [staticcheck]
+      text: "SA1019: .*(http2\\.|h2s\\.|t2\\.|manager\\.|s\\.uploader\\.)"
     - path: _test\.go
       linters:
         - errcheck

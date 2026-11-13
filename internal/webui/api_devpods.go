@@ -210,27 +210,9 @@ func koreErr(sess Session, dp *devpodv1alpha1.DevPod) *serverErr {
 	return nil
 }
 
-// rejectKore is koreErr, written to the response.
-func (s *Server) rejectKore(w http.ResponseWriter, sess Session, dp *devpodv1alpha1.DevPod) bool {
-	if apiErr := koreErr(sess, dp); apiErr != nil {
-		s.writeErr(w, apiErr.status, apiErr.Code, apiErr.Message, apiErr.Detail)
-		return false
-	}
-	return true
-}
-
-// checkQuotaFor runs the quota gate for proposed. exclude names a
-// DevPod to leave out of "existing" (the one being updated).
-func (s *Server) checkQuotaFor(w http.ResponseWriter, r *http.Request, sess Session, proposed *devpodv1alpha1.DevPod, exclude string) bool {
-	if apiErr := s.quotaErrFor(r, sess, proposed, exclude); apiErr != nil {
-		s.writeErr(w, apiErr.status, apiErr.Code, apiErr.Message, apiErr.Detail)
-		return false
-	}
-	return true
-}
-
-// quotaErrFor is checkQuotaFor without writing the response. pending
-// are DevPods about to be created with proposed: counted as existing.
+// quotaErrFor runs the quota gate for proposed. exclude names a DevPod
+// to leave out of "existing" (the one being updated); pending are
+// DevPods about to be created with proposed: counted as existing.
 func (s *Server) quotaErrFor(r *http.Request, sess Session, proposed *devpodv1alpha1.DevPod, exclude string, pending ...*devpodv1alpha1.DevPod) *serverErr {
 	if sess.Admin {
 		return nil

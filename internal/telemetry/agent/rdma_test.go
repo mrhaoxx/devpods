@@ -52,8 +52,8 @@ func TestRDMA_ScopeAndBytes(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	writeTreeFile(t, sys, filepath.Join("class/infiniband/mlx5_0/ports/1/counters/port_xmit_data"), "350\n")
-	writeTreeFile(t, sys, filepath.Join("class/infiniband/mlx5_0/ports/1/counters/port_xmit_packets"), "30\n")
+	writeTreeFile(t, sys, "class/infiniband/mlx5_0/ports/1/counters/port_xmit_data", "350\n")
+	writeTreeFile(t, sys, "class/infiniband/mlx5_0/ports/1/counters/port_xmit_packets", "30\n")
 	s, _, err := d.Sample(sys, &c, time.Second)
 	if err != nil || len(s) != 1 {
 		t.Fatalf("%+v %v", s, err)

@@ -17,9 +17,10 @@ import (
 	"sync"
 	"time"
 
+	"sigs.k8s.io/controller-runtime/pkg/client"
+
 	devpodv1alpha1 "github.com/mrhaoxx/devpod/api/v1alpha1"
 	"github.com/mrhaoxx/devpod/internal/httpauth"
-	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
 // HTTPProxy routes {id}-{port}{suffix}.{baseDomain} to a port of the

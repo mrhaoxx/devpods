@@ -62,13 +62,13 @@ const cliExtension = "devpod.io/cli"
 
 // cliAuth handles the public-key step of a CLI login; ok is false when
 // the login is an ordinary DevPod login.
-func cliAuth(ctx context.Context, authn *gateway.Authenticator, id uint64, meta ssh.ConnMetadata, key ssh.PublicKey) (*ssh.Permissions, error, bool) {
+func cliAuth(ctx context.Context, authn *gateway.Authenticator, id uint64, meta ssh.ConnMetadata, key ssh.PublicKey) (_ *ssh.Permissions, ok bool, _ error) {
 	if cli == nil {
-		return nil, nil, false
+		return nil, false, nil
 	}
 	named, isCLI := gateway.ParseCLILogin(cli.user, meta.User())
 	if !isCLI {
-		return nil, nil, false
+		return nil, false, nil
 	}
 	user, ap, err := authn.AuthenticateCLI(ctx, named, key)
 	if err != nil {
@@ -76,12 +76,12 @@ func cliAuth(ctx context.Context, authn *gateway.Authenticator, id uint64, meta 
 		slog.Warn("cli_auth_rejected", "id", id, "login", meta.User(), "reason", err)
 		gateway.AuthFailure(slog.Default(), reason, ap.Kind, ap.Alias, ssh.FingerprintSHA256(key), named, "", ap.LastSourceErr)
 		gateway.AuthFailuresTotal.WithLabelValues(reason, ap.Kind).Inc()
-		return nil, err, true
+		return nil, true, err
 	}
 	slog.Info("cli_auth_ok", "id", id, "user", user, "auth_path", ap.Kind, "proxy_alias", ap.Alias)
 	return &ssh.Permissions{Extensions: map[string]string{
 		cliExtension: "1", "devpod.io/user": user, "devpod.io/cli-auth": ap.Kind, "devpod.io/cli-alias": ap.Alias,
-	}}, nil, true
+	}}, true, nil
 }
 
 // serveCLI runs an authenticated CLI connection; it reports whether the

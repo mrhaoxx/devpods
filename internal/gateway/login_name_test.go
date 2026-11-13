@@ -19,15 +19,15 @@ func TestParseLoginName(t *testing.T) {
 		wantErr  bool
 	}{
 		{"alice+frontend-dev", "alice", "frontend-dev", false},
-		{"alice", "", "", true},        // pod required
+		{"alice", "", "", true}, // pod required
 		{"alice+", "", "", true},
 		{"+pod", "", "", true},
 		{"alice+pod+extra+more", "", "", true},
 		{"alice+../pod", "", "", true},
-		{"alice+pod ", "", "", true},   // trailing whitespace
+		{"alice+pod ", "", "", true}, // trailing whitespace
 		{"", "", "", true},
-		{"ALICE+pod", "", "", true},    // owner must match [a-z0-9-]
-		{"alice+POD", "", "", true},    // pod must match [a-z0-9-]
+		{"ALICE+pod", "", "", true}, // owner must match [a-z0-9-]
+		{"alice+POD", "", "", true}, // pod must match [a-z0-9-]
 		{"alice+p", "alice", "p", false},
 		{"a+b", "a", "b", false},
 		// Length-budget boundary (the {1,32} bound in the regex is load-bearing

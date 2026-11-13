@@ -11,8 +11,6 @@ import (
 	"errors"
 	"flag"
 	"fmt"
-	corev1 "k8s.io/api/core/v1"
-	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"log/slog"
 	"net"
 	"net/http"
@@ -21,6 +19,9 @@ import (
 	"strings"
 	"syscall"
 	"time"
+
+	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 
 	"github.com/coder/websocket"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"

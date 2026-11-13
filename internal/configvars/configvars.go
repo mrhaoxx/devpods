@@ -112,7 +112,7 @@ func scan(content string, text func(string), variable func(ref)) {
 			continue
 		}
 		r := ref{name: content[i+2 : end]}
-		next := end
+		var next int
 		switch {
 		case content[end] == '}':
 			next = end + 1
