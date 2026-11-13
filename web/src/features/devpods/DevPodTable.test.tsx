@@ -200,6 +200,34 @@ describe("DevPodTable", () => {
     expect(await screen.findByRole("link", { name: "alice-t-0" })).toBeTruthy();
   });
 
+  it("starting a DevPod: its row says 启动中 until it runs, and it cannot be started twice", async () => {
+    const calls = stubFetch({ "/api/devpods": list, "PATCH /api/devpods/alice-b": { devpod: mk("alice-b", "alice", "Stopped", true), rebuild: false } });
+    renderWithProviders(<DevPodTable scope="all" />, { me: stubMe({ admin: true }), route: "/admin/devpods" });
+    const row = (await screen.findByRole("link", { name: "alice-b" })).closest("tr")!;
+    fireEvent.keyDown(within(row).getByRole("button", { name: "alice-b 操作" }), { key: "Enter" });
+    fireEvent.click(await screen.findByRole("menuitem", { name: "启动" }));
+    expect(await within(row).findByText(/启动中/)).toBeTruthy();
+    await waitFor(() => expect(calls.some((c) => c.method === "PATCH" && c.url.pathname === "/api/devpods/alice-b")).toBe(true));
+    // the request is done but the DevPod is not running yet: still 启动中
+    expect(within(row).getByText(/启动中/)).toBeTruthy();
+    fireEvent.keyDown(within(row).getByRole("button", { name: "alice-b 操作" }), { key: "Enter" });
+    expect((await screen.findByRole("menuitem", { name: "启动" })).getAttribute("aria-disabled")).toBe("true");
+  });
+
+  it("a start that fails says so on the row and why", async () => {
+    stubFetch({
+      "/api/devpods": list,
+      "PATCH /api/devpods/alice-b": new Response(JSON.stringify({ code: "INTERNAL", message: "the cluster is away" }), { status: 500 }),
+    });
+    renderWithProviders(<DevPodTable scope="all" />, { me: stubMe({ admin: true }), route: "/admin/devpods" });
+    const row = (await screen.findByRole("link", { name: "alice-b" })).closest("tr")!;
+    fireEvent.keyDown(within(row).getByRole("button", { name: "alice-b 操作" }), { key: "Enter" });
+    fireEvent.click(await screen.findByRole("menuitem", { name: "启动" }));
+    const note = await within(row).findByText(/启动失败/);
+    expect(note.getAttribute("title")).toContain("the cluster is away");
+    expect(screen.getByText(/启动：成功 0，失败 1/)).toBeTruthy();
+  });
+
   it("a right click offers a DevPod's own actions, or the selection's on a row of it", async () => {
     stubFetch({ "/api/devpods": list });
     renderWithProviders(<DevPodTable scope="all" />, { me: stubMe({ admin: true }), route: "/admin/devpods" });

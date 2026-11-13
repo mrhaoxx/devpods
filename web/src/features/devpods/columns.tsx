@@ -54,7 +54,32 @@ export function toRow(dp: DevPod, pod?: PodInfo): Row {
 }
 
 /** Shared by the cells: scope of the live stream and a coarse clock. */
-export const TableCtx = createContext<{ scope: "mine" | "all"; now: Date; recent?: RecentFrame }>({ scope: "mine", now: new Date() });
+/** Pending: what is being done to a DevPod (label, e.g. 启动), or that it failed and why. */
+export type Pending = { label: string; error?: string };
+
+export const TableCtx = createContext<{ scope: "mine" | "all"; now: Date; recent?: RecentFrame; pending?: ReadonlyMap<string, Pending> }>({
+  scope: "mine",
+  now: new Date(),
+});
+
+/** PhaseNote: the row's phase — or what is being done to it, until it is done. */
+function PhaseNote({ r }: { r: Row }) {
+  const p = useContext(TableCtx).pending?.get(keyOf(r));
+  if (p?.error)
+    return (
+      <span className="shrink-0 text-[11px] text-fail" title={p.error}>
+        {p.label}失败
+      </span>
+    );
+  if (p)
+    return (
+      <span className="inline-flex shrink-0 items-center gap-1 text-[11px] text-accent">
+        <span aria-hidden className="inline-block size-2.5 animate-spin rounded-full border border-current border-t-transparent" />
+        {p.label}中…
+      </span>
+    );
+  return r.phase !== "Running" ? <span className="text-[11px] text-muted">{phaseLabel(r.phase)}</span> : null;
+}
 
 /** useLive: a row's live values — keyed <cluster>/<name> (keyOf), as the stream keys them. */
 function useLive(name: string) {
@@ -179,6 +204,11 @@ function UptimeCell({ r }: { r: Row }) {
 function GroupName({ r, open, onToggle }: { r: Row; open: boolean; onToggle: (id: string) => void }) {
   const ms = r.group!.members;
   const up = ms.filter((m) => m.phase === "Running").length;
+  const pending = useContext(TableCtx).pending;
+  const busy = ms.filter((m) => {
+    const p = pending?.get(keyOf(m));
+    return p && !p.error;
+  }).length;
   return (
     <span className="inline-flex min-w-0 items-center gap-1.5">
       <button type="button" aria-label={`${open ? "收起" : "展开"} ${r.name}`} aria-expanded={open} onClick={() => onToggle(r.name)} className="w-3 text-muted hover:text-ink">
@@ -189,6 +219,7 @@ function GroupName({ r, open, onToggle }: { r: Row; open: boolean; onToggle: (id
       </span>
       <span className="mono truncate">{`${r.name} ×${ms.length}`}</span>
       <span className="text-[11px] text-muted">{`${up}/${ms.length} 运行中`}</span>
+      {busy > 0 && <span className="text-[11px] text-accent">{`${busy} 个进行中…`}</span>}
     </span>
   );
 }
@@ -225,7 +256,7 @@ export function devpodColumns(opts: {
           <Link to={devpodHref(r)} className="mono truncate hover:text-accent">
             {r.name}
           </Link>
-          {r.phase !== "Running" && <span className="text-[11px] text-muted">{phaseLabel(r.phase)}</span>}
+          <PhaseNote r={r} />
           {reservationNotes(r.dp).map((n) => (
             <Badge key={n.type} tone={n.tone} title={n.message}>
               {n.label}

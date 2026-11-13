@@ -8,7 +8,7 @@ import * as Menu from "@radix-ui/react-dropdown-menu";
 import type { SortingState } from "@tanstack/react-table";
 import { devpodHref, keyOf } from "../../data/cluster";
 import { deleteDevPod, podKey, patchDevPod, patchDevPodSpec, rebuildFromConfig, redeployDevPod, sshCommand, type LiveItem, shellPath } from "../../data/api";
-import { useDevPodMutations, useDevPods, useMe, useRecent } from "../../data/queries";
+import { useDevPods, useMe, useRecent } from "../../data/queries";
 import { devpodsStream } from "../../data/live/streams";
 import { useLiveEnabled, useLiveRow, useLiveValues } from "../../data/live/hooks";
 import { DataTable, type RowAction } from "../../design/DataTable";
@@ -23,7 +23,7 @@ import { useUrlState, type Schema } from "../../lib/urlState";
 import { runBulk, type BulkResult } from "../../lib/bulk";
 import { BulkDialog, type BulkKind } from "./BulkDialog";
 import { useNow } from "../../lib/useNow";
-import { TableCtx, devpodColumns, toRow, type Row } from "./columns";
+import { TableCtx, devpodColumns, toRow, type Pending, type Row } from "./columns";
 import { groupRows } from "./groups";
 import { groupUsage, usage, usageKeys, type UsageKey } from "./usage";
 
@@ -43,6 +43,13 @@ const toSorting = (s: string): SortingState => (s ? [{ id: s.replace(/^-/, ""), 
 const fromSorting = (s: SortingState) => (s[0] ? `${s[0].desc ? "-" : ""}${s[0].id}` : "");
 
 type Outcome = { action: string; results: BulkResult<string>[] };
+// what a DevPod is being brought to: shown as pending until it gets there
+// (or fails, or two minutes pass); a failure stays a minute
+type Want = "Running" | "Stopped" | "gone";
+type PendingEntry = Pending & { want?: Want; since: number };
+const START = { label: "启动", want: "Running" as const };
+const STOP = { label: "休眠", want: "Stopped" as const };
+const DELETE = { label: "删除", want: "gone" as const };
 
 /** ActionMenu: a row's ⋯ — the same actions its right-click menu offers,
  *  worked out when it opens. */
@@ -135,8 +142,9 @@ export function DevPodTable({ scope }: { scope: "mine" | "all" }) {
       return next;
     });
   const [outcome, setOutcome] = useState<Outcome | null>(null);
+  const [progress, setProgress] = useState<{ action: string; done: number; failed: number; total: number } | null>(null);
+  const [pending, setPending] = useState<ReadonlyMap<string, PendingEntry>>(() => new Map());
   const [dialog, setDialog] = useState<{ kind: BulkKind; rows: Row[]; clear: () => void } | null>(null);
-  const { remove, setRunning } = useDevPodMutations();
 
   const { matches, several, clusters } = useClusterFilter();
   const rows = useMemo(
@@ -161,10 +169,60 @@ export function DevPodTable({ scope }: { scope: "mine" | "all" }) {
   const filtered = url.phase.length ? byQuery.filter((r) => url.phase.includes(r.phase)) : byQuery;
   const shown = useMemo(() => groupRows(filtered, open), [filtered, open]);
 
-  const bulk = async (action: string, items: Row[], fn: (r: Row) => Promise<unknown>) => {
-    const results = await runBulk(items, (r) => fn(r).then(() => undefined));
+  // every action on DevPods — one or many — goes here: their rows say
+  // what is being done until it is, the bar how far it has got
+  const bulk = async (action: string, items: Row[], fn: (r: Row) => Promise<unknown>, how: { label: string; want?: Want } = { label: "更新" }) => {
+    const since = Date.now();
+    setPending((cur) => {
+      const next = new Map(cur);
+      for (const r of items) next.set(keyOf(r), { label: how.label, want: how.want, since });
+      return next;
+    });
+    setOutcome(null);
+    setProgress({ action, done: 0, failed: 0, total: items.length });
+    const results = await runBulk(items, async (r) => {
+      try {
+        await fn(r);
+      } catch (e) {
+        const error = e instanceof Error ? e.message : String(e);
+        setPending((cur) => new Map(cur).set(keyOf(r), { label: how.label, error, since: Date.now() }));
+        setProgress((p) => p && { ...p, done: p.done + 1, failed: p.failed + 1 });
+        throw e;
+      }
+      if (!how.want)
+        setPending((cur) => {
+          const next = new Map(cur);
+          next.delete(keyOf(r));
+          return next;
+        });
+      setProgress((p) => p && { ...p, done: p.done + 1 });
+    });
+    setProgress(null);
     setOutcome({ action, results: results.map((x) => ({ ...x, item: x.item.name })) });
     void qc.invalidateQueries({ queryKey: ["devpods"] });
+  };
+  // a pending row is done when its DevPod got where it was sent (or failed,
+  // or is gone), or after two minutes; a failure is shown a minute
+  const byKey = useMemo(() => new Map(rows.map((r) => [keyOf(r), r])), [rows]);
+  useEffect(() => {
+    const t = Date.now();
+    setPending((cur) => {
+      let next: Map<string, PendingEntry> | null = null;
+      for (const [k, p] of cur) {
+        const r = byKey.get(k);
+        const done = p.error
+          ? t - p.since > 60_000
+          : p.want === "gone"
+            ? !r
+            : !!p.want && (!r || r.phase === p.want || r.phase === "Failed" || t - p.since > 120_000);
+        if (done) (next ??= new Map(cur)).delete(k);
+      }
+      return next ?? cur;
+    });
+  }, [byKey, now]);
+  const busy = (r: Row) => {
+    const p = pending.get(keyOf(r));
+    return !!p && !p.error;
   };
   // what can be done to a DevPod, a group of them, a selection: said once,
   // offered by the ⋯ menu, the right-click menu and the bulk bar alike
@@ -172,16 +230,21 @@ export function DevPodTable({ scope }: { scope: "mine" | "all" }) {
     { label: "在新标签页打开", onSelect: () => window.open(devpodHref(r), "_blank", "noopener") },
     { label: "复制 SSH 命令", onSelect: () => void copyText(sshCommand(me, r.owner, r.name, r.cluster)) },
     ...(me?.features.webshell && r.phase === "Running" ? [{ label: "终端", onSelect: () => window.open(shellPath(r), "_blank", "noopener") }] : []),
-    { label: r.dp.spec.running ? "休眠" : "启动", onSelect: () => setRunning.mutate({ ref: r, running: !r.dp.spec.running }) },
-    { label: "删除…", danger: true, onSelect: () => setConfirm({ rows: [r], bulk: false }) },
+    r.dp.spec.running
+      ? { label: "休眠", disabled: busy(r), onSelect: () => void bulk("休眠", [r], (x) => patchDevPod(x, false), STOP) }
+      : { label: "启动", disabled: busy(r), onSelect: () => void bulk("启动", [r], (x) => patchDevPod(x, true), START) },
+    { label: "删除…", danger: true, disabled: busy(r), onSelect: () => setConfirm({ rows: [r], bulk: false }) },
   ];
   const groupActions = (r: Row): RowAction[] => [
-    { label: "整组启动", onSelect: () => void bulk("整组启动", r.group!.members, (m) => patchDevPod(m, true)) },
-    { label: "整组休眠", onSelect: () => void bulk("整组休眠", r.group!.members, (m) => patchDevPod(m, false)) },
+    { label: "整组启动", onSelect: () => void bulk("整组启动", r.group!.members, (m) => patchDevPod(m, true), START) },
+    { label: "整组休眠", onSelect: () => void bulk("整组休眠", r.group!.members, (m) => patchDevPod(m, false), STOP) },
     { label: "按配置重建整组…", onSelect: () => setRebuildAsk(r) },
     { label: "删除整组…", danger: true, onSelect: () => setConfirm({ rows: r.group!.members, bulk: true }) },
   ];
   const rowActions = (r: Row) => (r.group ? groupActions(r) : devpodActions(r));
+  // the ⋯ menu is in the (memoised) columns: it asks for what is current
+  const rowActionsNow = useRef(rowActions);
+  rowActionsNow.current = rowActions;
   const bulkActions = (picked: Row[], clear: () => void): RowAction[] => {
     const sel = flat(picked);
     // nodes are a cluster's: DevPods of two clusters cannot move to the same ones
@@ -193,8 +256,8 @@ export function DevPodTable({ scope }: { scope: "mine" | "all" }) {
         title: acrossClusters ? "所选 DevPod 分属不同集群，不能一起迁移：只选同一个集群的" : undefined,
         onSelect: () => setDialog({ kind: "migrate", rows: sel, clear }),
       },
-      { label: "休眠", onSelect: () => void bulk("休眠", sel, (r) => patchDevPod(r, false)).then(clear) },
-      { label: "启动", onSelect: () => void bulk("启动", sel, (r) => patchDevPod(r, true)).then(clear) },
+      { label: "休眠", onSelect: () => void bulk("休眠", sel, (r) => patchDevPod(r, false), STOP).then(clear) },
+      { label: "启动", onSelect: () => void bulk("启动", sel, (r) => patchDevPod(r, true), START).then(clear) },
       { label: "协作者…", onSelect: () => setDialog({ kind: "collaborators", rows: sel, clear }) },
       { label: "设置镜像…", onSelect: () => setDialog({ kind: "image", rows: sel, clear }) },
       { label: "重新部署…", onSelect: () => setDialog({ kind: "redeploy", rows: sel, clear }) },
@@ -210,7 +273,7 @@ export function DevPodTable({ scope }: { scope: "mine" | "all" }) {
         groups: { open, toggle },
         usage: (r, key) =>
           r.group ? groupUsage(r.group.members.map((m) => (running(m) ? used.get(keyOf(m)) : undefined)), key) : running(r) ? usage(used.get(keyOf(r)), key) : undefined,
-        actions: (r) => <ActionMenu label={`${r.name} 操作`} actions={() => rowActions(r)} />,
+        actions: (r) => <ActionMenu label={`${r.name} 操作`} actions={() => rowActionsNow.current(r)} />,
       }),
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [admin, me, open, used, several, clusters],
@@ -218,7 +281,7 @@ export function DevPodTable({ scope }: { scope: "mine" | "all" }) {
 
   const failed = outcome?.results.filter((r) => !r.ok) ?? [];
   return (
-    <TableCtx.Provider value={{ scope, now, recent: recent.data }}>
+    <TableCtx.Provider value={{ scope, now, recent: recent.data, pending }}>
       <div className="flex flex-wrap items-center gap-2 border-b border-line px-3 py-2">
         <FilterBox value={url.q} onChange={(q) => setUrl({ q })} />
         {PHASES.map((p) => (
@@ -248,6 +311,13 @@ export function DevPodTable({ scope }: { scope: "mine" | "all" }) {
           </Link>
         )}
       </div>
+      {progress && (
+        <div className="border-b border-line px-3 py-1.5">
+          <Notice tone="idle">
+            {progress.action}：进行中 {progress.done}/{progress.total}…{progress.failed > 0 && `（失败 ${progress.failed}）`}
+          </Notice>
+        </div>
+      )}
       {outcome && (
         <div className="flex items-start gap-2 border-b border-line px-3 py-1.5">
           <div className="flex-1">
@@ -308,8 +378,7 @@ export function DevPodTable({ scope }: { scope: "mine" | "all" }) {
         onConfirm={() => {
           const rs = confirm!.rows;
           setConfirm(null);
-          if (rs.length === 1 && !confirm!.bulk) remove.mutate(rs[0]);
-          else void bulk("删除", rs, (r) => deleteDevPod(r));
+          void bulk("删除", rs, (r) => deleteDevPod(r), DELETE);
         }}
       >
         删除后 Pod 和持久化数据都会被移除，不能恢复。
@@ -322,7 +391,7 @@ export function DevPodTable({ scope }: { scope: "mine" | "all" }) {
         onConfirm={() => {
           const g = rebuildAsk!;
           setRebuildAsk(null);
-          void bulk("按配置重建", g.group!.members, (m) => rebuildFromConfig(m));
+          void bulk("按配置重建", g.group!.members, (m) => rebuildFromConfig(m), { label: "重建" });
         }}
       >
         用来源配置现在的内容重建每个 DevPod。运行中的会重建 Pod，已有的会话会断开；home 卷不变。
