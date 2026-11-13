@@ -8,6 +8,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"os"
 	"time"
 
@@ -49,6 +50,9 @@ func (u *Uploader) Run(ctx context.Context) {
 		if err := u.Flush(ctx); err != nil {
 			attempt++
 			wait = backoff(attempt)
+			if ctx.Err() == nil { // what holds the spool back is said, not only retried
+				slog.Warn("audit_upload", "err", err.Error(), "attempt", attempt, "retry_in", wait.String())
+			}
 		} else {
 			attempt = 0
 		}
@@ -96,7 +100,10 @@ func (u *Uploader) upload(ctx context.Context, it Item) error {
 			return err
 		}
 		defer f.Close()
-		return u.Objects.Put(ctx, it.ObjectKey, f, it.Size)
+		if err := u.Objects.Put(ctx, it.ObjectKey, f, it.Size); err != nil {
+			return fmt.Errorf("put object %s: %w", it.ObjectKey, err)
+		}
+		return nil
 	case ItemBatch:
 		data, err := os.ReadFile(it.Path)
 		if err != nil {
@@ -106,7 +113,10 @@ func (u *Uploader) upload(ctx context.Context, it Item) error {
 		if err := json.Unmarshal(data, &b); err != nil {
 			return fmt.Errorf("spool batch %s: %w", it.Token, err)
 		}
-		return u.Events.Insert(ctx, b, it.Token)
+		if err := u.Events.Insert(ctx, b, it.Token); err != nil {
+			return fmt.Errorf("insert batch %s: %w", it.Token, err)
+		}
+		return nil
 	}
 	return fmt.Errorf("spool: unknown item kind %d", it.Kind)
 }
