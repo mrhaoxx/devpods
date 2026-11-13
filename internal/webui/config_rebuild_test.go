@@ -11,6 +11,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	devpodv1alpha1 "github.com/mrhaoxx/devpod/api/v1alpha1"
 )
@@ -72,6 +73,20 @@ func TestRebuildFromConfig(t *testing.T) {
 		dp := waitDevPod(t, name)
 		return dp.Spec.Pod.Spec.Containers[0].Image
 	}
+	// imageBecomes waits for the cache to show a rebuild (the API has
+	// answered, the cache the test reads follows a moment later — a long
+	// moment on a slow machine) and returns the DevPod as it then is.
+	imageBecomes := func(name, want string) devpodv1alpha1.DevPod {
+		t.Helper()
+		var dp devpodv1alpha1.DevPod
+		for deadline := time.Now().Add(15 * time.Second); time.Now().Before(deadline); time.Sleep(100 * time.Millisecond) {
+			if dp = waitDevPod(t, name); dp.Spec.Pod.Spec.Containers[0].Image == want {
+				return dp
+			}
+		}
+		t.Fatalf("%s: image %s, want %s", name, dp.Spec.Pod.Spec.Containers[0].Image, want)
+		return dp
+	}
 	env := func(dp devpodv1alpha1.DevPod, name string) string {
 		for _, e := range dp.Spec.Pod.Spec.Containers[0].Env {
 			if e.Name == name {
@@ -108,10 +123,7 @@ func TestRebuildFromConfig(t *testing.T) {
 
 	t.Run("apply", func(t *testing.T) {
 		rebuild("rb-bob-g-0", bob, `{}`, http.StatusOK)
-		if got := image("rb-bob-g-0"); got != "debian:12" {
-			t.Fatalf("image %s", got)
-		}
-		if dp := waitDevPod(t, "rb-bob-g-0"); dp.Annotations["devpod.io/config-hash"] != hash(group) {
+		if dp := imageBecomes("rb-bob-g-0", "debian:12"); dp.Annotations["devpod.io/config-hash"] != hash(group) {
 			t.Fatalf("hash %q, want %q", dp.Annotations["devpod.io/config-hash"], hash(group))
 		}
 		if got := outdated("rb-bob-g-0", bob); got != false {
@@ -129,7 +141,7 @@ func TestRebuildFromConfig(t *testing.T) {
 	t.Run("group member", func(t *testing.T) {
 		call("DELETE", "/api/devpods/rb-bob-g-0", bob, "", http.StatusNoContent)
 		rebuild("rb-bob-g-1", bob, `{}`, http.StatusOK)
-		if dp := waitDevPod(t, "rb-bob-g-1"); env(dp, "LEADER") != "rb-bob-g-0" || dp.Spec.Pod.Spec.Containers[0].Image != "debian:12" {
+		if dp := imageBecomes("rb-bob-g-1", "debian:12"); env(dp, "LEADER") != "rb-bob-g-0" {
 			t.Fatalf("LEADER %q image %s", env(dp, "LEADER"), dp.Spec.Pod.Spec.Containers[0].Image)
 		}
 	})
