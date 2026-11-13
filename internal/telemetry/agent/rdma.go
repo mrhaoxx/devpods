@@ -5,6 +5,7 @@
 package agent
 
 import (
+	"maps"
 	"os"
 	"path/filepath"
 	"sort"
@@ -23,8 +24,16 @@ type RDMADev struct {
 	Scope string // vf_exclusive | pf_shared
 }
 
-// RDMACounters are the cumulative per-port counters of the previous sample.
-type RDMACounters map[int][4]uint64 // port → xmit bytes, rcv bytes, xmit pkts, rcv pkts
+// RDMACounters are the per-port counters of the previous sample.
+type RDMACounters map[int]RDMAPort
+
+// RDMAPort: a port's cumulative counters, and whether it was reported (it
+// moved) the last time.
+type RDMAPort struct {
+	Data     [4]uint64 // xmit bytes, rcv bytes, xmit pkts, rcv pkts
+	Health   map[string]uint64
+	Reported bool
+}
 
 // DiscoverRDMA lists the IB devices behind the container's
 // /dev/infiniband/uverbs* nodes; other devices on the host are ignored.
@@ -60,21 +69,37 @@ func rdmaScope(sysRoot, ib string) string {
 	return "pf_shared"
 }
 
-// Sample reads every port's counters. Data counters count 4-byte words.
+// Sample reads every port's counters and reports the ports that moved —
+// their data or a health counter changed since the last sample. A host has
+// hundreds of RDMA ports (representors and the like), nearly all idle: one
+// that goes idle is reported once more, at zero, and then not until it
+// moves again. The first sample reports nothing (no rates yet). Data
+// counters count 4-byte words.
 func (d RDMADev) Sample(sysRoot string, prev *RDMACounters, dt time.Duration) ([]wire.RDMA, RDMACounters, error) {
 	cur := RDMACounters{}
 	var out []wire.RDMA
 	for _, port := range d.Ports {
 		dir := filepath.Join(sysRoot, "class", "infiniband", d.IBDev, "ports", strconv.Itoa(port))
 		cnt := filepath.Join(dir, "counters")
-		c := [4]uint64{
+		now := RDMAPort{Data: [4]uint64{
 			readUint(cnt, "port_xmit_data") * 4, readUint(cnt, "port_rcv_data") * 4,
 			readUint(cnt, "port_xmit_packets"), readUint(cnt, "port_rcv_packets"),
+		}}
+		if ents, err := os.ReadDir(filepath.Join(dir, "hw_counters")); err == nil {
+			now.Health = map[string]uint64{}
+			for _, e := range ents {
+				now.Health[e.Name()] = readUint(filepath.Join(dir, "hw_counters"), e.Name())
+			}
 		}
-		cur[port] = c
-		r := wire.RDMA{IBDev: d.IBDev, Port: port, Scope: d.Scope}
-		if prev != nil && dt > 0 {
-			if p, ok := (*prev)[port]; ok {
+		var p RDMAPort
+		known := false
+		if prev != nil {
+			p, known = (*prev)[port]
+		}
+		moved := known && (now.Data != p.Data || !maps.Equal(now.Health, p.Health))
+		if known && dt > 0 && (moved || p.Reported) {
+			r := wire.RDMA{IBDev: d.IBDev, Port: port, Scope: d.Scope, Health: now.Health}
+			if moved {
 				secs := dt.Seconds()
 				rate := func(a, b uint64) float64 {
 					if a < b {
@@ -82,17 +107,13 @@ func (d RDMADev) Sample(sysRoot string, prev *RDMACounters, dt time.Duration) ([
 					}
 					return float64(a-b) / secs
 				}
-				r.TxBps, r.RxBps = rate(c[0], p[0]), rate(c[1], p[1])
-				r.TxPps, r.RxPps = rate(c[2], p[2]), rate(c[3], p[3])
+				r.TxBps, r.RxBps = rate(now.Data[0], p.Data[0]), rate(now.Data[1], p.Data[1])
+				r.TxPps, r.RxPps = rate(now.Data[2], p.Data[2]), rate(now.Data[3], p.Data[3])
 			}
+			out = append(out, r)
 		}
-		if ents, err := os.ReadDir(filepath.Join(dir, "hw_counters")); err == nil {
-			r.Health = map[string]uint64{}
-			for _, e := range ents {
-				r.Health[e.Name()] = readUint(filepath.Join(dir, "hw_counters"), e.Name())
-			}
-		}
-		out = append(out, r)
+		now.Reported = moved
+		cur[port] = now
 	}
 	return out, cur, nil
 }
