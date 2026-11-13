@@ -30,7 +30,7 @@ const (
 )
 
 // snapshot's sub-verbs; any other first word is a DevPod to snapshot.
-var snapshotVerbs = []string{"create", "show", "follow", "cancel", "rm"}
+var snapshotVerbs = []string{"create", "show", "follow", "retry", "cancel", "rm"}
 
 const snapshotLong = `snapshot <devpod> saves the DevPod's container as an image and follows the
 progress until it ends. The container is paused while it is committed
@@ -48,23 +48,28 @@ you saved a login for that registry ("registry add <host>"): give
 from the first line of standard input (--password-stdin forces that). The
 password never goes on the command line.
 
-The words create, show, follow, cancel and rm are sub-commands; a DevPod
-with one of those names is reached with "snapshot create <devpod>".
+"snapshot retry <id>" runs a failed snapshot again.
+
+The words create, show, follow, retry, cancel and rm are sub-commands; a
+DevPod with one of those names is reached with "snapshot create <devpod>".
+With several clusters a snapshot's id is <cluster>/<id>, as the lists show it.
 
 With --json the progress is one JSON object per line.`
 
 func snapshotCommands() []*command {
 	return []*command{
-		{name: "snapshot", args: "<devpod> [--name N] [--tag T | --new-tag] [--image REF [--username U] [--password-stdin]] [--no-pause] [--detach] | show <id> | follow <id> | cancel <id> | rm <id>",
-			short: "save a DevPod as an image and follow it (Ctrl-C or disconnecting cancels; --detach does not follow)",
+		{group: "Images", name: "snapshot", args: "<devpod> [--name N] [--tag T | --new-tag] [--image REF [--username U] [--password-stdin]] [--no-pause] [--detach] | show <id> | follow <id> | retry <id> | cancel <id> | rm <id>",
+			brief: "<devpod> [flags] | show|follow|retry|cancel|rm <id>",
+			short: "save a DevPod as an image and follow it (Ctrl-C cancels; --detach)",
 			long:  snapshotLong,
 			vals:  []string{"name", "tag", "image", "username"}, bools: []string{"no-pause", "detach", "password-stdin", "new-tag"}, run: runSnapshot},
-		{name: "snapshots", aliases: []string{"images"}, args: "[--all] [--devpod D]", short: "list snapshots (--all: everyone's, admin)",
+		{name: "snapshots", aliases: []string{"images"}, args: "[--all] [--devpod D] [--cluster C]", short: "list snapshots (--all: everyone's, admin)",
 			bools: []string{"all"}, vals: []string{"devpod"}, run: runSnapshots},
 	}
 }
 
 type snapView struct {
+	Cluster     string     `json:"cluster"`
 	ID          string     `json:"id"`
 	DevPod      string     `json:"devpod"`
 	Owner       string     `json:"owner"`
@@ -108,7 +113,11 @@ type snapRequest struct {
 	PushAuth *pushAuth `json:"pushAuth,omitempty"`
 }
 
-func snapPath(id string) string { return "/api/snapshots/" + url.PathEscape(id) }
+// snapPath is a snapshot's API path; ref is <id> or <cluster>/<id>.
+func snapPath(e *Env, ref string) string {
+	c, id := splitRef(ref)
+	return scoped(e, c, "/api/snapshots/"+url.PathEscape(id))
+}
 
 var stageLabel = map[string]string{"pending": "等待开始", "commit": "提交容器", "push": "推送镜像", "done": "完成", "error": "失败"}
 
@@ -207,13 +216,23 @@ func runSnapshot(e *Env, a *parsed) int {
 		return snapShow(e, a, rest[0])
 	case "follow":
 		var v snapView
-		if _, err := call(e, "GET", snapPath(rest[0]), nil, &v); err != nil {
+		if _, err := call(e, "GET", snapPath(e, rest[0]), nil, &v); err != nil {
 			return fail(e, err)
 		}
-		if v.ID == "" {
-			v.ID = rest[0]
-		}
+		v.ID = rest[0] // as given: <id> or <cluster>/<id>
 		return snapFollow(e, a, &v, false)
+	case "retry":
+		var v snapView
+		raw, err := call(e, "POST", snapPath(e, rest[0])+"/retry", nil, &v)
+		if err != nil {
+			return fail(e, err)
+		}
+		if a.json {
+			printJSON(e, raw)
+			return ExitOK
+		}
+		fmt.Fprintf(e.Out, "snapshot %s is being taken again; follow it with `snapshot follow %s`\n", rest[0], rest[0])
+		return ExitOK
 	case "cancel":
 		return snapEnd(e, rest[0], true)
 	default:
@@ -297,7 +316,7 @@ func snapCreate(e *Env, a *parsed, c *command, devpod string) int {
 		req.PushAuth = auth
 	}
 	var v snapView
-	path := dpPath(devpod) + "/snapshots"
+	path := dpPath(e, devpod) + "/snapshots"
 	raw, err := call(e, "POST", path, req, &v)
 	var ae *APIError
 	if errors.As(err, &ae) && ae.Code == "PUSH_AUTH_REQUIRED" && req.PushAuth == nil {
@@ -319,6 +338,14 @@ func snapCreate(e *Env, a *parsed, c *command, devpod string) int {
 	if err != nil {
 		return fail(e, err)
 	}
+	// from here on its id says its cluster (the DevPod's)
+	if v.Cluster == "" {
+		v.Cluster, _ = splitRef(devpod)
+		if v.Cluster == "" {
+			v.Cluster = e.Cluster
+		}
+	}
+	v.ID = joinRef(v.Cluster, v.ID)
 	if a.has["detach"] {
 		if a.json {
 			printJSON(e, raw)
@@ -332,7 +359,7 @@ func snapCreate(e *Env, a *parsed, c *command, devpod string) int {
 
 func snapShow(e *Env, a *parsed, id string) int {
 	var v snapView
-	raw, err := call(e, "GET", snapPath(id), nil, &v)
+	raw, err := call(e, "GET", snapPath(e, id), nil, &v)
 	if err != nil {
 		return fail(e, err)
 	}
@@ -364,7 +391,7 @@ func snapShow(e *Env, a *parsed, id string) int {
 // first: cancel must not delete a record, rm must not cancel.
 func snapEnd(e *Env, id string, cancel bool) int {
 	var v snapView
-	if _, err := call(e, "GET", snapPath(id), nil, &v); err != nil {
+	if _, err := call(e, "GET", snapPath(e, id), nil, &v); err != nil {
 		return fail(e, err)
 	}
 	if cancel && v.finished() {
@@ -375,7 +402,7 @@ func snapEnd(e *Env, id string, cancel bool) int {
 		fmt.Fprintf(e.Err, "error: snapshot %s is still in progress; stop it with `snapshot cancel %s`\n", id, id)
 		return ExitAPI
 	}
-	if _, err := call(e, "DELETE", snapPath(id), nil, nil); err != nil {
+	if _, err := call(e, "DELETE", snapPath(e, id), nil, nil); err != nil {
 		return fail(e, err)
 	}
 	if cancel {
@@ -418,7 +445,7 @@ func snapFollow(e *Env, a *parsed, v *snapView, cancel bool) int {
 		fmt.Fprintf(e.Out, "快照 %s → %s\n", v.ID, v.Image)
 	}
 	var last *snapProgress
-	err := e.API.Stream(ctx, e.User, snapPath(v.ID)+"/progress", idle, func(data []byte) error {
+	err := e.API.Stream(ctx, e.User, snapPath(e, v.ID)+"/progress", idle, func(data []byte) error {
 		var p snapProgress
 		if json.Unmarshal(data, &p) != nil {
 			return nil // not a progress object: skip it
@@ -440,7 +467,7 @@ func snapFollow(e *Env, a *parsed, v *snapView, cancel bool) int {
 		// the session may be gone: the cancel runs on its own short clock
 		cctx, done := context.WithTimeout(context.WithoutCancel(base), 10*time.Second)
 		defer done()
-		if _, derr := e.API.Do(cctx, e.User, "DELETE", snapPath(v.ID), nil); derr != nil {
+		if _, derr := e.API.Do(cctx, e.User, "DELETE", snapPath(e, v.ID), nil); derr != nil {
 			fmt.Fprintf(e.Err, "error: cancelling snapshot %s failed: %s\n", v.ID, derr)
 			return ExitAPI
 		}
@@ -553,11 +580,12 @@ func runSnapshots(e *Env, a *parsed) int {
 	if len(a.pos) > 0 {
 		return usage(e, find("snapshots"), "snapshots takes no arguments; use `snapshot show <id>`")
 	}
-	path := "/api/snapshots"
+	dc, dname := splitRef(a.val["devpod"]) // --devpod <cluster>/<name> says the cluster too
+	path := scoped(e, dc, "/api/snapshots")
 	if a.has["all"] {
 		path += "?scope=all"
 	}
-	if d := a.val["devpod"]; d != "" {
+	if d := dname; d != "" {
 		sep := "?"
 		if a.has["all"] {
 			sep = "&"
@@ -592,7 +620,7 @@ func runSnapshots(e *Env, a *parsed) int {
 			if v.CreatedAt != nil {
 				created = *v.CreatedAt
 			}
-			fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\n", v.ID, dash(v.DevPod), dash(v.Image), fmtSize(v.SizeBytes), dash(v.Phase), age(e.Now(), created))
+			fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\n", joinRef(v.Cluster, v.ID), dash(v.DevPod), dash(v.Image), fmtSize(v.SizeBytes), dash(v.Phase), age(e.Now(), created))
 		}
 	})
 	return ExitOK

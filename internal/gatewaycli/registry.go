@@ -33,6 +33,7 @@ from then on, and to push when "snapshot --image" names that registry.`
 func registryCommands() []*command {
 	return []*command{
 		{name: "registry", aliases: []string{"registries"}, args: "[list] | add <host> [--username U] [--password-stdin] | rm <host>",
+			brief: "[list|add|rm …]",
 			short: "your saved registry logins: pull private images, push snapshots",
 			long:  registryLong,
 			vals:  []string{"username"}, bools: []string{"password-stdin"}, run: runRegistry},

@@ -11,13 +11,13 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"net/url"
 	"slices"
 	"sort"
 	"strconv"
 	"strings"
 	"text/tabwriter"
 	"time"
+	"unicode/utf8"
 
 	corev1 "k8s.io/api/core/v1"
 
@@ -55,14 +55,20 @@ type Env struct {
 	StdinLine func() (string, error)
 	// FollowIdle / FollowBudget override the follow limits (tests).
 	FollowIdle, FollowBudget time.Duration
+	// Cluster is --cluster: the cluster a command is about, when its names
+	// do not say (<cluster>/<name>).
+	Cluster string
+	// Interactive: the command came from the devpod> prompt.
+	Interactive bool
 }
 
 type parsed struct {
-	pos  []string
-	val  map[string]string
-	all  map[string][]string // every value of a flag given more than once
-	has  map[string]bool
-	json bool
+	cluster string // --cluster, taken by every command
+	pos     []string
+	val     map[string]string
+	all     map[string][]string // every value of a flag given more than once
+	has     map[string]bool
+	json    bool
 }
 
 // command is one row of the table the dispatcher, the parser and the
@@ -70,7 +76,9 @@ type parsed struct {
 type command struct {
 	name    string
 	aliases []string
+	group   string   // the help's heading for it and the commands after
 	args    string   // the argument synopsis
+	brief   string   // a shorter one for the command list (args when empty)
 	short   string   // one line for the list
 	long    string   // more for `help <command>`
 	admin   bool     // the API only answers admins
@@ -84,31 +92,42 @@ var commands []*command
 func init() {
 	edit := []string{"image", "cpu", "memory", "gpu", "shell"}
 	commands = []*command{
-		{name: "help", args: "[command]", short: "show this help, or one command's", run: nil},
-		{name: "whoami", short: "who you are, your quota and usage", run: runWhoami},
-		{name: "list", aliases: []string{"ls"}, args: "[--all]", short: "list your DevPods (--all: everyone's, admin)", bools: []string{"all"}, run: runList},
-		{name: "show", aliases: []string{"status", "get"}, args: "<name>", short: "one DevPod in detail", run: runShow},
-		{name: "create", args: "<name> --image IMG [--cpu N] [--memory SIZE] [--gpu N] [--shell S] [--collab a,b]",
+		{name: "help", args: "[command]", short: "this list, or one command in full", run: nil},
+		{group: "DevPods", name: "list", aliases: []string{"ls"}, args: "[--all] [--cluster C]", short: "list your DevPods (--all: everyone's, admin)", bools: []string{"all"}, run: runList},
+		{name: "show", aliases: []string{"status", "get"}, args: "<name>", short: "one DevPod in detail, with its Pod's state", run: runShow},
+		{name: "events", args: "<name>", short: "a DevPod's recent events (scheduling, pulls, restarts)", run: runEvents},
+		{name: "create", args: "<name> --image IMG [--cpu N] [--memory SIZE] [--gpu N] [--shell S] [--collab a,b] [--cluster C]", brief: "<name> --image IMG [flags]",
 			short: "create a DevPod",
-			long:  "<name> is the part after your user name: `create dev1` makes <you>-dev1.\nNon-admins must give --cpu and --memory. To start from a saved config: config launch.",
-			vals:  append([]string{"collab"}, edit...), run: runCreate},
+			long: "<name> is the part after your user name: `create dev1` makes <you>-dev1.\nNon-admins must give --cpu and --memory. To start from a saved config: config launch.\n" +
+				"With several clusters, say where: --cluster C, or <cluster>/<name> (create st2/dev1).",
+			vals: append([]string{"collab"}, edit...), run: runCreate},
 		{name: "start", args: "<name>…", short: "start (wake) DevPods", run: runRunning(true)},
 		{name: "stop", args: "<name>…", short: "stop (hibernate) DevPods; the home volume stays", run: runRunning(false)},
 		{name: "redeploy", args: "<name>…", short: "recreate the Pod (sessions drop, the home volume stays)", run: runRedeploy},
+		{name: "rebuild", args: "<name>… [--dry-run]", short: "rebuild DevPods from the config they were made from, as it is now",
+			long:  "A running DevPod's Pod is recreated (sessions drop; the home volume stays).\n--dry-run prints the YAML each would get and changes nothing.",
+			bools: []string{"dry-run"}, run: runRebuild},
 		{name: "delete", aliases: []string{"rm"}, args: "<name>… --yes", short: "delete DevPods and their data", bools: []string{"yes"}, run: runDelete},
-		{name: "set", args: "<name> [--image IMG] [--cpu N] [--memory SIZE] [--gpu N] [--shell S]", short: "change a DevPod (a running one is rebuilt)", vals: edit, run: runSet},
+		{name: "set", args: "<name> [--image IMG] [--cpu N] [--memory SIZE] [--gpu N] [--shell S]", brief: "<name> [--image|--cpu|--memory|--gpu|--shell …]", short: "change a DevPod (a running one is rebuilt)", vals: edit, run: runSet},
+		{name: "yaml", args: "<name> [--apply]", short: "print a DevPod's YAML, or replace it with the YAML on standard input",
+			long:  "yaml <name> prints the DevPod as you may edit it. yaml <name> --apply reads a\nwhole new YAML from standard input and replaces the DevPod's spec with it\n(a running DevPod is rebuilt when its Pod changes):\n  ssh <you>+devpod@<gateway> yaml dev1 --apply < dev1.yaml",
+			bools: []string{"apply"}, run: runYAML},
 		{name: "collab", args: "<name> [add|remove|set user…]", short: "show or change collaborators", run: runCollab},
-		{name: "ports", args: "<name> [url <port> | public <port>… | users <port>… | private <port>… | reset]", short: "HTTP addresses of a DevPod's ports",
+		{name: "ports", args: "<name> [url <port> | public <port>… | users <port>… | private <port>… | reset]", brief: "<name> [url|public|users|private|reset …]", short: "HTTP addresses of a DevPod's ports",
 			long: "Without a subcommand: the address pattern and the public ports.\nurl prints one port's address; public / private open or close a port to\npeople who are not signed in; reset draws a new random address (old links die).",
 			run:  runPorts},
 		{name: "ssh", args: "<name>", short: "print the ssh command for a DevPod", run: runSSH},
-		{name: "nodes", short: "list nodes", admin: true, run: runNodes},
-		{name: "users", short: "list users", admin: true, run: runUsers},
 		{name: "migrate", args: "<name> <node|->", short: "pin a DevPod to a node (- lets the scheduler choose)", admin: true, run: runMigrate},
+		{group: "Clusters and nodes", name: "clusters", short: "the clusters, where to reach each, and your DevPods in it", run: runClusters},
+		{name: "nodes", args: "[--cluster C]", short: "list nodes", admin: true, run: runNodes},
 	}
+	commands = append(commands, reserveCommands()...)
 	commands = append(commands, snapshotCommands()...)
-	commands = append(commands, registryCommands()...)
 	commands = append(commands, configCommands()...)
+	commands = append(commands, &command{group: "You", name: "whoami", short: "who you are, your quota and usage (per cluster)", run: runWhoami})
+	commands = append(commands, accountCommands()...)
+	commands = append(commands, registryCommands()...)
+	commands = append(commands, &command{group: "Admin", name: "users", short: "list users", admin: true, run: runUsers})
 }
 
 func find(name string) *command {
@@ -129,7 +148,10 @@ func (c *command) synopsis() string {
 }
 
 // Help writes the command list, or one command's help.
-func Help(w io.Writer, name string) bool {
+func Help(w io.Writer, name string) bool { return help(w, name, false) }
+
+// help: in the devpod> shell (interactive) commands are typed as they are.
+func help(w io.Writer, name string, interactive bool) bool {
 	if name != "" {
 		c := find(name)
 		if c == nil {
@@ -143,22 +165,45 @@ func Help(w io.Writer, name string) bool {
 		if c.long != "" {
 			fmt.Fprintf(w, "\n%s\n", c.long)
 		}
+		if strings.Contains(c.args, "<name>") || strings.Contains(c.args, "<id>") || strings.Contains(c.args, "<devpod>") {
+			fmt.Fprintln(w, "\nWith several clusters: <cluster>/<name> (or --cluster C) where a name is in more than one.")
+		}
 		if len(c.aliases) > 0 {
 			fmt.Fprintf(w, "\naliases: %s\n", strings.Join(c.aliases, ", "))
 		}
 		return true
 	}
-	fmt.Fprintln(w, "DevPod CLI — usage: ssh <user>+devpod@<gateway> <command> [arguments]")
-	fmt.Fprintln(w)
-	tw := tabwriter.NewWriter(w, 0, 2, 2, ' ', 0)
+	if interactive {
+		fmt.Fprintln(w, "DevPod CLI — type a command; `help <command>` for more, `exit` to leave.")
+	} else {
+		fmt.Fprintln(w, "DevPod CLI — usage: ssh <user>+devpod@<gateway> <command> [arguments]")
+		fmt.Fprintln(w, "(ssh -t <user>+devpod@<gateway> for a devpod> prompt)")
+	}
+	// one column for every group; a long synopsis is cut to its brief here
+	// (help <command> has it in full)
+	listed := func(c *command) string {
+		if c.brief != "" {
+			return c.name + " " + c.brief
+		}
+		return c.synopsis()
+	}
+	width := 0
 	for _, c := range commands {
+		width = max(width, utf8.RuneCountInString(listed(c)))
+	}
+	for _, c := range commands {
+		if c.group != "" {
+			fmt.Fprintf(w, "\n%s\n", c.group)
+		}
 		short := c.short
 		if c.admin {
 			short += " (admin)"
 		}
-		fmt.Fprintf(tw, "  %s\t%s\n", c.synopsis(), short)
+		s := listed(c)
+		fmt.Fprintf(w, "  %s%s  %s\n", s, strings.Repeat(" ", width-utf8.RuneCountInString(s)), short)
 	}
-	_ = tw.Flush()
+	fmt.Fprintln(w)
+	fmt.Fprintln(w, clustersHelp)
 	fmt.Fprintln(w)
 	fmt.Fprintln(w, "Every command takes --json (or -o json): the API's JSON on stdout, for scripts and agents.")
 	fmt.Fprintln(w, "Exit status: 0 ok, 1 the API refused, 2 bad command line. Errors go to stderr.")
@@ -199,6 +244,12 @@ func parse(c *command, argv []string) (*parsed, error) {
 		switch {
 		case name == "json":
 			a.json = true
+		case name == "cluster":
+			v, err := value()
+			if err != nil {
+				return nil, err
+			}
+			a.cluster = v
 		case name == "output":
 			v, err := value()
 			if err != nil {
@@ -233,7 +284,7 @@ func Run(e *Env, argv []string) int {
 		e.Now = time.Now
 	}
 	if len(argv) == 0 {
-		Help(e.Out, "")
+		help(e.Out, "", e.Interactive)
 		return ExitOK
 	}
 	name, rest := argv[0], argv[1:]
@@ -245,7 +296,7 @@ func Run(e *Env, argv []string) int {
 		if len(rest) > 0 {
 			topic = rest[0]
 		}
-		if !Help(e.Out, topic) {
+		if !help(e.Out, topic, e.Interactive) {
 			fmt.Fprintf(e.Err, "error: no such command %q; try `help`\n", topic)
 			return ExitUsage
 		}
@@ -257,13 +308,14 @@ func Run(e *Env, argv []string) int {
 		return ExitUsage
 	}
 	if slices.Contains(rest, "--help") || slices.Contains(rest, "-h") {
-		Help(e.Out, c.name)
+		help(e.Out, c.name, e.Interactive)
 		return ExitOK
 	}
 	a, err := parse(c, rest)
 	if err != nil {
 		return usage(e, c, err.Error())
 	}
+	e.Cluster = a.cluster
 	return c.run(e, a)
 }
 
@@ -281,7 +333,7 @@ func fail(e *Env, err error) int {
 func call(e *Env, method, path string, body, out any) ([]byte, error) {
 	raw, err := e.API.Do(e.Ctx, e.User, method, path, body)
 	if err != nil {
-		return nil, err
+		return nil, explain(err)
 	}
 	if out != nil && len(raw) > 0 {
 		if err := json.Unmarshal(raw, out); err != nil {
@@ -366,22 +418,10 @@ type podInfo struct {
 	IP   string `json:"ip"`
 }
 
-func dpPath(name string) string { return "/api/devpods/" + url.PathEscape(name) }
-
 /* ---- commands ---- */
 
 func runWhoami(e *Env, a *parsed) int {
-	var me struct {
-		User  string `json:"user"`
-		Admin bool   `json:"admin"`
-		Usage struct {
-			DevPods int               `json:"devpods"`
-			Running int               `json:"running"`
-			Compute map[string]string `json:"compute"`
-			Storage string            `json:"storage"`
-		} `json:"usage"`
-		Quota map[string]any `json:"quota"`
-	}
+	var me meView
 	raw, err := call(e, "GET", "/api/me", nil, &me)
 	if err != nil {
 		return fail(e, err)
@@ -391,35 +431,59 @@ func runWhoami(e *Env, a *parsed) int {
 		return ExitOK
 	}
 	fmt.Fprintf(e.Out, "user:     %s\nadmin:    %v\ndevpods:  %d (%d running)\n", me.User, me.Admin, me.Usage.DevPods, me.Usage.Running)
-	keys := make([]string, 0, len(me.Usage.Compute))
-	for k := range me.Usage.Compute {
-		keys = append(keys, k)
+	usageLines := func(prefix string, u usageView, q map[string]any) {
+		keys := make([]string, 0, len(u.Compute))
+		for k := range u.Compute {
+			keys = append(keys, k)
+		}
+		sort.Strings(keys)
+		for _, k := range keys {
+			fmt.Fprintf(e.Out, "%sin use:   %s %s\n", prefix, k, u.Compute[k])
+		}
+		if u.Storage != "" && u.Storage != "0" {
+			fmt.Fprintf(e.Out, "%sstorage:  %s\n", prefix, u.Storage)
+		}
+		if len(q) > 0 {
+			b, _ := json.Marshal(q)
+			fmt.Fprintf(e.Out, "%squota:    %s\n", prefix, b)
+		}
 	}
-	sort.Strings(keys)
-	for _, k := range keys {
-		fmt.Fprintf(e.Out, "in use:   %s %s\n", k, me.Usage.Compute[k])
+	if len(me.Clusters) == 0 {
+		usageLines("", me.Usage, me.Quota)
+		return ExitOK
 	}
-	if me.Usage.Storage != "" && me.Usage.Storage != "0" {
-		fmt.Fprintf(e.Out, "storage:  %s\n", me.Usage.Storage)
+	// quotas and usage are per cluster
+	names := make([]string, 0, len(me.Clusters))
+	for n := range me.Clusters {
+		names = append(names, n)
 	}
-	if len(me.Quota) > 0 {
-		q, _ := json.Marshal(me.Quota)
-		fmt.Fprintf(e.Out, "quota:    %s\n", q)
+	sort.Strings(names)
+	for _, n := range names {
+		c := me.Clusters[n]
+		fmt.Fprintf(e.Out, "\ncluster %s: %d DevPods (%d running), ssh %s\n", n, c.Usage.DevPods, c.Usage.Running, me.sshOf(n).address())
+		usageLines("  ", c.Usage, c.Quota)
 	}
 	return ExitOK
+}
+
+// listed is a DevPod as a list has it: with its cluster, in a console of
+// several.
+type listed struct {
+	devpodv1alpha1.DevPod
+	Cluster string `json:"cluster"`
 }
 
 func runList(e *Env, a *parsed) int {
 	if len(a.pos) > 0 {
 		return usage(e, find("list"), "list takes no names; use `show <name>`")
 	}
-	path := "/api/devpods"
+	path := scoped(e, "", "/api/devpods")
 	if a.has["all"] {
 		path += "?scope=all"
 	}
 	var list struct {
-		Items []devpodv1alpha1.DevPod `json:"items"`
-		Pods  map[string]podInfo      `json:"pods"`
+		Items []listed           `json:"items"`
+		Pods  map[string]podInfo `json:"pods"` // by <cluster>/<name> in a console of several
 	}
 	raw, err := call(e, "GET", path, nil, &list)
 	if err != nil {
@@ -433,12 +497,29 @@ func runList(e *Env, a *parsed) int {
 		fmt.Fprintln(e.Out, "no DevPods; create one with `create <name> --image IMG --cpu N --memory SIZE`")
 		return ExitOK
 	}
-	sort.Slice(list.Items, func(i, j int) bool { return list.Items[i].Name < list.Items[j].Name })
-	table(e, "NAME\tOWNER\tPHASE\tNODE\tIMAGE\tCPU\tMEMORY\tGPU\tAGE", func(w io.Writer) {
+	several := false
+	for _, it := range list.Items {
+		several = several || it.Cluster != ""
+	}
+	sort.Slice(list.Items, func(i, j int) bool {
+		if list.Items[i].Cluster != list.Items[j].Cluster {
+			return list.Items[i].Cluster < list.Items[j].Cluster
+		}
+		return list.Items[i].Name < list.Items[j].Name
+	})
+	head := "NAME\tOWNER\tPHASE\tNODE\tIMAGE\tCPU\tMEMORY\tGPU\tAGE"
+	if several {
+		head = "CLUSTER\t" + head
+	}
+	table(e, head, func(w io.Writer) {
 		for i := range list.Items {
-			dp := &list.Items[i]
+			it := &list.Items[i]
+			dp := &it.DevPod
 			c := target(dp)
-			fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n", dp.Name, dp.Spec.Owner, dash(string(dp.Status.Phase)), dash(list.Pods[dp.Name].Node),
+			if several {
+				fmt.Fprintf(w, "%s\t", dash(it.Cluster))
+			}
+			fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n", dp.Name, dp.Spec.Owner, dash(string(dp.Status.Phase)), dash(list.Pods[joinRef(it.Cluster, dp.Name)].Node),
 				dash(image(c)), dash(limit(c, corev1.ResourceCPU)), dash(limit(c, corev1.ResourceMemory)), dash(limit(c, "nvidia.com/gpu")),
 				age(e.Now(), dp.CreationTimestamp.Time))
 		}
@@ -447,8 +528,24 @@ func runList(e *Env, a *parsed) int {
 }
 
 type detail struct {
-	DevPod devpodv1alpha1.DevPod `json:"devpod"`
-	Pod    *podInfo              `json:"pod"`
+	DevPod  devpodv1alpha1.DevPod `json:"devpod"`
+	Cluster string                `json:"cluster"`
+	Pod     *podInfo              `json:"pod"`
+}
+
+// podState is GET …/pod: the DevPod's Pod as Kubernetes has it.
+type podState struct {
+	Pod *struct {
+		Phase      string `json:"phase"`
+		Reason     string `json:"reason"`
+		Ready      string `json:"ready"`
+		Restarts   int32  `json:"restarts"`
+		Containers []struct {
+			Name      string `json:"name"`
+			State     string `json:"state"`
+			LastState string `json:"lastState"`
+		} `json:"containers"`
+	} `json:"pod"`
 }
 
 func runShow(e *Env, a *parsed) int {
@@ -456,7 +553,7 @@ func runShow(e *Env, a *parsed) int {
 		return usage(e, find("show"), "show takes exactly one name")
 	}
 	var d detail
-	raw, err := call(e, "GET", dpPath(a.pos[0]), nil, &d)
+	raw, err := call(e, "GET", dpPath(e, a.pos[0]), nil, &d)
 	if err != nil {
 		return fail(e, err)
 	}
@@ -466,7 +563,7 @@ func runShow(e *Env, a *parsed) int {
 	}
 	dp, c := &d.DevPod, target(&d.DevPod)
 	kv := [][2]string{
-		{"name", dp.Name}, {"owner", dp.Spec.Owner}, {"phase", string(dp.Status.Phase)}, {"message", dp.Status.Message},
+		{"name", dp.Name}, {"cluster", d.Cluster}, {"owner", dp.Spec.Owner}, {"phase", string(dp.Status.Phase)}, {"message", dp.Status.Message},
 		{"running", strconv.FormatBool(dp.Spec.Running)},
 	}
 	if d.Pod != nil {
@@ -479,6 +576,23 @@ func runShow(e *Env, a *parsed) int {
 	}
 	if !dp.CreationTimestamp.IsZero() {
 		kv = append(kv, [2]string{"created", dp.CreationTimestamp.UTC().Format(time.RFC3339)})
+	}
+	// the Pod as Kubernetes has it (what an empty phase does not say)
+	var ps podState
+	if _, err := call(e, "GET", dpPath(e, joinRef(d.Cluster, dp.Name))+"/pod", nil, &ps); err == nil && ps.Pod != nil {
+		p := ps.Pod
+		state := p.Phase
+		if p.Reason != "" {
+			state += " (" + p.Reason + ")"
+		}
+		kv = append(kv, [2]string{"pod", fmt.Sprintf("%s, %s ready, %d restarts", state, dash(p.Ready), p.Restarts)})
+		for _, ct := range p.Containers {
+			line := dash(ct.State)
+			if ct.LastState != "" {
+				line += "; last " + ct.LastState
+			}
+			kv = append(kv, [2]string{"container " + ct.Name, line})
+		}
 	}
 	for _, r := range kv {
 		if r[1] != "" {
@@ -506,7 +620,8 @@ func runCreate(e *Env, a *parsed) int {
 	if a.val["image"] == "" {
 		return usage(e, c, "give --image")
 	}
-	body := map[string]any{"name": a.pos[0]}
+	cluster, name := splitRef(a.pos[0])
+	body := map[string]any{"name": name}
 	for flag, field := range map[string]string{"image": "image", "cpu": "cpu", "memory": "memory", "gpu": "gpu", "shell": "shell"} {
 		if v, ok := a.val[flag]; ok {
 			body[field] = v
@@ -516,7 +631,7 @@ func runCreate(e *Env, a *parsed) int {
 		body["collaborators"] = splitList(v)
 	}
 	var dp devpodv1alpha1.DevPod
-	raw, err := call(e, "POST", "/api/devpods", body, &dp)
+	raw, err := call(e, "POST", scoped(e, cluster, "/api/devpods"), body, &dp)
 	if err != nil {
 		return fail(e, err)
 	}
@@ -588,7 +703,7 @@ func runRunning(on bool) func(e *Env, a *parsed) int {
 	}
 	return func(e *Env, a *parsed) int {
 		return each(e, a, find(name), done, func(n string) (string, error) {
-			_, err := call(e, "PATCH", dpPath(n), map[string]any{"running": on}, nil)
+			_, err := call(e, "PATCH", dpPath(e, n), map[string]any{"running": on}, nil)
 			return "", err
 		})
 	}
@@ -596,7 +711,7 @@ func runRunning(on bool) func(e *Env, a *parsed) int {
 
 func runRedeploy(e *Env, a *parsed) int {
 	return each(e, a, find("redeploy"), "redeploying", func(n string) (string, error) {
-		_, err := call(e, "POST", dpPath(n)+"/redeploy", nil, nil)
+		_, err := call(e, "POST", dpPath(e, n)+"/redeploy", nil, nil)
 		return "", err
 	})
 }
@@ -607,7 +722,7 @@ func runDelete(e *Env, a *parsed) int {
 		return usage(e, c, "deleting removes the DevPod and its home volume; add --yes to confirm")
 	}
 	return each(e, a, c, "deleted", func(n string) (string, error) {
-		_, err := call(e, "DELETE", dpPath(n), nil, nil)
+		_, err := call(e, "DELETE", dpPath(e, n), nil, nil)
 		return "", err
 	})
 }
@@ -625,7 +740,7 @@ func runSet(e *Env, a *parsed) int {
 		body[k] = v
 	}
 	var r patchResult
-	raw, err := call(e, "PATCH", dpPath(a.pos[0]), body, &r)
+	raw, err := call(e, "PATCH", dpPath(e, a.pos[0]), body, &r)
 	if err != nil {
 		return fail(e, err)
 	}
@@ -644,7 +759,7 @@ func runCollab(e *Env, a *parsed) int {
 	}
 	name := a.pos[0]
 	var d detail
-	raw, err := call(e, "GET", dpPath(name), nil, &d)
+	raw, err := call(e, "GET", dpPath(e, name), nil, &d)
 	if err != nil {
 		return fail(e, err)
 	}
@@ -678,7 +793,7 @@ func runCollab(e *Env, a *parsed) int {
 			next = []string{}
 		}
 		var r patchResult
-		if raw, err = call(e, "PATCH", dpPath(name), map[string]any{"collaborators": next}, &r); err != nil {
+		if raw, err = call(e, "PATCH", dpPath(e, name), map[string]any{"collaborators": next}, &r); err != nil {
 			return fail(e, err)
 		}
 		cur = r.DevPod.Spec.Collaborators
@@ -707,7 +822,7 @@ func runPorts(e *Env, a *parsed) int {
 	if len(a.pos) == 0 {
 		return usage(e, c, "ports needs a name")
 	}
-	path := dpPath(a.pos[0]) + "/http"
+	path := dpPath(e, a.pos[0]) + "/http"
 	var v httpView
 	raw, err := call(e, "GET", path, nil, &v)
 	if err != nil {
@@ -804,30 +919,25 @@ func runSSH(e *Env, a *parsed) int {
 		return usage(e, find("ssh"), "ssh takes exactly one name")
 	}
 	var d detail
-	if _, err := call(e, "GET", dpPath(a.pos[0]), nil, &d); err != nil {
+	if _, err := call(e, "GET", dpPath(e, a.pos[0]), nil, &d); err != nil {
 		return fail(e, err)
 	}
-	var me struct {
-		SSH struct {
-			Host        string `json:"host"`
-			Port        int    `json:"port"`
-			LoginSuffix string `json:"loginSuffix"`
-		} `json:"ssh"`
-	}
+	var me meView
 	if _, err := call(e, "GET", "/api/me", nil, &me); err != nil {
 		return fail(e, err)
 	}
+	ssh := me.sshOf(d.Cluster) // the gateway that serves the DevPod's cluster
 	owner, name := d.DevPod.Spec.Owner, d.DevPod.Name
 	pod := strings.TrimPrefix(name, owner+"-")
 	login := owner + "+" + pod
-	if me.SSH.LoginSuffix != "" {
-		login += "+" + me.SSH.LoginSuffix
+	if ssh.LoginSuffix != "" {
+		login += "+" + ssh.LoginSuffix
 	}
-	host, port := me.SSH.Host, ""
+	host, port := ssh.Host, ""
 	if host == "" {
 		host = "<gateway>"
-	} else if me.SSH.Port != 0 && me.SSH.Port != 22 {
-		port = fmt.Sprintf("-p %d ", me.SSH.Port)
+	} else if ssh.Port != 0 && ssh.Port != 22 {
+		port = fmt.Sprintf("-p %d ", ssh.Port)
 	}
 	cmd := fmt.Sprintf("ssh %s%s@%s", port, login, host)
 	if a.json {
@@ -847,11 +957,12 @@ func runNodes(e *Env, a *parsed) int {
 	}
 	var list struct {
 		Items []struct {
-			Name  string `json:"name"`
-			Ready bool   `json:"ready"`
-			CPU   res    `json:"cpu"`
-			Mem   res    `json:"mem"`
-			GPU   struct {
+			Cluster string `json:"cluster"`
+			Name    string `json:"name"`
+			Ready   bool   `json:"ready"`
+			CPU     res    `json:"cpu"`
+			Mem     res    `json:"mem"`
+			GPU     struct {
 				Model string `json:"model"`
 				Total int    `json:"total"`
 				Used  int    `json:"used"`
@@ -859,7 +970,7 @@ func runNodes(e *Env, a *parsed) int {
 			DevPods int `json:"devpods"`
 		} `json:"items"`
 	}
-	raw, err := call(e, "GET", "/api/admin/nodes", nil, &list)
+	raw, err := call(e, "GET", scoped(e, "", "/api/admin/nodes"), nil, &list)
 	if err != nil {
 		return fail(e, err)
 	}
@@ -868,8 +979,19 @@ func runNodes(e *Env, a *parsed) int {
 		return ExitOK
 	}
 	gib := func(b float64) string { return strconv.FormatFloat(b/(1<<30), 'f', 0, 64) + "Gi" }
-	table(e, "NAME\tREADY\tCPU alloc/total\tMEMORY alloc/total\tGPU used/total\tDEVPODS", func(w io.Writer) {
+	several := false
+	for _, n := range list.Items {
+		several = several || n.Cluster != ""
+	}
+	head := "NAME\tREADY\tCPU alloc/total\tMEMORY alloc/total\tGPU used/total\tDEVPODS"
+	if several {
+		head = "CLUSTER\t" + head
+	}
+	table(e, head, func(w io.Writer) {
 		for _, n := range list.Items {
+			if several {
+				fmt.Fprintf(w, "%s\t", dash(n.Cluster))
+			}
 			gpu := "-"
 			if n.GPU.Total > 0 {
 				gpu = fmt.Sprintf("%d/%d %s", n.GPU.Used, n.GPU.Total, n.GPU.Model)
@@ -918,7 +1040,7 @@ func runMigrate(e *Env, a *parsed) int {
 		node = ""
 	}
 	var r patchResult
-	raw, err := call(e, "PATCH", dpPath(a.pos[0]), map[string]any{"node": node}, &r)
+	raw, err := call(e, "PATCH", dpPath(e, a.pos[0]), map[string]any{"node": node}, &r)
 	if err != nil {
 		return fail(e, err)
 	}

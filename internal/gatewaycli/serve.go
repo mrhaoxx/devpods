@@ -213,7 +213,7 @@ func (s *Server) run(ctx context.Context, m Meta, line string, out, errw io.Writ
 		fmt.Fprintf(errw, "error: %s\n", err)
 	} else {
 		cctx, cancel := context.WithTimeout(ctx, s.CommandTimeout)
-		env := &Env{Ctx: cctx, User: m.User, API: s.API, Out: out, Err: errw, Session: ctx, Interrupt: in.begin(), TTY: in.tty,
+		env := &Env{Ctx: cctx, User: m.User, API: s.API, Out: out, Err: errw, Session: ctx, Interrupt: in.begin(), TTY: in.tty, Interactive: in.repl,
 			StdinLine: func() (string, error) { return in.line(nil) }, FollowBudget: s.FollowBudget, FollowIdle: s.FollowIdle}
 		if in.tty {
 			env.ReadLine = func(prompt string, echo bool) (string, error) {
@@ -246,6 +246,7 @@ func (s *Server) interactive(ctx context.Context, ch ssh.Channel, in *input, m M
 		io.Reader
 		io.Writer
 	}{in, ch}, "devpod> ")
+	in.repl = true
 	fmt.Fprintf(t, "DevPod CLI — signed in as %s. Type help for commands, exit to leave.\n", m.User)
 	code := ExitOK
 	for {
@@ -305,7 +306,8 @@ const maxInput = maxConfigContent + 64<<10
 // command from then on. End of input alone is not an interrupt
 // (`ssh -n`, an agent without stdin).
 type input struct {
-	tty bool
+	tty  bool
+	repl bool // lines come from the devpod> prompt
 
 	mu      sync.Mutex
 	cond    *sync.Cond

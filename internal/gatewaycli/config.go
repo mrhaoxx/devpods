@@ -34,8 +34,9 @@ or ${VAR:-default} of your own.
   config share <name> [user…]                who may use it besides you (no user: nobody)
   config public <name> on|off                open it to everyone signed in, or not
   config delete <name>
-  config launch <name> [--set VAR=value]… [--node N]… [--count N] [--dry-run]
-                                             create DevPods from it
+  config launch <name> [--set VAR=value]… [--node N]… [--count N] [--dry-run] [--cluster C]
+                                             create DevPods from it (with several clusters:
+                                             in --cluster C)
 
 <name> is the config's full name as the list shows it; your own may be given
 without your user name. launch creates one DevPod per --node for a config with
@@ -45,7 +46,7 @@ only checks, and prints the YAML each DevPod would be created from.`
 
 func configCommands() []*command {
 	return []*command{
-		{name: "config", aliases: []string{"configs"},
+		{group: "Configs", name: "config", aliases: []string{"configs"}, brief: "[list|show|save|share|public|delete|launch …]",
 			args:  "[list | show <name> | save <id> | share <name> [user…] | public <name> on|off | delete <name> | launch <name> [--set VAR=value]… [--node N]… [--count N] [--dry-run]]",
 			short: "saved DevPod configs: list, save, share, and create DevPods from one",
 			long:  configLong,
@@ -416,7 +417,7 @@ func configLaunch(e *Env, c *command, a *parsed, args []string) int {
 	// 422: the check refused the launch and nothing was created — its
 	// body lists every DevPod like the others do.
 	rejected := false
-	raw, err := call(e, http.MethodPost, configPath(have.Name)+"/launch", body, nil)
+	raw, err := call(e, http.MethodPost, scoped(e, "", configPath(have.Name)+"/launch"), body, nil)
 	if err != nil {
 		var apiErr *APIError
 		if !errors.As(err, &apiErr) || apiErr.Status != http.StatusUnprocessableEntity || len(apiErr.Body) == 0 {
