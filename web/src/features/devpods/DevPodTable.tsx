@@ -1,7 +1,7 @@
 // 我的 DevPod / 全部 DevPod (UI spec §5.1): one table, the admin view adds
 // Owner, the 空转 / GPU chips and bulk actions.
 import { useClusterFilter } from "../../data/clusterFilter";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import { useQueryClient } from "@tanstack/react-query";
 import * as Menu from "@radix-ui/react-dropdown-menu";
@@ -81,6 +81,39 @@ const flat = (rows: Row[]): Row[] => {
   // each DevPod once — by cluster and name: same-named ones of two clusters are two
   return rows.flatMap((r) => r.group?.members ?? [r]).filter((r) => !seen.has(keyOf(r)) && seen.add(keyOf(r)));
 };
+
+// The filter box keeps what is typed and hands it on once typing pauses:
+// with a thousand rows, redrawing the table on every key lags. A query
+// changed elsewhere (back, a link) shows in the box.
+function FilterBox({ value, onChange }: { value: string; onChange: (q: string) => void }) {
+  const [text, setText] = useState(value);
+  const sent = useRef(value);
+  const send = useRef(onChange);
+  send.current = onChange;
+  useEffect(() => {
+    if (value !== sent.current) {
+      sent.current = value;
+      setText(value);
+    }
+  }, [value]);
+  useEffect(() => {
+    if (text === sent.current) return;
+    const t = setTimeout(() => {
+      sent.current = text;
+      send.current(text);
+    }, 200);
+    return () => clearTimeout(t);
+  }, [text]);
+  return (
+    <Input
+      aria-label="过滤"
+      placeholder="过滤：Running gpu>0 owner: node: image:"
+      value={text}
+      onChange={(e) => setText(e.target.value)}
+      className="mono !h-7 w-72 text-xs max-[700px]:w-full"
+    />
+  );
+}
 
 export function DevPodTable({ scope }: { scope: "mine" | "all" }) {
   const me = useMe().data;
@@ -187,13 +220,7 @@ export function DevPodTable({ scope }: { scope: "mine" | "all" }) {
   return (
     <TableCtx.Provider value={{ scope, now, recent: recent.data }}>
       <div className="flex flex-wrap items-center gap-2 border-b border-line px-3 py-2">
-        <Input
-          aria-label="过滤"
-          placeholder="过滤：Running gpu>0 owner: node: image:"
-          value={url.q}
-          onChange={(e) => setUrl({ q: e.target.value })}
-          className="mono !h-7 w-72 text-xs max-[700px]:w-full"
-        />
+        <FilterBox value={url.q} onChange={(q) => setUrl({ q })} />
         {PHASES.map((p) => (
           <Chip
             key={p}

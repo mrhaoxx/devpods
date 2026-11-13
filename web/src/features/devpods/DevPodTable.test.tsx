@@ -44,6 +44,18 @@ describe("DevPodTable", () => {
     expect(rowNames()).toEqual(["alice-a"]);
   });
 
+  it("the filter box takes each key at once; the rows follow when typing pauses", async () => {
+    stubFetch({ "/api/devpods": list });
+    renderWithProviders(<DevPodTable scope="all" />, { me: stubMe({ admin: true }), route: "/admin/devpods" });
+    await screen.findByRole("link", { name: "bob-c" });
+    const box = screen.getByRole<HTMLInputElement>("textbox", { name: "过滤" });
+    fireEvent.change(box, { target: { value: "user:alice" } });
+    expect(box.value).toBe("user:alice");
+    expect(rowNames()).toContain("bob-c"); // a thousand rows are not redrawn on every key
+    await act(() => new Promise((r) => setTimeout(r, 300))); // the pause, inside act: the URL change is a transition
+    expect(rowNames()).toEqual(["alice-a", "alice-b"]);
+  });
+
   it("status chip counts follow the rows", async () => {
     stubFetch({ "/api/devpods": list });
     renderWithProviders(<DevPodTable scope="all" />, { me: stubMe({ admin: true }), route: "/admin/devpods?q=user:bob" });
