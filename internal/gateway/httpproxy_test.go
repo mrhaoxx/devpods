@@ -5,13 +5,16 @@
 package gateway
 
 import (
+	"bufio"
 	"context"
+	"fmt"
 	"io"
 	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -21,6 +24,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
 	devpodv1alpha1 "github.com/mrhaoxx/devpod/api/v1alpha1"
+	"github.com/mrhaoxx/devpod/internal/audit/store"
 	"github.com/mrhaoxx/devpod/internal/httpauth"
 )
 
@@ -324,5 +328,156 @@ func TestHTTPProxy_ThroughTheClustersAgent(t *testing.T) {
 	// the connection is kept for the next request, not dialled again
 	if body := get(); body != "hello from mulan" || len(got) != 1 {
 		t.Fatalf("second request: %q after %d dials", body, len(got))
+	}
+}
+
+// fakeHTTPAudit admits (and records) while serve, and keeps the rows.
+type fakeHTTPAudit struct {
+	mu    sync.Mutex
+	serve bool
+	rows  []store.HTTPRequestRow
+}
+
+func (f *fakeHTTPAudit) Admit(context.Context, string) (bool, bool) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.serve, f.serve
+}
+
+func (f *fakeHTTPAudit) Record(r store.HTTPRequestRow) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.rows = append(f.rows, r)
+}
+
+// waitRows: the rows once there are n (a row is recorded as its request
+// ends, after the answer may already have reached the client).
+func (f *fakeHTTPAudit) waitRows(t *testing.T, n int) []store.HTTPRequestRow {
+	t.Helper()
+	for deadline := time.Now().Add(2 * time.Second); ; time.Sleep(10 * time.Millisecond) {
+		f.mu.Lock()
+		rows := append([]store.HTTPRequestRow(nil), f.rows...)
+		f.mu.Unlock()
+		if len(rows) >= n || time.Now().After(deadline) {
+			if len(rows) != n {
+				t.Fatalf("%d rows, want %d: %+v", len(rows), n, rows)
+			}
+			return rows
+		}
+	}
+}
+
+// Each request to a DevPod is recorded as it ended — refusals and the
+// sign-in included, a public port's visitor named when their cookie is
+// good; nothing is served while audit storage refuses.
+func TestHTTPProxy_Audit(t *testing.T) {
+	p, do, seen, bport := proxyRig(t)
+	fa := &fakeHTTPAudit{serve: true}
+	p.Audit = fa
+	if resp := do("GET", "/", map[string]string{"Host": "zzzzzzzz2222-" + bport + "-devpod.apps.test"}); resp.StatusCode != http.StatusNotFound {
+		t.Fatalf("unknown id: %d", resp.StatusCode)
+	}
+	if resp := do("GET", "/api", nil); resp.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("no cookie: %d", resp.StatusCode)
+	}
+	rows := fa.waitRows(t, 1) // the unknown id left none
+	if r := rows[0]; r.User != "" || r.Status != 401 || r.Access != "private" || r.DevPod != "alice-dev" || r.Path != "/api" || r.Method != "GET" {
+		t.Fatalf("refused: %+v", r)
+	}
+	// bob, a collaborator, signs in and reaches the private port
+	tk := httpauth.Sign(p.Key, httpauth.Claims{Kind: httpauth.KindTicket, ID: idA, User: "bob", Exp: time.Now().Add(time.Minute).Unix()})
+	resp := do("GET", httpauth.AuthPath+"?rd=%2F&t="+tk, nil)
+	if resp.StatusCode != http.StatusFound || len(resp.Cookies()) != 1 {
+		t.Fatalf("ticket: %d", resp.StatusCode)
+	}
+	bob := resp.Cookies()[0].Name + "=" + resp.Cookies()[0].Value
+	if resp := do("GET", "/x?a=1&token=t", map[string]string{"Cookie": bob}); resp.StatusCode != http.StatusOK {
+		t.Fatalf("signed in: %d", resp.StatusCode)
+	}
+	rows = fa.waitRows(t, 3)
+	if r := rows[1]; r.User != "bob" || r.Path != httpauth.AuthPath || r.Status != http.StatusFound {
+		t.Fatalf("sign-in: %+v", r)
+	}
+	if r := rows[2]; r.User != "bob" || r.Status != 200 || r.Path != "/x" || r.Query != "a=1&token=t" ||
+		r.BytesOut != uint64(len("hello from the devpod")) || r.Websocket || r.Port == 0 || r.RequestID == "" {
+		t.Fatalf("served: %+v", r)
+	}
+	// a public port: anyone, named only by a good cookie, never sent to sign in
+	var dp devpodv1alpha1.DevPod
+	_ = p.dir.(*kubeDirectory).c.Get(context.Background(), client.ObjectKey{Name: "alice-dev", Namespace: "devpods"}, &dp)
+	dp.Annotations[httpauth.PublicPortsAnnotation] = bport
+	if err := p.dir.(*kubeDirectory).c.(client.Client).Update(context.Background(), &dp); err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range []struct{ cookie, user string }{{"", ""}, {httpauth.CookieName + "=garbage", ""}, {bob, "bob"}} {
+		fa.mu.Lock()
+		n := len(fa.rows)
+		fa.mu.Unlock()
+		if resp := do("GET", "/pub", map[string]string{"Cookie": c.cookie, "Accept": "text/html"}); resp.StatusCode != http.StatusOK {
+			t.Fatalf("public port, cookie %q: %d", c.cookie, resp.StatusCode)
+		}
+		if r := fa.waitRows(t, n+1)[n]; r.User != c.user || r.Access != "public" {
+			t.Fatalf("public port, cookie %q: %+v", c.cookie, r)
+		}
+	}
+	// audit storage refuses: nothing is served, nothing recorded
+	fa.mu.Lock()
+	fa.serve = false
+	n, before := len(fa.rows), len(*seen)
+	fa.mu.Unlock()
+	if resp := do("GET", "/pub", nil); resp.StatusCode != http.StatusServiceUnavailable || len(*seen) != before {
+		t.Fatalf("refused by audit: %d, served %d", resp.StatusCode, len(*seen)-before)
+	}
+	time.Sleep(50 * time.Millisecond)
+	fa.waitRows(t, n)
+}
+
+// A WebSocket through the proxy still upgrades and streams, and is one
+// row when it closes, counting both directions.
+func TestHTTPProxy_AuditWebSocket(t *testing.T) {
+	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, brw, err := http.NewResponseController(w).Hijack()
+		if err != nil {
+			return
+		}
+		defer conn.Close()
+		_, _ = brw.WriteString("HTTP/1.1 101 Switching Protocols\r\nConnection: Upgrade\r\nUpgrade: test\r\n\r\n")
+		_ = brw.Flush()
+		buf := make([]byte, 4)
+		if _, err := io.ReadFull(brw, buf); err == nil {
+			_, _ = conn.Write(buf)
+		}
+	}))
+	t.Cleanup(backend.Close)
+	_, bport, _ := net.SplitHostPort(strings.TrimPrefix(backend.URL, "http://"))
+	dp := &devpodv1alpha1.DevPod{
+		ObjectMeta: metav1.ObjectMeta{Name: "alice-dev", Namespace: "devpods",
+			Annotations: map[string]string{httpauth.IDAnnotation: idA, httpauth.PublicPortsAnnotation: bport}},
+		Spec:   devpodv1alpha1.DevPodSpec{Owner: "alice", Running: true},
+		Status: devpodv1alpha1.DevPodStatus{Phase: devpodv1alpha1.DevPodRunning, Endpoint: "127.0.0.1:1"},
+	}
+	p := NewHTTPProxy(newFakeClient(t, dp), "devpods", "apps.test", "-devpod")
+	fa := &fakeHTTPAudit{serve: true}
+	p.Audit = fa
+	srv := httptest.NewServer(p)
+	t.Cleanup(srv.Close)
+	c, err := net.Dial("tcp", strings.TrimPrefix(srv.URL, "http://"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, _ = fmt.Fprintf(c, "GET /ws HTTP/1.1\r\nHost: %s-%s-devpod.apps.test\r\nConnection: Upgrade\r\nUpgrade: test\r\n\r\n", idA, bport)
+	br := bufio.NewReader(c)
+	resp, err := http.ReadResponse(br, nil)
+	if err != nil || resp.StatusCode != http.StatusSwitchingProtocols {
+		t.Fatalf("upgrade: %v %v", resp, err)
+	}
+	_, _ = c.Write([]byte("ping"))
+	buf := make([]byte, 4)
+	if _, err := io.ReadFull(br, buf); err != nil || string(buf) != "ping" {
+		t.Fatalf("echo: %q %v", buf, err)
+	}
+	_ = c.Close()
+	if r := fa.waitRows(t, 1)[0]; r.Status != 101 || !r.Websocket || r.BytesIn < 4 || r.BytesOut < 4 || r.Path != "/ws" {
+		t.Fatalf("websocket row: %+v", r)
 	}
 }

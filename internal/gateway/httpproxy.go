@@ -46,6 +46,8 @@ type HTTPProxy struct {
 	// Net, when set, is how a DevPod's address is reached: through the
 	// agent of its cluster (see Dialer.Net). Nil: a plain TCP connection.
 	Net func(ctx context.Context, t Target) (net.Conn, error)
+	// Audit records each request to a DevPod (nil: none is).
+	Audit HTTPAudit
 
 	mu         sync.Mutex
 	transports map[string]*http.Transport // per DevPod: idle connections are reused
@@ -153,11 +155,12 @@ func safeReturn(rd string) string {
 }
 
 // handleAuth turns the webui's ticket into this hostname's cookie.
-func (p *HTTPProxy) handleAuth(w http.ResponseWriter, r *http.Request, id string, port int, dp *devpodv1alpha1.DevPod) {
+// It returns the user signed in ("" when the ticket is refused).
+func (p *HTTPProxy) handleAuth(w http.ResponseWriter, r *http.Request, id string, port int, dp *devpodv1alpha1.DevPod) string {
 	c, err := httpauth.Verify(p.Key, r.URL.Query().Get("t"), httpauth.KindTicket, p.Now())
 	if err != nil || c.ID != id || c.User == "" || !httpauth.MayOpen(dp, port, c.User, c.Admin) {
 		http.Error(w, "this link has expired; open the port again from the DevPod console", http.StatusForbidden)
-		return
+		return ""
 	}
 	c.Kind, c.Exp = httpauth.KindCookie, p.Now().Add(httpauth.CookieTTL).Unix()
 	http.SetCookie(w, &http.Cookie{
@@ -165,6 +168,7 @@ func (p *HTTPProxy) handleAuth(w http.ResponseWriter, r *http.Request, id string
 		MaxAge: int(httpauth.CookieTTL / time.Second), HttpOnly: true, Secure: p.secure(), SameSite: http.SameSiteLaxMode,
 	})
 	http.Redirect(w, r, safeReturn(r.URL.Query().Get("rd")), http.StatusFound)
+	return c.User
 }
 
 // stripCookie removes the gateway's cookie before the request reaches
@@ -190,13 +194,26 @@ func (p *HTTPProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "not found", http.StatusNotFound)
 		return
 	}
+	// whom a good cookie names, on any port (a public one asks no one)
+	user, authed := p.user(r, id, port, dp)
+	if p.Audit != nil {
+		serve, record := p.Audit.Admit(r.Context(), user)
+		if !serve {
+			http.Error(w, "audit storage is full; try again later", http.StatusServiceUnavailable)
+			return
+		}
+		if record {
+			var done func(string)
+			w, done = p.record(w, r, dp, cluster, port)
+			defer func() { done(user) }()
+		}
+	}
 	if r.URL.Path == httpauth.AuthPath {
-		p.handleAuth(w, r, id, port, dp)
+		user = p.handleAuth(w, r, id, port, dp)
 		return
 	}
-	user, authed := "", false
 	if httpauth.Access(dp, port) != httpauth.AccessPublic {
-		if user, authed = p.user(r, id, port, dp); !authed {
+		if !authed {
 			browser := (r.Method == http.MethodGet || r.Method == http.MethodHead) && strings.Contains(r.Header.Get("Accept"), "text/html")
 			if !browser || p.LoginURL == "" || len(p.Key) == 0 {
 				http.Error(w, "this port needs a sign-in: open it from the DevPod console", http.StatusUnauthorized)
@@ -221,7 +238,7 @@ func (p *HTTPProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	target := net.JoinHostPort(podIP, strconv.Itoa(port))
-	slog.Info("http_proxy", "devpod", dp.Name, "port", port, "user", user, "public", !authed, "method", r.Method, "path", r.URL.Path)
+	slog.Info("http_proxy", "devpod", dp.Name, "port", port, "user", user, "access", httpauth.Access(dp, port), "method", r.Method, "path", r.URL.Path)
 	stripCookie(r)
 	proxy := &httputil.ReverseProxy{
 		Director: func(req *http.Request) {
