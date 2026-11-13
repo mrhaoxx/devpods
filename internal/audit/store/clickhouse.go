@@ -100,6 +100,7 @@ func (c *CH) Insert(ctx context.Context, b Batch, token string) error {
 	errs = append(errs, insertRows(ctx, c, "policy_events", token, b.PolicyEvents))
 	errs = append(errs, insertRows(ctx, c, "raw_segments", token, b.RawSegments))
 	errs = append(errs, insertRows(ctx, c, "alerts", token, b.Alerts))
+	errs = append(errs, insertRows(ctx, c, "http_requests", token, b.HTTPRequests))
 	return errors.Join(errs...)
 }
 

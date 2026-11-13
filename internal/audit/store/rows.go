@@ -127,6 +127,40 @@ type RawSegmentRow struct {
 	CompressedBytes int64     `ch:"compressed_bytes" json:"compressed_bytes"`
 }
 
+// HTTPRequestRow is one request a gateway's HTTP proxy served to a DevPod
+// port (one WebSocket connection, recorded when it closed).
+type HTTPRequestRow struct {
+	TS         time.Time `ch:"ts" json:"ts"`
+	DurationMS uint32    `ch:"duration_ms" json:"duration_ms"`
+	// Cluster: the DevPod's ("" in a console of one); Gateway: the
+	// gateway's registered name ("" for a gateway of one cluster).
+	Cluster    string `ch:"cluster" json:"cluster,omitempty"`
+	Gateway    string `ch:"gateway" json:"gateway,omitempty"`
+	GatewayPod string `ch:"gateway_pod" json:"gateway_pod"`
+	DevPod     string `ch:"devpod" json:"devpod"`
+	DevPodUID  string `ch:"devpod_uid" json:"devpod_uid"`
+	Owner      string `ch:"owner" json:"owner"`
+	Port       uint16 `ch:"port" json:"port"`
+	// Access: the port's level when served (public, users, private).
+	Access string `ch:"access" json:"access"`
+	// User: by the gateway's login cookie; "" is anonymous.
+	User      string `ch:"user" json:"user"`
+	Method    string `ch:"method" json:"method"`
+	Host      string `ch:"host" json:"host"`
+	Path      string `ch:"path" json:"path"`
+	Query     string `ch:"query" json:"query"`
+	Status    uint16 `ch:"status" json:"status"`
+	BytesIn   uint64 `ch:"bytes_in" json:"bytes_in"`
+	BytesOut  uint64 `ch:"bytes_out" json:"bytes_out"`
+	Websocket bool   `ch:"websocket" json:"websocket"`
+	// ClientIP: the TCP peer; ForwardedFor: X-Forwarded-For as received,
+	// unverified.
+	ClientIP     string `ch:"client_ip" json:"client_ip"`
+	ForwardedFor string `ch:"forwarded_for" json:"forwarded_for"`
+	UserAgent    string `ch:"user_agent" json:"user_agent"`
+	RequestID    string `ch:"request_id" json:"request_id"`
+}
+
 // AlertRow is a cross-check or data-loss alert.
 type AlertRow struct {
 	// Cluster: the cluster of its DevPod, in a console of several ("" in a console of one).
@@ -158,12 +192,14 @@ type Batch struct {
 	PolicyEvents []PolicyEventRow `json:"policy_events,omitempty"`
 	RawSegments  []RawSegmentRow  `json:"raw_segments,omitempty"`
 	Alerts       []AlertRow       `json:"alerts,omitempty"`
+	// HTTPRequests carry each its own cluster (SetCluster leaves them).
+	HTTPRequests []HTTPRequestRow `json:"http_requests,omitempty"`
 }
 
 // Empty reports whether the batch has no rows.
 func (b Batch) Empty() bool {
 	return len(b.Sessions)+len(b.Channels)+len(b.Commands)+len(b.FileEvents)+
-		len(b.PolicyEvents)+len(b.RawSegments)+len(b.Alerts) == 0
+		len(b.PolicyEvents)+len(b.RawSegments)+len(b.Alerts)+len(b.HTTPRequests) == 0
 }
 
 // SetCluster says every row of b is of a DevPod in cluster.

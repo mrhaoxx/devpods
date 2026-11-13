@@ -10,6 +10,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/rand"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -56,7 +57,7 @@ func openTestCH(t *testing.T, db string) *CH {
 	return c
 }
 
-var auditTables = []string{"sessions", "channels", "commands", "file_events", "policy_events", "raw_segments", "alerts", "access_log"}
+var auditTables = []string{"sessions", "channels", "commands", "file_events", "policy_events", "raw_segments", "alerts", "access_log", "http_requests"}
 
 func TestMigrate_Idempotent(t *testing.T) {
 	ctx := context.Background()
@@ -118,6 +119,50 @@ func TestInsert_DedupToken(t *testing.T) {
 		if n != 1 {
 			t.Errorf("%s: %d rows after a retried insert, want 1", tbl, n)
 		}
+	}
+}
+
+// HTTP requests: kept once when their batch is sent again, each with the
+// cluster it was written with, searched newest first by any filter.
+func TestHTTPRequests_InsertDedupSearch(t *testing.T) {
+	ctx := context.Background()
+	db := fmt.Sprintf("audit_http_%d", time.Now().UnixNano())
+	c := openTestCH(t, db)
+	t.Cleanup(func() { _ = c.conn.Exec(context.Background(), "DROP DATABASE IF EXISTS "+db) })
+	if err := Migrate(ctx, c, DefaultRetention(180)); err != nil {
+		t.Fatal(err)
+	}
+	t0 := time.Now().UTC().Truncate(time.Millisecond)
+	b := Batch{HTTPRequests: []HTTPRequestRow{
+		{TS: t0, Cluster: "a", Gateway: "g1", DevPod: "alice-dev", DevPodUID: "u1", Port: 8080, Access: "private", User: "alice",
+			Method: "GET", Path: "/lab", Query: "token=abc", Status: 200, BytesOut: 12, RequestID: "01A"},
+		{TS: t0.Add(time.Second), Cluster: "b", Gateway: "g2", DevPod: "bob-dev", DevPodUID: "u2", Port: 3000, Access: "public",
+			Method: "POST", Path: "/api", Status: 502, RequestID: "01B"},
+	}}
+	for i := 0; i < 2; i++ {
+		if err := c.Insert(ctx, b, "tok-http"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	from, to := t0.Add(-time.Minute), t0.Add(time.Minute)
+	all, _, err := c.SearchHTTP(ctx, HTTPFilter{From: from, To: to})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(all) != 2 || all[0].RequestID != "01B" || all[0].Cluster != "b" || all[1].Query != "token=abc" || all[1].BytesOut != 12 {
+		t.Fatalf("all: %+v", all)
+	}
+	if got, _, _ := c.SearchHTTP(ctx, HTTPFilter{User: "alice", From: from, To: to}); len(got) != 1 || got[0].RequestID != "01A" {
+		t.Fatalf("by user: %+v", got)
+	}
+	if got, _, _ := c.SearchHTTP(ctx, HTTPFilter{Cluster: "b", Status: 502, From: from, To: to}); len(got) != 1 || got[0].RequestID != "01B" {
+		t.Fatalf("by cluster and status: %+v", got)
+	}
+	if got, _, _ := c.SearchHTTP(ctx, HTTPFilter{Port: 8080, Method: "GET", DevPodUID: "u1", From: from, To: to}); len(got) != 1 {
+		t.Fatalf("by port, method and DevPod: %+v", got)
+	}
+	if _, _, err := c.SearchHTTP(ctx, HTTPFilter{}); !errors.Is(err, ErrRangeRequired) {
+		t.Fatalf("no range: %v", err)
 	}
 }
 

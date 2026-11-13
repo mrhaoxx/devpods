@@ -81,6 +81,15 @@ type FileFilter struct {
 	Limit                         int
 }
 
+// HTTPFilter searches HTTP requests; zero fields do not filter.
+type HTTPFilter struct {
+	User, DevPodUID, Cluster, Method string
+	Port, Status                     int
+	From, To                         time.Time
+	Cursor                           string
+	Limit                            int
+}
+
 // TimeFilter pages a time-ordered log.
 type TimeFilter struct {
 	From, To time.Time
@@ -368,6 +377,43 @@ func (c *CH) SearchFiles(ctx context.Context, f FileFilter) ([]FileEventRow, str
 	if len(rows) > limit {
 		rows = rows[:limit]
 		next = encodeCursor(rows[limit-1].TS, rows[limit-1].EventID)
+	}
+	return rows, next, nil
+}
+
+// SearchHTTP finds HTTP requests, newest first.
+func (c *CH) SearchHTTP(ctx context.Context, f HTTPFilter) ([]HTTPRequestRow, string, error) {
+	if f.From.IsZero() || f.To.IsZero() {
+		return nil, "", ErrRangeRequired
+	}
+	w := &where{}
+	w.add("ts >= ? AND ts < ?", f.From, f.To)
+	for _, eq := range []struct {
+		col string
+		v   any
+		set bool
+	}{
+		{"user", f.User, f.User != ""}, {"devpod_uid", f.DevPodUID, f.DevPodUID != ""},
+		{"cluster", f.Cluster, f.Cluster != ""}, {"method", f.Method, f.Method != ""},
+		{"port", f.Port, f.Port != 0}, {"status", f.Status, f.Status != 0},
+	} {
+		if eq.set {
+			w.add(eq.col+" = ?", eq.v)
+		}
+	}
+	if err := w.cursor(f.Cursor, "ts", "request_id"); err != nil {
+		return nil, "", err
+	}
+	limit := limitOf(f.Limit)
+	var rows []HTTPRequestRow
+	q := fmt.Sprintf("SELECT %s FROM %s.http_requests WHERE %s ORDER BY ts DESC, request_id DESC LIMIT %d", columns[HTTPRequestRow](), c.db, w.sql(), limit+1)
+	if err := c.conn.Select(c.readCtx(ctx), &rows, q, w.args...); err != nil {
+		return nil, "", fmt.Errorf("search http: %w", err)
+	}
+	next := ""
+	if len(rows) > limit {
+		rows = rows[:limit]
+		next = encodeCursor(rows[limit-1].TS, rows[limit-1].RequestID)
 	}
 	return rows, next, nil
 }

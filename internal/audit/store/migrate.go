@@ -50,6 +50,7 @@ var ttlRules = map[string]ttlRule{
 	"raw_segments":         {"first_ts", "DAY", auditDays},
 	"alerts":               {"ts", "DAY", auditDays},
 	"access_log":           {"ts", "DAY", auditDays},
+	"http_requests":        {"ts", "DAY", auditDays},
 	"ssh_conns":            {"first_seen", "DAY", auditDays},
 	"processes":            {"first_seen", "DAY", auditDays},
 	"container_info":       {"ts", "DAY", auditDays},
@@ -136,6 +137,9 @@ func migrate(ctx context.Context, c *CH, r Retention, upTo uint32) error {
 		}
 	}
 
+	if upTo != ^uint32(0) {
+		return nil // an older schema (a test's) lacks later tables; the full run that follows sets retention
+	}
 	// Do not rewrite existing parts on a TTL change; merges apply it.
 	ttlCtx := clickhouse.Context(ctx, clickhouse.WithSettings(clickhouse.Settings{"materialize_ttl_after_modify": 0}))
 	for table, rule := range ttlRules {
