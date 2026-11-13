@@ -44,6 +44,10 @@ controller:
     limits:   {cpu: 500m, memory: 512Mi}
 
 gateway:
+  # The gateway's name: of its Deployment, Services, ServiceAccount, roles,
+  # key Secrets (<name>-host-key, <name>-internal-key) and its Pods' label.
+  # Another name runs it beside an older install's devpod-gateway.
+  name: devpod-gateway
   replicas: 2
   # An audited session costs ~2 MiB of gateway memory (measured; ~0.5 MiB
   # without audit). 1Gi holds ~300 audited sessions on one replica, e.g.

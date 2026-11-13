@@ -78,7 +78,7 @@ spec:
       volumes:
       - name: internal-key-pub
         secret:
-          secretName: devpod-gateway-internal-key
+          secretName: {{ include "devpod.gateway.name" $ }}-internal-key
           items:
           - key: ssh_host_ed25519_key.pub
             path: ssh_host_ed25519_key.pub

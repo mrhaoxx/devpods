@@ -128,7 +128,7 @@ spec:
     matchExpressions:
     - key: app.kubernetes.io/name
       operator: In
-      values: [devpod-gateway, devpod-webui, devpod-audit-migrate]
+      values: [{{ include "devpod.gateway.name" . }}, devpod-webui, devpod-audit-migrate]
 {{- end -}}
 
 {{/* devpod.audit.on: "true" when audit is enabled, else "". Values from

@@ -82,7 +82,7 @@ spec:
         {{- end }}
         {{- if (.Values.webui.webshell | default dict).enabled }}
         - --webshell-key-file=/etc/devpod/webshell/id_ed25519
-        - --webshell-gateway=devpod-gateway.{{ .Values.namespaces.system }}.svc:22
+        - --webshell-gateway={{ include "devpod.gateway.name" $ }}.{{ .Values.namespaces.system }}.svc:22
         {{- with (.Values.webui.webshell | default dict).gatewayHostKey }}
         - --webshell-gateway-host-key={{ . }}
         {{- end }}

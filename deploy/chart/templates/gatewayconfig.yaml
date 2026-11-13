@@ -6,10 +6,10 @@ spec:
   devPodNamespace: {{ .Values.namespaces.devpods }}
   supervisorImage: "{{ .Values.image.supervisor.repository }}:{{ .Values.image.supervisor.tag }}"
   hostKeyRef:
-    name: devpod-gateway-host-key
+    name: {{ include "devpod.gateway.name" $ }}-host-key
     namespace: {{ .Values.namespaces.system }}
   internalKeyRef:
-    name: devpod-gateway-internal-key
+    name: {{ include "devpod.gateway.name" $ }}-internal-key
     namespace: {{ .Values.namespaces.system }}
   listen:
     port: 22

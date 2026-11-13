@@ -22,13 +22,13 @@ data:
 apiVersion: v1
 kind: Service
 metadata:
-  name: devpod-gateway-http
+  name: {{ include "devpod.gateway.name" $ }}-http
   namespace: {{ .Values.namespaces.system }}
   labels: {{ include "devpod.labels" . | nindent 4 }}
 spec:
   type: ClusterIP
   selector:
-    app.kubernetes.io/name: devpod-gateway
+    app.kubernetes.io/name: {{ include "devpod.gateway.name" $ }}
   ports:
   - name: http
     port: 80
@@ -39,7 +39,7 @@ spec:
 apiVersion: gateway.networking.k8s.io/v1
 kind: HTTPRoute
 metadata:
-  name: devpod-gateway-http
+  name: {{ include "devpod.gateway.name" $ }}-http
   namespace: {{ .Values.namespaces.system }}
   labels: {{ include "devpod.labels" . | nindent 4 }}
 spec:
@@ -53,7 +53,7 @@ spec:
   - {{ printf "*.%s" .Values.gateway.http.baseDomain | quote }}
   rules:
   - backendRefs:
-    - name: devpod-gateway-http
+    - name: {{ include "devpod.gateway.name" $ }}-http
       port: 80
 {{- end }}
 {{- end }}

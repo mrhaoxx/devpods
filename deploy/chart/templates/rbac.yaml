@@ -134,13 +134,13 @@ subjects:
 apiVersion: v1
 kind: ServiceAccount
 metadata:
-  name: devpod-gateway
+  name: {{ include "devpod.gateway.name" $ }}
   namespace: {{ .Values.namespaces.system }}
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
-  name: devpod-gateway
+  name: {{ include "devpod.gateway.name" $ }}
 rules:
 - apiGroups: ["devpod.io"]
   resources: ["users","devpods","gatewayconfigs"]
@@ -152,20 +152,20 @@ rules:
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
 metadata:
-  name: devpod-gateway
+  name: {{ include "devpod.gateway.name" $ }}
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: ClusterRole
-  name: devpod-gateway
+  name: {{ include "devpod.gateway.name" $ }}
 subjects:
 - kind: ServiceAccount
-  name: devpod-gateway
+  name: {{ include "devpod.gateway.name" $ }}
   namespace: {{ .Values.namespaces.system }}
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
 metadata:
-  name: devpod-gateway-events
+  name: {{ include "devpod.gateway.name" $ }}-events
   namespace: {{ .Values.namespaces.devpods }}
 rules:
 - apiGroups: [""]
@@ -175,15 +175,15 @@ rules:
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
 metadata:
-  name: devpod-gateway-events
+  name: {{ include "devpod.gateway.name" $ }}-events
   namespace: {{ .Values.namespaces.devpods }}
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: Role
-  name: devpod-gateway-events
+  name: {{ include "devpod.gateway.name" $ }}-events
 subjects:
 - kind: ServiceAccount
-  name: devpod-gateway
+  name: {{ include "devpod.gateway.name" $ }}
   namespace: {{ .Values.namespaces.system }}
 ---
 # Spec §3: scope gateway Secret reads to a namespaced Role
@@ -194,15 +194,15 @@ subjects:
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
 metadata:
-  name: devpod-gateway-secrets
+  name: {{ include "devpod.gateway.name" $ }}-secrets
   namespace: {{ .Values.namespaces.system }}
 rules:
 - apiGroups: [""]
   resources: ["secrets"]
   verbs: ["get","list","watch"]
   resourceNames:
-  - devpod-gateway-host-key
-  - devpod-gateway-internal-key
+  - {{ include "devpod.gateway.name" $ }}-host-key
+  - {{ include "devpod.gateway.name" $ }}-internal-key
   {{- if .Values.gateway.ldap.enabled }}
   {{- with .Values.gateway.ldap.caSecret.name }}
   - {{ . | quote }}
@@ -215,13 +215,13 @@ rules:
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
 metadata:
-  name: devpod-gateway-secrets
+  name: {{ include "devpod.gateway.name" $ }}-secrets
   namespace: {{ .Values.namespaces.system }}
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: Role
-  name: devpod-gateway-secrets
+  name: {{ include "devpod.gateway.name" $ }}-secrets
 subjects:
 - kind: ServiceAccount
-  name: devpod-gateway
+  name: {{ include "devpod.gateway.name" $ }}
   namespace: {{ .Values.namespaces.system }}

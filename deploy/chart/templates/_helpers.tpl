@@ -23,3 +23,11 @@ true
 true
 {{- end -}}
 {{- end -}}
+
+{{/* devpod.gateway.name: the gateway's name — of its Deployment, Services,
+     ServiceAccount, roles, key Secrets and the label its Pods carry. Set
+     another (gateway.name) to run beside an older install's devpod-gateway. */}}
+{{- define "devpod.gateway.name" -}}
+{{- dig "name" "" .Values.gateway | default "devpod-gateway" -}}
+{{- end -}}
+
