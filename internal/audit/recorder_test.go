@@ -134,6 +134,20 @@ func TestRecorder_DrainUploadsEverything(t *testing.T) {
 	}
 }
 
+// An HTTP request kept by the recorder reaches the store with the next
+// batch — on shutdown too — saying the replica, and its own cluster.
+func TestRecorder_HTTPRowsReachTheStore(t *testing.T) {
+	g := newRig(t, 64<<20)
+	g.r.HTTP(store.HTTPRequestRow{RequestID: "r1", Cluster: "b", Status: 200})
+	all := g.drain()
+	if len(all.HTTPRequests) != 1 {
+		t.Fatalf("HTTP rows: %+v", all.HTTPRequests)
+	}
+	if r := all.HTTPRequests[0]; r.RequestID != "r1" || r.GatewayPod != "gw-0" || r.Cluster != "b" {
+		t.Fatalf("row: %+v", r)
+	}
+}
+
 func TestNewSessionID_SortsByTime(t *testing.T) {
 	a := NewSessionID(time.Unix(100, 0))
 	b := NewSessionID(time.Unix(200, 0))

@@ -80,6 +80,7 @@ func (m *memEvents) Insert(_ context.Context, b store.Batch, _ string) error {
 	m.all.PolicyEvents = append(m.all.PolicyEvents, b.PolicyEvents...)
 	m.all.RawSegments = append(m.all.RawSegments, b.RawSegments...)
 	m.all.Alerts = append(m.all.Alerts, b.Alerts...)
+	m.all.HTTPRequests = append(m.all.HTTPRequests, b.HTTPRequests...)
 	return nil
 }
 

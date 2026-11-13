@@ -22,6 +22,12 @@ var (
 		Name: "devpod_gateway_audit_gaps_total",
 		Help: "Raw audit records dropped (spool full).",
 	})
+	// HTTPDroppedTotal counts HTTP requests served but not recorded
+	// (the spool was full under a fail-open policy).
+	HTTPDroppedTotal = prometheus.NewCounter(prometheus.CounterOpts{
+		Name: "devpod_gateway_audit_http_dropped_total",
+		Help: "HTTP requests served without an audit record (spool full, fail-open).",
+	})
 	// DecoderErrorsTotal counts protocol decoders that failed.
 	DecoderErrorsTotal = prometheus.NewCounter(prometheus.CounterOpts{
 		Name: "devpod_gateway_audit_decoder_errors_total",
@@ -36,5 +42,5 @@ var (
 
 // MustRegisterMetrics registers the audit metrics on reg.
 func MustRegisterMetrics(reg prometheus.Registerer) {
-	reg.MustRegister(SpoolBytes, UploadLag, GapsTotal, DecoderErrorsTotal, PolicyActionsTotal)
+	reg.MustRegister(SpoolBytes, UploadLag, GapsTotal, DecoderErrorsTotal, PolicyActionsTotal, HTTPDroppedTotal)
 }

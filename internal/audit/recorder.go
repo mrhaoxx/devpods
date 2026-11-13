@@ -58,6 +58,10 @@ type Recorder struct {
 	// ended: the cluster of sessions that ended lately, by id — what
 	// they left in the spool may still be uploading when a gap is told
 	ended map[string]endedSession
+	// http: requests the HTTP proxy served, written as one batch per
+	// FlushInterval (httpFlushed: when last)
+	http        []store.HTTPRequestRow
+	httpFlushed time.Time
 }
 
 type endedSession struct {
@@ -121,7 +125,36 @@ func (r *Recorder) snapshot() []*Session {
 	return out
 }
 
+// HTTP keeps one request the HTTP proxy served; it is written to the
+// spool with the next batch.
+func (r *Recorder) HTTP(row store.HTTPRequestRow) {
+	row.GatewayPod = r.cfg.GatewayPod
+	r.mu.Lock()
+	r.http = append(r.http, row)
+	r.mu.Unlock()
+}
+
+// Full says the spool has no room left: what is recorded now is lost.
+func (r *Recorder) Full() bool { return r.spool.Level() == spool.LevelFull }
+
+// flushHTTP writes the kept requests as one batch, once FlushInterval has
+// passed since the last (always when force).
+func (r *Recorder) flushHTTP(now time.Time, force bool) {
+	r.mu.Lock()
+	if len(r.http) == 0 || (!force && now.Sub(r.httpFlushed) < r.cfg.FlushInterval) {
+		r.mu.Unlock()
+		return
+	}
+	rows := r.http
+	r.http, r.httpFlushed = nil, now
+	r.mu.Unlock()
+	if err := r.spool.WriteBatch(store.Batch{HTTPRequests: rows}); err != nil {
+		HTTPDroppedTotal.Add(float64(len(rows))) // the spool is completely full
+	}
+}
+
 func (r *Recorder) tick(now time.Time) {
+	r.flushHTTP(now, false)
 	SpoolBytes.Set(float64(r.spool.Usage()))
 	r.mu.Lock()
 	for id, e := range r.ended {
@@ -167,13 +200,14 @@ func (r *Recorder) clusterOf(id string) string {
 	return r.ended[id].cluster
 }
 
-// Drain seals and flushes every session, then uploads until the spool is
+// Drain seals and flushes every session (and the HTTP requests kept), then uploads until the spool is
 // empty or ctx ends. On a deadline it records best-effort gap alerts for
 // sessions whose data could not be uploaded.
 func (r *Recorder) Drain(ctx context.Context) error {
 	for _, s := range r.snapshot() {
 		s.sealAndFlush()
 	}
+	r.flushHTTP(r.cfg.Now(), true)
 	for {
 		if err := r.up.Flush(ctx); err == nil {
 			items, err := r.spool.Ready()
