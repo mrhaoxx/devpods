@@ -6,7 +6,6 @@ package agent
 
 import (
 	"bytes"
-	"context"
 	"errors"
 	"io"
 	"net"
@@ -14,6 +13,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"golang.org/x/net/http2"
 )
 
 // TelemetryPath is where DevPods post their telemetry batches.
@@ -83,66 +84,102 @@ func TelemetryForward(target string, hc *http.Client) http.Handler {
 const CapTelemetryLink = "telemetry-link"
 
 // PurposeTelemetry: a stream the console opens to an agent for its
-// telemetry; on it the agent is the HTTP client, the console's receiver
+// telemetry; on it the agent is the HTTP/2 client, the console's receiver
 // the server.
 var PurposeTelemetry = mustPurpose("telemetry")
 
 // TelemetryLink takes the cluster's telemetry to the console over the
-// agent's link: the console offers streams (Offer), and each batch the
-// DevPods post (Forward) goes on one as a request to the console's
-// receiver, whose answer passes back. The agent needs no way to the
-// console of its own beyond its link.
+// agent's link: the console offers streams (Offer), each becomes an HTTP/2
+// connection at once, and each batch the DevPods post (Forward) goes on
+// one as a request to the console's receiver, whose answer passes back.
+// The agent needs no way to the console of its own beyond its link.
 type TelemetryLink struct {
 	// Wait bounds how long a batch waits for a stream (default 10 s);
 	// then the DevPod is told the receiver cannot be reached.
-	Wait  time.Duration
-	conns chan net.Conn
-	once  sync.Once
-	hc    *http.Client
+	Wait time.Duration
+	t2   *http2.Transport
+	hc   *http.Client
+
+	mu    sync.Mutex
+	conns []*http2.ClientConn
+	more  chan struct{} // closed when a stream is offered
 }
 
 // NewTelemetryLink returns a TelemetryLink with no streams yet.
 func NewTelemetryLink() *TelemetryLink {
-	return &TelemetryLink{conns: make(chan net.Conn, 16)}
-}
-
-// Offer keeps a stream the console opened, for a batch to go on.
-func (l *TelemetryLink) Offer(c net.Conn) {
-	select {
-	case l.conns <- c:
-	default:
-		_ = c.Close() // enough are kept
+	t1 := &http.Transport{
+		DisableCompression: true, // the batch and the answer pass as they are
+		// a stream quiet for a while is pinged: what is in between (a
+		// reverse proxy) does not take it for idle, and one gone is noticed
+		HTTP2: &http.HTTP2Config{SendPingTimeout: 15 * time.Second, PingTimeout: 10 * time.Second},
 	}
+	t2, err := http2.ConfigureTransports(t1)
+	if err != nil {
+		panic(err) // only if t1 already speaks HTTP/2: it does not
+	}
+	t2.AllowHTTP = true
+	l := &TelemetryLink{t2: t2, more: make(chan struct{})}
+	l.hc = &http.Client{Timeout: 30 * time.Second, Transport: roundTripFunc(l.roundTrip)}
+	return l
 }
 
-func (l *TelemetryLink) take(ctx context.Context) (net.Conn, error) {
+// Offer takes a stream the console opened: from now on an HTTP/2
+// connection, kept (and pinged) until a batch goes on it.
+func (l *TelemetryLink) Offer(c net.Conn) {
+	cc, err := l.t2.NewClientConn(c)
+	if err != nil {
+		_ = c.Close()
+		return
+	}
+	l.mu.Lock()
+	live := l.conns[:0]
+	for _, x := range l.conns {
+		if st := x.State(); !st.Closed && !st.Closing {
+			live = append(live, x)
+		}
+	}
+	l.conns = append(live, cc)
+	close(l.more)
+	l.more = make(chan struct{})
+	l.mu.Unlock()
+}
+
+func (l *TelemetryLink) roundTrip(req *http.Request) (*http.Response, error) {
 	wait := l.Wait
 	if wait <= 0 {
 		wait = 10 * time.Second
 	}
 	t := time.NewTimer(wait)
 	defer t.Stop()
-	select {
-	case c := <-l.conns:
-		return c, nil
-	case <-t.C:
-		return nil, errors.New("no telemetry stream from the console")
-	case <-ctx.Done():
-		return nil, ctx.Err()
+	for {
+		l.mu.Lock()
+		more := l.more
+		var cc *http2.ClientConn
+		for _, x := range l.conns {
+			if x.CanTakeNewRequest() {
+				cc = x
+				break
+			}
+		}
+		l.mu.Unlock()
+		if cc != nil {
+			return cc.RoundTrip(req)
+		}
+		select {
+		case <-more:
+		case <-t.C:
+			return nil, errors.New("no telemetry stream from the console")
+		case <-req.Context().Done():
+			return nil, req.Context().Err()
+		}
 	}
 }
 
+type roundTripFunc func(*http.Request) (*http.Response, error)
+
+func (f roundTripFunc) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
+
 // Forward is the handler DevPods post their batches to.
 func (l *TelemetryLink) Forward() http.Handler {
-	l.once.Do(func() {
-		l.hc = &http.Client{Timeout: 30 * time.Second, Transport: &http.Transport{
-			// every connection is a stream the console offered; a stream
-			// kept idle is used again
-			DialContext:         func(ctx context.Context, _, _ string) (net.Conn, error) { return l.take(ctx) },
-			MaxIdleConnsPerHost: 16,
-			IdleConnTimeout:     5 * time.Minute,
-			DisableCompression:  true,
-		}}
-	})
 	return TelemetryForward("http://console"+TelemetryPath, l.hc)
 }

@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -482,7 +483,17 @@ func TestRegistry_TelemetryOverTheLink(t *testing.T) {
 		_ = resp.Body.Close()
 		return resp.StatusCode
 	}
-	eventually(t, "a batch reaches the console's receiver over the link", func() bool { return post("batch") == http.StatusAccepted })
+	eventually(t, "the console knows the agent sends telemetry over its link", func() bool {
+		in, ok := r.Info("c1")
+		return ok && slices.Contains(in.Capabilities, agent.CapTelemetryLink)
+	})
+	// the streams wait for a batch longer than a server waits for the
+	// first request on a new connection: they still carry it, the first
+	// time
+	time.Sleep(12 * time.Second)
+	if code := post("batch"); code != http.StatusAccepted {
+		t.Fatalf("a batch after the streams waited: %d", code)
+	}
 	mu.Lock()
 	n := len(got)
 	mu.Unlock()

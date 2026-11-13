@@ -15,8 +15,9 @@ import (
 	"testing"
 	"time"
 
+	"golang.org/x/net/http2"
+
 	"github.com/mrhaoxx/devpod/internal/agent"
-	"github.com/mrhaoxx/devpod/internal/tunnel"
 )
 
 // DevPods of a managed cluster send their telemetry to the agent, in the
@@ -106,13 +107,11 @@ func TestTelemetryLink(t *testing.T) {
 		w.WriteHeader(http.StatusAccepted)
 	})
 	link := agent.NewTelemetryLink()
-	console := tunnel.NewListener()
-	go func() { _ = http.Serve(console, recv) }()
-	defer console.Close()
 	for i := 0; i < 2; i++ { // the console's end of each stream is served by its receiver
 		agentEnd, consoleEnd := net.Pipe()
+		go (&http2.Server{}).ServeConn(consoleEnd, &http2.ServeConnOpts{Handler: recv})
 		link.Offer(agentEnd)
-		console.Offer(consoleEnd)
+		defer consoleEnd.Close()
 	}
 	fwd := httptest.NewServer(link.Forward())
 	defer fwd.Close()
