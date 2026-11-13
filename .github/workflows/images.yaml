@@ -1,9 +1,11 @@
 name: images
 
 # Builds every image in images/ for amd64 and arm64 (each on its own
-# runner, no emulation) — and the supervisor, which runs inside every
-# DevPod, for riscv64 too (emulated: GitHub has no such runner; slow the
-# first time, cached after) — and pushes them to ghcr.io/<owner>/devpod-<name>:
+# runner, no emulation) — and what runs on the nodes DevPods are on, for
+# riscv64 too: the supervisor (inside every DevPod; emulated, as GitHub
+# has no such runner — slow the first time, cached after) and the snapshot
+# Job's image (cross-compiled, nothing to emulate) — and pushes them to
+# ghcr.io/<owner>/devpod-<name>:
 # main → dev and sha-<commit>, a v* tag → that tag. The chart's defaults
 # pull ghcr.io/mrhaoxx/devpod-*:dev.
 
@@ -33,6 +35,7 @@ jobs:
         arch: [amd64, arm64]
         include:
         - {image: supervisor, arch: riscv64}
+        - {image: snapshot, arch: riscv64}
     runs-on: ${{ matrix.arch == 'arm64' && 'ubuntu-24.04-arm' || 'ubuntu-24.04' }}
     timeout-minutes: 300
     steps:
@@ -77,10 +80,11 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        image: [agent, controller, gateway, snapshot, webui]
+        image: [agent, controller, gateway, webui]
         arches: [2]
         include:
         - {image: supervisor, arches: 3}
+        - {image: snapshot, arches: 3}
     runs-on: ubuntu-24.04
     steps:
     - uses: actions/download-artifact@v4
