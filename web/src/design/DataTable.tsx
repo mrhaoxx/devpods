@@ -490,8 +490,11 @@ export function DataTable<T>(p: DataTableProps<T>) {
                   data-row={row.id}
                   aria-selected={p.selectable ? sel : undefined}
                   onClick={(e) => {
-                    if (!p.onRowClick || (e.target as HTMLElement).closest("button,a,input,select,label")) return;
-                    p.onRowClick(row.original);
+                    if ((e.target as HTMLElement).closest("button,a,input,select,label,[role='menu']")) return;
+                    if (p.onRowClick) return p.onRowClick(row.original);
+                    // a selectable row with nothing else to do on a click: the click picks it
+                    // (anywhere on it, not only the box) — unless text was being selected
+                    if (p.selectable && !window.getSelection()?.toString()) row.toggleSelected();
                   }}
                   className={`group h-7 border-b border-line ${sel ? "bg-accent-soft/60" : "hover:bg-sunk"} ${p.onRowClick ? "cursor-pointer" : ""} ${p.rowClass?.(row.original) ?? ""}`}
                 >

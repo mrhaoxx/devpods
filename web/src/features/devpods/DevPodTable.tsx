@@ -264,6 +264,13 @@ export function DevPodTable({ scope }: { scope: "mine" | "all" }) {
   );
 
   const failed = outcome?.results.filter((r) => !r.ok) ?? [];
+  // a success says so for a few seconds; a failure stays until closed
+  const allOk = !!outcome && failed.length === 0;
+  useEffect(() => {
+    if (!allOk) return;
+    const t = setTimeout(() => setOutcome(null), 5000);
+    return () => clearTimeout(t);
+  }, [allOk, outcome]);
   return (
     <TableCtx.Provider value={{ scope, now, recent: recent.data, pending }}>
       <div className="flex h-full min-h-0 flex-col">
@@ -296,24 +303,29 @@ export function DevPodTable({ scope }: { scope: "mine" | "all" }) {
             </Link>
           )}
         </div>
-        {progress && (
-          <div className="border-b border-line px-3 py-1.5">
-            <Notice tone="idle">
-              {progress.action}：进行中 {progress.done}/{progress.total}…{progress.failed > 0 && `（失败 ${progress.failed}）`}
-            </Notice>
-          </div>
-        )}
-        {outcome && (
-          <div className="flex items-start gap-2 border-b border-line px-3 py-1.5">
-            <div className="flex-1">
-              <Notice tone={failed.length ? "warm" : "run"}>
-                {outcome.action}：成功 {outcome.results.length - failed.length}，失败 {failed.length}
-                {failed.length > 0 && <>（{failed.map((f) => `${f.item}：${f.error}`).join("；")}）</>}
-              </Notice>
-            </div>
-            <button type="button" onClick={() => setOutcome(null)} className="text-xs text-muted hover:text-ink" aria-label="关闭结果">
-              ✕
-            </button>
+        {/* what an action is doing and how it ended: over the window's corner, moving nothing */}
+        {(progress || outcome) && (
+          <div className="pointer-events-none fixed right-4 bottom-16 z-40 flex max-w-[min(32rem,calc(100vw-2rem))] flex-col gap-2">
+            {progress && (
+              <div role="status" className="pointer-events-auto rounded-lg border border-line bg-surface p-1 shadow-lg">
+                <Notice tone="idle">
+                  {progress.action}：进行中 {progress.done}/{progress.total}…{progress.failed > 0 && `（失败 ${progress.failed}）`}
+                </Notice>
+              </div>
+            )}
+            {outcome && (
+              <div role="status" className="pointer-events-auto flex items-start gap-2 rounded-lg border border-line bg-surface p-1 shadow-lg">
+                <div className="max-h-60 flex-1 overflow-y-auto">
+                  <Notice tone={failed.length ? "warm" : "run"}>
+                    {outcome.action}：成功 {outcome.results.length - failed.length}，失败 {failed.length}
+                    {failed.length > 0 && <>（{failed.map((f) => `${f.item}：${f.error}`).join("；")}）</>}
+                  </Notice>
+                </div>
+                <button type="button" onClick={() => setOutcome(null)} className="px-1 text-xs text-muted hover:text-ink" aria-label="关闭结果">
+                  ✕
+                </button>
+              </div>
+            )}
           </div>
         )}
         {list.isError ? (
