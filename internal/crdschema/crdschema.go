@@ -11,13 +11,15 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 
 	"sigs.k8s.io/yaml"
 )
 
 // DevPod is the JSON schema of a DevPod manifest, from the CRD (its
 // YAML). Next to the CRD's own schema it says what apiVersion, kind and
-// metadata are, leaves out status (the controller's), and refuses fields
+// metadata are, leaves out status (the controller's) and the need to name
+// an owner (the console's), and refuses fields
 // that do not exist — where the API server would drop them without a
 // word, the editor points them out.
 func DevPod(crd []byte) ([]byte, error) {
@@ -51,6 +53,13 @@ func DevPod(crd []byte) ([]byte, error) {
 		return nil, errors.New("the CRD has no schema with properties")
 	}
 	delete(props, "status")
+	// a manifest written here names no owner: the console fills it in (the
+	// creator, the one who launches a config, the one it had)
+	if spec, ok := props["spec"].(map[string]any); ok {
+		if req, ok := spec["required"].([]any); ok {
+			spec["required"] = slices.DeleteFunc(slices.Clone(req), func(f any) bool { return f == "owner" })
+		}
+	}
 	props["apiVersion"] = map[string]any{"type": "string", "enum": []any{doc.Spec.Group + "/" + version},
 		"description": "The API version of a " + doc.Spec.Names.Kind + "."}
 	props["kind"] = map[string]any{"type": "string", "enum": []any{doc.Spec.Names.Kind}}

@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"slices"
 	"testing"
 
 	"github.com/mrhaoxx/devpod/internal/crdschema"
@@ -64,6 +65,12 @@ func TestDevPod(t *testing.T) {
 	// descriptions are kept: they are what a hover shows
 	if d, _ := at(t, props, "spec", "properties", "owner")["description"].(string); d == "" {
 		t.Fatal("spec.owner lost its description")
+	}
+	// a manifest written in the editor names no owner: the console fills it
+	// in (the creator, the one who launches a config, the one it had)
+	req, _ := at(t, props, "spec")["required"].([]any)
+	if slices.Contains(req, any("owner")) || !slices.Contains(req, any("running")) {
+		t.Fatalf("spec.required: %v (want running, not owner)", req)
 	}
 	// a field that does not exist is pointed out: the API server would drop it without a word
 	if at(t, props, "spec")["additionalProperties"] != false {
