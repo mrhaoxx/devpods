@@ -39,6 +39,7 @@ func (s *Server) registerAuditRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/audit/files/{event}/content", s.handleAuditFileContent)
 	mux.HandleFunc("GET /api/audit/commands", s.handleAuditCommands)
 	mux.HandleFunc("GET /api/audit/files", s.handleAuditFiles)
+	mux.HandleFunc("GET /api/audit/http", s.handleAuditHTTP)
 	mux.HandleFunc("GET /api/audit/alerts", s.handleAuditAlerts)
 	mux.HandleFunc("GET /api/audit/access-log", s.handleAuditAccessLog)
 	mux.HandleFunc("GET /api/audit/presence", s.handleAuditPresence)
@@ -360,6 +361,52 @@ func (s *Server) handleAuditCommands(w http.ResponseWriter, r *http.Request) {
 		items = []store.CommandRow{}
 	}
 	s.writeJSON(w, http.StatusOK, page[store.CommandRow]{Items: items, Next: next})
+}
+
+// handleAuditHTTP: GET /api/audit/http — requests to DevPod ports through
+// a gateway's HTTP proxy, by user, DevPod, cluster, port, status, method.
+func (s *Server) handleAuditHTTP(w http.ResponseWriter, r *http.Request) {
+	sess, ok := s.auditSession(w, r)
+	if !ok {
+		return
+	}
+	from, to, err := timeRange(r)
+	if err != nil {
+		s.writeErr(w, http.StatusBadRequest, "BAD_REQUEST", err.Error(), nil)
+		return
+	}
+	q := r.URL.Query()
+	num := map[string]int{}
+	for _, k := range []string{"port", "status"} {
+		if v := q.Get(k); v != "" {
+			n, err := strconv.Atoi(v)
+			if err != nil || n <= 0 || n > 65535 {
+				s.writeErr(w, http.StatusBadRequest, "BAD_REQUEST", "invalid "+k, nil)
+				return
+			}
+			num[k] = n
+		}
+	}
+	uid, found, answered := s.devpodUID(w, r)
+	if answered {
+		return
+	}
+	if !found {
+		s.writeJSON(w, http.StatusOK, page[store.HTTPRequestRow]{Items: []store.HTTPRequestRow{}})
+		return
+	}
+	items, next, err := s.Audit.Store.SearchHTTP(r.Context(), store.HTTPFilter{
+		User: scopeUser(sess, r), DevPodUID: uid, Cluster: s.namedCluster(r.Context()), Method: q.Get("method"),
+		Port: num["port"], Status: num["status"], From: from, To: to, Cursor: q.Get("cursor"), Limit: queryLimit(r),
+	})
+	if err != nil {
+		s.auditStoreErr(w, err)
+		return
+	}
+	if items == nil {
+		items = []store.HTTPRequestRow{}
+	}
+	s.writeJSON(w, http.StatusOK, page[store.HTTPRequestRow]{Items: items, Next: next})
 }
 
 func (s *Server) handleAuditFiles(w http.ResponseWriter, r *http.Request) {

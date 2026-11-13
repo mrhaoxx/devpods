@@ -144,6 +144,7 @@ var apiRoutes = []apiRoute{
 	{"GET /api/audit/sessions/{id}/channels/{ch}/raw", "admin:read", "Raw stream of a channel"},
 	{"GET /api/audit/commands", "audit:read", "Search commands"},
 	{"GET /api/audit/files", "audit:read", "Search file transfers"},
+	{"GET /api/audit/http", "audit:read", "Search HTTP requests to DevPod ports"},
 	{"GET /api/audit/files/{event}/content", "audit:read", "A captured file"},
 	{"GET /api/audit/presence", "audit:read", "Who is connected now"},
 	{"GET /api/audit/alerts", "admin:read", "Audit alerts"},

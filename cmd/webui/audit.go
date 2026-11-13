@@ -143,6 +143,14 @@ func (l *lazyCH) SearchFiles(ctx context.Context, f store.FileFilter) ([]store.F
 	return c.SearchFiles(ctx, f)
 }
 
+func (l *lazyCH) SearchHTTP(ctx context.Context, f store.HTTPFilter) ([]store.HTTPRequestRow, string, error) {
+	c, err := l.get(ctx)
+	if err != nil {
+		return nil, "", err
+	}
+	return c.SearchHTTP(ctx, f)
+}
+
 func (l *lazyCH) GetFileEvent(ctx context.Context, id string) (*store.FileEventRow, error) {
 	c, err := l.get(ctx)
 	if err != nil {

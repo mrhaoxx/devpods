@@ -21,6 +21,7 @@ type AuditStore interface {
 	GetSession(context.Context, string) (*store.SessionDetail, error)
 	SearchCommands(context.Context, store.CommandFilter) ([]store.CommandRow, string, error)
 	SearchFiles(context.Context, store.FileFilter) ([]store.FileEventRow, string, error)
+	SearchHTTP(context.Context, store.HTTPFilter) ([]store.HTTPRequestRow, string, error)
 	GetFileEvent(context.Context, string) (*store.FileEventRow, error)
 	ListAlerts(context.Context, store.TimeFilter) ([]store.AlertRow, string, error)
 	ListAccessLog(context.Context, store.TimeFilter) ([]store.AccessLogRow, string, error)

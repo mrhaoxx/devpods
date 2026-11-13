@@ -31,6 +31,7 @@ type fakeAuditStore struct {
 	mu        sync.Mutex
 	sessF     store.SessionFilter
 	cmdF      store.CommandFilter
+	httpF     store.HTTPFilter
 	sessions  map[string]*store.SessionDetail
 	files     map[string]*store.FileEventRow
 	presence  map[string][]string
@@ -62,6 +63,13 @@ func (f *fakeAuditStore) SearchCommands(_ context.Context, cf store.CommandFilte
 
 func (f *fakeAuditStore) SearchFiles(context.Context, store.FileFilter) ([]store.FileEventRow, string, error) {
 	return nil, "", nil
+}
+
+func (f *fakeAuditStore) SearchHTTP(_ context.Context, hf store.HTTPFilter) ([]store.HTTPRequestRow, string, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.httpF = hf
+	return []store.HTTPRequestRow{{RequestID: "r1", User: hf.User}}, "", nil
 }
 
 func (f *fakeAuditStore) GetFileEvent(_ context.Context, id string) (*store.FileEventRow, error) {
@@ -207,6 +215,26 @@ func TestAuditAPI(t *testing.T) {
 		route(t, s, "GET", "/api/audit/commands?q=rm&user=gl-bob", forge(sm, "gl-alice", false), "")
 		if st.cmdF.User != "gl-alice" || st.cmdF.Q != "rm" {
 			t.Fatalf("commands filter %+v", st.cmdF)
+		}
+	})
+
+	// HTTP requests are searched as commands are: an admin by any user,
+	// anyone else only their own; port and status are numbers.
+	t.Run("HTTPSearch", func(t *testing.T) {
+		s, sm, st, _ := auditRig(t)
+		rec := route(t, s, "GET", "/api/audit/http?user=gl-bob&port=8080&status=404&method=GET", forge(sm, "gl-root", false), "")
+		if rec.Code != 200 || !strings.Contains(rec.Body.String(), `"request_id":"r1"`) {
+			t.Fatalf("%d %s", rec.Code, rec.Body)
+		}
+		if f := st.httpF; f.User != "gl-bob" || f.Port != 8080 || f.Status != 404 || f.Method != "GET" || f.From.IsZero() || f.To.IsZero() {
+			t.Fatalf("admin filter %+v", f)
+		}
+		route(t, s, "GET", "/api/audit/http?user=gl-bob", forge(sm, "gl-alice", false), "")
+		if st.httpF.User != "gl-alice" {
+			t.Fatalf("non-admin saw user %q", st.httpF.User)
+		}
+		if rec := route(t, s, "GET", "/api/audit/http?port=x", forge(sm, "gl-root", false), ""); rec.Code != 400 {
+			t.Fatalf("bad port: %d", rec.Code)
 		}
 	})
 
