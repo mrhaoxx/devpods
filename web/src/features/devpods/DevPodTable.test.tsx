@@ -188,6 +188,24 @@ describe("DevPodTable", () => {
     expect(await screen.findByRole("link", { name: "alice-t-0" })).toBeTruthy();
   });
 
+  it("a right click offers a DevPod's own actions, or the selection's on a row of it", async () => {
+    stubFetch({ "/api/devpods": list });
+    renderWithProviders(<DevPodTable scope="all" />, { me: stubMe({ admin: true }), route: "/admin/devpods" });
+    const rowOf = async (name: string) => (await screen.findByRole("link", { name })).closest("tr")!;
+    fireEvent.contextMenu(await rowOf("alice-a"));
+    let menu = within(await screen.findByRole("menu"));
+    expect(menu.getByRole("menuitem", { name: "复制 SSH 命令" })).toBeTruthy();
+    expect(menu.getByRole("menuitem", { name: "删除…" })).toBeTruthy();
+    fireEvent.keyDown(screen.getByRole("menu"), { key: "Escape" });
+    await waitFor(() => expect(screen.queryByRole("menu")).toBeNull());
+    fireEvent.click(screen.getByLabelText("选择 alice-a"));
+    fireEvent.click(screen.getByLabelText("选择 bob-c"));
+    fireEvent.contextMenu(await rowOf("bob-c"));
+    menu = within(await screen.findByRole("menu"));
+    expect(menu.getByText("已选 2")).toBeTruthy();
+    expect(menu.getByRole("menuitem", { name: "迁移…" })).toBeTruthy();
+  });
+
   it("sorts by what DevPods use now: CPU most first, those not running last either way", async () => {
     stubFetch({ "/api/devpods": list });
     const conns: { url: string; h: SseHandlers }[] = [];

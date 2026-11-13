@@ -3,6 +3,7 @@
 // leave goes to a filler, never into them), a 列 menu to choose the columns,
 // and sideways scrolling inside the table with the pinned columns staying.
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import * as ContextMenu from "@radix-ui/react-context-menu";
 import * as Menu from "@radix-ui/react-dropdown-menu";
 import {
   flexRender,
@@ -52,6 +53,9 @@ function useWidth(ref: React.RefObject<HTMLElement>): number {
   return w;
 }
 
+/** RowAction: one thing a row menu (or a bulk bar) offers. */
+export type RowAction = { label: string; onSelect(): void; danger?: boolean; disabled?: boolean; title?: string };
+
 export type DataTableProps<T> = {
   data: T[];
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -68,6 +72,10 @@ export type DataTableProps<T> = {
   rowClass?(r: T): string;
   /** storageKey: remember column widths set by dragging, in this browser, under this name */
   storageKey?: string;
+  /** rowMenu: what a right click on a row offers — for that row, or, on a
+   *  row of a selection of several, for the selection (bulk). Nothing
+   *  offered (or Shift held): the browser's own menu. */
+  rowMenu?(rows: T[], bulk: boolean, clear: () => void): RowAction[];
 };
 
 const MIN_COL = 48;
@@ -208,6 +216,20 @@ export function DataTable<T>(p: DataTableProps<T>) {
     return Object.keys(liveSelection).flatMap((id) => (byId.has(id) ? [byId.get(id)!] : []));
   }, [liveSelection, p.data, p.getRowId]);
   const clear = () => setSelection({});
+  // the right-click menu: worked out as it opens, for the row under the
+  // pointer — or the selection, when that row is one of several chosen
+  const [menuFor, setMenuFor] = useState<{ bulk: number; actions: RowAction[] } | null>(null);
+  const onContext = (e: React.MouseEvent) => {
+    const id = (e.target as HTMLElement).closest("tr[data-row]")?.getAttribute("data-row");
+    const row = id == null ? undefined : p.data.find((r) => p.getRowId(r) === id);
+    const bulk = row !== undefined && !!liveSelection[id!] && selected.length > 1;
+    const actions = row === undefined || e.shiftKey ? [] : (p.rowMenu?.(bulk ? selected : [row], bulk, clear) ?? []);
+    if (actions.length === 0) {
+      e.stopPropagation(); // the menu does not open; the browser's does
+      return;
+    }
+    setMenuFor({ bulk: bulk ? selected.length : 0, actions });
+  };
   // Esc lets go of the rows — unless it is closing a dialog or a menu
   const any = selected.length > 0;
   useEffect(() => {
@@ -325,7 +347,7 @@ export function DataTable<T>(p: DataTableProps<T>) {
               </tr>
             ))}
           </thead>
-          <tbody className={p.dim ? "opacity-60" : undefined}>
+          <Body menu={p.rowMenu ? { onContext, menuFor, close: () => setMenuFor(null) } : undefined} className={p.dim ? "opacity-60" : undefined}>
             {rows.length === 0 && (
               <tr>
                 <td colSpan={colCount}>{p.empty ?? <EmptyState title="没有数据" />}</td>
@@ -336,6 +358,7 @@ export function DataTable<T>(p: DataTableProps<T>) {
               return (
                 <tr
                   key={row.id}
+                  data-row={row.id}
                   aria-selected={p.selectable ? sel : undefined}
                   onClick={(e) => {
                     if (!p.onRowClick || (e.target as HTMLElement).closest("button,a,input,select,label")) return;
@@ -368,7 +391,7 @@ export function DataTable<T>(p: DataTableProps<T>) {
                 </tr>
               );
             })}
-          </tbody>
+          </Body>
         </table>
       </div>
       {selected.length > 0 && (
@@ -387,5 +410,47 @@ export function DataTable<T>(p: DataTableProps<T>) {
         </div>
       )}
     </div>
+  );
+}
+
+/** Body: the rows, and — when they have a menu — what a right click opens. */
+function Body({
+  menu,
+  className,
+  children,
+}: {
+  menu?: { onContext(e: React.MouseEvent): void; menuFor: { bulk: number; actions: RowAction[] } | null; close(): void };
+  className?: string;
+  children: ReactNode;
+}) {
+  if (!menu) return <tbody className={className}>{children}</tbody>;
+  const item = "cursor-pointer rounded px-2 py-1 outline-none data-[disabled]:cursor-default data-[disabled]:opacity-50";
+  return (
+    <ContextMenu.Root modal={false} onOpenChange={(open) => !open && menu.close()}>
+      <ContextMenu.Trigger asChild>
+        {/* in the capture phase, before the menu's own handler: no row, nothing offered or Shift → the browser's menu */}
+        <tbody className={className} onContextMenuCapture={menu.onContext}>
+          {children}
+        </tbody>
+      </ContextMenu.Trigger>
+      <ContextMenu.Portal>
+        <ContextMenu.Content className="z-50 min-w-40 rounded-md border border-line bg-surface p-1 text-xs shadow-lg">
+          {menu.menuFor && menu.menuFor.bulk > 0 && (
+            <ContextMenu.Label className="px-2 py-1 font-medium text-accent">已选 {menu.menuFor.bulk}</ContextMenu.Label>
+          )}
+          {menu.menuFor?.actions.map((a) => (
+            <ContextMenu.Item
+              key={a.label}
+              disabled={a.disabled}
+              title={a.title}
+              onSelect={a.onSelect}
+              className={`${item} ${a.danger ? "text-fail data-[highlighted]:bg-fail-soft" : "data-[highlighted]:bg-sunk"}`}
+            >
+              {a.label}
+            </ContextMenu.Item>
+          ))}
+        </ContextMenu.Content>
+      </ContextMenu.Portal>
+    </ContextMenu.Root>
   );
 }

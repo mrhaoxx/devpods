@@ -6,12 +6,12 @@ import { Link } from "react-router-dom";
 import { useQueryClient } from "@tanstack/react-query";
 import * as Menu from "@radix-ui/react-dropdown-menu";
 import type { SortingState } from "@tanstack/react-table";
-import { keyOf } from "../../data/cluster";
+import { devpodHref, keyOf } from "../../data/cluster";
 import { deleteDevPod, podKey, patchDevPod, patchDevPodSpec, rebuildFromConfig, redeployDevPod, sshCommand, type LiveItem, shellPath } from "../../data/api";
 import { useDevPodMutations, useDevPods, useMe, useRecent } from "../../data/queries";
 import { devpodsStream } from "../../data/live/streams";
 import { useLiveEnabled, useLiveRow, useLiveValues } from "../../data/live/hooks";
-import { DataTable } from "../../design/DataTable";
+import { DataTable, type RowAction } from "../../design/DataTable";
 import { Chip } from "../../design/Chip";
 import { Button } from "../../design/Button";
 import { Input, Notice } from "../../design/Form";
@@ -44,62 +44,29 @@ const fromSorting = (s: SortingState) => (s[0] ? `${s[0].desc ? "-" : ""}${s[0].
 
 type Outcome = { action: string; results: BulkResult<string>[] };
 
-function RowMenu({ r, onDelete }: { r: Row; onDelete: (r: Row) => void }) {
-  const me = useMe().data;
-  const { setRunning } = useDevPodMutations();
+/** ActionMenu: a row's ⋯ — the same actions its right-click menu offers,
+ *  worked out when it opens. */
+function ActionMenu({ label, actions }: { label: string; actions: () => RowAction[] }) {
   return (
     <Menu.Root>
-      <Menu.Trigger aria-label={`${r.name} 操作`} className="rounded px-1.5 text-muted hover:bg-sunk hover:text-ink">
+      <Menu.Trigger aria-label={label} className="rounded px-1.5 text-muted hover:bg-sunk hover:text-ink">
         ⋯
       </Menu.Trigger>
       <Menu.Portal>
         <Menu.Content align="end" className="z-50 min-w-36 rounded-md border border-line bg-surface p-1 text-xs shadow-lg">
-          <Menu.Item className="cursor-pointer rounded px-2 py-1 outline-none data-[highlighted]:bg-sunk" onSelect={() => void copyText(sshCommand(me, r.owner, r.name, r.cluster))}>
-            复制 SSH 命令
-          </Menu.Item>
-          {me?.features.webshell && r.phase === "Running" && (
-            <Menu.Item className="cursor-pointer rounded px-2 py-1 outline-none data-[highlighted]:bg-sunk" onSelect={() => window.open(shellPath(r), "_blank", "noopener")}>
-              终端
+          {actions().map((a) => (
+            <Menu.Item
+              key={a.label}
+              disabled={a.disabled}
+              title={a.title}
+              onSelect={a.onSelect}
+              className={`cursor-pointer rounded px-2 py-1 outline-none data-[disabled]:cursor-default data-[disabled]:opacity-50 ${
+                a.danger ? "text-fail data-[highlighted]:bg-fail-soft" : "data-[highlighted]:bg-sunk"
+              }`}
+            >
+              {a.label}
             </Menu.Item>
-          )}
-          <Menu.Item
-            className="cursor-pointer rounded px-2 py-1 outline-none data-[highlighted]:bg-sunk"
-            onSelect={() => setRunning.mutate({ ref: r, running: !r.dp.spec.running })}
-          >
-            {r.dp.spec.running ? "休眠" : "启动"}
-          </Menu.Item>
-          <Menu.Item className="cursor-pointer rounded px-2 py-1 text-fail outline-none data-[highlighted]:bg-fail-soft" onSelect={() => onDelete(r)}>
-            删除…
-          </Menu.Item>
-        </Menu.Content>
-      </Menu.Portal>
-    </Menu.Root>
-  );
-}
-
-const item = "cursor-pointer rounded px-2 py-1 outline-none data-[highlighted]:bg-sunk";
-
-/** GroupMenu: what is done to every DevPod of a group at once. */
-function GroupMenu({ r, onRun, onAsk }: { r: Row; onRun: (action: string, fn: (m: Row) => Promise<unknown>) => void; onAsk: (what: "delete" | "rebuild") => void }) {
-  return (
-    <Menu.Root>
-      <Menu.Trigger aria-label={`${r.name} 操作`} className="rounded px-1.5 text-muted hover:bg-sunk hover:text-ink">
-        ⋯
-      </Menu.Trigger>
-      <Menu.Portal>
-        <Menu.Content align="end" className="z-50 min-w-36 rounded-md border border-line bg-surface p-1 text-xs shadow-lg">
-          <Menu.Item className={item} onSelect={() => onRun("整组启动", (m) => patchDevPod(m, true))}>
-            整组启动
-          </Menu.Item>
-          <Menu.Item className={item} onSelect={() => onRun("整组休眠", (m) => patchDevPod(m, false))}>
-            整组休眠
-          </Menu.Item>
-          <Menu.Item className={item} onSelect={() => onAsk("rebuild")}>
-            按配置重建整组…
-          </Menu.Item>
-          <Menu.Item className="cursor-pointer rounded px-2 py-1 text-fail outline-none data-[highlighted]:bg-fail-soft" onSelect={() => onAsk("delete")}>
-            删除整组…
-          </Menu.Item>
+          ))}
         </Menu.Content>
       </Menu.Portal>
     </Menu.Root>
@@ -136,7 +103,7 @@ export function DevPodTable({ scope }: { scope: "mine" | "all" }) {
     });
   const [outcome, setOutcome] = useState<Outcome | null>(null);
   const [dialog, setDialog] = useState<{ kind: BulkKind; rows: Row[]; clear: () => void } | null>(null);
-  const { remove } = useDevPodMutations();
+  const { remove, setRunning } = useDevPodMutations();
 
   const { matches, several, clusters } = useClusterFilter();
   const rows = useMemo(
@@ -166,6 +133,41 @@ export function DevPodTable({ scope }: { scope: "mine" | "all" }) {
     setOutcome({ action, results: results.map((x) => ({ ...x, item: x.item.name })) });
     void qc.invalidateQueries({ queryKey: ["devpods"] });
   };
+  // what can be done to a DevPod, a group of them, a selection: said once,
+  // offered by the ⋯ menu, the right-click menu and the bulk bar alike
+  const devpodActions = (r: Row): RowAction[] => [
+    { label: "在新标签页打开", onSelect: () => window.open(devpodHref(r), "_blank", "noopener") },
+    { label: "复制 SSH 命令", onSelect: () => void copyText(sshCommand(me, r.owner, r.name, r.cluster)) },
+    ...(me?.features.webshell && r.phase === "Running" ? [{ label: "终端", onSelect: () => window.open(shellPath(r), "_blank", "noopener") }] : []),
+    { label: r.dp.spec.running ? "休眠" : "启动", onSelect: () => setRunning.mutate({ ref: r, running: !r.dp.spec.running }) },
+    { label: "删除…", danger: true, onSelect: () => setConfirm({ rows: [r], bulk: false }) },
+  ];
+  const groupActions = (r: Row): RowAction[] => [
+    { label: "整组启动", onSelect: () => void bulk("整组启动", r.group!.members, (m) => patchDevPod(m, true)) },
+    { label: "整组休眠", onSelect: () => void bulk("整组休眠", r.group!.members, (m) => patchDevPod(m, false)) },
+    { label: "按配置重建整组…", onSelect: () => setRebuildAsk(r) },
+    { label: "删除整组…", danger: true, onSelect: () => setConfirm({ rows: r.group!.members, bulk: true }) },
+  ];
+  const rowActions = (r: Row) => (r.group ? groupActions(r) : devpodActions(r));
+  const bulkActions = (picked: Row[], clear: () => void): RowAction[] => {
+    const sel = flat(picked);
+    // nodes are a cluster's: DevPods of two clusters cannot move to the same ones
+    const acrossClusters = new Set(sel.map((r) => r.cluster ?? "")).size > 1;
+    return [
+      {
+        label: "迁移…",
+        disabled: acrossClusters,
+        title: acrossClusters ? "所选 DevPod 分属不同集群，不能一起迁移：只选同一个集群的" : undefined,
+        onSelect: () => setDialog({ kind: "migrate", rows: sel, clear }),
+      },
+      { label: "休眠", onSelect: () => void bulk("休眠", sel, (r) => patchDevPod(r, false)).then(clear) },
+      { label: "启动", onSelect: () => void bulk("启动", sel, (r) => patchDevPod(r, true)).then(clear) },
+      { label: "协作者…", onSelect: () => setDialog({ kind: "collaborators", rows: sel, clear }) },
+      { label: "设置镜像…", onSelect: () => setDialog({ kind: "image", rows: sel, clear }) },
+      { label: "重新部署…", onSelect: () => setDialog({ kind: "redeploy", rows: sel, clear }) },
+      { label: "删除…", danger: true, onSelect: () => setConfirm({ rows: sel, bulk: true }) },
+    ];
+  };
   const columns = useMemo(
     () =>
       devpodColumns({
@@ -175,16 +177,7 @@ export function DevPodTable({ scope }: { scope: "mine" | "all" }) {
         groups: { open, toggle },
         usage: (r, key) =>
           r.group ? groupUsage(r.group.members.map((m) => (running(m) ? used.get(keyOf(m)) : undefined)), key) : running(r) ? usage(used.get(keyOf(r)), key) : undefined,
-        actions: (r) =>
-          r.group ? (
-            <GroupMenu
-              r={r}
-              onRun={(action, fn) => void bulk(action, r.group!.members, fn)}
-              onAsk={(what) => (what === "delete" ? setConfirm({ rows: r.group!.members, bulk: true }) : setRebuildAsk(r))}
-            />
-          ) : (
-            <RowMenu r={r} onDelete={(x) => setConfirm({ rows: [x], bulk: false })} />
-          ),
+        actions: (r) => <ActionMenu label={`${r.name} 操作`} actions={() => rowActions(r)} />,
       }),
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [admin, me, open, used, several, clusters],
@@ -254,30 +247,14 @@ export function DevPodTable({ scope }: { scope: "mine" | "all" }) {
           selectable
           dim={status === "reconnecting"}
           empty={<EmptyState title={list.isLoading ? "加载中…" : rows.length ? "没有符合条件的 DevPod" : "还没有 DevPod"} />}
-          bulkBar={(picked, clear) => {
-            const sel = flat(picked);
-            // nodes are a cluster's: DevPods of two clusters cannot move to the same ones
-            const acrossClusters = new Set(sel.map((r) => r.cluster ?? "")).size > 1;
-            return (
-            <>
-              <Button
-                disabled={acrossClusters}
-                title={acrossClusters ? "所选 DevPod 分属不同集群，不能一起迁移：只选同一个集群的" : undefined}
-                onClick={() => setDialog({ kind: "migrate", rows: sel, clear })}
-              >
-                迁移…
+          bulkBar={(picked, clear) =>
+            bulkActions(picked, clear).map((a) => (
+              <Button key={a.label} variant={a.danger ? "danger" : undefined} disabled={a.disabled} title={a.title} onClick={a.onSelect}>
+                {a.label}
               </Button>
-              <Button onClick={() => void bulk("休眠", sel, (r) => patchDevPod(r, false)).then(clear)}>休眠</Button>
-              <Button onClick={() => void bulk("启动", sel, (r) => patchDevPod(r, true)).then(clear)}>启动</Button>
-              <Button onClick={() => setDialog({ kind: "collaborators", rows: sel, clear })}>协作者…</Button>
-              <Button onClick={() => setDialog({ kind: "image", rows: sel, clear })}>设置镜像…</Button>
-              <Button onClick={() => setDialog({ kind: "redeploy", rows: sel, clear })}>重新部署…</Button>
-              <Button variant="danger" onClick={() => setConfirm({ rows: sel, bulk: true })}>
-                删除…
-              </Button>
-            </>
-            );
-          }}
+            ))
+          }
+          rowMenu={(picked, isBulk, clear) => (isBulk ? bulkActions(picked, clear) : rowActions(picked[0]))}
         />
       )}
       <BulkDialog

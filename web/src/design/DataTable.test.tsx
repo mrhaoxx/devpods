@@ -141,6 +141,51 @@ describe("DataTable", () => {
     });
   });
 
+  describe("right-click menu", () => {
+    function Menued({ onAct }: { onAct: (what: string) => void }) {
+      return (
+        <DataTable
+          data={rows}
+          columns={columns}
+          getRowId={(r) => r.name}
+          sorting={[]}
+          onSortingChange={() => {}}
+          selectable
+          rowMenu={(picked, bulk) => [{ label: `${bulk ? "批量" : "单个"} ${picked.map((r) => r.name).join(",")}`, onSelect: () => onAct(picked.map((r) => r.name).join(",")) }]}
+        />
+      );
+    }
+    const rowOf = (name: string) => screen.getByLabelText(`选择 ${name}`).closest("tr")!;
+
+    it("on a row: that row's own actions, and the selection is left as it was", () => {
+      const acted: string[] = [];
+      render(<Menued onAct={(w) => acted.push(w)} />);
+      fireEvent.click(screen.getByLabelText("选择 a"));
+      fireEvent.click(screen.getByLabelText("选择 c"));
+      fireEvent.contextMenu(rowOf("b"));
+      const item = within(screen.getByRole("menu")).getByRole("menuitem", { name: "单个 b" });
+      fireEvent.click(item);
+      expect(acted).toEqual(["b"]);
+      expect(screen.getByText("已选 2")).toBeTruthy();
+    });
+
+    it("on a row of the selection: the selection's actions", () => {
+      render(<Menued onAct={() => {}} />);
+      fireEvent.click(screen.getByLabelText("选择 a"));
+      fireEvent.click(screen.getByLabelText("选择 c"));
+      fireEvent.contextMenu(rowOf("c"));
+      const menu = within(screen.getByRole("menu"));
+      expect(menu.getByText("已选 2")).toBeTruthy();
+      expect(menu.getByRole("menuitem", { name: "批量 a,c" })).toBeTruthy();
+    });
+
+    it("with Shift: the browser's own menu", () => {
+      render(<Menued onAct={() => {}} />);
+      fireEvent.contextMenu(rowOf("a"), { shiftKey: true });
+      expect(screen.queryByRole("menu")).toBeNull();
+    });
+  });
+
   describe("choosing columns", () => {
     afterEach(() => localStorage.clear());
     type R = { name: string; cpu: number; node: string };
