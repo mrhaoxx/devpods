@@ -75,10 +75,11 @@ func TestRDMA_NoDevices(t *testing.T) {
 	}
 }
 
-// Only ports that move are reported: a host has hundreds of RDMA ports
-// (representors and the like), nearly all idle. One that goes idle is
-// reported once more, at zero, and then not until it moves again; a change
-// of a health counter is a move.
+// Only ports that move are reported, and only they are read every second:
+// a node has hundreds of RDMA ports (representors and the like), nearly all
+// idle, and each counter read asks the NIC's firmware (14 000 files took a
+// second). An idle port is read every 10th sample; its health counters only
+// when it moved. One that goes idle is reported once more, at zero.
 func TestRDMA_OnlyPortsThatMove(t *testing.T) {
 	dev, sys := rdmaFixture(t)
 	for name, v := range map[string]string{
@@ -96,9 +97,17 @@ func TestRDMA_OnlyPortsThatMove(t *testing.T) {
 	if len(d.Ports) != 2 {
 		t.Fatalf("ports %v", d.Ports)
 	}
+	reads := map[string]int{} // by port and kind: "1/counters", "2/hw_counters"
+	orig := rdmaRead
+	rdmaRead = func(dir, name string) uint64 {
+		reads[filepath.Base(filepath.Dir(dir))+"/"+filepath.Base(dir)]++
+		return orig(dir, name)
+	}
+	t.Cleanup(func() { rdmaRead = orig })
 	var prev *RDMACounters
 	sample := func() []wire.RDMA {
 		t.Helper()
+		clear(reads)
 		s, c, err := d.Sample(sys, prev, time.Second)
 		if err != nil {
 			t.Fatal(err)
@@ -106,27 +115,30 @@ func TestRDMA_OnlyPortsThatMove(t *testing.T) {
 		prev = &c
 		return s
 	}
-	ports := func(s []wire.RDMA) (out []int) {
-		for _, r := range s {
-			out = append(out, r.Port)
-		}
-		return out
-	}
 	if s := sample(); len(s) != 0 {
-		t.Fatalf("first sample: nothing to say yet, got %v", ports(s))
+		t.Fatalf("first sample: nothing to say yet, got %+v", s)
 	}
 	writeTreeFile(t, sys, "class/infiniband/mlx5_0/ports/1/counters/port_xmit_data", "350\n")
-	if s := sample(); len(s) != 1 || s[0].Port != 1 || s[0].TxBps != 1000 {
+	s := sample()
+	if len(s) != 1 || s[0].Port != 1 || s[0].TxBps != 1000 || s[0].Health["np_cnp_sent"] != 3 {
 		t.Fatalf("port 1 moved: %+v", s)
+	}
+	if reads["2/hw_counters"] != 0 || reads["1/hw_counters"] == 0 {
+		t.Fatalf("health counters are read for a port that moved, only: %v", reads)
 	}
 	if s := sample(); len(s) != 1 || s[0].Port != 1 || s[0].TxBps != 0 {
 		t.Fatalf("port 1 went idle: once more, at zero: %+v", s)
 	}
-	if s := sample(); len(s) != 0 {
-		t.Fatalf("all idle: %v", ports(s))
+	// both idle now: not read again until their 10th sample
+	for i := 0; i < 8; i++ {
+		if s := sample(); len(s) != 0 || len(reads) != 0 {
+			t.Fatalf("idle sample %d: %+v, reads %v", i, s, reads)
+		}
 	}
-	writeTreeFile(t, sys, "class/infiniband/mlx5_0/ports/2/hw_counters/np_cnp_sent", "4\n")
-	if s := sample(); len(s) != 1 || s[0].Port != 2 || s[0].Health["np_cnp_sent"] != 4 {
-		t.Fatalf("a health counter moved on port 2: %+v", s)
+	// port 2 moved meanwhile: seen at its next read, at the rate over the time since the last
+	writeTreeFile(t, sys, "class/infiniband/mlx5_0/ports/2/counters/port_rcv_data", "500\n")
+	s = sample()
+	if len(s) != 1 || s[0].Port != 2 || s[0].RxBps != 200 {
+		t.Fatalf("port 2 moved while not read: %+v", s)
 	}
 }

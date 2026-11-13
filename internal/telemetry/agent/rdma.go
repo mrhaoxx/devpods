@@ -5,7 +5,6 @@
 package agent
 
 import (
-	"maps"
 	"os"
 	"path/filepath"
 	"sort"
@@ -27,13 +26,21 @@ type RDMADev struct {
 // RDMACounters are the per-port counters of the previous sample.
 type RDMACounters map[int]RDMAPort
 
-// RDMAPort: a port's cumulative counters, and whether it was reported (it
-// moved) the last time.
+// RDMAPort: a port's cumulative counters as last read, whether it was
+// reported (it moved) then, and how many samples it is left unread.
 type RDMAPort struct {
 	Data     [4]uint64 // xmit bytes, rcv bytes, xmit pkts, rcv pkts
 	Health   map[string]uint64
 	Reported bool
+	Wait     int // samples still to skip before the next read
+	Skipped  int // samples skipped since the last read (for the rate)
 }
+
+// rdmaIdleEvery: an idle port is read every this many samples.
+const rdmaIdleEvery = 10
+
+// rdmaRead reads one counter file (a variable for the tests).
+var rdmaRead = readUint
 
 // DiscoverRDMA lists the IB devices behind the container's
 // /dev/infiniband/uverbs* nodes; other devices on the host are ignored.
@@ -69,38 +76,48 @@ func rdmaScope(sysRoot, ib string) string {
 	return "pf_shared"
 }
 
-// Sample reads every port's counters and reports the ports that moved —
-// their data or a health counter changed since the last sample. A host has
-// hundreds of RDMA ports (representors and the like), nearly all idle: one
-// that goes idle is reported once more, at zero, and then not until it
-// moves again. The first sample reports nothing (no rates yet). Data
-// counters count 4-byte words.
+// Sample reports the ports that moved — their data counters changed since
+// they were last read. A node has hundreds of RDMA ports (representors and
+// the like), nearly all idle, and each counter read asks the NIC's firmware
+// (all of b300's 14 000 counter files take a second): a port that moved is
+// read every sample, an idle one every rdmaIdleEvery, and its health
+// counters only when it moved. One that goes idle is reported once more,
+// at zero. The first sample reports nothing (no rates yet). Data counters
+// count 4-byte words.
 func (d RDMADev) Sample(sysRoot string, prev *RDMACounters, dt time.Duration) ([]wire.RDMA, RDMACounters, error) {
 	cur := RDMACounters{}
 	var out []wire.RDMA
 	for _, port := range d.Ports {
-		dir := filepath.Join(sysRoot, "class", "infiniband", d.IBDev, "ports", strconv.Itoa(port))
-		cnt := filepath.Join(dir, "counters")
-		now := RDMAPort{Data: [4]uint64{
-			readUint(cnt, "port_xmit_data") * 4, readUint(cnt, "port_rcv_data") * 4,
-			readUint(cnt, "port_xmit_packets"), readUint(cnt, "port_rcv_packets"),
-		}}
-		if ents, err := os.ReadDir(filepath.Join(dir, "hw_counters")); err == nil {
-			now.Health = map[string]uint64{}
-			for _, e := range ents {
-				now.Health[e.Name()] = readUint(filepath.Join(dir, "hw_counters"), e.Name())
-			}
-		}
 		var p RDMAPort
 		known := false
 		if prev != nil {
 			p, known = (*prev)[port]
 		}
-		moved := known && (now.Data != p.Data || !maps.Equal(now.Health, p.Health))
+		if known && p.Wait > 0 { // idle, not due yet
+			p.Wait--
+			p.Skipped++
+			cur[port] = p
+			continue
+		}
+		dir := filepath.Join(sysRoot, "class", "infiniband", d.IBDev, "ports", strconv.Itoa(port))
+		cnt := filepath.Join(dir, "counters")
+		now := RDMAPort{Data: [4]uint64{
+			rdmaRead(cnt, "port_xmit_data") * 4, rdmaRead(cnt, "port_rcv_data") * 4,
+			rdmaRead(cnt, "port_xmit_packets"), rdmaRead(cnt, "port_rcv_packets"),
+		}, Health: p.Health}
+		moved := known && now.Data != p.Data
+		if moved {
+			if ents, err := os.ReadDir(filepath.Join(dir, "hw_counters")); err == nil {
+				now.Health = map[string]uint64{}
+				for _, e := range ents {
+					now.Health[e.Name()] = rdmaRead(filepath.Join(dir, "hw_counters"), e.Name())
+				}
+			}
+		}
 		if known && dt > 0 && (moved || p.Reported) {
 			r := wire.RDMA{IBDev: d.IBDev, Port: port, Scope: d.Scope, Health: now.Health}
 			if moved {
-				secs := dt.Seconds()
+				secs := dt.Seconds() * float64(p.Skipped+1) // since its last read
 				rate := func(a, b uint64) float64 {
 					if a < b {
 						return 0
@@ -113,6 +130,9 @@ func (d RDMADev) Sample(sysRoot string, prev *RDMACounters, dt time.Duration) ([
 			out = append(out, r)
 		}
 		now.Reported = moved
+		if known && !moved {
+			now.Wait = rdmaIdleEvery - 1
+		}
 		cur[port] = now
 	}
 	return out, cur, nil
