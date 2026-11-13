@@ -229,7 +229,8 @@ export function DetailPage() {
 
       <LiveCards row={live ? metrics.row : undefined} hist={recent.data} />
 
-      <div role="tablist" className="flex gap-1 border-b border-line text-xs">
+      {/* on a phone the tabs are wider than the screen: the row slides */}
+      <div role="tablist" className="flex gap-1 overflow-x-auto overflow-y-hidden border-b border-line text-xs [scrollbar-width:none]">
         {tabs.map(([id, label]) => (
           <button
             key={id}
@@ -240,7 +241,7 @@ export function DetailPage() {
             // Monaco is large: start fetching it when the YAML tab is about to be opened
             onPointerEnter={id === "yaml" ? () => void preloadYamlEditor()?.catch(() => {}) : undefined}
             onFocus={id === "yaml" ? () => void preloadYamlEditor()?.catch(() => {}) : undefined}
-            className={`-mb-px border-b-2 px-3 py-1.5 ${tab === id ? "border-accent font-semibold text-accent" : "border-transparent text-muted hover:text-ink"}`}
+            className={`-mb-px shrink-0 border-b-2 px-3 py-1.5 whitespace-nowrap ${tab === id ? "border-accent font-semibold text-accent" : "border-transparent text-muted hover:text-ink"}`}
           >
             {label}
           </button>

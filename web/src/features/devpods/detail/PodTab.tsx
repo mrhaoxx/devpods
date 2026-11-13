@@ -149,9 +149,9 @@ export function PodStatus({ q }: { q: PodQuery }) {
           <ul aria-label="条件" className="divide-y divide-line text-xs">
             {pod.conditions.map((c) => (
               <li key={c.type} className="flex flex-wrap items-baseline gap-x-3 px-3 py-1.5">
-                <span className="mono w-52 shrink-0 font-semibold">{c.type}</span>
+                <span className="mono w-52 shrink-0 font-semibold max-[700px]:w-auto">{c.type}</span>
                 <span className={`mono w-12 shrink-0 ${c.status === "True" ? "text-run" : c.status === "False" ? "text-fail" : "text-warm"}`}>{c.status}</span>
-                <span className="min-w-0 flex-1 break-words text-muted">
+                <span className="min-w-0 flex-1 break-words text-muted max-[700px]:basis-full">
                   {c.reason}
                   {c.reason && c.message && "："}
                   {c.message}
@@ -176,8 +176,8 @@ export function PodVolumes({ pod }: { pod: PodDetail }) {
     <Panel title="卷">
       <ul aria-label="卷" className="divide-y divide-line text-xs">
         {pod.volumes.map((v) => (
-          <li key={v.name} className="flex gap-3 px-3 py-1.5">
-            <span className="mono w-52 shrink-0 truncate font-semibold" title={v.name}>
+          <li key={v.name} className="flex gap-3 px-3 py-1.5 max-[700px]:flex-col max-[700px]:gap-0">
+            <span className="mono w-52 shrink-0 truncate font-semibold max-[700px]:w-auto" title={v.name}>
               {v.name}
             </span>
             <span className="mono min-w-0 flex-1 break-words text-muted">

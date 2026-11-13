@@ -19,10 +19,10 @@ export function EventList({ events }: { events: Record<string, K8sEvent> }) {
   return (
     <ul className="divide-y divide-line text-xs">
       {list.map((e, i) => (
-        <li key={i} className="flex gap-2 px-3 py-1.5">
+        <li key={i} className="flex gap-2 px-3 py-1.5 max-[700px]:flex-wrap">
           <time className="mono shrink-0 text-faint">{e.lastTimestamp ? new Date(e.lastTimestamp).toLocaleTimeString() : ""}</time>
           <span className={`shrink-0 font-medium ${e.type === "Warning" ? "text-fail" : "text-muted"}`}>{e.reason}</span>
-          <span className="min-w-0 flex-1 break-words">{e.message}</span>
+          <span className="min-w-0 flex-1 break-words max-[700px]:order-last max-[700px]:basis-full">{e.message}</span>
           {e.total > 1 && <span className="mono shrink-0 text-faint">×{e.total}</span>}
         </li>
       ))}

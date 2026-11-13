@@ -108,10 +108,12 @@ describe("DataTable", () => {
     it("dragging a column's edge sets its width — that column's alone — and it is remembered", () => {
       table();
       const edge = screen.getByRole("separator", { name: "调整 名称 列宽" });
-      fireEvent.mouseDown(edge, { clientX: 100 });
-      fireEvent.mouseMove(document, { clientX: 140 });
+      // by pointer events: a finger drags it as a mouse does
+      const touch = { pointerId: 7, pointerType: "touch" };
+      fireEvent.pointerDown(edge, { clientX: 100, ...touch });
+      fireEvent.pointerMove(document, { clientX: 140, ...touch });
       expect(document.body.classList.contains("col-resizing")).toBe(true);
-      fireEvent.mouseUp(document, { clientX: 140 });
+      fireEvent.pointerUp(document, { clientX: 140, ...touch });
       expect(document.body.classList.contains("col-resizing")).toBe(false);
       expect(colWidth("名称")).toBe("190px");
       expect(colWidth("CPU")).toBe("90px");

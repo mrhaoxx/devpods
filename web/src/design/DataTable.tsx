@@ -215,21 +215,31 @@ export function DataTable<T>(p: DataTableProps<T>) {
     setSizes(next);
     if (save) writeJSON(p.storageKey && sizesKey(p.storageKey), next);
   };
-  const startResize = (id: string, e: React.MouseEvent) => {
+  // by pointer — a mouse, a finger, a pen alike (mouse events never come
+  // from a touch, so a phone could not drag an edge)
+  const startResize = (id: string, e: React.PointerEvent) => {
+    if (e.pointerType === "mouse" && e.button !== 0) return;
     e.preventDefault();
     e.stopPropagation();
     const x0 = e.clientX;
     const w0 = widthOf(id);
+    const pointer = e.pointerId;
     document.body.classList.add("col-resizing");
-    const move = (ev: MouseEvent) => setWidth(id, w0 + ev.clientX - x0, false);
-    const up = (ev: MouseEvent) => {
-      setWidth(id, w0 + ev.clientX - x0, true);
-      document.body.classList.remove("col-resizing");
-      document.removeEventListener("mousemove", move);
-      document.removeEventListener("mouseup", up);
+    const move = (ev: PointerEvent) => {
+      if (ev.pointerId === pointer) setWidth(id, w0 + ev.clientX - x0, false);
     };
-    document.addEventListener("mousemove", move);
-    document.addEventListener("mouseup", up);
+    const end = (ev: PointerEvent) => {
+      if (ev.pointerId !== pointer) return;
+      // a cancelled touch (the browser took it) keeps the width it had reached
+      setWidth(id, ev.type === "pointercancel" ? (sizesRef.current[id] ?? w0) : w0 + ev.clientX - x0, true);
+      document.body.classList.remove("col-resizing");
+      document.removeEventListener("pointermove", move);
+      document.removeEventListener("pointerup", end);
+      document.removeEventListener("pointercancel", end);
+    };
+    document.addEventListener("pointermove", move);
+    document.addEventListener("pointerup", end);
+    document.addEventListener("pointercancel", end);
   };
   const keyResize = (id: string, e: React.KeyboardEvent) => {
     const step = e.shiftKey ? 32 : 8;
@@ -457,10 +467,10 @@ export function DataTable<T>(p: DataTableProps<T>) {
                         aria-valuenow={widthOf(id)}
                         tabIndex={0}
                         title="拖动或用 ←/→ 调整列宽，双击恢复"
-                        onMouseDown={(e) => startResize(id, e)}
+                        onPointerDown={(e) => startResize(id, e)}
                         onDoubleClick={() => resetSize(id)}
                         onKeyDown={(e) => keyResize(id, e)}
-                        className="absolute inset-y-1 -right-1 z-[3] w-2 cursor-col-resize outline-none after:absolute after:inset-y-0 after:left-1/2 after:w-px after:bg-line hover:after:bg-accent focus-visible:after:bg-accent"
+                        className="absolute inset-y-1 -right-1 z-[3] w-2 cursor-col-resize touch-none outline-none [@media(pointer:coarse)]:-right-2.5 [@media(pointer:coarse)]:w-5 after:absolute after:inset-y-0 after:left-1/2 after:w-px after:bg-line hover:after:bg-accent focus-visible:after:bg-accent"
                       />
                     </th>
                   );

@@ -205,7 +205,7 @@ export function MonitorTab({ r, history }: { r: Ref; history?: ReadonlyArray<{ t
   }, [hist.data, history, live, rangeMs]);
   return (
     <div className="space-y-3">
-      <div role="radiogroup" aria-label="时间范围" className="inline-flex rounded-md border border-line bg-sunk p-0.5 text-xs">
+      <div role="radiogroup" aria-label="时间范围" className="inline-flex max-w-full overflow-x-auto rounded-md border border-line bg-sunk p-0.5 text-xs [scrollbar-width:none] [&>button]:shrink-0">
         {RANGES.map((id) => (
           <button
             key={id}
