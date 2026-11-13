@@ -89,7 +89,7 @@ func (h *Handler) rows(hd wire.Header, recs []wire.Record) store.TelemetryBatch 
 				rdma = 1
 			}
 			b.Procs = append(b.Procs, store.ProcMetricRow{TS: at(p.TS, fallback), DevPodUID: uid, BootID: boot, Pid: uint32(p.Pid), StartTime: p.Start,
-				CPU: float32(p.CPU), RSS: p.RSS, PSS: p.PSS, IOR: float32(p.IOR), IOW: float32(p.IOW), TCPRx: float32(p.TCPRx), TCPTx: float32(p.TCPTx),
+				CPU: float32(p.CPU), RSS: p.RSS, IOR: float32(p.IOR), IOW: float32(p.IOW), TCPRx: float32(p.TCPRx), TCPTx: float32(p.TCPTx),
 				GPU: gpus, RDMA: rdma, SessionID: sid, Peer: peer(p.Attr)})
 		case wire.KProcEvent:
 			e := r.PE

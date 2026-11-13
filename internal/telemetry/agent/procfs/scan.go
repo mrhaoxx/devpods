@@ -39,7 +39,7 @@ type Proc struct {
 	Threads       int
 	SSHConnection string // from environ, "" when absent or unreadable
 	CPUNs         uint64
-	RSS, PSS      uint64
+	RSS           uint64
 	IORead        uint64
 	IOWrite       uint64
 	// ReadAt is when CPUNs/RSS/IO were read; an idle process keeps its
@@ -436,20 +436,4 @@ func (s *Scanner) readIO(pid int) (r, w uint64, ok bool) {
 		return v
 	}
 	return field("\nread_bytes:"), field("\nwrite_bytes:"), true
-}
-
-// PSS reads smaps_rollup (expensive; the agent calls it every 10 s for
-// the top RSS processes only).
-func (s *Scanner) PSS(pid int) uint64 {
-	sc := bufio.NewScanner(bytes.NewReader(s.file(pid, "smaps_rollup")))
-	for sc.Scan() {
-		if v, ok := strings.CutPrefix(sc.Text(), "Pss:"); ok {
-			fs := strings.Fields(v)
-			if len(fs) > 0 {
-				kb, _ := strconv.ParseUint(fs[0], 10, 64)
-				return kb * 1024
-			}
-		}
-	}
-	return 0
 }

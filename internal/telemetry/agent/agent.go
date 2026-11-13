@@ -32,9 +32,7 @@ const (
 	fullProcsEvery = 5 * time.Second
 	snapshotEvery  = 15 * time.Second
 	infoEvery      = 60 * time.Second
-	pssEvery       = 10 * time.Second
 	reloadEvery    = 30 * time.Second
-	pssTop         = 10
 	collectorFails = 3
 )
 
@@ -93,7 +91,6 @@ type agent struct {
 	procs, prevProcs map[procfs.PID]*procfs.Proc
 	attrib           map[procfs.PID]procfs.Attribution
 	cpuRates         map[procfs.PID]float64
-	pss              map[procfs.PID]uint64
 	sockets          *procfs.SocketMap
 	gpuProcs         map[procfs.PID][]int
 	rdmaProcs        map[procfs.PID]bool
@@ -134,7 +131,6 @@ func newAgent(cfg config.Config, env Env) *agent {
 		procs:         map[procfs.PID]*procfs.Proc{},
 		attrib:        map[procfs.PID]procfs.Attribution{},
 		cpuRates:      map[procfs.PID]float64{},
-		pss:           map[procfs.PID]uint64{},
 		reportedConns: map[procfs.PID]string{},
 		life:          newLifecycle(),
 		rdmaPrev:      map[string]RDMACounters{},
@@ -473,7 +469,7 @@ func (a *agent) procRecords(now time.Time, dt time.Duration) []wire.Record {
 			other.IOW += r.iow
 			continue
 		}
-		wp := &wire.Proc{TS: now.UTC(), Pid: r.id.Pid, Start: r.id.Start, CPU: r.cpu, RSS: r.p.RSS, PSS: a.pss[r.id],
+		wp := &wire.Proc{TS: now.UTC(), Pid: r.id.Pid, Start: r.id.Start, CPU: r.cpu, RSS: r.p.RSS,
 			IOR: r.ior, IOW: r.iow, TCPRx: r.tcpRx, TCPTx: r.tcpTx, GPU: a.gpuProcs[r.id], RDMA: a.rdmaProcs[r.id]}
 		if at, ok := a.attrib[r.id]; ok {
 			wp.Attr = at.Wire()
@@ -515,20 +511,6 @@ func (a *agent) snapshot(now time.Time) {
 		s.TS = now.UTC()
 		a.pendingMetric = append(a.pendingMetric, wire.Record{K: wire.KSnapshot, Snap: &s})
 	})
-}
-
-// refreshPSS reads smaps_rollup for the top RSS processes.
-func (a *agent) refreshPSS() {
-	ids := make([]procfs.PID, 0, len(a.procs))
-	for id := range a.procs {
-		ids = append(ids, id)
-	}
-	sort.Slice(ids, func(i, j int) bool { return a.procs[ids[i]].RSS > a.procs[ids[j]].RSS })
-	pss := map[procfs.PID]uint64{}
-	for i := 0; i < len(ids) && i < pssTop; i++ {
-		pss[ids[i]] = a.scanner.PSS(ids[i].Pid)
-	}
-	a.pss = pss
 }
 
 func (a *agent) info(now time.Time) wire.Info {
@@ -613,7 +595,7 @@ func Run(ctx context.Context, cfg config.Config, env Env) (err error) {
 	now := time.Now()
 	a.scanProcs(now)
 	a.queueInfo(now, true)
-	var lastFull, lastSnap, lastInfo, lastPSS, lastReload = now, now, now, now, now
+	var lastFull, lastSnap, lastInfo, lastReload = now, now, now, now
 	for {
 		select {
 		case <-ctx.Done():
@@ -630,10 +612,6 @@ func Run(ctx context.Context, cfg config.Config, env Env) (err error) {
 			if now.Sub(lastSnap) >= snapshotEvery {
 				a.snapshot(now)
 				lastSnap = now
-			}
-			if now.Sub(lastPSS) >= pssEvery {
-				a.refreshPSS()
-				lastPSS = now
 			}
 			if now.Sub(lastInfo) >= infoEvery {
 				a.queueInfo(now, false)

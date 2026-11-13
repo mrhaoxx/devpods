@@ -170,7 +170,6 @@ type Proc struct {
 	Start uint64    `json:"start"`
 	CPU   float64   `json:"cpu"`
 	RSS   uint64    `json:"rss"`
-	PSS   uint64    `json:"pss,omitempty"`
 	IOR   float64   `json:"io_r"`
 	IOW   float64   `json:"io_w"`
 	TCPRx float64   `json:"tcp_rx"`

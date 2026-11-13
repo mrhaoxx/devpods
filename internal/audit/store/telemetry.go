@@ -88,7 +88,6 @@ type ProcMetricRow struct {
 	StartTime uint64    `ch:"starttime"`
 	CPU       float32   `ch:"cpu"`
 	RSS       uint64    `ch:"rss"`
-	PSS       uint64    `ch:"pss"`
 	IOR       float32   `ch:"io_r"`
 	IOW       float32   `ch:"io_w"`
 	TCPRx     float32   `ch:"tcp_rx"`
