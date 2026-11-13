@@ -160,6 +160,12 @@ func (tf *telemetryFlags) startTelemetry(ctx context.Context, cfg *rest.Config, 
 		},
 	}
 
+	// the telemetry of the clusters that join: over their agents' links,
+	// into this receiver, while this replica leads
+	if srv.Clusters != nil {
+		srv.Clusters.SetTelemetry(h, el.IsLeader)
+	}
+
 	token := wire.Token(key, "internal-live")
 	addr := func() (string, error) {
 		actx, cancel := context.WithTimeout(ctx, 5*time.Second)

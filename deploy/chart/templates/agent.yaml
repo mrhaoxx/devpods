@@ -49,9 +49,9 @@ spec:
         - --capabilities={{ join "," $caps }}
         {{- end }}
         - --devpod-namespace={{ .Values.namespaces.devpods }}
-        {{- with (dig "telemetry" "url" "" $a) }}
-        # DevPods post telemetry here; the agent passes it on
-        - --telemetry-url={{ . }}
+        {{- if and (include "devpod.telemetry.on" .) (include "devpod.telemetry.forward" .) }}
+        # DevPods post telemetry here; the agent takes it to the console
+        # over its link
         - --telemetry-listen=:8081
         ports:
         - {name: telemetry, containerPort: 8081}
@@ -73,10 +73,10 @@ spec:
         secret:
           secretName: {{ $joinSecret }}
       {{- end }}
-{{- if dig "telemetry" "url" "" $a }}
+{{- if and (include "devpod.telemetry.on" .) (include "devpod.telemetry.forward" .) }}
 ---
-# Where this cluster's DevPods send telemetry: the agent, which passes it
-# on to the console's receiver.
+# Where this cluster's DevPods send telemetry: the agent, which takes it
+# to the console's receiver over its link.
 apiVersion: v1
 kind: Service
 metadata:

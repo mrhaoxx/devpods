@@ -7,12 +7,16 @@ package agent_test
 import (
 	"bytes"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/mrhaoxx/devpod/internal/agent"
+	"github.com/mrhaoxx/devpod/internal/tunnel"
 )
 
 // DevPods of a managed cluster send their telemetry to the agent, in the
@@ -85,5 +89,63 @@ func TestTelemetryForward(t *testing.T) {
 	central.Close()
 	if resp := post("/ingest/v1/batch", batch, nil); resp.StatusCode != http.StatusBadGateway {
 		t.Fatalf("receiver away: %d", resp.StatusCode)
+	}
+}
+
+// Over the link: the console offers streams, and on each the agent's
+// forwarded batch is a request the console's receiver answers — the
+// answer passes back to the DevPod as from a receiver of its own.
+func TestTelemetryLink(t *testing.T) {
+	var mu sync.Mutex
+	var seen []string
+	recv := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		b, _ := io.ReadAll(r.Body)
+		mu.Lock()
+		seen = append(seen, r.URL.Path+" "+r.Header.Get("Authorization")+" "+string(b))
+		mu.Unlock()
+		w.WriteHeader(http.StatusAccepted)
+	})
+	link := agent.NewTelemetryLink()
+	console := tunnel.NewListener()
+	go func() { _ = http.Serve(console, recv) }()
+	defer console.Close()
+	for i := 0; i < 2; i++ { // the console's end of each stream is served by its receiver
+		agentEnd, consoleEnd := net.Pipe()
+		link.Offer(agentEnd)
+		console.Offer(consoleEnd)
+	}
+	fwd := httptest.NewServer(link.Forward())
+	defer fwd.Close()
+	for i, body := range []string{"one batch", "another"} {
+		req, _ := http.NewRequest(http.MethodPost, fwd.URL+"/ingest/v1/batch", strings.NewReader(body))
+		req.Header.Set("Authorization", "Bearer uid.key")
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		_ = resp.Body.Close()
+		if resp.StatusCode != http.StatusAccepted {
+			t.Fatalf("batch %d: %d", i, resp.StatusCode)
+		}
+	}
+	mu.Lock()
+	got := append([]string(nil), seen...)
+	mu.Unlock()
+	if len(got) != 2 || got[0] != "/ingest/v1/batch Bearer uid.key one batch" || got[1] != "/ingest/v1/batch Bearer uid.key another" {
+		t.Fatalf("what reached the receiver: %q", got)
+	}
+
+	// no stream offered: the DevPod is told soon, not kept waiting
+	none := agent.NewTelemetryLink()
+	none.Wait = 50 * time.Millisecond
+	empty := httptest.NewServer(none.Forward())
+	defer empty.Close()
+	resp, err := http.Post(empty.URL+"/ingest/v1/batch", "application/x-protobuf", strings.NewReader("x"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = resp.Body.Close()
+	if resp.StatusCode != http.StatusBadGateway {
+		t.Fatalf("no stream: %d", resp.StatusCode)
 	}
 }

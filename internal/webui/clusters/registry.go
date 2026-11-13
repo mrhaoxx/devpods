@@ -14,9 +14,11 @@ import (
 	"fmt"
 	"log/slog"
 	"net"
+	"net/http"
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -66,6 +68,9 @@ type Options struct {
 	// ByObject scopes a cluster's cache per kind (the DevPod namespace
 	// for DevPods, Pods and Events), as the console's own cache is.
 	ByObject map[client.Object]cache.ByObject
+	// TelemetryInterval: how often the telemetry streams to each agent
+	// are looked at (leading? enough open?). Default 1 s.
+	TelemetryInterval time.Duration
 }
 
 // Registry accepts agents and opens streams to them.
@@ -81,6 +86,14 @@ type Registry struct {
 
 	clients  map[string]*ClusterClients
 	building map[string]bool
+
+	sink atomic.Pointer[telemetrySink] // SetTelemetry
+}
+
+// telemetrySink is where clusters' telemetry goes, while leading.
+type telemetrySink struct {
+	h       http.Handler
+	leading func() bool
 }
 
 // New returns a Registry; Run must be called for status upkeep.
@@ -90,6 +103,9 @@ func New(o Options) *Registry {
 	}
 	if o.GatewaysInterval <= 0 {
 		o.GatewaysInterval = 5 * time.Second
+	}
+	if o.TelemetryInterval <= 0 {
+		o.TelemetryInterval = time.Second
 	}
 	if o.Instances == nil {
 		o.Instances = func() []string { return []string{o.Instance} }
@@ -202,6 +218,7 @@ func (r *Registry) onPeer(cluster string, up bool) {
 	if up {
 		go r.watchInfo(ctx, cluster)
 		go r.tellGateways(ctx, cluster)
+		go r.telemetry(ctx, cluster)
 		go r.ensureClients(cluster)
 	}
 	// what is written is what holds at the time of writing, so the order

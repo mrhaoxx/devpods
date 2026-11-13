@@ -83,6 +83,10 @@ type Options struct {
 	// DevPods to trust; called with the whole set whenever the list comes.
 	// nil = not published.
 	PublishGatewayKeys func(ctx context.Context, keys []string) error
+
+	// Telemetry, when set, takes this cluster's telemetry to the console:
+	// the telemetry streams the console opens are offered to it.
+	Telemetry *TelemetryLink
 }
 
 // Agent serves the streams the console opens.
@@ -147,6 +151,12 @@ func (a *Agent) handle(ctx context.Context, purpose []byte, conn net.Conn) {
 		a.serveInfo(ctx, conn)
 	case "gateways":
 		a.serveGateways(ctx, conn)
+	case "telemetry":
+		if a.o.Telemetry == nil {
+			_ = conn.Close() // this agent does not send telemetry
+			return
+		}
+		a.o.Telemetry.Offer(conn)
 	case "dial": // the console asks for DevPods' state, not for connections to them
 		answerDial(conn, errors.New("only a gateway is given connections to DevPods"), "")
 		_ = conn.Close()

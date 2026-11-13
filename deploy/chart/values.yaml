@@ -153,12 +153,9 @@ agent:
   joinToken: ""
   joinTokenSecret: ""
   # Telemetry of this cluster's DevPods (telemetry.enabled) goes to the
-  # console's receiver through the agent: its address as this cluster
-  # reaches it, e.g. https://devpod.example.com/ingest/v1/batch. The key
-  # DevPods sign with is the console's: copy its Secret devpod-ingest-key
-  # into namespaces.system here.
-  telemetry:
-    url: ""
+  # console's receiver through the agent, over its link: nothing to
+  # address. The key DevPods sign with is the console's: copy its Secret
+  # devpod-ingest-key into namespaces.system here.
   resources:
     requests: {cpu: 50m, memory: 64Mi}
     limits:   {cpu: "1", memory: 512Mi}

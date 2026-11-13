@@ -42,8 +42,9 @@ can serve them all. Nothing dials into a cluster: each cluster runs an
   the controller and the agent. The agent's service account is what the
   console can do in that cluster (DevPods, their Pods and events, nodes,
   reservations; no Secrets), and a gateway gets connections to running
-  DevPods only. `agent.telemetry.url` passes the DevPods' telemetry on to
-  the console.
+  DevPods only. With `telemetry.enabled` the DevPods' telemetry goes to
+  the console over the agent's link (copy the console's Secret
+  `devpod-ingest-key` into this cluster).
 - **A gateway of several clusters** — `gateway.hub.enabled`,
   `gateway.hub.name`, `gateway.hub.console`, `gateway.hub.joinToken`, and
   a route (TLS, long-lived connections) to the Service

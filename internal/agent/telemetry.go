@@ -6,10 +6,13 @@ package agent
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"io"
+	"net"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -72,4 +75,74 @@ func TelemetryForward(target string, hc *http.Client) http.Handler {
 		w.WriteHeader(resp.StatusCode)
 		_, _ = io.Copy(w, io.LimitReader(resp.Body, 1<<20))
 	})
+}
+
+// CapTelemetryLink is the capability of an agent that takes its cluster's
+// telemetry to the console over its link: the console then opens telemetry
+// streams to it.
+const CapTelemetryLink = "telemetry-link"
+
+// PurposeTelemetry: a stream the console opens to an agent for its
+// telemetry; on it the agent is the HTTP client, the console's receiver
+// the server.
+var PurposeTelemetry = mustPurpose("telemetry")
+
+// TelemetryLink takes the cluster's telemetry to the console over the
+// agent's link: the console offers streams (Offer), and each batch the
+// DevPods post (Forward) goes on one as a request to the console's
+// receiver, whose answer passes back. The agent needs no way to the
+// console of its own beyond its link.
+type TelemetryLink struct {
+	// Wait bounds how long a batch waits for a stream (default 10 s);
+	// then the DevPod is told the receiver cannot be reached.
+	Wait  time.Duration
+	conns chan net.Conn
+	once  sync.Once
+	hc    *http.Client
+}
+
+// NewTelemetryLink returns a TelemetryLink with no streams yet.
+func NewTelemetryLink() *TelemetryLink {
+	return &TelemetryLink{conns: make(chan net.Conn, 16)}
+}
+
+// Offer keeps a stream the console opened, for a batch to go on.
+func (l *TelemetryLink) Offer(c net.Conn) {
+	select {
+	case l.conns <- c:
+	default:
+		_ = c.Close() // enough are kept
+	}
+}
+
+func (l *TelemetryLink) take(ctx context.Context) (net.Conn, error) {
+	wait := l.Wait
+	if wait <= 0 {
+		wait = 10 * time.Second
+	}
+	t := time.NewTimer(wait)
+	defer t.Stop()
+	select {
+	case c := <-l.conns:
+		return c, nil
+	case <-t.C:
+		return nil, errors.New("no telemetry stream from the console")
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+}
+
+// Forward is the handler DevPods post their batches to.
+func (l *TelemetryLink) Forward() http.Handler {
+	l.once.Do(func() {
+		l.hc = &http.Client{Timeout: 30 * time.Second, Transport: &http.Transport{
+			// every connection is a stream the console offered; a stream
+			// kept idle is used again
+			DialContext:         func(ctx context.Context, _, _ string) (net.Conn, error) { return l.take(ctx) },
+			MaxIdleConnsPerHost: 16,
+			IdleConnTimeout:     5 * time.Minute,
+			DisableCompression:  true,
+		}}
+	})
+	return TelemetryForward("http://console"+TelemetryPath, l.hc)
 }

@@ -8,7 +8,7 @@
      no receiver, no store and no key of its own here. */}}
 {{- define "devpod.telemetry.forward" -}}
 {{- $a := .Values.agent | default dict -}}
-{{- if and (dig "enabled" false $a) (dig "telemetry" "url" "" $a) (not .Values.webui.enabled) -}}true{{- end -}}
+{{- if and (dig "enabled" false $a) (not .Values.webui.enabled) -}}true{{- end -}}
 {{- end -}}
 
 {{- define "devpod.telemetry.on" -}}

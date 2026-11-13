@@ -45,7 +45,7 @@ func main() {
 		identitySecret, identityFile, tokenFile      string
 		capabilities, controller                     string
 		idle                                         int
-		telemetryURL, telemetryListen                string
+		telemetryListen                              string
 	)
 	flag.StringVar(&cluster, "cluster", "", "this cluster's name, as registered at the console (required)")
 	flag.StringVar(&console, "console", "", "the console's address for agents, e.g. https://devpod.example.com (required)")
@@ -57,8 +57,7 @@ func main() {
 	flag.StringVar(&capabilities, "capabilities", "", "what this cluster offers, comma separated: snapshots, reservations, telemetry")
 	flag.StringVar(&controller, "controller-deployment", "devpod-controller", "the controller's Deployment, whose image tag is reported as its version")
 	flag.IntVar(&idle, "idle-connections", 8, "unused data connections kept on each instance of the console and of each gateway")
-	flag.StringVar(&telemetryURL, "telemetry-url", "", "the console's telemetry receiver, e.g. https://devpod.example.com/ingest/v1/batch: DevPods of this cluster post their telemetry to the agent (--telemetry-listen), which passes it on")
-	flag.StringVar(&telemetryListen, "telemetry-listen", ":8081", "where the agent takes telemetry batches in the cluster (with --telemetry-url)")
+	flag.StringVar(&telemetryListen, "telemetry-listen", "", "where the agent takes the telemetry batches of this cluster's DevPods, to take them to the console over its link (empty: no telemetry)")
 	flag.Parse()
 	slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stderr, nil)))
 	if cluster == "" || console == "" {
@@ -123,10 +122,14 @@ func main() {
 		return websocket.NetConn(ctx, c, websocket.MessageBinary), nil
 	}
 
-	if telemetryURL != "" {
-		ts := &http.Server{Addr: telemetryListen, Handler: agent.TelemetryForward(telemetryURL, nil), ReadHeaderTimeout: 10 * time.Second}
+	// the DevPods' telemetry goes to the console over the agent's link: the
+	// console opens telemetry streams, the batches go on them
+	var telemetry *agent.TelemetryLink
+	if telemetryListen != "" {
+		telemetry = agent.NewTelemetryLink()
+		ts := &http.Server{Addr: telemetryListen, Handler: telemetry.Forward(), ReadHeaderTimeout: 10 * time.Second}
 		go func() {
-			slog.Info("telemetry_forward", "listen", telemetryListen, "to", telemetryURL)
+			slog.Info("telemetry_over_link", "listen", telemetryListen)
 			if err := ts.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 				fatal(fmt.Errorf("--telemetry-listen: %w", err))
 			}
@@ -138,6 +141,9 @@ func main() {
 	}
 
 	caps := splitList(capabilities)
+	if telemetry != nil {
+		caps = append(caps, agent.CapTelemetryLink)
+	}
 	a, err := agent.New(agent.Options{
 		Cluster: cluster, Identity: id, API: cfg,
 		Namespace: devpodNamespace, DevPods: devpods,
@@ -148,6 +154,7 @@ func main() {
 		PublishGatewayKeys: func(ctx context.Context, keys []string) error {
 			return publishGatewayKeys(ctx, kc, devpodNamespace, keys)
 		},
+		Telemetry: telemetry,
 		Info: func(ctx context.Context) agent.Info {
 			in := agent.Info{AgentVersion: version, Capabilities: caps}
 			if v, err := kc.Discovery().ServerVersion(); err == nil {

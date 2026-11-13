@@ -7,12 +7,14 @@ package clusters_test
 import (
 	"context"
 	"errors"
+	"io"
 	"net"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -417,4 +419,77 @@ func TestRegistry_TellsAgentsOfGateways(t *testing.T) {
 		defer mu.Unlock()
 		return dialled["https://gw-b300.example"] == before
 	})
+}
+
+// A cluster's telemetry comes over its agent's link: while this console
+// takes telemetry in (the receiver's leader), it keeps streams to an agent
+// that says it sends it this way, and its receiver answers the agent's
+// batches on them; not leading, it keeps none.
+func TestRegistry_TelemetryOverTheLink(t *testing.T) {
+	h := startHub(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	r := clusters.New(clusters.Options{
+		Hub: h.c, Reader: h.c, Instance: "console-0", StatusInterval: time.Hour,
+		Heartbeat: 30 * time.Millisecond, Dead: 300 * time.Millisecond, TelemetryInterval: 20 * time.Millisecond,
+	})
+	go r.Run(ctx)
+	var leading atomic.Bool
+	leading.Store(true)
+	var mu sync.Mutex
+	var got []string
+	r.SetTelemetry(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		b, _ := io.ReadAll(req.Body)
+		mu.Lock()
+		got = append(got, string(b))
+		mu.Unlock()
+		w.WriteHeader(http.StatusAccepted)
+	}), leading.Load)
+
+	token := register(t, ctx, h, "c1")
+	id := newIdentity(t)
+	if err := r.Join(ctx, "c1", token, id.PublicKey()); err != nil {
+		t.Fatal(err)
+	}
+	link := agent.NewTelemetryLink()
+	link.Wait = 200 * time.Millisecond
+	api := httptest.NewServer(http.NotFoundHandler())
+	defer api.Close()
+	a, err := agent.New(agent.Options{
+		Cluster: "c1", Identity: id, API: &rest.Config{Host: api.URL}, Telemetry: link,
+		Info: func(context.Context) agent.Info { return agent.Info{Capabilities: []string{agent.CapTelemetryLink}} },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	go func() {
+		_ = a.Run(ctx, tunnel.ClientOptions{
+			Idle: 2, Heartbeat: 30 * time.Millisecond, Dead: 300 * time.Millisecond, BackoffMin: 5 * time.Millisecond, BackoffMax: 40 * time.Millisecond,
+			Dial: func(context.Context) (net.Conn, error) {
+				x, y := net.Pipe()
+				go r.Accept(ctx, y)
+				return x, nil
+			},
+		})
+	}()
+	fwd := httptest.NewServer(link.Forward())
+	defer fwd.Close()
+	post := func(body string) int {
+		resp, err := http.Post(fwd.URL+"/ingest/v1/batch", "application/x-protobuf", strings.NewReader(body))
+		if err != nil {
+			return 0
+		}
+		_ = resp.Body.Close()
+		return resp.StatusCode
+	}
+	eventually(t, "a batch reaches the console's receiver over the link", func() bool { return post("batch") == http.StatusAccepted })
+	mu.Lock()
+	n := len(got)
+	mu.Unlock()
+	if n == 0 || got[0] != "batch" {
+		t.Fatalf("the receiver got %q", got)
+	}
+	// no longer leading: its streams are closed, no new ones are opened
+	leading.Store(false)
+	eventually(t, "not leading, it keeps no streams", func() bool { return post("after") == http.StatusBadGateway })
 }
