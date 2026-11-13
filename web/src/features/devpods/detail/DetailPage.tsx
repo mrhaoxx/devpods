@@ -40,7 +40,6 @@ import { EventList } from "./EventsTab";
 import { MonitorTab } from "./MonitorTab";
 import { ContainerTab } from "./ContainerTab";
 import { PortsPanel } from "./PortsPanel";
-import { PodTab } from "./PodTab";
 import { YamlTab } from "./YamlTab";
 import { SnapshotControl } from "../../images/SnapshotControl";
 import { devpodToConfig } from "../../configs/exportConfig";
@@ -71,6 +70,8 @@ export function DetailPage() {
   const qc = useQueryClient();
   const live = useLiveEnabled();
   const [url, setUrl] = useUrlState(schema);
+  // the Pod is told in the 容器 tab (old links say ?tab=pod)
+  const tab = url.tab === "pod" ? "container" : url.tab;
   const now = useNow(5000);
   const q = useDevPod(r);
   const clusterList = useClusterList();
@@ -114,7 +115,7 @@ export function DetailPage() {
     [onDetail, onEvent],
   );
 
-  const allProcs = url.tab === "processes";
+  const allProcs = tab === "processes";
   const spec = useMemo(() => devpodStream(r, allProcs, onOther), [r, allProcs, onOther]);
   const metrics = useLiveRow<DevPodSample>(spec, "metrics");
   const recent = useMetrics(r, "15m"); // the cards' sparklines start from history
@@ -126,7 +127,7 @@ export function DetailPage() {
   }, [live, r, onDetail, onEvent]);
 
   const audit = !!me?.features.audit;
-  const sessions = useAuditSessions({ devpod: name, cluster }, { enabled: audit && (url.tab === "overview" || url.tab === "sessions"), refetchInterval: 10_000 });
+  const sessions = useAuditSessions({ devpod: name, cluster }, { enabled: audit && (tab === "overview" || tab === "sessions"), refetchInterval: 10_000 });
 
   const d = detail ?? q.data ?? null;
   const notFound = q.error instanceof ApiFailure && q.error.status === 404;
@@ -161,7 +162,6 @@ export function DetailPage() {
     ...(audit ? ([["sessions", "会话"]] as [string, string][]) : []),
     ...(me?.features.httpProxy ? ([["ports", "端口"]] as [string, string][]) : []),
     ["container", "容器"],
-    ["pod", "Pod"],
     ["events", "事件"],
     ["yaml", "YAML"],
   ];
@@ -230,19 +230,19 @@ export function DetailPage() {
             key={id}
             role="tab"
             type="button"
-            aria-selected={url.tab === id}
+            aria-selected={tab === id}
             onClick={() => setUrl({ tab: id })}
             // Monaco is large: start fetching it when the YAML tab is about to be opened
             onPointerEnter={id === "yaml" ? () => void preloadYamlEditor()?.catch(() => {}) : undefined}
             onFocus={id === "yaml" ? () => void preloadYamlEditor()?.catch(() => {}) : undefined}
-            className={`-mb-px border-b-2 px-3 py-1.5 ${url.tab === id ? "border-accent font-semibold text-accent" : "border-transparent text-muted hover:text-ink"}`}
+            className={`-mb-px border-b-2 px-3 py-1.5 ${tab === id ? "border-accent font-semibold text-accent" : "border-transparent text-muted hover:text-ink"}`}
           >
             {label}
           </button>
         ))}
       </div>
 
-      {url.tab === "overview" && (
+      {tab === "overview" && (
         <div className="grid gap-3 lg:grid-cols-2">
           <Panel title="SSH">
             <div className="space-y-2 p-3">
@@ -264,22 +264,21 @@ export function DetailPage() {
           </div>
         </div>
       )}
-      {url.tab === "monitor" && <MonitorTab r={r} history={live ? metrics.row?.history : undefined} />}
-      {url.tab === "processes" && (
+      {tab === "monitor" && <MonitorTab r={r} history={live ? metrics.row?.history : undefined} />}
+      {tab === "processes" && (
         <Panel title="全部进程（每秒刷新）">
           <ProcessTable procs={procs.row?.value} live={live} />
         </Panel>
       )}
-      {url.tab === "sessions" && audit && (
+      {tab === "sessions" && audit && (
         <Panel title="会话">
           <SessionList items={sessions.data?.items} error={sessions.error} now={now} />
         </Panel>
       )}
-      {url.tab === "ports" && me?.features.httpProxy && <PortsPanel r={r} sshPort={sshPort} />}
-      {url.tab === "container" && <ContainerTab r={r} />}
-      {url.tab === "pod" && <PodTab r={r} />}
-      {url.tab === "yaml" && <YamlTab r={r} />}
-      {url.tab === "events" && (
+      {tab === "ports" && me?.features.httpProxy && <PortsPanel r={r} sshPort={sshPort} />}
+      {tab === "container" && <ContainerTab r={r} ports={!!me?.features.httpProxy} />}
+      {tab === "yaml" && <YamlTab r={r} />}
+      {tab === "events" && (
         <Panel title="事件">
           <EventList events={events} />
         </Panel>

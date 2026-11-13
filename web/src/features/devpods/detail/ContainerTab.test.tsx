@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { fireEvent, screen, waitFor, within } from "@testing-library/react";
-import { PodTab } from "./PodTab";
+import { ContainerTab } from "./ContainerTab";
 import { renderWithProviders, stubFetch } from "../../../test/render";
 import type { PodDetail } from "../../../data/api";
 
@@ -48,12 +48,12 @@ const pod: PodDetail = {
   tolerations: ["nvidia.com/gpu:NoSchedule"],
 };
 
-describe("PodTab", () => {
+describe("ContainerTab: the Pod and the container on one tab", () => {
   afterEach(() => vi.unstubAllGlobals());
 
   it("tells the Pod as kubectl describe would: summary, conditions, containers with their state, volumes", async () => {
     stubFetch({ "/api/devpods/alice-x/pod": { pod } });
-    renderWithProviders(<PodTab r={{ name: "alice-x" }} />);
+    renderWithProviders(<ContainerTab r={{ name: "alice-x" }} />);
     const summary = await screen.findByRole("group", { name: "概要" });
     for (const [k, v] of [
       ["阶段", "Running"],
@@ -96,15 +96,36 @@ describe("PodTab", () => {
   it("a stopped DevPod has no Pod, and says so; 刷新 asks again", async () => {
     let n = 0;
     stubFetch({ "/api/devpods/alice-x/pod": () => new Response(JSON.stringify({ pod: n++ === 0 ? null : pod })) });
-    renderWithProviders(<PodTab r={{ name: "alice-x" }} />);
+    renderWithProviders(<ContainerTab r={{ name: "alice-x" }} />);
     expect(await screen.findByText(/没有 Pod/)).toBeTruthy();
+    expect(screen.queryByText("系统")).toBeNull(); // nothing else to tell
     fireEvent.click(screen.getByRole("button", { name: "刷新" }));
     await waitFor(() => expect(screen.getByRole("group", { name: "概要" })).toBeTruthy());
   });
 
   it("a failure to load is shown with its reason", async () => {
     stubFetch({ "/api/devpods/alice-x/pod": new Response(JSON.stringify({ code: "INTERNAL", message: "the API server is away" }), { status: 500 }) });
-    renderWithProviders(<PodTab r={{ name: "alice-x" }} />);
-    expect((await screen.findByRole("alert")).textContent).toContain("the API server is away");
+    renderWithProviders(<ContainerTab r={{ name: "alice-x" }} />);
+    await waitFor(() => expect(screen.getAllByRole("alert").some((e) => e.textContent?.includes("the API server is away"))).toBe(true));
+  });
+
+  it("GPUs are numbered by their order (the agent sends no index); 监听端口 only without the 端口 tab", async () => {
+    stubFetch({
+      "/api/devpods/alice-x/pod": { pod },
+      "/api/devpods/alice-x/info": {
+        info: { ts: "", cpu_limit: 0, mem_limit: 0, gpus: [{ uuid: "GPU-a", name: "A100", mem_total: 40960 }, { uuid: "GPU-b", name: "A100", mem_total: 40960 }] },
+        infoTs: "",
+        snapshot: { ts: "", procs: 1, threads: 1, zombies: 0, listen: [{ port: 8080, proto: "tcp", addr: "0.0.0.0" }] },
+      },
+    });
+    const { unmount } = renderWithProviders(<ContainerTab r={{ name: "alice-x" }} ports />);
+    expect(await screen.findByText("GPU1")).toBeTruthy();
+    expect(screen.getByText("GPU0")).toBeTruthy();
+    expect(screen.queryByText(/undefined/)).toBeNull();
+    expect(screen.getByRole("group", { name: "概要" })).toBeTruthy(); // the Pod, on the same tab
+    expect(screen.queryByText("监听端口")).toBeNull();
+    unmount();
+    renderWithProviders(<ContainerTab r={{ name: "alice-x" }} />);
+    expect(await screen.findByText("监听端口")).toBeTruthy();
   });
 });

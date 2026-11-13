@@ -1,10 +1,11 @@
 // The Pod behind a DevPod, the way `kubectl describe pod` tells it: where
-// it runs, the state of each container and why, what is mounted. For the
-// question "why does my DevPod not start".
+// it runs, the state of each container and why, what is mounted, how it
+// was scheduled — sections of the 容器 tab. For the question "why does my
+// DevPod not start".
 import type { Ref } from "../../../data/cluster";
 import type { ReactNode } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { ApiFailure, getDevPodPod, type PodContainer } from "../../../data/api";
+import { ApiFailure, getDevPodPod, type PodContainer, type PodDetail } from "../../../data/api";
 import { Button } from "../../../design/Button";
 import { EmptyState } from "../../../design/EmptyState";
 import { Notice } from "../../../design/Form";
@@ -76,18 +77,28 @@ function Chips({ label, items }: { label: string; items: string[] }) {
   );
 }
 
-export function PodTab({ r }: { r: Ref }) {
-  const q = useQuery({ queryKey: ["devpod-pod", r.cluster ?? "", r.name], queryFn: () => getDevPodPod(r), refetchInterval: 5000, retry: false });
-  const refresh = (
+/** usePod: the DevPod's Pod (null: it has none), kept fresh. */
+export function usePod(r: Ref) {
+  return useQuery({ queryKey: ["devpod-pod", r.cluster ?? "", r.name], queryFn: () => getDevPodPod(r), refetchInterval: 5000, retry: false });
+}
+type PodQuery = ReturnType<typeof usePod>;
+
+function Refresh({ q }: { q: PodQuery }) {
+  return (
     <Button onClick={() => void q.refetch()} disabled={q.isFetching}>
       刷新
     </Button>
   );
+}
+
+/** PodStatus: where the Pod runs, its conditions and the state of each
+ *  container — or that there is no Pod. */
+export function PodStatus({ q }: { q: PodQuery }) {
   if (q.isError) {
     return (
       <div className="space-y-2">
         <Notice>加载失败：{q.error instanceof ApiFailure ? q.error.body.message : String(q.error)}</Notice>
-        {refresh}
+        <Refresh q={q} />
       </div>
     );
   }
@@ -95,15 +106,15 @@ export function PodTab({ r }: { r: Ref }) {
   const pod = q.data.pod;
   if (!pod) {
     return (
-      <Panel title="Pod" actions={refresh}>
+      <Panel title="Pod" actions={<Refresh q={q} />}>
         <EmptyState title="没有 Pod" hint="DevPod 已休眠，或者刚启动、Pod 还没有创建出来。" />
       </Panel>
     );
   }
   const phaseTone = pod.phase === "Running" || pod.phase === "Succeeded" ? "text-run" : pod.phase === "Failed" ? "text-fail" : "text-warm";
   return (
-    <div className="space-y-3">
-      <Panel title={<span className="mono">Pod — {pod.name}</span>} actions={refresh}>
+    <>
+      <Panel title={<span className="mono">Pod — {pod.name}</span>} actions={<Refresh q={q} />}>
         <dl role="group" aria-label="概要" className="grid grid-cols-2 gap-x-4 gap-y-2 p-3 sm:grid-cols-4">
           <Item k="阶段">
             <span className={phaseTone}>{pod.phase}</span>
@@ -154,28 +165,39 @@ export function PodTab({ r }: { r: Ref }) {
 
       <Containers label="初始化容器" items={pod.initContainers} />
       <Containers label="容器" items={pod.containers} />
+    </>
+  );
+}
 
-      {pod.volumes.length > 0 && (
-        <Panel title="卷">
-          <ul aria-label="卷" className="divide-y divide-line text-xs">
-            {pod.volumes.map((v) => (
-              <li key={v.name} className="flex gap-3 px-3 py-1.5">
-                <span className="mono w-52 shrink-0 truncate font-semibold" title={v.name}>
-                  {v.name}
-                </span>
-                <span className="mono min-w-0 flex-1 break-words text-muted">
-                  {v.kind}
-                  {v.detail ? `: ${v.detail}` : ""}
-                </span>
-              </li>
-            ))}
-          </ul>
-        </Panel>
-      )}
+/** PodVolumes: what the Pod mounts, by source. */
+export function PodVolumes({ pod }: { pod: PodDetail }) {
+  if (pod.volumes.length === 0) return null;
+  return (
+    <Panel title="卷">
+      <ul aria-label="卷" className="divide-y divide-line text-xs">
+        {pod.volumes.map((v) => (
+          <li key={v.name} className="flex gap-3 px-3 py-1.5">
+            <span className="mono w-52 shrink-0 truncate font-semibold" title={v.name}>
+              {v.name}
+            </span>
+            <span className="mono min-w-0 flex-1 break-words text-muted">
+              {v.kind}
+              {v.detail ? `: ${v.detail}` : ""}
+            </span>
+          </li>
+        ))}
+      </ul>
+    </Panel>
+  );
+}
 
+/** PodScheduling: the Pod's labels, node selector and tolerations. */
+export function PodScheduling({ pod }: { pod: PodDetail }) {
+  return (
+    <>
       <Chips label="标签" items={pairs(pod.labels)} />
       <Chips label="节点选择" items={pairs(pod.nodeSelector)} />
       <Chips label="容忍" items={pod.tolerations} />
-    </div>
+    </>
   );
 }

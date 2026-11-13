@@ -138,7 +138,8 @@ export type WireInfo = {
   cpu_limit: number;
   cpuset?: string;
   mem_limit: number;
-  gpus?: { index: number; uuid: string; name: string; mem_total: number; driver?: string; cuda?: string }[];
+  // in nvidia-smi's order, which is the GPUs' index in the container
+  gpus?: { uuid: string; name: string; mem_total: number; driver?: string; cuda?: string }[];
   rdma?: { ibdev: string; port: number; scope: string }[];
   shell?: string;
   agent_version?: string;
