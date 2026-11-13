@@ -412,6 +412,12 @@ export function DataTable<T>(p: DataTableProps<T>) {
       <div
         ref={scroller}
         data-table-scroller={p.fill ? "" : undefined}
+        // a click on the empty part of the list — under the last row, not on a row or the header — lets go of the rows
+        onClick={(e) => {
+          // (in the list itself: a menu's items are drawn elsewhere, though their clicks pass through here)
+          const t = e.target as HTMLElement;
+          if (any && e.currentTarget.contains(t) && !t.closest("tr[data-row],thead")) setSelection({});
+        }}
         className={p.fill ? "min-h-0 flex-1 overflow-auto" : "overflow-x-auto"}
         style={selected.length > 0 && p.fill ? { paddingBottom: BAR_ROOM } : undefined}
       >

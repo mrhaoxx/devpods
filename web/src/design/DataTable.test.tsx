@@ -232,6 +232,18 @@ describe("DataTable", () => {
   });
 });
 
+describe("picking rows by clicking", () => {
+  it("a click on a row picks it; a click on the empty part of the list lets go", () => {
+    const { container } = render(<DataTable fill selectable data={rows} columns={columns} getRowId={(r) => r.name} sorting={[]} onSortingChange={() => {}} />);
+    fireEvent.click(screen.getByText("b"));
+    expect(screen.getByText("已选 1")).toBeTruthy();
+    fireEvent.click(screen.getByRole("columnheader", { name: /名称/ })); // the header is not the empty part
+    expect(screen.getByText("已选 1")).toBeTruthy();
+    fireEvent.click(container.querySelector("[data-table-scroller]")!);
+    expect(screen.queryByText("已选 1")).toBeNull();
+  });
+});
+
 describe("a list page's table (fill)", () => {
   it("works out the rows in sight, and all of them while its height is unknown", () => {
     expect(rowWindow(1000, { top: 0, height: 0 }, 29, 29)).toEqual({ first: 0, last: 1000 });
