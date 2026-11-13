@@ -146,7 +146,9 @@ func (a *Agent) handle(ctx context.Context, purpose []byte, conn net.Conn) {
 	}
 	switch p.Kind {
 	case "kube":
-		a.ln.Offer(conn) // served as HTTP by a.kube
+		// served by an HTTP server, which moves the read deadline after
+		// every request: the stream must survive that
+		a.ln.Offer(tunnel.DeadlineSafe(conn)) // served as HTTP by a.kube
 	case "info":
 		a.serveInfo(ctx, conn)
 	case "gateways":
