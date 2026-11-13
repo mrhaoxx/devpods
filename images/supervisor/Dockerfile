@@ -33,7 +33,8 @@ RUN mkdir -p /out/sbin /out/libexec && \
     strip /out/sbin/* /out/libexec/* 2>/dev/null || true
 
 # --- Stage 2: build supervisor (static Go) ------------------------------
-FROM golang:1.26-alpine AS supervisor-build
+# on the build machine, cross-compiled (no cgo): not under emulation
+FROM --platform=$BUILDPLATFORM golang:1.26-alpine AS supervisor-build
 WORKDIR /src
 COPY go.mod go.sum ./
 RUN go mod download
