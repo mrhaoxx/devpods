@@ -11,6 +11,15 @@
 {{- if and (dig "enabled" false $a) (not .Values.webui.enabled) -}}true{{- end -}}
 {{- end -}}
 
+{{/* devpod.telemetry.viaAgent: "true" when this cluster's DevPods post
+     their telemetry to the agent, which takes it to the console over its
+     link: in a cluster managed from elsewhere, and in the console's own
+     cluster with agent.telemetryOverLink (DevPods on the host network, which
+     the receiver's policy does not admit, reach the agent). */}}
+{{- define "devpod.telemetry.viaAgent" -}}
+{{- $a := .Values.agent | default dict -}}
+{{- if or (include "devpod.telemetry.forward" .) (and (dig "enabled" false $a) (dig "telemetryOverLink" false $a)) -}}true{{- end -}}
+{{- end -}}
 {{- define "devpod.telemetry.on" -}}
 {{- $t := .Values.telemetry | default dict -}}
 {{- if and $t.enabled (include "devpod.telemetry.forward" .) -}}
@@ -27,7 +36,7 @@ true
 {{- end -}}
 
 {{- define "devpod.telemetry.ingestURL" -}}
-{{- if include "devpod.telemetry.forward" . -}}
+{{- if include "devpod.telemetry.viaAgent" . -}}
 http://devpod-agent-ingest.{{ .Values.namespaces.system }}.svc:8081/ingest/v1/batch
 {{- else -}}
 http://devpod-webui-ingest.{{ .Values.namespaces.system }}.svc:8081/ingest/v1/batch

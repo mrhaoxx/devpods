@@ -157,6 +157,12 @@ agent:
   # release's snapshot/reservation/telemetry settings; give it when the
   # controller is not this release's, e.g. an older install's: [] = none.
   # capabilities: []
+  # In the console's own release (webui.enabled): this cluster's DevPods post
+  # their telemetry to the agent too, which takes it to the console over its
+  # link, as any other cluster's do — e.g. when they run on the host network,
+  # which the receiver's network policy does not admit. (A cluster managed
+  # from elsewhere always does.)
+  telemetryOverLink: false
   # Telemetry of this cluster's DevPods (telemetry.enabled) goes to the
   # console's receiver through the agent, over its link: nothing to
   # address. The key DevPods sign with is the console's: copy its Secret

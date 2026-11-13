@@ -54,7 +54,7 @@ spec:
         - --capabilities={{ join "," $caps }}
         {{- end }}
         - --devpod-namespace={{ .Values.namespaces.devpods }}
-        {{- if and (include "devpod.telemetry.on" .) (include "devpod.telemetry.forward" .) }}
+        {{- if and (include "devpod.telemetry.on" .) (include "devpod.telemetry.viaAgent" .) }}
         # DevPods post telemetry here; the agent takes it to the console
         # over its link
         - --telemetry-listen=:8081
@@ -78,7 +78,7 @@ spec:
         secret:
           secretName: {{ $joinSecret }}
       {{- end }}
-{{- if and (include "devpod.telemetry.on" .) (include "devpod.telemetry.forward" .) }}
+{{- if and (include "devpod.telemetry.on" .) (include "devpod.telemetry.viaAgent" .) }}
 ---
 # Where this cluster's DevPods send telemetry: the agent, which takes it
 # to the console's receiver over its link.
