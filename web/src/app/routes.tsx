@@ -13,7 +13,7 @@ import { OverviewPage } from "../features/overview/OverviewPage";
 import { UsersPage } from "../features/users/UsersPage";
 import { SessionsPage } from "../features/audit/SessionsPage";
 import { SessionPage } from "../features/audit/SessionPage";
-import { CommandsPage, FilesPage } from "../features/audit/SearchPages";
+import { CommandsPage, FilesPage, HTTPPage } from "../features/audit/SearchPages";
 import { AccessLogPage, AlertsPage, PolicyPage } from "../features/audit/AdminPages";
 import { NodesPage } from "../features/nodes/NodesPage";
 import { HttpAuthPage } from "../features/devpods/HttpAuthPage";
@@ -53,6 +53,7 @@ export function AppRoutes() {
           <Route path="audit/sessions/:id" element={<SessionRedirect />} />
           <Route path="audit/commands" element={<CommandsPage />} />
           <Route path="audit/files" element={<FilesPage />} />
+          <Route path="audit/http" element={<HTTPPage />} />
           <Route element={<RequireAdmin />}>
             <Route path="audit/sessions" element={<SessionsPage />} />
             <Route path="audit/alerts" element={<AlertsPage />} />

@@ -82,7 +82,7 @@ export function Sidebar({ me, onNavigate }: { me: Me; onNavigate?: () => void })
   ];
   const auditItems: Item[] = [
     { to: "/audit/sessions", label: "会话 / 回放", icon: "▶" },
-    { to: "/audit/commands", label: "命令 · 文件", icon: "⌘" },
+    { to: "/audit/commands", label: "命令 · 文件 · HTTP", icon: "⌘" },
     { to: "/audit/alerts", label: "告警", icon: "⚠", count: alertCount && alertCount !== "0" ? alertCount : undefined, countTone: "fail" },
     { to: "/audit/access-log", label: "访问记录 · 策略", icon: "☰" },
   ];

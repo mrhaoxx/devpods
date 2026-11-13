@@ -1,11 +1,11 @@
-// 命令 · 文件 检索 (UI spec §5.8): full-width tables, substring / path /
-// sha256 search, time range in the URL; the server limits non-admins to
+// 命令 · 文件 · HTTP 检索 (UI spec §5.8): full-width tables, substring / path /
+// sha256 search, HTTP requests to DevPod ports by DevPod / port / status, time range in the URL; the server limits non-admins to
 // their own events.
 import { useClusterFilter } from "../../data/clusterFilter";
 import { useState } from "react";
 import { Link, NavLink } from "react-router-dom";
 import type { ColumnDef, SortingState } from "@tanstack/react-table";
-import { fileContentURL, searchCommands, searchFiles, type CommandRow, type FileEventRow } from "../../data/api";
+import { fileContentURL, searchCommands, searchFiles, searchHTTP, type CommandRow, type FileEventRow, type HTTPRequestRow } from "../../data/api";
 import { useMe } from "../../data/queries";
 import { DataTable } from "../../design/DataTable";
 import { Badge } from "../../design/Badge";
@@ -23,6 +23,9 @@ function Tabs() {
       </NavLink>
       <NavLink to="/audit/files" className={cls}>
         文件
+      </NavLink>
+      <NavLink to="/audit/http" className={cls}>
+        HTTP
       </NavLink>
     </nav>
   );
@@ -116,6 +119,81 @@ export function FilesPage() {
       ) : (
         <>
           <DataTable<FileEventRow> storageKey="files" data={q.items} columns={withCluster(columns, several)} getRowId={(f) => f.event_id} sorting={sorting} onSortingChange={setSorting} empty={<EmptyState title={q.isLoading ? "加载中…" : "这段时间没有文件传输"} />} />
+          <LoadMore hasMore={q.hasNextPage} busy={q.isFetchingNextPage} onClick={() => void q.fetchNextPage()} />
+        </>
+      )}
+    </>
+  );
+}
+
+const httpSchema = {
+  range: { kind: "string", default: "7d" },
+  user: { kind: "string", default: "" },
+  devpod: { kind: "string", default: "" },
+  port: { kind: "string", default: "" },
+  status: { kind: "string", default: "" },
+  method: { kind: "string", default: "" },
+} satisfies Schema;
+
+// HTTP requests to DevPod ports through a gateway (one row per request,
+// one per WebSocket connection).
+export function HTTPPage() {
+  const admin = !!useMe().data?.admin;
+  const [url, setUrl] = useUrlState(httpSchema);
+  const [sorting, setSorting] = useState<SortingState>([]);
+  const { filter, several } = useClusterFilter();
+  const q = usePaged<HTTPRequestRow>(
+    "http",
+    { ...fromTo(url.range), user: admin ? url.user : "", devpod: url.devpod, port: url.port, status: url.status, method: url.method, cluster: filter },
+    searchHTTP,
+  );
+  const columns: ColumnDef<HTTPRequestRow, unknown>[] = [
+    { id: "ts", header: "时间", accessorKey: "ts", meta: { priority: 2, width: 150 }, cell: ({ getValue }) => fmtTS(String(getValue())) },
+    { id: "user", header: "用户", accessorKey: "user", meta: { priority: 3, width: 90, mono: true }, cell: ({ getValue }) => (getValue() ? String(getValue()) : <span className="text-muted">匿名</span>) },
+    { id: "devpod", header: "DevPod", accessorFn: (h) => `${h.devpod}:${h.port}`, meta: { priority: 3, width: 150, mono: true } },
+    { id: "method", header: "方法", accessorKey: "method", meta: { priority: 4, width: 60, mono: true }, cell: ({ row: { original: h } }) => (h.websocket ? `${h.method} ws` : h.method) },
+    {
+      id: "path",
+      header: "路径",
+      accessorFn: (h) => (h.query ? `${h.path}?${h.query}` : h.path),
+      meta: { priority: 1, width: 320, mono: true },
+      cell: ({ getValue }) => <span title={String(getValue())}>{String(getValue())}</span>,
+    },
+    { id: "status", header: "状态", accessorKey: "status", meta: { priority: 2, width: 50, mono: true }, cell: ({ getValue }) => <span className={(getValue() as number) >= 400 ? "text-warm" : undefined}>{String(getValue())}</span> },
+    { id: "bytes", header: "入 / 出", accessorFn: (h) => h.bytes_in + h.bytes_out, meta: { priority: 5, width: 110, mono: true, align: "right" }, cell: ({ row: { original: h } }) => `${fmtBytes(h.bytes_in)} / ${fmtBytes(h.bytes_out)}` },
+    { id: "dur", header: "耗时", accessorKey: "duration_ms", meta: { priority: 6, width: 70, mono: true, align: "right" }, cell: ({ getValue }) => `${getValue()} ms` },
+    {
+      id: "client",
+      header: "来源",
+      accessorKey: "client_ip",
+      meta: { priority: 7, width: 110, mono: true },
+      cell: ({ row: { original: h } }) => <span title={h.forwarded_for ? `X-Forwarded-For（未经核实）: ${h.forwarded_for}` : undefined}>{h.forwarded_for || h.client_ip}</span>,
+    },
+  ];
+  return (
+    <>
+      <Tabs />
+      <div className="flex flex-wrap items-center gap-2 border-b border-line px-3 py-2">
+        <RangePicker value={url.range} onChange={(range) => setUrl({ range })} />
+        {admin && <FilterBox label="用户" value={url.user} onChange={(user) => setUrl({ user })} width="w-32" />}
+        <FilterBox label="DevPod" value={url.devpod} onChange={(devpod) => setUrl({ devpod })} />
+        <FilterBox label="端口" value={url.port} onChange={(port) => setUrl({ port })} width="w-20" />
+        <FilterBox label="状态" value={url.status} onChange={(status) => setUrl({ status })} width="w-20" />
+        <FilterBox label="方法" value={url.method} onChange={(method) => setUrl({ method: method.toUpperCase() })} width="w-20" />
+      </div>
+      {q.isError ? (
+        <AuditError error={q.error} />
+      ) : (
+        <>
+          <DataTable<HTTPRequestRow>
+            storageKey="http"
+            data={q.items}
+            columns={withCluster(columns, several)}
+            getRowId={(h) => h.request_id}
+            sorting={sorting}
+            onSortingChange={setSorting}
+            empty={<EmptyState title={q.isLoading ? "加载中…" : "这段时间没有 HTTP 请求"} />}
+          />
           <LoadMore hasMore={q.hasNextPage} busy={q.isFetchingNextPage} onClick={() => void q.fetchNextPage()} />
         </>
       )}

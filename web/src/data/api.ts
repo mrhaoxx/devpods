@@ -312,6 +312,33 @@ export type FileEventRow = {
   blocked: boolean;
   s3_key: string;
 };
+// One request to a DevPod port through a gateway's HTTP proxy (one
+// WebSocket connection); user "" is anonymous, query is as sent.
+export type HTTPRequestRow = {
+  ts: string;
+  duration_ms: number;
+  cluster?: string;
+  gateway?: string;
+  gateway_pod: string;
+  devpod: string;
+  devpod_uid: string;
+  owner: string;
+  port: number;
+  access: string;
+  user: string;
+  method: string;
+  host: string;
+  path: string;
+  query: string;
+  status: number;
+  bytes_in: number;
+  bytes_out: number;
+  websocket: boolean;
+  client_ip: string;
+  forwarded_for: string;
+  user_agent: string;
+  request_id: string;
+};
 export type PolicyEventRow = { ts: string; session_id: string; user: string; rule: string; action: string; detail: string };
 export type AlertRow = { cluster?: string; ts: string; devpod_uid: string; session_id: string; kind: string; source: string; detail: string };
 export type AccessLogRow = { ts: string; viewer: string; action: string; target_session: string; target_file: string; client_ip: string };
@@ -335,6 +362,7 @@ export const listAuditSessions = (q: Record<string, string | undefined>) =>
 export const getAuditSession = (id: string) => req<SessionDetail>("GET", `/api/audit/sessions/${id}`);
 export const searchCommands = (q: Record<string, string | undefined>) => req<Page<CommandRow>>("GET", `/api/audit/commands?${qs(q)}`);
 export const searchFiles = (q: Record<string, string | undefined>) => req<Page<FileEventRow>>("GET", `/api/audit/files?${qs(q)}`);
+export const searchHTTP = (q: Record<string, string | undefined>) => req<Page<HTTPRequestRow>>("GET", `/api/audit/http?${qs(q)}`);
 export const listAlerts = (q: Record<string, string | undefined>) => req<Page<AlertRow>>("GET", `/api/audit/alerts?${qs(q)}`);
 export const listAccessLog = (q: Record<string, string | undefined>) => req<Page<AccessLogRow>>("GET", `/api/audit/access-log?${qs(q)}`);
 export const castURL = (id: string, ch: number) => `/api/audit/sessions/${id}/channels/${ch}/cast`;

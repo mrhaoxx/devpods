@@ -5,7 +5,8 @@ import { renderWithProviders, stubFetch, stubMe } from "../../test/render";
 import { plainOutput, replayable } from "./replay";
 import { SessionPage } from "./SessionPage";
 import { SessionsPage } from "./SessionsPage";
-import type { ChannelRow, SessionDetail } from "../../data/api";
+import { HTTPPage } from "./SearchPages";
+import type { ChannelRow, HTTPRequestRow, SessionDetail } from "../../data/api";
 
 vi.mock("./SessionPlayer", () => ({
   SessionPlayer: ({ sessionId, channel, open, seek, markers, text }: { sessionId: string; channel: number; open: boolean; seek?: { t: number }; markers?: { t: number; label: string }[]; text?: boolean }) => (
@@ -136,6 +137,19 @@ describe("audit pages", () => {
     await screen.findByText(/没有会话/);
     expect(screen.queryByLabelText("用户")).toBeNull();
     expect(screen.getByLabelText("DevPod")).toBeTruthy();
+  });
+
+  it("HTTP page lists requests to DevPod ports; an anonymous visitor reads 匿名", async () => {
+    const row: HTTPRequestRow = {
+      ts: "2026-11-13T10:00:00Z", duration_ms: 12, gateway_pod: "gw-0", devpod: "bob-dev", devpod_uid: "u2", owner: "bob", port: 3000,
+      access: "public", user: "", method: "GET", host: "x-3000-devpod.example", path: "/a", query: "t=1", status: 200,
+      bytes_in: 0, bytes_out: 2048, websocket: false, client_ip: "10.0.0.9", forwarded_for: "1.2.3.4", user_agent: "curl", request_id: "r1",
+    };
+    stubFetch({ "/api/audit/http": { items: [row], next: "" } });
+    renderWithProviders(<HTTPPage />, { route: "/audit/http", me: stubMe({ admin: true }) });
+    expect(await screen.findByText("匿名")).toBeTruthy();
+    expect(screen.getByText("bob-dev:3000")).toBeTruthy();
+    expect(screen.getByText("/a?t=1")).toBeTruthy();
   });
 
   it("AUDIT_UNAVAILABLE shows the error panel", async () => {
