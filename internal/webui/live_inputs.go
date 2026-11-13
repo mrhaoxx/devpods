@@ -16,6 +16,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	devpodv1alpha1 "github.com/mrhaoxx/devpod/api/v1alpha1"
+	"github.com/mrhaoxx/devpod/internal/agent"
 	"github.com/mrhaoxx/devpod/internal/audit/store"
 	"github.com/mrhaoxx/devpod/internal/render"
 	"github.com/mrhaoxx/devpod/internal/webui/clusters"
@@ -134,10 +135,17 @@ func (li *LiveInputs) Build(ctx context.Context) live.Inputs {
 		}
 		var pods corev1.PodList
 		_ = cc.Client.List(ctx, &pods, client.InNamespace(s.NS), client.HasLabels{render.LabelDevPod}, client.UnsafeDisableDeepCopy)
+		// what other workloads hold on each node, as the cluster's agent says
+		var others map[string]agent.NodeUsage
+		if s.Clusters != nil && cc.Name != "" {
+			if info, ok := s.Clusters.Info(cc.Name); ok {
+				others = info.Nodes
+			}
+		}
 		var ns corev1.NodeList
 		if err := cc.Client.List(ctx, &ns, client.UnsafeDisableDeepCopy); err == nil {
 			for i := range ns.Items {
-				nodes = append(nodes, nodeIn{cluster: label, node: &ns.Items[i]})
+				nodes = append(nodes, nodeIn{cluster: label, node: &ns.Items[i], other: others[ns.Items[i].Name]})
 			}
 		}
 		li.devpodRefs(&in, label, cc, owners, dps.Items, pods.Items)
@@ -152,10 +160,12 @@ type ownerIn struct {
 	cc             *clusters.ClusterClients
 }
 
-// nodeIn: a node and the cluster it is in.
+// nodeIn: a node, the cluster it is in, and what pods other than DevPods
+// hold on it.
 type nodeIn struct {
 	cluster string
 	node    *corev1.Node
+	other   agent.NodeUsage
 }
 
 // devpodRefs adds one cluster's DevPods to in.
@@ -191,7 +201,8 @@ func (li *LiveInputs) finish(ctx context.Context, in *live.Inputs, owners map[ow
 		for _, ni := range nodes {
 			n := ni.node
 			ref := live.NodeRef{Cluster: ni.cluster, Name: n.Name, Labels: map[string]string{}, GPUModel: n.Labels[gpuProductLabel],
-				CPUAllocatable: cores(n.Status.Allocatable), MemAllocatable: bytesOf(n.Status.Allocatable), GPUAllocatable: gpus(n.Status.Allocatable)}
+				CPUAllocatable: cores(n.Status.Allocatable), MemAllocatable: bytesOf(n.Status.Allocatable), GPUAllocatable: gpus(n.Status.Allocatable),
+				OtherCPU: ni.other.CPU, OtherMem: ni.other.Mem, OtherGPU: ni.other.GPU}
 			for k, v := range n.Labels {
 				if keepNodeLabel(k) {
 					ref.Labels[k] = v

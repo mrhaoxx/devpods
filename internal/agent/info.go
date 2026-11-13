@@ -21,6 +21,9 @@ type Info struct {
 	Capabilities      []string `json:"capabilities,omitempty"`
 	// Gateways the agent is connected to.
 	Gateways []string `json:"gateways,omitempty"`
+	// Nodes: what pods other than DevPods hold on each node (requests),
+	// for the console to count as taken.
+	Nodes map[string]NodeUsage `json:"nodes,omitempty"`
 }
 
 // serveInfo writes the cluster's Info at once and again whenever it

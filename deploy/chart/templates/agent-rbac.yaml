@@ -62,6 +62,11 @@ rules:
 - apiGroups: [""]
   resources: ["nodes"]
   verbs: ["get", "list", "watch"]
+# every pod, to read only: what workloads other than DevPods hold on each
+# node, which the agent tells the console (the console counts it as taken)
+- apiGroups: [""]
+  resources: ["pods"]
+  verbs: ["get", "list", "watch"]
 # Read always (the console keeps them in its cache of this cluster);
 # changed only where reservations are on.
 - apiGroups: ["devpod.io"]

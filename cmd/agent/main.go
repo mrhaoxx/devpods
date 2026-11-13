@@ -140,6 +140,9 @@ func main() {
 		}()
 	}
 
+	// what other workloads hold on each node, for the console to count
+	usage := agent.NewPodUsage(kc, devpodNamespace)
+	go usage.Run(ctx)
 	caps := splitList(capabilities)
 	if telemetry != nil {
 		caps = append(caps, agent.CapTelemetryLink)
@@ -156,7 +159,7 @@ func main() {
 		},
 		Telemetry: telemetry,
 		Info: func(ctx context.Context) agent.Info {
-			in := agent.Info{AgentVersion: version, Capabilities: caps}
+			in := agent.Info{AgentVersion: version, Capabilities: caps, Nodes: usage.Nodes()}
 			if v, err := kc.Discovery().ServerVersion(); err == nil {
 				in.KubernetesVersion = v.GitVersion
 			}

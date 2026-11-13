@@ -74,6 +74,20 @@ func TestRollup_NodeAndUser(t *testing.T) {
 	}
 }
 
+// What other workloads hold on a node (OtherCPU/Mem/GPU, from its agent)
+// is taken, as the DevPods' requests are.
+func TestRollup_NodeOthers(t *testing.T) {
+	now := time.Unix(1000, 0)
+	in := Inputs{
+		DevPods: []DevPodRef{{UID: "a", Name: "a1", Owner: "alice", Node: "g206", Phase: "Running", GPURequest: 1, CPURequest: 4, MemRequest: 1 << 30}},
+		Nodes:   []NodeRef{{Name: "g206", Ready: true, CPUAllocatable: 64, GPUAllocatable: 8, OtherCPU: 10, OtherMem: 4 << 30, OtherGPU: 3}},
+	}
+	n := NewState(clock(&now)).Snapshot(in).Nodes[0]
+	if n.GPUUsed != 4 || n.CPUAllocated != 14 || n.MemAllocated != 5<<30 {
+		t.Fatalf("node %+v", n)
+	}
+}
+
 func TestRollup_Attention(t *testing.T) {
 	now := time.Unix(100000, 0)
 	s := NewState(clock(&now))

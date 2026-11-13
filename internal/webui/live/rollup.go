@@ -118,7 +118,8 @@ func (s *State) Snapshot(in Inputs) Snapshot {
 	nodes := map[string]*NodeLive{}
 	for _, n := range in.Nodes {
 		nl := &NodeLive{Cluster: n.Cluster, Name: n.Name, Ready: n.Ready, Labels: n.Labels, CPUAllocatable: n.CPUAllocatable,
-			MemAllocatable: n.MemAllocatable, GPUTotal: n.GPUAllocatable, GPUModel: n.GPUModel}
+			MemAllocatable: n.MemAllocatable, GPUTotal: n.GPUAllocatable, GPUModel: n.GPUModel,
+			CPUAllocated: n.OtherCPU, MemAllocated: n.OtherMem, GPUUsed: n.OtherGPU}
 		nodes[nodeKey(n.Cluster, n.Name)] = nl
 		all.node(n)
 		if p := partOf(n.Cluster); p != nil {

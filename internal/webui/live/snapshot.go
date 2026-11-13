@@ -190,6 +190,10 @@ type NodeRef struct {
 	MemAllocatable float64
 	GPUAllocatable int
 	GPUModel       string
+	// What pods other than DevPods hold here (their requests, as the
+	// cluster's agent reports them): taken, as DevPods' requests are.
+	OtherCPU, OtherMem float64
+	OtherGPU           int
 }
 
 // Quota is an owner's compute quota.
