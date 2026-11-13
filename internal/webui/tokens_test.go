@@ -197,7 +197,17 @@ func TestAccessTokens(t *testing.T) {
 			t.Fatalf("admin through the gateway: %v", me)
 		}
 		call("GET", "/api/devpods", [2]string{"gwk_wrong", "tk-alice"}, "", http.StatusUnauthorized)
-		call("GET", "/api/devpods", [2]string{"gwk_gateway-shared-key", "tk-nobody"}, "", http.StatusUnauthorized)
+		// a person of the directory has no User object until they first sign in:
+		// the gateway signed them in, so they are a user (and now have one)
+		if me := call("GET", "/api/me", [2]string{"gwk_gateway-shared-key", "tk-nobody"}, "", http.StatusOK); me["user"] != "tk-nobody" || me["admin"] == true {
+			t.Fatalf("a directory user through the gateway: %v", me)
+		}
+		var nobody devpodv1alpha1.User
+		if err := k8sClient.Get(ctx, types.NamespacedName{Name: "tk-nobody"}, &nobody); err != nil {
+			t.Fatalf("no User object after their first use: %v", err)
+		}
+		t.Cleanup(func() { _ = k8sClient.Delete(ctx, &nobody) })
+		call("GET", "/api/devpods", [2]string{"gwk_gateway-shared-key", ""}, "", http.StatusUnauthorized)
 		s.CLIKey = nil
 		call("GET", "/api/devpods", gw, "", http.StatusUnauthorized)
 	})

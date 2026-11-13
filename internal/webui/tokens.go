@@ -11,12 +11,14 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"slices"
 	"sort"
 	"strings"
 	"time"
 
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/util/retry"
@@ -259,11 +261,26 @@ func (s *Server) bearerSession(w http.ResponseWriter, r *http.Request, bearer st
 			return deny("invalid gateway key")
 		}
 		name := r.Header.Get("X-DevPod-User")
-		var u devpodv1alpha1.User
-		if name == "" || s.Client.Get(r.Context(), types.NamespacedName{Name: name}, &u) != nil {
+		if name == "" {
 			return deny("unknown user")
 		}
-		return Session{User: name, Admin: s.adminFor(name, &u)}, true
+		// The gateway signed the person in (by their key: the directory's or a
+		// User object's). A person of the directory has no User object until
+		// they first sign in: a user all the same, as at the web login, and
+		// given one here as there.
+		var u devpodv1alpha1.User
+		userPtr := &u
+		if err := s.Client.Get(r.Context(), types.NamespacedName{Name: name}, &u); err != nil {
+			if !apierrors.IsNotFound(err) {
+				s.writeErr(w, http.StatusInternalServerError, "INTERNAL", err.Error(), nil)
+				return Session{}, false
+			}
+			userPtr = nil
+			if err := s.ensureUser(r.Context(), name); err != nil {
+				slog.Warn("user object for a gateway user", "user", name, "err", err)
+			}
+		}
+		return Session{User: name, Admin: s.adminFor(name, userPtr)}, true
 	}
 	rest, ok := strings.CutPrefix(bearer, tokenPrefix)
 	id, secret, ok2 := strings.Cut(rest, "_")
