@@ -101,6 +101,11 @@ const (
 // endpoint.
 var PurposeLive = []byte(`{"kind":"live"}`)
 
+// PurposeSSH: a stream that is an SSH connection to the replica's
+// gateway, as if made to its SSH port. The console's web terminal comes
+// this way, and logs in as any other client does.
+var PurposeSSH = []byte(`{"kind":"ssh"}`)
+
 /* ---- what is asked and answered ---- */
 
 // Found is a DevPod and the cluster it is in.
@@ -146,6 +151,14 @@ type Report struct {
 	// InternalKey: the key it signs into DevPods with (authorized_keys
 	// line), for the DevPods of the clusters it serves to trust.
 	InternalKey string `json:"internalKey,omitempty"`
+}
+
+// ReportAnswer is what the console says back to a report.
+type ReportAnswer struct {
+	// TrustedProxyKeys: the keys the console logs in with as a trusted
+	// proxy (its web terminal), for the gateway to trust as it trusts
+	// those its GatewayConfig lists.
+	TrustedProxyKeys []devpodv1alpha1.TrustedProxyKey `json:"trustedProxyKeys,omitempty"`
 }
 
 /* ---- the gateway's side ---- */
@@ -312,11 +325,19 @@ func (c *Client) Clusters(ctx context.Context) ([]Cluster, bool, error) {
 	return out.Clusters, stale, err
 }
 
-// Report tells the console what this gateway is and serves (not cached).
-func (c *Client) Report(ctx context.Context, r Report) error {
+// Report tells the console what this gateway is and serves (not cached),
+// and returns what the console says back.
+func (c *Client) Report(ctx context.Context, r Report) (ReportAnswer, error) {
 	body, _ := json.Marshal(r)
-	_, _, err := c.send(ctx, http.MethodPost, "/gateway/v1/report", body)
-	return err
+	var ans ReportAnswer
+	raw, _, err := c.send(ctx, http.MethodPost, "/gateway/v1/report", body)
+	if err != nil {
+		return ans, err
+	}
+	if len(bytes.TrimSpace(raw)) > 0 {
+		err = json.Unmarshal(raw, &ans)
+	}
+	return ans, err
 }
 
 // Join registers the gateway's public key with the one-time token.

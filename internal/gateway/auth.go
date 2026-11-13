@@ -64,8 +64,8 @@ type AuthResult struct {
 type Authenticator struct {
 	dir       Directory
 	dpNS      string
-	proxyKeys map[string]string // SHA256 fingerprint → alias
-	sources   []IdentitySource  // ordered; first match wins
+	proxyKeys *ProxyKeys
+	sources   []IdentitySource // ordered; first match wins
 }
 
 // NewAuthenticator returns an Authenticator pre-loaded with a single
@@ -73,9 +73,10 @@ type Authenticator struct {
 // (e.g., crdSource then ldapSource).
 func NewAuthenticator(c client.Reader, devpodNamespace string) *Authenticator {
 	return &Authenticator{
-		dir:     NewKubeDirectory(c, devpodNamespace),
-		dpNS:    devpodNamespace,
-		sources: []IdentitySource{NewCRDSource(c)},
+		dir:       NewKubeDirectory(c, devpodNamespace),
+		dpNS:      devpodNamespace,
+		proxyKeys: &ProxyKeys{},
+		sources:   []IdentitySource{NewCRDSource(c)},
 	}
 }
 
@@ -86,12 +87,15 @@ func (a *Authenticator) WithDirectory(d Directory) *Authenticator {
 	return a
 }
 
-// WithProxyKeys attaches the trusted-proxy index. Pass nil/empty to
-// disable trusted-proxy auth.
+// WithProxyKeys sets the trusted proxies the GatewayConfig lists
+// (fingerprint → alias). Pass nil/empty for none.
 func (a *Authenticator) WithProxyKeys(idx map[string]string) *Authenticator {
-	a.proxyKeys = idx
+	a.proxyKeys = &ProxyKeys{config: idx}
 	return a
 }
+
+// ProxyKeys are the trusted proxies: the GatewayConfig's and the console's.
+func (a *Authenticator) ProxyKeys() *ProxyKeys { return a.proxyKeys }
 
 // WithSources installs the ordered identity-source chain. Sources are
 // tried in slice order; the first one to authorize the offered key
@@ -135,7 +139,7 @@ func (a *Authenticator) Authenticate(ctx context.Context, loginName string, key 
 
 	// Trusted-proxy short-circuit — fingerprint-only, identity
 	// sources not consulted.
-	if alias, ok := a.proxyKeys[ssh.FingerprintSHA256(key)]; ok {
+	if alias, ok := a.proxyKeys.Alias(ssh.FingerprintSHA256(key)); ok {
 		ap.Kind = "trusted_proxy"
 		ap.Alias = alias
 		return a.finalize(found, user, pod, ap)

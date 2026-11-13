@@ -43,7 +43,7 @@ var userRE = loginUserRE()
 // sentinels as Authenticate.
 func (a *Authenticator) AuthenticateCLI(ctx context.Context, user string, key ssh.PublicKey) (string, AuthPath, error) {
 	ap := AuthPath{User: user}
-	if alias, ok := a.proxyKeys[ssh.FingerprintSHA256(key)]; ok {
+	if alias, ok := a.proxyKeys.Alias(ssh.FingerprintSHA256(key)); ok {
 		ap.Kind, ap.Alias = "trusted_proxy", alias
 		// the proxy vouches for the user, but the user must exist
 		known := false

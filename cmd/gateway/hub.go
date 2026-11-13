@@ -19,9 +19,11 @@ import (
 	"time"
 
 	"github.com/coder/websocket"
+	"golang.org/x/crypto/ssh"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
 
+	devpodv1alpha1 "github.com/mrhaoxx/devpod/api/v1alpha1"
 	"github.com/mrhaoxx/devpod/internal/agent"
 	"github.com/mrhaoxx/devpod/internal/gateway"
 	"github.com/mrhaoxx/devpod/internal/gwlink"
@@ -74,9 +76,11 @@ type hub struct {
 	// internalKey: the key this gateway signs into DevPods with, reported
 	// for the clusters it serves to trust
 	internalKey string
+	// proxies take the keys the console logs in with (its web terminal)
+	proxies *gateway.ProxyKeys
 }
 
-func (f *hubFlags) start(ctx context.Context, kc kubernetes.Interface, internalKey string) (*hub, error) {
+func (f *hubFlags) start(ctx context.Context, kc kubernetes.Interface, internalKey string, proxies *gateway.ProxyKeys) (*hub, error) {
 	if *f.name == "" {
 		return nil, errors.New("--console needs --gateway-name")
 	}
@@ -102,7 +106,7 @@ func (f *hubFlags) start(ctx context.Context, kc kubernetes.Interface, internalK
 		}
 	}
 	h := &hub{link: gwlink.NewClient(gwlink.Options{Console: *f.console, Gateway: *f.name, Identity: id}),
-		id: id, console: *f.console, name: *f.name, instance: *f.instance, internalKey: internalKey}
+		id: id, console: *f.console, name: *f.name, instance: *f.instance, internalKey: internalKey, proxies: proxies}
 	instances := func() []string { return []string{*f.instance} }
 	if *f.instanceSelector != "" {
 		instances = podNames(kc, *f.namespace, *f.instanceSelector, *f.instance)
@@ -159,7 +163,8 @@ func (f *hubFlags) start(ctx context.Context, kc kubernetes.Interface, internalK
 }
 
 // report tells the console, now and every half minute, which clusters'
-// agents this gateway holds connections from.
+// agents this gateway holds connections from; the console answers with
+// the keys it logs in with as a trusted proxy.
 func (h *hub) report(ctx context.Context) {
 	tick := time.NewTicker(30 * time.Second)
 	defer tick.Stop()
@@ -172,12 +177,13 @@ func (h *hub) report(ctx context.Context) {
 		}
 		slices.Sort(names)
 		rctx, cancel := context.WithTimeout(ctx, 10*time.Second)
-		err := h.link.Report(rctx, gwlink.Report{Version: version, Clusters: names, InternalKey: h.internalKey})
+		ans, err := h.link.Report(rctx, gwlink.Report{Version: version, Clusters: names, InternalKey: h.internalKey})
 		cancel()
 		if err != nil {
 			slog.Warn("gateway_report", "err", err)
 		} else {
 			last = names // what the console was told; a report that failed is said again soon
+			h.trustConsole(ans.TrustedProxyKeys)
 		}
 		// a change is said soon, not at the next half minute
 		soon := time.NewTimer(2 * time.Second)
@@ -205,16 +211,41 @@ func (h *hub) report(ctx context.Context) {
 	}
 }
 
+// trustConsole makes the keys the console said it logs in with this
+// gateway's trusted proxies besides the GatewayConfig's: the console
+// already says which keys each user has, so this trusts it with nothing
+// more.
+func (h *hub) trustConsole(keys []devpodv1alpha1.TrustedProxyKey) {
+	idx := map[string]string{}
+	for _, k := range keys {
+		pk, _, _, _, err := ssh.ParseAuthorizedKey([]byte(k.Pubkey))
+		if err != nil || k.Alias == "" {
+			slog.Warn("console_proxy_key", "alias", k.Alias, "err", fmt.Sprint(err))
+			continue
+		}
+		idx[ssh.FingerprintSHA256(pk)] = k.Alias
+	}
+	h.proxies.SetConsole(idx)
+}
+
 // linkConsole keeps connections from this replica to every instance of
-// the console, over which the console reaches live (watching a session,
-// ending one): the console cannot dial a gateway that is elsewhere.
-func (h *hub) linkConsole(ctx context.Context, live http.Handler) {
-	ln := tunnel.NewListener()
-	server := &http.Server{Handler: live, ReadHeaderTimeout: 10 * time.Second}
-	go func() { _ = server.Serve(ln) }()
+// the console: the console cannot dial a gateway that is elsewhere. Over
+// them it reaches live (watching a session, ending one; nil: not here)
+// and this gateway's SSH, which the returned listener gives out.
+func (h *hub) linkConsole(ctx context.Context, live http.Handler) net.Listener {
+	ln, sshLn := tunnel.NewListener(), tunnel.NewListener()
+	if live != nil {
+		server := &http.Server{Handler: live, ReadHeaderTimeout: 10 * time.Second}
+		go func() { _ = server.Serve(ln) }()
+		go func() {
+			<-ctx.Done()
+			_ = server.Close()
+		}()
+	}
 	go func() {
 		<-ctx.Done()
-		_ = server.Close()
+		_ = ln.Close()
+		_ = sshLn.Close()
 	}()
 	endpoint := strings.Replace(strings.TrimRight(h.console, "/"), "http", "ws", 1) + "/gateway/connect"
 	c := tunnel.NewClient(tunnel.ClientOptions{
@@ -232,16 +263,31 @@ func (h *hub) linkConsole(ctx context.Context, live http.Handler) {
 			return websocket.NetConn(ctx, c, websocket.MessageBinary), nil
 		},
 		Handle: func(_ context.Context, purpose []byte, conn net.Conn) {
-			if string(purpose) != string(gwlink.PurposeLive) {
-				_ = conn.Close() // the console is given the live endpoint here, nothing else
-				return
+			switch {
+			case string(purpose) == string(gwlink.PurposeSSH):
+				sshLn.Offer(fromConsole{conn})
+			case string(purpose) == string(gwlink.PurposeLive) && live != nil:
+				ln.Offer(conn)
+			default:
+				_ = conn.Close() // the console is given these here, nothing else
 			}
-			ln.Offer(conn)
 		},
 		OnError: func(err error) { slog.Warn("gateway_console_link", "err", err.Error()) },
 	})
 	go func() { _ = c.Run(ctx) }()
+	return sshLn
 }
+
+// fromConsole is an SSH connection the console made over the link: its
+// source reads "console".
+type fromConsole struct{ net.Conn }
+
+func (fromConsole) RemoteAddr() net.Addr { return consoleAddr{} }
+
+type consoleAddr struct{}
+
+func (consoleAddr) Network() string { return "tunnel" }
+func (consoleAddr) String() string  { return "console" }
 
 // dial is the way to a DevPod's address: through its cluster's agent.
 func (h *hub) dial(ctx context.Context, t gateway.Target) (net.Conn, error) {

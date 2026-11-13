@@ -5,7 +5,6 @@
 package webui
 
 import (
-	"strings"
 	"context"
 	"encoding/json"
 	"errors"
@@ -17,6 +16,7 @@ import (
 	"slices"
 	"sort"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -514,7 +514,11 @@ func (s *Server) handleGatewayReport(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.writeGatewayStatus(name, &rep)
-	w.WriteHeader(http.StatusNoContent)
+	var ans gwlink.ReportAnswer
+	if s.Webshell != nil { // the web terminal logs into the gateway as a trusted proxy
+		ans.TrustedProxyKeys = []devpodv1alpha1.TrustedProxyKey{{Alias: WebshellProxyAlias, Pubkey: s.Webshell.PublicKey()}}
+	}
+	s.writeJSON(w, http.StatusOK, ans)
 }
 
 // gatewayOf is the gateway that serves a cluster: the one the cluster
@@ -586,19 +590,6 @@ func (s *Server) httpProxies(ctx context.Context) []*HTTPProxy {
 		}
 	}
 	return out
-}
-
-// loginCluster is the cluster to write in a login for the request's
-// DevPod: its name where a gateway of several clusters serves it, nothing
-// where the cluster's own gateway does (that one knows no cluster names).
-func (s *Server) loginCluster(r *http.Request) string {
-	if s.Clusters == nil {
-		return ""
-	}
-	if name := s.k(r).Name; s.gatewayOf(r.Context(), name) != nil {
-		return name
-	}
-	return ""
 }
 
 // authorizedKeyLine: k as one authorized_keys line (key type and key, no

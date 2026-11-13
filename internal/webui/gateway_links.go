@@ -8,6 +8,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math/rand/v2"
 	"net"
 	"net/http"
 	"strings"
@@ -92,6 +93,21 @@ func (g *GatewayLinks) DialContext(ctx context.Context, network, addr string) (n
 		return conn, err
 	}
 	return (&net.Dialer{}).DialContext(ctx, network, addr)
+}
+
+// DialSSH is an SSH connection to the gateway: a stream over the link
+// of one of its replicas, any one that holds a link to this console.
+func (g *GatewayLinks) DialSSH(ctx context.Context, gateway string) (net.Conn, error) {
+	var replicas []string
+	for peer := range g.srv.Peers() {
+		if strings.HasPrefix(peer, gateway+".") {
+			replicas = append(replicas, peer)
+		}
+	}
+	if gateway == "" || len(replicas) == 0 {
+		return nil, fmt.Errorf("no replica of gateway %q is connected to this console", gateway)
+	}
+	return g.srv.Dial(ctx, replicas[rand.IntN(len(replicas))], gwlink.PurposeSSH)
 }
 
 // Via has ls reach the replicas of gateways of several clusters over

@@ -240,6 +240,40 @@ func TestAuthenticate_TrustedProxy_Succeeds(t *testing.T) {
 	}
 }
 
+// The keys the console says it logs in with are trusted proxies like the
+// GatewayConfig's, on the same path; what the console says next replaces
+// what it said before, and the GatewayConfig's stay.
+func TestAuthenticate_TrustedProxy_KeysFromTheConsole(t *testing.T) {
+	pkConsole, _ := ed25519Pubkey(t)
+	pkConfig, _ := ed25519Pubkey(t)
+	c := fakeClient(t, runningDevPod("hello", "alice"))
+	a := gateway.NewAuthenticator(c, "devpods").WithProxyKeys(map[string]string{ssh.FingerprintSHA256(pkConfig): "corp"})
+	login := func(key ssh.PublicKey) (gateway.AuthPath, error) {
+		res, err := a.Authenticate(context.Background(), "alice+hello", key)
+		if err != nil {
+			return gateway.AuthPath{}, err
+		}
+		return res.AuthPath, nil
+	}
+	if _, err := login(pkConsole); err == nil {
+		t.Fatal("a key nobody named got in")
+	}
+	a.ProxyKeys().SetConsole(map[string]string{ssh.FingerprintSHA256(pkConsole): "webui"})
+	if ap, err := login(pkConsole); err != nil || ap.Kind != "trusted_proxy" || ap.Alias != "webui" {
+		t.Fatalf("the console's key: %+v %v", ap, err)
+	}
+	if alias, ok := a.ProxyKeys().Alias(ssh.FingerprintSHA256(pkConsole)); !ok || alias != "webui" {
+		t.Fatalf("Alias = %q %v", alias, ok)
+	}
+	a.ProxyKeys().SetConsole(nil)
+	if _, err := login(pkConsole); err == nil {
+		t.Fatal("a key the console no longer names still gets in")
+	}
+	if ap, err := login(pkConfig); err != nil || ap.Alias != "corp" {
+		t.Fatalf("the GatewayConfig's key: %+v %v", ap, err)
+	}
+}
+
 func TestAuthenticate_TrustedProxy_DevPodNotFoundRejected(t *testing.T) {
 	// Trusted-proxy auth bypasses identity-source resolution (the
 	// proxy attests to the user — required so LDAP-only users with

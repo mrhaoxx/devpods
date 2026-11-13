@@ -185,7 +185,7 @@ func main() {
 	var theHub *hub
 	hubName := "" // this gateway's registered name, when it serves several clusters
 	if hf.enabled() {
-		if theHub, err = hf.start(ctx, clientset, strings.TrimSpace(string(ssh.MarshalAuthorizedKey(internalSigner.PublicKey())))); err != nil {
+		if theHub, err = hf.start(ctx, clientset, strings.TrimSpace(string(ssh.MarshalAuthorizedKey(internalSigner.PublicKey()))), authn.ProxyKeys()); err != nil {
 			slog.Error("hub", "err", err)
 			os.Exit(1)
 		}
@@ -248,23 +248,24 @@ func main() {
 		slog.Error("audit_recorder", "err", err)
 		os.Exit(1)
 	}
+	var live http.Handler // live sessions: watched, ended
 	if auditRec != nil {
 		go auditRec.Run(ctx)
 		slog.Info("audit_recorder_ready", "spool", af.spoolDir)
 		if af.liveListen != "" {
-			live, err := startLive(ctx, auditRec, af.liveListen, af.liveKeyFile)
-			if err != nil {
+			if live, err = startLive(ctx, auditRec, af.liveListen, af.liveKeyFile); err != nil {
 				slog.Error("audit_live", "err", err)
 				os.Exit(1)
 			}
-			if theHub != nil { // the console reaches it here too, wherever this gateway runs
-				theHub.linkConsole(ctx, live)
-			}
 		}
+	}
+	var links net.Listener // SSH from the console's web terminal, wherever this gateway runs
+	if theHub != nil {
+		links = theHub.linkConsole(ctx, live)
 	}
 	ad := &auditDeps{cache: c, gcName: gcName, ns: devpodNamespace, rec: auditRec, tmpl: bannerTmpl, sessionGrace: sessionGrace, gatewayName: hubName}
 
-	runErr := run(ctx, listenAddr, gw.Spec.Listen, hostSigner, authn, dialer, proxyKeys, ad, recorder)
+	runErr := run(ctx, listenAddr, links, gw.Spec.Listen, hostSigner, authn, dialer, ad, recorder)
 
 	if auditRec != nil {
 		dctx, dcancel := context.WithTimeout(context.Background(), af.drainTimeout)
@@ -394,7 +395,7 @@ func loadGatewayConfig(ctx context.Context, r client.Reader, name string) (*devp
 	return &gc, nil
 }
 
-func run(ctx context.Context, addr string, listen devpodv1alpha1.ListenSpec, hostSigner ssh.Signer, authn *gateway.Authenticator, dialer *gateway.Dialer, proxyKeys map[string]string, ad *auditDeps, recorder *gateway.EventRecorder) error {
+func run(ctx context.Context, addr string, links net.Listener, listen devpodv1alpha1.ListenSpec, hostSigner ssh.Signer, authn *gateway.Authenticator, dialer *gateway.Dialer, ad *auditDeps, recorder *gateway.EventRecorder) error {
 	ln, err := net.Listen("tcp", addr)
 	if err != nil {
 		return fmt.Errorf("listen %s: %w", addr, err)
@@ -424,26 +425,43 @@ func run(ctx context.Context, addr string, listen devpodv1alpha1.ListenSpec, hos
 	g, _ := errgroup.WithContext(ctx)
 	var conns sync.Map
 	var connCount atomic.Uint64
-	for {
-		conn, err := ln.Accept()
-		if err != nil {
-			if errors.Is(ctx.Err(), context.Canceled) {
-				return waitWithGrace(g.Wait, &conns, ad.sessionGrace)
+	// connections to the SSH port and those the console makes over its
+	// link are one kind: the same handshake, checks and recording
+	serve := func(ln net.Listener) error {
+		for {
+			conn, err := ln.Accept()
+			if err != nil {
+				return err
 			}
-			return fmt.Errorf("accept: %w", err)
+			id := connCount.Add(1)
+			slog.Info("accept", "id", id, "from", conn.RemoteAddr().String())
+			conns.Store(conn, struct{}{})
+			g.Go(func() error {
+				defer conns.Delete(conn)
+				handle(ctx, id, conn, hostSigner, authn, dialer, ad, recorder)
+				return nil
+			})
 		}
-		id := connCount.Add(1)
-		slog.Info("accept", "id", id, "from", conn.RemoteAddr().String())
-		conns.Store(conn, struct{}{})
-		g.Go(func() error {
-			defer conns.Delete(conn)
-			handle(ctx, id, conn, hostSigner, authn, dialer, proxyKeys, ad, recorder)
-			return nil
-		})
 	}
+	linksDone := make(chan struct{})
+	go func() {
+		defer close(linksDone)
+		if links != nil {
+			_ = serve(links)
+		}
+	}()
+	err = serve(ln)
+	if links != nil {
+		_ = links.Close()
+	}
+	<-linksDone // no connection is taken in while the last ones are awaited
+	if errors.Is(ctx.Err(), context.Canceled) {
+		return waitWithGrace(g.Wait, &conns, ad.sessionGrace)
+	}
+	return fmt.Errorf("accept: %w", err)
 }
 
-func handle(parent context.Context, id uint64, conn net.Conn, hostSigner ssh.Signer, authn *gateway.Authenticator, dialer *gateway.Dialer, proxyKeys map[string]string, ad *auditDeps, recorder *gateway.EventRecorder) {
+func handle(parent context.Context, id uint64, conn net.Conn, hostSigner ssh.Signer, authn *gateway.Authenticator, dialer *gateway.Dialer, ad *auditDeps, recorder *gateway.EventRecorder) {
 	defer conn.Close()
 
 	cfg := &ssh.ServerConfig{
@@ -469,7 +487,7 @@ func handle(parent context.Context, id uint64, conn net.Conn, hostSigner ssh.Sig
 			fp := ssh.FingerprintSHA256(key)
 			ap := "direct"
 			alias := ""
-			if a, ok := proxyKeys[fp]; ok {
+			if a, ok := authn.ProxyKeys().Alias(fp); ok {
 				ap = "trusted_proxy"
 				alias = a
 			}

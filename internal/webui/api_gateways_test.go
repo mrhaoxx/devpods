@@ -6,18 +6,23 @@ package webui_test
 
 import (
 	"context"
+	"crypto/ed25519"
+	"crypto/rand"
 	"encoding/json"
+	"encoding/pem"
 	"errors"
 	"io"
 	"net"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/coder/websocket"
+	"golang.org/x/crypto/ssh"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 
@@ -161,8 +166,19 @@ func TestGateways(t *testing.T) {
 	}
 	// what it says of itself is shown to admins
 	internalKey := "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIMTlaVZ1W7ZmQ5c3bKkq5cL2Ey0HkP2Qj4mY8v3a1b2c"
-	if err := gw.Report(ctx, gwlink.Report{Version: "v0.8.0", Clusters: []string{"a"}, InternalKey: internalKey}); err != nil {
+	// the console says back the key its web terminal logs in with, for
+	// the gateway to trust as a proxy
+	_, priv, _ := ed25519.GenerateKey(rand.Reader)
+	block, _ := ssh.MarshalPrivateKey(priv, "")
+	if w.s.Webshell, err = webui.NewWebshell(pem.EncodeToMemory(block), "unused:22", "", 8, 2); err != nil {
+		t.Fatal(err)
+	}
+	ans, err := gw.Report(ctx, gwlink.Report{Version: "v0.8.0", Clusters: []string{"a"}, InternalKey: internalKey})
+	if err != nil {
 		t.Fatalf("report: %v", err)
+	}
+	if want := []devpodv1alpha1.TrustedProxyKey{{Alias: "webui", Pubkey: w.s.Webshell.PublicKey()}}; !reflect.DeepEqual(ans.TrustedProxyKeys, want) {
+		t.Fatalf("report answer: %+v, want %+v", ans.TrustedProxyKeys, want)
 	}
 	// the key it signs into DevPods with is kept, for the clusters it serves to trust
 	w.until("the internal key is recorded", func() bool {
@@ -198,11 +214,15 @@ func TestGateways(t *testing.T) {
 			Sign:  func(nonce []byte) []byte { return key.SignFor(gwlink.LinkContext, nonce) },
 			Idle:  2, BackoffMin: 10 * time.Millisecond, BackoffMax: 100 * time.Millisecond,
 			Handle: func(_ context.Context, purpose []byte, conn net.Conn) {
-				if string(purpose) != string(gwlink.PurposeLive) {
+				switch string(purpose) {
+				case string(gwlink.PurposeLive):
+					ln.Offer(conn)
+				case string(gwlink.PurposeSSH):
+					_, _ = conn.Write([]byte("SSH of " + name))
 					_ = conn.Close()
-					return
+				default:
+					_ = conn.Close()
 				}
-				ln.Offer(conn)
 			},
 			Dial: func(context.Context) (net.Conn, error) {
 				c, _, err := websocket.Dial(lctx, "ws"+strings.TrimPrefix(web.URL, "http")+"/gateway/connect", nil)
@@ -233,6 +253,19 @@ func TestGateways(t *testing.T) {
 	_ = lresp.Body.Close()
 	if string(lbody) != "live endpoint of gw-pod-1: GET /live/session-1" {
 		t.Fatalf("over the link: %q", lbody)
+	}
+	// the web terminal reaches the gateway's SSH over a replica's link
+	sc, err := w.s.GatewayLinks.DialSSH(ctx, "b300")
+	if err != nil {
+		t.Fatalf("SSH over the link: %v", err)
+	}
+	sb, _ := io.ReadAll(sc)
+	_ = sc.Close()
+	if string(sb) != "SSH of b300.gw-pod-1" {
+		t.Fatalf("SSH over the link reached %q", sb)
+	}
+	if _, err := w.s.GatewayLinks.DialSSH(ctx, "other"); err == nil {
+		t.Fatal("SSH to a gateway with no replica linked")
 	}
 	if _, ok := w.s.GatewayLinks.AddrOf("b300", "gw-imposter"); ok {
 		t.Fatal("a replica with another key got a link")

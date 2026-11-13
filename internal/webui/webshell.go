@@ -30,6 +30,10 @@ import (
 // logged-in user and bridges the shell to a WebSocket. The session goes
 // through the gateway like any other, so it is recorded, listed, can be
 // watched live and can be cut by an admin; its source reads "webui".
+// WebshellProxyAlias is the name the web terminal's key goes by among a
+// gateway's trusted proxies.
+const WebshellProxyAlias = "webui"
+
 type Webshell struct {
 	signer  ssh.Signer
 	addr    string        // gateway host:port
@@ -109,14 +113,21 @@ func webshellLogin(user, devpod, cluster string) string {
 }
 
 // open connects to the gateway as user and starts a shell on a pty.
-func (w *Webshell) open(ctx context.Context, user, devpod, cluster string, cols, rows int) (*ssh.Client, *ssh.Session, io.WriteCloser, io.Reader, io.Reader, error) {
-	hk := ssh.InsecureIgnoreHostKey() //nolint:gosec // in-cluster Service; pinned when a host key is configured
-	if w.hostKey != nil {
+// via, when not nil, is the way to the gateway that serves the DevPod's
+// cluster: a stream over the link its replica keeps to the console, which
+// proved who that replica is (no host key is pinned then). Without it,
+// the gateway at the configured address.
+func (w *Webshell) open(ctx context.Context, user, devpod, cluster string, via func(context.Context) (net.Conn, error), cols, rows int) (*ssh.Client, *ssh.Session, io.WriteCloser, io.Reader, io.Reader, error) {
+	hk := ssh.InsecureIgnoreHostKey() //nolint:gosec // in-cluster Service or an authenticated link; pinned when a host key is configured
+	if w.hostKey != nil && via == nil {
 		hk = ssh.FixedHostKey(w.hostKey)
+	}
+	if via == nil {
+		via = func(ctx context.Context) (net.Conn, error) { return w.dial(ctx, "tcp", w.addr) }
 	}
 	ctx, cancel := context.WithTimeout(ctx, webshellDialTimeout)
 	defer cancel()
-	conn, err := w.dial(ctx, "tcp", w.addr)
+	conn, err := via(ctx)
 	if err != nil {
 		return nil, nil, nil, nil, nil, err
 	}
@@ -221,7 +232,17 @@ func (s *Server) handleDevPodShell(w http.ResponseWriter, r *http.Request) {
 	defer ws.release(sess.User)
 
 	cols, rows := termSize(r.URL.Query())
-	client, shell, stdin, stdout, stderr, err := ws.open(r.Context(), sess.User, dp.Name, s.loginCluster(r), cols, rows)
+	// the gateway that serves the DevPod's cluster, over its link; the
+	// configured one when the cluster names none
+	cluster, via := "", (func(context.Context) (net.Conn, error))(nil)
+	if g := s.gatewayOf(r.Context(), s.k(r).Name); g != nil {
+		if s.GatewayLinks == nil {
+			s.writeErr(w, http.StatusBadGateway, "GATEWAY_UNAVAILABLE", "this console holds no links to gateways", nil)
+			return
+		}
+		cluster, via = s.k(r).Name, func(ctx context.Context) (net.Conn, error) { return s.GatewayLinks.DialSSH(ctx, g.Name) }
+	}
+	client, shell, stdin, stdout, stderr, err := ws.open(r.Context(), sess.User, dp.Name, cluster, via, cols, rows)
 	if err != nil {
 		s.writeErr(w, http.StatusBadGateway, "GATEWAY_UNAVAILABLE", "the SSH gateway refused the connection: "+err.Error(), nil)
 		return
