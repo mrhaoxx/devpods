@@ -304,7 +304,7 @@ audit:
       storage: 100Gi
       storageClass: ""
   clickhouse:
-    url: ""                     # external mode, e.g. clickhouse://clickhouse.example.com:9000
+    url: ""                     # external mode, e.g. clickhouse://clickhouse.example.com:9000 (HTTPS: https://…:443?secure=true)
     database: devpod_audit
     # external mode: Secrets with keys username, password, one per component
     credentialsSecrets: {gateway: "", webui: "", migrate: ""}
@@ -317,7 +317,7 @@ audit:
   # gateway of several clusters elsewhere records here): ClickHouse's HTTP
   # port and S3, each at a hostname of its own, through a Gateway API
   # listener with TLS. Such a gateway takes audit.clickhouse.url
-  # https://<clickhouseHostname>:443 and audit.s3.endpoint
+  # https://<clickhouseHostname>:443?secure=true and audit.s3.endpoint
   # https://<s3Hostname>, with copies of the gateway's credentials Secrets.
   route:
     enabled: false

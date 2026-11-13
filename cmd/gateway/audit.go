@@ -169,6 +169,9 @@ func buildRecorder(ctx context.Context, f auditFlags) (*audit.Recorder, error) {
 	if f.s3Bucket == "" {
 		return nil, errors.New("--audit-s3-bucket is required with --audit-clickhouse-url")
 	}
+	if err := store.CheckCHURL(f.chURL); err != nil { // connected later; a wrong address is said now
+		return nil, err
+	}
 	chCfg := store.CHConfig{URL: f.chURL, Database: f.chDatabase}
 	if f.chCredsDir != "" {
 		u, p, err := store.LoadCHCredentials(f.chCredsDir)

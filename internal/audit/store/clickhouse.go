@@ -50,6 +50,16 @@ type CH struct {
 	readExtra clickhouse.Settings
 }
 
+// CheckCHURL says whether the client takes url: one it does not never
+// connects, so a gateway that connects only when it first writes checks it
+// when it starts. (An https:// address needs ?secure=true.)
+func CheckCHURL(url string) error {
+	if _, err := clickhouse.ParseDSN(url); err != nil {
+		return fmt.Errorf("clickhouse url: %w", err)
+	}
+	return nil
+}
+
 // OpenCH connects and pings.
 func OpenCH(ctx context.Context, cfg CHConfig) (*CH, error) {
 	db := cfg.Database

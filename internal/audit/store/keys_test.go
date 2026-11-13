@@ -33,3 +33,20 @@ func TestBatchEmpty(t *testing.T) {
 		t.Fatal("batch with an alert is not empty")
 	}
 }
+
+// A ClickHouse address the client will never take is said when the
+// gateway starts, not at its first insert (an https address needs
+// secure=true).
+func TestCheckCHURL(t *testing.T) {
+	for url, ok := range map[string]bool{
+		"clickhouse://ch.example.org:9000":       true,
+		"https://ch.example.org:443?secure=true": true,
+		"http://ch.example.org:8123":             true,
+		"https://ch.example.org:443":             false,
+		"clickhouse://":                          false,
+	} {
+		if err := CheckCHURL(url); (err == nil) != ok {
+			t.Errorf("CheckCHURL(%q) = %v, want ok=%v", url, err, ok)
+		}
+	}
+}
