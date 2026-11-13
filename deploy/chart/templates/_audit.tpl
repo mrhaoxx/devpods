@@ -74,6 +74,55 @@ devpod-audit-ch-{{ .component }}
 {{- end -}}
 
 {{/* Pods allowed to reach the bundled storage. */}}
+{{/* devpod.audit.route: the route block when routes to the bundled store
+     are on, else nothing. */}}
+{{- define "devpod.audit.route" -}}
+{{- $r := dig "route" dict .Values.audit -}}
+{{- if dig "enabled" false $r -}}{{ toJson $r }}{{- end -}}
+{{- end -}}
+
+{{/* devpod.audit.httpRoute: an HTTPRoute to a bundled store's Service.
+     dict: root, name (route and Service), hostname (its key in
+     audit.route), port. */}}
+{{- define "devpod.audit.httpRoute" -}}
+{{- $r := fromJson (include "devpod.audit.route" .root) -}}
+---
+# the bundled store for gateways in other clusters, at its own hostname
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: {{ .name }}
+  namespace: {{ .root.Values.namespaces.system }}
+  labels: {{ include "devpod.labels" .root | nindent 4 }}
+spec:
+  parentRefs:
+  - name: {{ required "audit.route.gateway.name is required" $r.gateway.name }}
+    namespace: {{ $r.gateway.namespace | default .root.Values.namespaces.system }}
+    {{- with $r.httpsListener }}
+    sectionName: {{ . }}
+    {{- end }}
+  hostnames:
+  - {{ required (printf "audit.route.%s is required" .hostname) (index $r .hostname) }}
+  rules:
+  - backendRefs:
+    - name: {{ .name }}
+      port: {{ .port }}
+{{- end -}}
+
+{{/* devpod.audit.proxyFrom: the network policy rule admitting the route's
+     proxy Pods to port (nothing when routes are off). dict: root, port. */}}
+{{- define "devpod.audit.proxyFrom" -}}
+{{- with include "devpod.audit.route" .root }}
+{{- $r := fromJson . }}
+# the route's proxy, for gateways in other clusters
+- from:
+  - namespaceSelector:
+      matchLabels:
+        kubernetes.io/metadata.name: {{ $r.proxyNamespace | default $r.gateway.namespace | default $.root.Values.namespaces.system }}
+  ports: [{port: {{ $.port }}}]
+{{- end }}
+{{- end -}}
+
 {{- define "devpod.audit.clients" -}}
 - podSelector:
     matchExpressions:

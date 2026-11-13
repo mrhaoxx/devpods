@@ -147,4 +147,8 @@ spec:
   ingress:
   - from: {{- include "devpod.audit.clients" . | nindent 4 }}
     ports: [{port: 9000}, {port: 8123}]
+  {{- include "devpod.audit.proxyFrom" (dict "root" . "port" 8123) | nindent 2 }}
+{{- if include "devpod.audit.route" . }}
+{{ include "devpod.audit.httpRoute" (dict "root" . "name" "devpod-audit-clickhouse" "hostname" "clickhouseHostname" "port" 8123) }}
+{{- end }}
 {{- end }}

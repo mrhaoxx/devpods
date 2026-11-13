@@ -313,6 +313,19 @@ audit:
       image: {repository: clickhouse/clickhouse-server, tag: "26.8.36.3"}
       storage: 50Gi
       storageClass: ""
+  # Routes to the bundled store for gateways that run in other clusters (a
+  # gateway of several clusters elsewhere records here): ClickHouse's HTTP
+  # port and S3, each at a hostname of its own, through a Gateway API
+  # listener with TLS. Such a gateway takes audit.clickhouse.url
+  # https://<clickhouseHostname>:443 and audit.s3.endpoint
+  # https://<s3Hostname>, with copies of the gateway's credentials Secrets.
+  route:
+    enabled: false
+    clickhouseHostname: ""
+    s3Hostname: ""
+    gateway: {name: "", namespace: ""}
+    httpsListener: ""
+    proxyNamespace: ""          # where the listener's proxy Pods run; "" = gateway.namespace
 
 # Saving a running DevPod as an image (snapshot spec v2). The console and
 # the CLI offer it when enabled. With imageTemplate set, images go to the

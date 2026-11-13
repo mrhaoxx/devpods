@@ -84,4 +84,8 @@ spec:
   ingress:
   - from: {{- include "devpod.audit.clients" . | nindent 4 }}
     ports: [{port: 9000}]
+  {{- include "devpod.audit.proxyFrom" (dict "root" . "port" 9000) | nindent 2 }}
+{{- if include "devpod.audit.route" . }}
+{{ include "devpod.audit.httpRoute" (dict "root" . "name" "devpod-audit-s3" "hostname" "s3Hostname" "port" 9000) }}
+{{- end }}
 {{- end }}
