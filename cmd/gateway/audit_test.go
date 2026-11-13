@@ -11,11 +11,13 @@ import (
 	"testing"
 	"text/template"
 
+	"github.com/prometheus/client_golang/prometheus/testutil"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
 	devpodv1alpha1 "github.com/mrhaoxx/devpod/api/v1alpha1"
+	"github.com/mrhaoxx/devpod/internal/audit"
 )
 
 func gcWith(a *devpodv1alpha1.AuditSpec) *devpodv1alpha1.GatewayConfig {
@@ -108,5 +110,45 @@ func TestAuditDeps_GatewayConfigName(t *testing.T) {
 	}
 	if gc := (&auditDeps{cache: c, gcName: "default"}).gatewayConfig(context.Background()); auditEnabled(gc) {
 		t.Fatal("default GatewayConfig has audit off")
+	}
+}
+
+// Whether an HTTP request is served and recorded: recorded while audit is
+// on and the spool has room; with the spool full, the user's fail mode
+// (the cluster default for anonymous visitors) refuses it or serves it
+// unrecorded, counted.
+func TestHTTPAdmit(t *testing.T) {
+	closed, open := devpodv1alpha1.FailClosed, devpodv1alpha1.FailOpen
+	scheme := runtime.NewScheme()
+	_ = devpodv1alpha1.AddToScheme(scheme)
+	cache := func(audit bool) *auditDeps {
+		c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(
+			&devpodv1alpha1.GatewayConfig{ObjectMeta: metav1.ObjectMeta{Name: "default"}, Spec: devpodv1alpha1.GatewayConfigSpec{
+				Audit: &devpodv1alpha1.AuditSpec{Enabled: audit, Policy: devpodv1alpha1.AuditPolicy{FailMode: &open}}}},
+			&devpodv1alpha1.User{ObjectMeta: metav1.ObjectMeta{Name: "alice"}, Spec: devpodv1alpha1.UserSpec{
+				AuditPolicy: &devpodv1alpha1.AuditPolicy{FailMode: &closed}}},
+		).Build()
+		return &auditDeps{cache: c, gcName: "default"}
+	}
+	for _, tc := range []struct {
+		audit, full   bool
+		user          string
+		serve, record bool
+		dropped       float64
+	}{
+		{audit: false, full: false, user: "alice", serve: true, record: false},
+		{audit: true, full: false, user: "alice", serve: true, record: true},
+		{audit: true, full: true, user: "alice", serve: false, record: false},
+		{audit: true, full: true, user: "", serve: true, record: false, dropped: 1},
+	} {
+		before := testutil.ToFloat64(audit.HTTPDroppedTotal)
+		h := &httpAudit{deps: cache(tc.audit), full: func() bool { return tc.full }}
+		serve, record := h.Admit(context.Background(), tc.user)
+		if serve != tc.serve || record != tc.record {
+			t.Errorf("%+v: serve %v record %v", tc, serve, record)
+		}
+		if d := testutil.ToFloat64(audit.HTTPDroppedTotal) - before; d != tc.dropped {
+			t.Errorf("%+v: dropped %v", tc, d)
+		}
 	}
 }

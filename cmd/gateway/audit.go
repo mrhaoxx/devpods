@@ -255,6 +255,46 @@ func (a *auditDeps) startSession(ctx context.Context, meta audit.SessionMeta) (a
 	return s, s
 }
 
+// httpAudit records the HTTP proxy's requests on the audit path, under
+// the switch and fail mode SSH sessions have.
+type httpAudit struct {
+	deps *auditDeps
+	full func() bool // the spool has no room
+}
+
+// httpAudit is nil when audit storage is not configured.
+func (a *auditDeps) httpAudit() gateway.HTTPAudit {
+	if a.rec == nil {
+		return nil
+	}
+	return &httpAudit{deps: a, full: a.rec.Full}
+}
+
+func (h *httpAudit) Admit(ctx context.Context, user string) (serve, record bool) {
+	gc := h.deps.gatewayConfig(ctx)
+	if !auditEnabled(gc) {
+		return true, false
+	}
+	if !h.full() {
+		return true, true
+	}
+	var u devpodv1alpha1.User
+	up := &u
+	if user == "" || h.deps.cache.Get(ctx, types.NamespacedName{Name: user}, &u) != nil {
+		up = nil // anonymous, or no User here: the cluster default
+	}
+	if sessionPolicy(gc, up).FailClosed {
+		return false, false
+	}
+	audit.HTTPDroppedTotal.Inc()
+	return true, false
+}
+
+func (h *httpAudit) Record(row store.HTTPRequestRow) {
+	row.Gateway = h.deps.gatewayName
+	h.deps.rec.HTTP(row)
+}
+
 // waitWithGrace waits for connection handlers after the listener closed;
 // after grace it closes the remaining connections and waits again.
 func waitWithGrace(wait func() error, conns *sync.Map, grace time.Duration) error {

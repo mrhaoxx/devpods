@@ -201,8 +201,10 @@ func main() {
 		os.Exit(1)
 	}
 
+	var hp *gateway.HTTPProxy // the HTTP proxy, served once audit is wired (below)
+	var serveHTTP func()
 	if httpListenAddr != "" && httpBaseDomain != "" {
-		hp := gateway.NewHTTPProxy(c, devpodNamespace, httpBaseDomain, httpSubdomainSuffix)
+		hp = gateway.NewHTTPProxy(c, devpodNamespace, httpBaseDomain, httpSubdomainSuffix)
 		if theHub != nil {
 			hp = gateway.NewHTTPProxyWith(gateway.NewConsoleDirectory(theHub.link), httpBaseDomain, httpSubdomainSuffix)
 			hp.Net = theHub.dial
@@ -221,16 +223,18 @@ func main() {
 			Handler:           hp,
 			ReadHeaderTimeout: 10 * time.Second,
 		}
-		go func() {
-			slog.Info("http_proxy_listening", "addr", httpListenAddr, "base_domain", httpBaseDomain)
-			if err := httpServer.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
-				slog.Error("http_proxy", "err", err)
-			}
-		}()
-		go func() {
-			<-ctx.Done()
-			_ = httpServer.Close()
-		}()
+		serveHTTP = func() {
+			go func() {
+				slog.Info("http_proxy_listening", "addr", httpListenAddr, "base_domain", httpBaseDomain)
+				if err := httpServer.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+					slog.Error("http_proxy", "err", err)
+				}
+			}()
+			go func() {
+				<-ctx.Done()
+				_ = httpServer.Close()
+			}()
+		}
 	}
 
 	recorder := gateway.NewEventRecorder(c, clientset, devpodNamespace)
@@ -264,6 +268,12 @@ func main() {
 		links = theHub.linkConsole(ctx, live)
 	}
 	ad := &auditDeps{cache: c, gcName: gcName, ns: devpodNamespace, rec: auditRec, tmpl: bannerTmpl, sessionGrace: sessionGrace, gatewayName: hubName}
+	if hp != nil {
+		if ha := ad.httpAudit(); ha != nil { // its requests are recorded as sessions are
+			hp.Audit = ha
+		}
+		serveHTTP()
+	}
 
 	runErr := run(ctx, listenAddr, links, gw.Spec.Listen, hostSigner, authn, dialer, ad, recorder)
 
