@@ -15,11 +15,9 @@ test("batch 设配额 for two users reports two successes", async ({ page }) => 
   await expect(page.getByText("成功 2，失败 0")).toBeVisible();
 });
 
-test("400 DevPods with every column never scroll the page sideways", async ({ page }) => {
+test("400 DevPods with every column never scroll the page sideways (the table scrolls inside)", async ({ page }) => {
   await page.goto("/admin/devpods");
   await expect(page.getByRole("link", { name: "alice-train" })).toBeVisible();
-  const showAll = page.getByRole("button", { name: /显示全部列/ });
-  if (await showAll.isVisible()) await showAll.click();
   const overflow = await page.evaluate(() => document.scrollingElement!.scrollWidth - document.scrollingElement!.clientWidth);
   expect(overflow).toBeLessThanOrEqual(0);
   await shot(page, "all-devpods");

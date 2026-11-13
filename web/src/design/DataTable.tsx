@@ -1,6 +1,9 @@
 // Dense full-width table (UI spec §3, §5.1): sorting, multi-select with a
-// bulk bar, and columns hidden by priority when the table is narrow.
+// bulk bar, columns of exact widths (dragged or by keyboard; the room they
+// leave goes to a filler, never into them), a 列 menu to choose the columns,
+// and sideways scrolling inside the table with the pinned columns staying.
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import * as Menu from "@radix-ui/react-dropdown-menu";
 import {
   flexRender,
   getCoreRowModel,
@@ -17,30 +20,25 @@ import { EmptyState } from "./EmptyState";
 declare module "@tanstack/react-table" {
   // eslint-disable-next-line @typescript-eslint/no-unused-vars
   interface ColumnMeta<TData extends RowData, TValue> {
-    /** 1 = never hidden; higher numbers hide first. */
+    /** how much the column is wanted: on a phone only 1 and 2 show by default */
     priority?: number;
-    /** approximate width in px, for the narrow-screen budget */
+    /** width in px (until dragged) */
     width?: number;
     mono?: boolean;
     align?: "right";
+    /** stays in place when the table scrolls sideways, and is always shown */
+    pin?: "left" | "right";
   }
 }
 
-/** columnsForWidth picks the columns that fit, lowest priority number
- *  first; priority 1 always shows; width 0 (unknown) shows everything. */
-export function columnsForWidth(width: number, metas: { id: string; priority: number; width?: number }[]): string[] {
-  if (width <= 0) return metas.map((m) => m.id);
-  const keep = new Set<string>();
-  let used = 0;
-  for (const m of [...metas].sort((a, b) => a.priority - b.priority)) {
-    const w = m.width ?? 100;
-    if (m.priority <= 1 || used + w <= width) {
-      keep.add(m.id);
-      used += w;
-    }
-  }
-  return metas.filter((m) => keep.has(m.id)).map((m) => m.id);
+/** phoneHidden: the columns a phone-wide table leaves out until chosen —
+ *  every one past priority 2; none on a wider screen (or before the width
+ *  is known). */
+export function phoneHidden(width: number, metas: { id: string; priority: number }[]): string[] {
+  if (width <= 0 || width >= PHONE) return [];
+  return metas.filter((m) => m.priority > 2).map((m) => m.id);
 }
+const PHONE = 640;
 
 function useWidth(ref: React.RefObject<HTMLElement>): number {
   const [w, setW] = useState(0);
@@ -73,64 +71,119 @@ export type DataTableProps<T> = {
 };
 
 const MIN_COL = 48;
+const CHECK = 28; // the selection column
 const sizesKey = (k: string) => `devpod.columns.${k}`;
-function readSizes(k?: string): Record<string, number> {
-  if (!k) return {};
+const hiddenKey = (k: string) => `devpod.columns-hidden.${k}`;
+function readJSON<T>(key: string | undefined, ok: (v: unknown) => v is T): T | undefined {
+  if (!key) return undefined;
   try {
-    const v = JSON.parse(localStorage.getItem(sizesKey(k)) ?? "{}");
-    return v && typeof v === "object" ? v : {};
+    const v: unknown = JSON.parse(localStorage.getItem(key) ?? "null");
+    return ok(v) ? v : undefined;
   } catch {
-    return {};
+    return undefined;
   }
 }
-function writeSizes(k: string | undefined, v: Record<string, number>) {
-  if (!k) return;
+function writeJSON(key: string | undefined, v: unknown) {
+  if (!key) return;
   try {
-    localStorage.setItem(sizesKey(k), JSON.stringify(v));
+    if (v === undefined) localStorage.removeItem(key);
+    else localStorage.setItem(key, JSON.stringify(v));
   } catch {
     // not kept: no matter
   }
 }
+const isSizes = (v: unknown): v is Record<string, number> => !!v && typeof v === "object" && !Array.isArray(v);
+const isIds = (v: unknown): v is string[] => Array.isArray(v) && v.every((x) => typeof x === "string");
+// a pinned cell covers what scrolls under it: a background of its own, as its row's
+const pinnedBg = (selected: boolean) =>
+  selected ? "bg-[color-mix(in_srgb,var(--color-accent-soft)_60%,var(--color-surface))]" : "bg-surface group-hover:bg-sunk";
 
 export function DataTable<T>(p: DataTableProps<T>) {
   const wrap = useRef<HTMLDivElement>(null);
   const width = useWidth(wrap);
-  const [showAll, setShowAll] = useState(false);
   const [selection, setSelection] = useState<RowSelectionState>({});
-  // Each column is as wide as it says (or as it was dragged to), never as
-  // its cells happen to be: live numbers changing do not move the columns.
-  const [sizes, setSizes] = useState<Record<string, number>>(() => readSizes(p.storageKey));
+  // Each column is exactly as wide as it says (or as it was dragged to),
+  // never as its cells happen to be, nor stretched to fill the row.
+  const [sizes, setSizes] = useState<Record<string, number>>(() => readJSON(p.storageKey && sizesKey(p.storageKey), isSizes) ?? {});
   const sizesRef = useRef(sizes);
   sizesRef.current = sizes;
+  // the columns hidden by choice (undefined: none chosen — the default)
+  const [chosen, setChosen] = useState<string[] | undefined>(() => readJSON(p.storageKey && hiddenKey(p.storageKey), isIds));
 
   const metas = useMemo(
-    () => p.columns.map((c, i) => ({ id: c.id ?? String(i), priority: c.meta?.priority ?? 1, width: sizes[c.id ?? String(i)] ?? c.meta?.width ?? 120 })),
+    () =>
+      p.columns.map((c, i) => {
+        const id = c.id ?? String(i);
+        const label = typeof c.header === "string" ? c.header : "";
+        return { id, label, priority: c.meta?.priority ?? 1, pin: c.meta?.pin, width: sizes[id] ?? c.meta?.width ?? 120 };
+      }),
     [p.columns, sizes],
   );
   const widthOf = (id: string) => metas.find((m) => m.id === id)?.width ?? 120;
+  const setWidth = (id: string, w: number, save: boolean) => {
+    const next = { ...sizesRef.current, [id]: Math.max(MIN_COL, Math.round(w)) };
+    setSizes(next);
+    if (save) writeJSON(p.storageKey && sizesKey(p.storageKey), next);
+  };
   const startResize = (id: string, e: React.MouseEvent) => {
     e.preventDefault();
     e.stopPropagation();
     const x0 = e.clientX;
     const w0 = widthOf(id);
-    const move = (ev: MouseEvent) => setSizes((cur) => ({ ...cur, [id]: Math.max(MIN_COL, Math.round(w0 + ev.clientX - x0)) }));
+    document.body.classList.add("col-resizing");
+    const move = (ev: MouseEvent) => setWidth(id, w0 + ev.clientX - x0, false);
     const up = (ev: MouseEvent) => {
-      move(ev);
+      setWidth(id, w0 + ev.clientX - x0, true);
+      document.body.classList.remove("col-resizing");
       document.removeEventListener("mousemove", move);
       document.removeEventListener("mouseup", up);
-      writeSizes(p.storageKey, { ...sizesRef.current, [id]: Math.max(MIN_COL, Math.round(w0 + ev.clientX - x0)) });
     };
     document.addEventListener("mousemove", move);
     document.addEventListener("mouseup", up);
   };
+  const keyResize = (id: string, e: React.KeyboardEvent) => {
+    const step = e.shiftKey ? 32 : 8;
+    if (e.key === "ArrowRight" || e.key === "ArrowLeft") {
+      e.preventDefault();
+      setWidth(id, widthOf(id) + (e.key === "ArrowRight" ? step : -step), true);
+    }
+  };
   const resetSize = (id: string) => {
     const { [id]: _, ...rest } = sizesRef.current;
     setSizes(rest);
-    writeSizes(p.storageKey, rest);
+    writeJSON(p.storageKey && sizesKey(p.storageKey), rest);
   };
-  const visibleIds = showAll ? metas.map((m) => m.id) : columnsForWidth(width - (p.selectable ? 28 : 0), metas);
-  const hidden = metas.length - visibleIds.length;
-  const columnVisibility = Object.fromEntries(metas.map((m) => [m.id, visibleIds.includes(m.id)]));
+
+  const hiddenIds = new Set((chosen ?? phoneHidden(width, metas)).filter((id) => !metas.find((m) => m.id === id)?.pin));
+  const choosable = metas.filter((m) => !m.pin && m.label);
+  const choose = (next: string[] | undefined) => {
+    setChosen(next);
+    writeJSON(p.storageKey && hiddenKey(p.storageKey), next);
+  };
+  const toggle = (id: string) => {
+    const now = [...hiddenIds];
+    choose(hiddenIds.has(id) ? now.filter((x) => x !== id) : [...now, id]);
+  };
+  const columnVisibility = Object.fromEntries(metas.map((m) => [m.id, !hiddenIds.has(m.id)]));
+  const shown = metas.filter((m) => !hiddenIds.has(m.id));
+
+  // where pinned columns sit: from the left after the checkbox, from the right
+  const offset: Record<string, { left?: number; right?: number }> = {};
+  let left = p.selectable ? CHECK : 0;
+  for (const m of shown.filter((m) => m.pin === "left")) {
+    offset[m.id] = { left };
+    left += m.width;
+  }
+  let right = 0;
+  const rightPinned = shown.filter((m) => m.pin === "right");
+  for (const m of [...rightPinned].reverse()) {
+    offset[m.id] = { right };
+    right += m.width;
+  }
+  // the 列 menu sits in the last pinned-right header, or a cell of its own
+  const menuHost = rightPinned.at(-1)?.id;
+  const fillerBefore = rightPinned[0]?.id; // undefined: at the end
+  const sticky = (id: string): React.CSSProperties | undefined => (offset[id] ? { position: "sticky", ...offset[id], zIndex: 1 } : undefined);
 
   // drop selections whose rows are gone
   const ids = useMemo(() => new Set(p.data.map(p.getRowId)), [p.data, p.getRowId]);
@@ -155,8 +208,36 @@ export function DataTable<T>(p: DataTableProps<T>) {
   }, [liveSelection, p.data, p.getRowId]);
   const clear = () => setSelection({});
   const rows = table.getRowModel().rows;
-  const colCount = visibleIds.length + (p.selectable ? 1 : 0);
-  const tableWidth = visibleIds.reduce((n, id) => n + widthOf(id), p.selectable ? 28 : 0);
+  const colCount = shown.length + (p.selectable ? 1 : 0) + 1 + (menuHost ? 0 : 1);
+
+  const menu = choosable.length > 0 && (
+    <Menu.Root modal={false}>
+      <Menu.Trigger aria-label="选择列" title="选择显示哪些列" className="rounded px-1 font-normal text-muted hover:bg-sunk hover:text-ink">
+        列
+      </Menu.Trigger>
+      <Menu.Portal>
+        <Menu.Content align="end" className="z-50 max-h-96 min-w-40 overflow-y-auto rounded-md border border-line bg-surface p-1 text-xs shadow-lg">
+          {choosable.map((m) => (
+            <Menu.CheckboxItem
+              key={m.id}
+              checked={!hiddenIds.has(m.id)}
+              onCheckedChange={() => toggle(m.id)}
+              onSelect={(e) => e.preventDefault()}
+              className="flex cursor-pointer items-center gap-2 rounded px-2 py-1 outline-none data-[highlighted]:bg-sunk"
+            >
+              <span aria-hidden="true" className="w-3 text-accent">{hiddenIds.has(m.id) ? "" : "✓"}</span>
+              {m.label}
+            </Menu.CheckboxItem>
+          ))}
+          <Menu.Separator className="my-1 h-px bg-line" />
+          <Menu.Item onSelect={() => choose(undefined)} className="cursor-pointer rounded px-2 py-1 text-muted outline-none data-[highlighted]:bg-sunk">
+            恢复默认
+          </Menu.Item>
+        </Menu.Content>
+      </Menu.Portal>
+    </Menu.Root>
+  );
+  const filler = (kind: "th" | "td") => (kind === "th" ? <th key="filler" data-filler aria-hidden="true" /> : <td key="filler" data-filler aria-hidden="true" />);
 
   return (
     <div ref={wrap} className="min-w-0">
@@ -169,20 +250,13 @@ export function DataTable<T>(p: DataTableProps<T>) {
           </button>
         </div>
       )}
-      {(hidden > 0 || showAll) && (
-        <div className="flex justify-end px-2 py-0.5">
-          <button type="button" onClick={() => setShowAll(!showAll)} className="text-[11px] text-muted hover:text-accent">
-            {showAll ? "收起列" : `显示全部列（+${hidden}）`}
-          </button>
-        </div>
-      )}
-      <div className={showAll ? "overflow-x-auto" : "overflow-x-hidden"}>
-        <table className="min-w-full border-collapse text-xs" style={{ tableLayout: "fixed", width: tableWidth }}>
-          <thead className="sticky top-0 z-[1] bg-surface">
+      <div className="overflow-x-auto">
+        <table className="border-collapse text-xs" style={{ tableLayout: "fixed", width: "100%" }}>
+          <thead className="sticky top-0 z-[2] bg-surface">
             {table.getHeaderGroups().map((hg) => (
               <tr key={hg.id} className="h-7 border-b border-line text-left text-[11px] text-muted">
                 {p.selectable && (
-                  <th className="px-2" style={{ width: 28 }}>
+                  <th className="bg-surface px-2" style={{ width: CHECK, position: "sticky", left: 0, zIndex: 1 }}>
                     <input
                       type="checkbox"
                       aria-label="全选"
@@ -194,39 +268,56 @@ export function DataTable<T>(p: DataTableProps<T>) {
                     />
                   </th>
                 )}
-                {hg.headers.map((h) => {
+                {hg.headers.flatMap((h) => {
+                  const id = h.column.id;
                   const sortable = h.column.getCanSort();
                   const dir = h.column.getIsSorted();
                   const label = flexRender(h.column.columnDef.header, h.getContext());
-                  return (
+                  const name = typeof h.column.columnDef.header === "string" ? h.column.columnDef.header : id;
+                  const right = h.column.columnDef.meta?.align === "right";
+                  const cell = (
                     <th
                       key={h.id}
                       aria-sort={dir === "asc" ? "ascending" : dir === "desc" ? "descending" : undefined}
-                      style={{ width: widthOf(h.column.id) }}
-                      className={`relative truncate px-2 font-medium whitespace-nowrap ${h.column.columnDef.meta?.align === "right" ? "text-right" : ""}`}
+                      style={{ width: widthOf(id), ...sticky(id) }}
+                      className={`group/h relative bg-surface px-2 font-medium whitespace-nowrap ${right ? "text-right" : ""}`}
                     >
-                      {sortable ? (
-                        <button type="button" onClick={h.column.getToggleSortingHandler()} className="inline-flex items-center gap-0.5 hover:text-ink">
-                          {label}
-                          <span aria-hidden="true" className="text-faint">
-                            {dir === "asc" ? "↑" : dir === "desc" ? "↓" : ""}
-                          </span>
-                        </button>
-                      ) : (
-                        label
-                      )}
+                      <span className="flex min-w-0 items-center gap-1">
+                        {sortable ? (
+                          <button type="button" onClick={h.column.getToggleSortingHandler()} className={`inline-flex min-w-0 items-center gap-0.5 hover:text-ink ${right ? "ml-auto" : ""}`}>
+                            <span className="truncate">{label}</span>
+                            <span aria-hidden="true" className={dir ? "text-accent" : "invisible text-faint group-hover/h:visible"}>
+                              {dir === "asc" ? "↑" : dir === "desc" ? "↓" : "↕"}
+                            </span>
+                          </button>
+                        ) : (
+                          <span className="truncate">{label}</span>
+                        )}
+                        {id === menuHost && <span className="ml-auto">{menu}</span>}
+                      </span>
+                      {/* the edge: a line between headers, grabbed across its middle */}
                       <span
                         role="separator"
                         aria-orientation="vertical"
-                        aria-label={`调整 ${typeof h.column.columnDef.header === "string" ? h.column.columnDef.header : h.column.id} 列宽`}
-                        title="拖动调整列宽，双击恢复"
-                        onMouseDown={(e) => startResize(h.column.id, e)}
-                        onDoubleClick={() => resetSize(h.column.id)}
-                        className="absolute inset-y-0 right-0 w-1.5 cursor-col-resize hover:bg-accent/40"
+                        aria-label={`调整 ${name} 列宽`}
+                        aria-valuenow={widthOf(id)}
+                        tabIndex={0}
+                        title="拖动或用 ←/→ 调整列宽，双击恢复"
+                        onMouseDown={(e) => startResize(id, e)}
+                        onDoubleClick={() => resetSize(id)}
+                        onKeyDown={(e) => keyResize(id, e)}
+                        className="absolute inset-y-1 -right-1 z-[3] w-2 cursor-col-resize outline-none after:absolute after:inset-y-0 after:left-1/2 after:w-px after:bg-line hover:after:bg-accent focus-visible:after:bg-accent"
                       />
                     </th>
                   );
+                  return id === fillerBefore ? [filler("th"), cell] : [cell];
                 })}
+                {!fillerBefore && filler("th")}
+                {!menuHost && (
+                  <th className="bg-surface px-1 text-right" style={{ width: 32, position: "sticky", right: 0, zIndex: 1 }}>
+                    {menu}
+                  </th>
+                )}
               </tr>
             ))}
           </thead>
@@ -236,35 +327,43 @@ export function DataTable<T>(p: DataTableProps<T>) {
                 <td colSpan={colCount}>{p.empty ?? <EmptyState title="没有数据" />}</td>
               </tr>
             )}
-            {rows.map((row) => (
-              <tr
-                key={row.id}
-                aria-selected={p.selectable ? row.getIsSelected() : undefined}
-                onClick={(e) => {
-                  if (!p.onRowClick || (e.target as HTMLElement).closest("button,a,input,select,label")) return;
-                  p.onRowClick(row.original);
-                }}
-                className={`h-7 border-b border-line ${row.getIsSelected() ? "bg-accent-soft/60" : "hover:bg-sunk"} ${
-                  p.onRowClick ? "cursor-pointer" : ""
-                } ${p.rowClass?.(row.original) ?? ""}`}
-              >
-                {p.selectable && (
-                  <td className="px-2">
-                    <input type="checkbox" aria-label={`选择 ${row.id}`} checked={row.getIsSelected()} onChange={row.getToggleSelectedHandler()} />
-                  </td>
-                )}
-                {row.getVisibleCells().map((cell) => (
-                  <td
-                    key={cell.id}
-                    className={`truncate px-2 whitespace-nowrap ${cell.column.columnDef.meta?.mono ? "mono" : ""} ${
-                      cell.column.columnDef.meta?.align === "right" ? "text-right" : ""
-                    }`}
-                  >
-                    {flexRender(cell.column.columnDef.cell, cell.getContext())}
-                  </td>
-                ))}
-              </tr>
-            ))}
+            {rows.map((row) => {
+              const sel = row.getIsSelected();
+              return (
+                <tr
+                  key={row.id}
+                  aria-selected={p.selectable ? sel : undefined}
+                  onClick={(e) => {
+                    if (!p.onRowClick || (e.target as HTMLElement).closest("button,a,input,select,label")) return;
+                    p.onRowClick(row.original);
+                  }}
+                  className={`group h-7 border-b border-line ${sel ? "bg-accent-soft/60" : "hover:bg-sunk"} ${p.onRowClick ? "cursor-pointer" : ""} ${p.rowClass?.(row.original) ?? ""}`}
+                >
+                  {p.selectable && (
+                    <td className={`px-2 ${pinnedBg(sel)}`} style={{ position: "sticky", left: 0, zIndex: 1 }}>
+                      <input type="checkbox" aria-label={`选择 ${row.id}`} checked={sel} onChange={row.getToggleSelectedHandler()} />
+                    </td>
+                  )}
+                  {row.getVisibleCells().flatMap((cell) => {
+                    const id = cell.column.id;
+                    const td = (
+                      <td
+                        key={cell.id}
+                        style={sticky(id)}
+                        className={`truncate px-2 whitespace-nowrap ${offset[id] ? pinnedBg(sel) : ""} ${cell.column.columnDef.meta?.mono ? "mono" : ""} ${
+                          cell.column.columnDef.meta?.align === "right" ? "text-right" : ""
+                        }`}
+                      >
+                        {flexRender(cell.column.columnDef.cell, cell.getContext())}
+                      </td>
+                    );
+                    return id === fillerBefore ? [filler("td"), td] : [td];
+                  })}
+                  {!fillerBefore && filler("td")}
+                  {!menuHost && <td className={pinnedBg(sel)} style={{ position: "sticky", right: 0, zIndex: 1 }} />}
+                </tr>
+              );
+            })}
           </tbody>
         </table>
       </div>

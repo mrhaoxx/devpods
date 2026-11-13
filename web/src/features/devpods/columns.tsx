@@ -213,7 +213,7 @@ export function devpodColumns(opts: {
       id: "name",
       header: "名称",
       accessorFn: (r) => r.name,
-      meta: { priority: 1, width: 190 },
+      meta: { priority: 1, width: 190, pin: "left" },
       cell: ({ row: { original: r } }) =>
         r.group ? (
           <GroupName r={r} open={!!opts.groups?.open.has(r.name)} onToggle={(id) => opts.groups?.toggle(id)} />
@@ -278,7 +278,7 @@ export function devpodColumns(opts: {
     { id: "rdma", header: "RDMA ↓/↑", ...by("rdma"), meta: { priority: 8, width: 150 }, cell: own((r) => <RdmaCell r={r} />) },
     { id: "node", header: "节点", accessorFn: (r) => r.node, meta: { priority: 9, width: 90, mono: true } },
     { id: "image", header: "镜像", accessorFn: (r) => r.image, meta: { priority: 10, width: 170, mono: true }, cell: ({ getValue }) => <span title={String(getValue())}>{String(getValue())}</span> },
-    { id: "actions", header: "", enableSorting: false, meta: { priority: 1, width: 36, align: "right" }, cell: ({ row }) => opts.actions(row.original) },
+    { id: "actions", header: "", enableSorting: false, meta: { priority: 1, width: 48, align: "right", pin: "right" }, cell: ({ row }) => opts.actions(row.original) },
   );
   return cols;
 }
