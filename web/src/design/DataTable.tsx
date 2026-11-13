@@ -46,7 +46,7 @@ const PHONE = 640;
 
 /** useView: where a scroller is scrolled to and how tall it is, read once
  *  a frame while it scrolls or changes size (height 0: not known). */
-function useView(ref: React.RefObject<HTMLElement>, on: boolean): { top: number; height: number } {
+export function useView(ref: React.RefObject<HTMLElement>, on: boolean): { top: number; height: number } {
   const [view, setView] = useState({ top: 0, height: 0 });
   useEffect(() => {
     const el = ref.current;

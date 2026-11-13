@@ -23,6 +23,7 @@ import { useUrlState, type Schema } from "../../lib/urlState";
 import { runBulk, type BulkResult } from "../../lib/bulk";
 import { BulkDialog, type BulkKind } from "./BulkDialog";
 import { useNow } from "../../lib/useNow";
+import { useDebounced } from "../../lib/useDebounced";
 import { TableCtx, devpodColumns, toRow, type Pending, type Row } from "./columns";
 import { groupRows } from "./groups";
 import { groupUsage, usage, usageKeys, type UsageKey } from "./usage";
@@ -93,24 +94,7 @@ const flat = (rows: Row[]): Row[] => {
 // with a thousand rows, redrawing the table on every key lags. A query
 // changed elsewhere (back, a link) shows in the box.
 function FilterBox({ value, onChange }: { value: string; onChange: (q: string) => void }) {
-  const [text, setText] = useState(value);
-  const sent = useRef(value);
-  const send = useRef(onChange);
-  send.current = onChange;
-  useEffect(() => {
-    if (value !== sent.current) {
-      sent.current = value;
-      setText(value);
-    }
-  }, [value]);
-  useEffect(() => {
-    if (text === sent.current) return;
-    const t = setTimeout(() => {
-      sent.current = text;
-      send.current(text);
-    }, 200);
-    return () => clearTimeout(t);
-  }, [text]);
+  const [text, setText] = useDebounced(value, onChange);
   return (
     <Input
       aria-label="过滤"
@@ -165,8 +149,8 @@ export function DevPodTable({ scope }: { scope: "mine" | "all" }) {
       ),
     [rows, filter, admin, url.gpu, url.idle, idle],
   );
-  const counts = Object.fromEntries(PHASES.map((p) => [p, byQuery.filter((r) => r.phase === p).length]));
-  const filtered = url.phase.length ? byQuery.filter((r) => url.phase.includes(r.phase)) : byQuery;
+  const counts = useMemo(() => Object.fromEntries(PHASES.map((p) => [p, byQuery.filter((r) => r.phase === p).length])), [byQuery]);
+  const filtered = useMemo(() => (url.phase.length ? byQuery.filter((r) => url.phase.includes(r.phase)) : byQuery), [byQuery, url.phase]);
   const shown = useMemo(() => groupRows(filtered, open), [filtered, open]);
 
   // every action on DevPods — one or many — goes here: their rows say

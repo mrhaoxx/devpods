@@ -62,17 +62,37 @@ export function applyWatchEvent(old: DevPodList | undefined, type: string, dp: D
   return { items: next, pods };
 }
 
+const WATCH_BATCH_MS = 150;
+
 /** useDevPods: the list plus its watch stream folded into the cache. */
 export function useDevPods(scope: "mine" | "all" = "mine", enabled = true) {
   const qc = useQueryClient();
   const q = useQuery({ queryKey: qk.devpods(scope), queryFn: () => listDevPods(scope), enabled });
   useEffect(() => {
     if (!enabled) return;
-    return watchDevPods(
-      (type, dp, pod) => qc.setQueryData<DevPodList>(qk.devpods(scope), (old) => applyWatchEvent(old, type, dp, pod)),
+    // Events are folded in together, a few times a second: starting 600
+    // DevPods sends well over a thousand, and each one applied by itself
+    // made the page rebuild, filter and sort the whole list again.
+    let queue: Parameters<Parameters<typeof watchDevPods>[0]>[] = [];
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const flush = () => {
+      timer = undefined;
+      const batch = queue;
+      queue = [];
+      qc.setQueryData<DevPodList>(qk.devpods(scope), (old) => batch.reduce<DevPodList | undefined>((acc, [type, dp, pod]) => applyWatchEvent(acc, type, dp, pod), old));
+    };
+    const stop = watchDevPods(
+      (...ev) => {
+        queue.push(ev);
+        timer ??= setTimeout(flush, WATCH_BATCH_MS);
+      },
       () => void qc.invalidateQueries({ queryKey: qk.devpods(scope) }),
       scope,
     );
+    return () => {
+      stop();
+      if (timer) clearTimeout(timer);
+    };
   }, [qc, scope, enabled]);
   return q;
 }

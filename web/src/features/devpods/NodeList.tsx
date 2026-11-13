@@ -3,7 +3,8 @@
 // the DevPods (INDEX) or pairs them with the nodes of a migration. A
 // node someone else holds now cannot be picked. single: one node.
 import { keyOf } from "../../data/cluster";
-import { useMemo, useState } from "react";
+import { useLayoutEffect, useMemo, useRef, useState } from "react";
+import { rowWindow, useView } from "../../design/DataTable";
 import type { NodeChoice } from "../../data/api";
 import { useNodeChoices } from "../../data/queries";
 import { fmtCores } from "../../lib/format";
@@ -53,6 +54,15 @@ export function NodeList({
     );
   }, [nodes, q, onlyUsable, onlyGpu]);
   const full = !single && picked.length >= max;
+  // a cluster of a thousand nodes: only the ones in sight are drawn
+  const list = useRef<HTMLUListElement>(null);
+  const view = useView(list, true);
+  const [rowH, setRowH] = useState(29);
+  const { first, last } = rowWindow(shown.length, view, rowH, 0);
+  useLayoutEffect(() => {
+    const h = list.current?.querySelector("li[data-node]")?.getBoundingClientRect().height ?? 0;
+    if (h > 0 && Math.abs(h - rowH) > 0.25) setRowH(h);
+  });
 
   const toggle = (name: string) => {
     if (single) return setPicked([name]);
@@ -105,13 +115,14 @@ export function NodeList({
         </ol>
       )}
       {full && <p role="status" className="text-[11px] text-warm">最多选 {max} 个。</p>}
-      <ul className="max-h-72 overflow-y-auto rounded-md border border-line">
-        {shown.map((n) => {
+      <ul ref={list} className="max-h-72 overflow-y-auto rounded-md border border-line">
+        {first > 0 && <li aria-hidden="true" style={{ height: first * rowH }} />}
+        {shown.slice(first, last).map((n) => {
           const at = picked.indexOf(n.name);
           const st = state(n);
           const free = n.gpuTotal - n.gpuUsed;
           return (
-            <li key={keyOf(n)} className="border-b border-line last:border-0">
+            <li key={keyOf(n)} data-node className="border-b border-line last:border-0">
               <label className={`flex items-center gap-2 px-2 py-1 ${n.selectable ? "cursor-pointer hover:bg-sunk" : "opacity-50"} ${at >= 0 ? "bg-accent-soft" : ""}`}>
                 <input
                   type={single ? "radio" : "checkbox"}
@@ -136,6 +147,7 @@ export function NodeList({
             </li>
           );
         })}
+        {last < shown.length && <li aria-hidden="true" style={{ height: (shown.length - last) * rowH }} />}
         {shown.length === 0 && <li className="px-2 py-2 text-faint">{nodes.length ? "没有符合条件的节点" : "没有可选节点"}</li>}
       </ul>
     </fieldset>

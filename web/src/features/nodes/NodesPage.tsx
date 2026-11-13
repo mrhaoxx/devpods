@@ -13,6 +13,7 @@ import { useMe, useNode, useNodeChoices, useNodes, useNodesRecent } from "../../
 import { setReservable } from "../../data/api";
 import { overviewStream } from "../../data/live/streams";
 import { useLiveRow } from "../../data/live/hooks";
+import { useDebounced } from "../../lib/useDebounced";
 import { DataTable } from "../../design/DataTable";
 import { Drawer } from "../../design/Drawer";
 import { Chip } from "../../design/Chip";
@@ -297,6 +298,11 @@ function NodeDrawerBody({ r }: { r: Ref }) {
   );
 }
 
+function LabelBox({ value, onChange }: { value: string; onChange: (v: string) => void }) {
+  const [text, setText] = useDebounced(value, onChange);
+  return <Input aria-label="按标签过滤" placeholder="标签 key=value" value={text} onChange={(e) => setText(e.target.value)} className="mono !h-7 w-56 text-xs" />;
+}
+
 export function NodesPage() {
   const q = useNodes();
   const [url, setUrl] = useUrlState(schema, { key: "nodes", omit: ["node"] });
@@ -323,7 +329,7 @@ export function NodesPage() {
         <Chip active={url.notready} count={items.filter((n) => !n.ready).length} onClick={() => setUrl({ notready: !url.notready, ready: false })}>
           NotReady
         </Chip>
-        <Input aria-label="按标签过滤" placeholder="标签 key=value" value={url.label} onChange={(e) => setUrl({ label: e.target.value })} className="mono !h-7 w-56 text-xs" />
+        <LabelBox value={url.label} onChange={(label) => setUrl({ label })} />
       </div>
       {q.isError ? (
         <EmptyState tone="error" title="无法加载节点" hint={String(q.error)} />

@@ -1,5 +1,6 @@
 // Shared bits of the audit pages: the time range in the URL, paged
 // queries, the error state when ClickHouse is unavailable.
+import { useDebounced } from "../../lib/useDebounced";
 import { useMemo } from "react";
 import { useInfiniteQuery } from "@tanstack/react-query";
 import { ApiFailure, type Page } from "../../data/api";
@@ -38,7 +39,9 @@ export function RangePicker({ value, onChange }: { value: string; onChange: (v: 
 }
 
 export function FilterBox({ label, value, onChange, width = "w-40" }: { label: string; value: string; onChange: (v: string) => void; width?: string }) {
-  return <Input aria-label={label} placeholder={label} value={value} onChange={(e) => onChange(e.target.value)} className={`mono !h-7 ${width} text-xs`} />;
+  // each value is a query to the audit store: asked once typing pauses
+  const [text, setText] = useDebounced(value, onChange, 300);
+  return <Input aria-label={label} placeholder={label} value={text} onChange={(e) => setText(e.target.value)} className={`mono !h-7 ${width} text-xs`} />;
 }
 
 /** usePaged pages through a cursor API; the filters form the query key. */
