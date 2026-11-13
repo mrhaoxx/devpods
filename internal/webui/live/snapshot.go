@@ -147,6 +147,7 @@ func QuotaKey(cluster, owner string) string {
 type ProcLive struct {
 	Pid     int     `json:"pid"`
 	Start   uint64  `json:"start"`
+	PPid    int     `json:"ppid,omitempty"` // the parent, for the tree; 0: not known
 	Exe     string  `json:"exe"`
 	Cmdline string  `json:"cmdline"`
 	CPU     float64 `json:"cpu"`

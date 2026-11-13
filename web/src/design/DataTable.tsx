@@ -117,6 +117,9 @@ export type DataTableProps<T> = {
    *  row of a selection of several, for the selection (bulk). Nothing
    *  offered (or Shift held): the browser's own menu. */
   rowMenu?(rows: T[], bulk: boolean, clear: () => void): RowAction[];
+  /** sorted: data comes in the order to show (the caller sorts, say to
+   *  hold an order while values change); the headers still say and ask */
+  sorted?: boolean;
   /** fill: a list page's table — it takes the rest of its flex column and
    *  scrolls itself, the header staying, drawing only the rows in sight */
   fill?: boolean;
@@ -279,7 +282,8 @@ export function DataTable<T>(p: DataTableProps<T>) {
     onRowSelectionChange: setSelection,
     enableRowSelection: !!p.selectable,
     getCoreRowModel: getCoreRowModel(),
-    getSortedRowModel: getSortedRowModel(),
+    getSortedRowModel: p.sorted ? undefined : getSortedRowModel(),
+    manualSorting: !!p.sorted,
   });
   // in the order the rows were ticked (bulk actions such as 迁移 pair
   // the selection with a list, one to one)

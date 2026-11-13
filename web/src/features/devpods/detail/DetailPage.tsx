@@ -115,11 +115,16 @@ export function DetailPage() {
     [onDetail, onEvent],
   );
 
-  const allProcs = tab === "processes";
-  const spec = useMemo(() => devpodStream(r, allProcs, onOther), [r, allProcs, onOther]);
+  // One stream for the page whatever the tab: the cards above keep their
+  // values and curves when the tab changes (a stream per tab emptied them
+  // until its first message). The 进程 tab opens a second one beside it
+  // for every process, and shows the ten of the first until that arrives.
+  const spec = useMemo(() => devpodStream(r, false, onOther), [r, onOther]);
+  const allSpec = useMemo(() => (tab === "processes" ? devpodStream(r, true) : null), [r, tab]);
   const metrics = useLiveRow<DevPodSample>(spec, "metrics");
   const recent = useMetrics(r, "15m"); // the cards' sparklines start from history
   const procs = useLiveRow<ProcLive[]>(spec, "processes");
+  const allProcs = useLiveRow<ProcLive[]>(allSpec, "processes");
   // without live data the detail stream still carries status and events
   useEffect(() => {
     if (live) return;
@@ -267,7 +272,7 @@ export function DetailPage() {
       {tab === "monitor" && <MonitorTab r={r} history={live ? metrics.row?.history : undefined} />}
       {tab === "processes" && (
         <Panel title="全部进程（每秒刷新）">
-          <ProcessTable procs={procs.row?.value} live={live} />
+          <ProcessTable procs={allProcs.row?.value ?? procs.row?.value} live={live} />
         </Panel>
       )}
       {tab === "sessions" && audit && (

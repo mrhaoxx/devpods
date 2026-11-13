@@ -77,6 +77,8 @@ export type OverviewFrame = { ts: string; kpi: KPI; nodes: NodeLive[]; users: Us
 export type ProcLive = {
   pid: number;
   start: number;
+  /** the parent's pid (0 or absent: not known) */
+  ppid?: number;
   exe: string;
   cmdline: string;
   cpu: number;

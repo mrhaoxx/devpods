@@ -263,7 +263,7 @@ func (s *State) Processes(uid string, all bool) []ProcLive {
 	if p.full != nil {
 		for _, sp := range p.full.Procs {
 			pl := add(connKey{sp.Pid, sp.Start})
-			pl.Exe, pl.Cmdline, pl.CPU, pl.RSS = sp.Exe, sp.Cmdline, sp.CPU, sp.RSS
+			pl.PPid, pl.Exe, pl.Cmdline, pl.CPU, pl.RSS = sp.PPid, sp.Exe, sp.Cmdline, sp.CPU, sp.RSS
 			resolve(pl, sp.Attr)
 		}
 	}
