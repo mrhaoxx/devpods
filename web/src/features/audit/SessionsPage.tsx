@@ -22,6 +22,7 @@ const schema = {
   devpod: { kind: "string", default: "" },
   files: { kind: "bool", default: false },
   alerts: { kind: "bool", default: false },
+  open: { kind: "bool", default: false },
 } satisfies Schema;
 
 export function SessionsPage({ mine }: { mine?: boolean }) {
@@ -39,6 +40,7 @@ export function SessionsPage({ mine }: { mine?: boolean }) {
     cluster: filter,
     hasFiles: url.files ? "true" : "",
     hasAlerts: url.alerts ? "true" : "",
+    open: url.open ? "true" : "",
   };
   const q = usePaged<SessionSummary>("sessions", filters, listAuditSessions);
   const columns: ColumnDef<SessionSummary, unknown>[] = [
@@ -110,6 +112,9 @@ export function SessionsPage({ mine }: { mine?: boolean }) {
         <RangePicker value={url.range} onChange={(range) => setUrl({ range })} />
         {admin && <FilterBox label="用户" value={url.user} onChange={(user) => setUrl({ user })} width="w-32" />}
         <FilterBox label="DevPod" value={url.devpod} onChange={(devpod) => setUrl({ devpod })} />
+        <Chip active={url.open} onClick={() => setUrl({ open: !url.open })}>
+          进行中
+        </Chip>
         <Chip active={url.files} onClick={() => setUrl({ files: !url.files })}>
           有文件传输
         </Chip>

@@ -181,7 +181,7 @@ func (s *Server) handleAuditSessions(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
 	items, next, err := s.Audit.Store.ListSessions(r.Context(), store.SessionFilter{
 		User: scopeUser(sess, r), DevPodUID: uid, Cluster: s.namedCluster(r.Context()), From: from, To: to,
-		HasFiles: q.Get("hasFiles") == "true", HasAlerts: q.Get("hasAlerts") == "true",
+		HasFiles: q.Get("hasFiles") == "true", HasAlerts: q.Get("hasAlerts") == "true", Open: q.Get("open") == "true",
 		Cursor: q.Get("cursor"), Limit: queryLimit(r),
 	})
 	if err != nil {

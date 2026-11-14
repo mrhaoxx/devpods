@@ -11,6 +11,7 @@ import (
 	"crypto/rand"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -507,5 +508,38 @@ func TestNewerThanTheSchema(t *testing.T) {
 	}
 	if d, err := c.GetSession(ctx, row.SessionID); err != nil || d.Session.Pubkey != "ssh-ed25519 AAAA" {
 		t.Fatalf("after the migration the key is kept: %+v %v", d, err)
+	}
+}
+
+// 进行中: not closed and alive — a session whose gateway died before it
+// could close it (its row not rewritten for minutes) is not open.
+func TestListSessions_Open(t *testing.T) {
+	ctx := context.Background()
+	db := fmt.Sprintf("q_%d", time.Now().UnixNano())
+	c := openTestCH(t, db)
+	t.Cleanup(func() { _ = c.conn.Exec(context.Background(), "DROP DATABASE IF EXISTS "+db) })
+	if err := Migrate(ctx, c, DefaultRetention(30)); err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().UTC().Truncate(time.Millisecond)
+	hourAgo := now.Add(-time.Hour)
+	closed := now.Add(-time.Minute)
+	rows := []SessionRow{
+		{SessionID: "live", User: "a", OpenedAt: hourAgo, LastActive: now.Add(-30 * time.Second), Version: 60},
+		{SessionID: "new", User: "a", OpenedAt: now.Add(-20 * time.Second), LastActive: now.Add(-20 * time.Second), Version: 1},
+		{SessionID: "dead", User: "a", OpenedAt: hourAgo, LastActive: now.Add(-30 * time.Minute), Version: 31},
+		{SessionID: "done", User: "a", OpenedAt: hourAgo, ClosedAt: &closed, LastActive: closed, Version: 61},
+	}
+	if err := c.Insert(ctx, Batch{Sessions: rows}, "open"); err != nil {
+		t.Fatal(err)
+	}
+	got, _, err := c.ListSessions(ctx, SessionFilter{From: now.Add(-2 * time.Hour), To: now.Add(time.Minute), Open: true})
+	ids := []string{}
+	for _, r := range got {
+		ids = append(ids, r.SessionID)
+	}
+	slices.Sort(ids)
+	if err != nil || !slices.Equal(ids, []string{"live", "new"}) {
+		t.Fatalf("open sessions %v %v", ids, err)
 	}
 }

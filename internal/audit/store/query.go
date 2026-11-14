@@ -37,8 +37,10 @@ type SessionFilter struct {
 	Cluster             string // the cluster of its DevPod
 	From, To            time.Time
 	HasFiles, HasAlerts bool // HasAlerts: any alert, policy hit or gap
-	Cursor              string
-	Limit               int
+	// Open: sessions going on now (see openSilence)
+	Open   bool
+	Cursor string
+	Limit  int
 }
 
 // SessionSummary is a session plus per-session counters.
@@ -166,6 +168,10 @@ func (w *where) cursor(c, timeCol, keyExpr string) error {
 
 // ListSessions returns sessions newest first and the next page's cursor
 // ("" when there is none).
+// openSilence: an open session whose row was not rewritten for this long
+// (it is every minute) is taken for one whose gateway died.
+const openSilence = 3 * time.Minute
+
 func (c *CH) ListSessions(ctx context.Context, f SessionFilter) ([]SessionSummary, string, error) {
 	if f.From.IsZero() || f.To.IsZero() {
 		return nil, "", ErrRangeRequired
@@ -185,6 +191,17 @@ func (c *CH) ListSessions(ctx context.Context, f SessionFilter) ([]SessionSummar
 	}
 	if f.HasFiles {
 		w.add(fmt.Sprintf("session_id IN (SELECT session_id FROM %s.file_events WHERE ts >= ?)", c.db), f.From)
+	}
+	if f.Open {
+		// open: not closed — and alive: a gateway rewrites an open
+		// session's row every minute, so one that has said nothing for a
+		// few (its gateway died before it could close it) is not taken
+		// for open. Without last_active (a schema of before): not closed.
+		w.add("closed_at IS NULL")
+		if c.known(ctx, "sessions", "last_active") == "last_active" {
+			alive := time.Now().Add(-openSilence)
+			w.add("(last_active >= ? OR opened_at >= ?)", alive, alive)
+		}
 	}
 	if f.HasAlerts {
 		w.add(fmt.Sprintf("(gaps > 0 OR session_id IN (SELECT session_id FROM %[1]s.alerts WHERE ts >= ?) OR session_id IN (SELECT session_id FROM %[1]s.policy_events WHERE ts >= ?))", c.db), f.From, f.From)

@@ -4,6 +4,7 @@ import { useCallback, useState } from "react";
 
 export const REFRESH_CHOICES: [number, string][] = [
   [0, "关闭"],
+  [1_000, "1 秒"],
   [5_000, "5 秒"],
   [10_000, "10 秒"],
   [30_000, "30 秒"],
