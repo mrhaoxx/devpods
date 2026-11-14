@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import type { ColumnDef, SortingState } from "@tanstack/react-table";
 import { useState } from "react";
-import { DataTable, phoneHidden, rowWindow } from "./DataTable";
+import { DataTable, rowWindow } from "./DataTable";
 
 type Row = { name: string; cpu: number };
 const rows: Row[] = [
@@ -75,12 +75,6 @@ describe("DataTable", () => {
     expect(cells[0]).toContain("b");
   });
 
-  it("on a phone, by default, only the most wanted columns; elsewhere every one", () => {
-    const metas = [1, 2, 3, 5].map((p) => ({ id: `c${p}`, priority: p }));
-    expect(phoneHidden(400, metas)).toEqual(["c3", "c5"]);
-    expect(phoneHidden(1200, metas)).toEqual([]);
-    expect(phoneHidden(0, metas)).toEqual([]); // width not known yet
-  });
 
   describe("column widths", () => {
     afterEach(() => localStorage.clear());

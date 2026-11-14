@@ -24,7 +24,7 @@ import { EmptyState } from "./EmptyState";
 declare module "@tanstack/react-table" {
   // eslint-disable-next-line @typescript-eslint/no-unused-vars
   interface ColumnMeta<TData extends RowData, TValue> {
-    /** how much the column is wanted: on a phone only 1 and 2 show by default */
+    /** how much the column is wanted (1 most): kept for callers; every column shows by default */
     priority?: number;
     /** width in px (until dragged) */
     width?: number;
@@ -35,14 +35,6 @@ declare module "@tanstack/react-table" {
   }
 }
 
-/** phoneHidden: the columns a phone-wide table leaves out until chosen —
- *  every one past priority 2; none on a wider screen (or before the width
- *  is known). */
-export function phoneHidden(width: number, metas: { id: string; priority: number }[]): string[] {
-  if (width <= 0 || width >= PHONE) return [];
-  return metas.filter((m) => m.priority > 2).map((m) => m.id);
-}
-const PHONE = 640;
 
 /** useView: where a scroller is scrolled to and how tall it is, read once
  *  a frame while it scrolls or changes size. Height -1: not read yet;
@@ -88,17 +80,6 @@ export function rowWindow(n: number, view: { top: number; height: number }, h: n
 
 const FIRST_DRAW = 60;
 
-function useWidth(ref: React.RefObject<HTMLElement>): number {
-  const [w, setW] = useState(0);
-  useEffect(() => {
-    const el = ref.current;
-    if (!el || typeof ResizeObserver === "undefined") return;
-    const ro = new ResizeObserver(([e]) => setW(Math.floor(e.contentRect.width)));
-    ro.observe(el);
-    return () => ro.disconnect();
-  }, [ref]);
-  return w;
-}
 
 /** RowAction: one thing a row menu (or a bulk bar) offers. */
 export type RowAction = { label: string; onSelect(): void; danger?: boolean; disabled?: boolean; title?: string };
@@ -186,7 +167,6 @@ const pinnedBg = (selected: boolean) =>
 
 export function DataTable<T>(p: DataTableProps<T>) {
   const wrap = useRef<HTMLDivElement>(null);
-  const width = useWidth(wrap);
   const scroller = useRef<HTMLDivElement>(null);
   const head = useRef<HTMLTableSectionElement>(null);
   const view = useView(scroller, !!p.fill);
@@ -254,7 +234,9 @@ export function DataTable<T>(p: DataTableProps<T>) {
     writeJSON(p.storageKey && sizesKey(p.storageKey), rest);
   };
 
-  const hiddenIds = new Set((chosen ?? phoneHidden(width, metas)).filter((id) => !metas.find((m) => m.id === id)?.pin));
+  // every column by default, on a phone too: the table scrolls sideways
+  // (hiding columns there took their headers away); 列 hides any
+  const hiddenIds = new Set((chosen ?? []).filter((id) => !metas.find((m) => m.id === id)?.pin));
   const choosable = metas.filter((m) => !m.pin && m.label);
   const choose = (next: string[] | undefined) => {
     setChosen(next);
@@ -284,6 +266,10 @@ export function DataTable<T>(p: DataTableProps<T>) {
   const menuHost = rightPinned.at(-1)?.id;
   const fillerBefore = rightPinned[0]?.id; // undefined: at the end
   const sticky = (id: string): React.CSSProperties | undefined => (offset[id] ? { position: "sticky", ...offset[id], zIndex: 1 } : undefined);
+  // a header cell stays at the top of the scroller by itself — a sticky
+  // <thead> is not kept by every browser (Safari on a phone); a pinned one
+  // also stays sideways, over the other headers
+  const headSticky = (id?: string): React.CSSProperties => ({ position: "sticky", top: 0, ...(id ? offset[id] : undefined), zIndex: id && offset[id] ? 3 : 2 });
 
   // drop selections whose rows are gone
   const ids = useMemo(() => new Set(p.data.map(p.getRowId)), [p.data, p.getRowId]);
@@ -396,7 +382,7 @@ export function DataTable<T>(p: DataTableProps<T>) {
   );
   const filler = (kind: "th" | "td") =>
     kind === "th" ? (
-      <th key="filler" data-filler aria-hidden="true" className="bg-surface shadow-[inset_0_-1px_0_var(--color-line)]" />
+      <th key="filler" data-filler aria-hidden="true" className="sticky top-0 z-[2] bg-surface shadow-[inset_0_-1px_0_var(--color-line)]" />
     ) : (
       <td key="filler" data-filler aria-hidden="true" />
     );
@@ -422,11 +408,11 @@ export function DataTable<T>(p: DataTableProps<T>) {
         style={selected.length > 0 && p.fill ? { paddingBottom: BAR_ROOM } : undefined}
       >
         <table className="border-collapse text-xs" style={{ tableLayout: "fixed", width: "100%" }}>
-          <thead ref={head} className="sticky top-0 z-[2] bg-surface">
+          <thead ref={head} className="bg-surface">
             {table.getHeaderGroups().map((hg) => (
               <tr key={hg.id} className="h-7 border-b border-line text-left text-[11px] text-muted">
                 {p.selectable && (
-                  <th className="bg-surface px-2 shadow-[inset_0_-1px_0_var(--color-line)]" style={{ width: CHECK, position: "sticky", left: 0, zIndex: 1 }}>
+                  <th className="bg-surface px-2 shadow-[inset_0_-1px_0_var(--color-line)]" style={{ width: CHECK, ...headSticky(), left: 0, zIndex: 3 }}>
                     <input
                       type="checkbox"
                       aria-label="全选"
@@ -449,7 +435,7 @@ export function DataTable<T>(p: DataTableProps<T>) {
                     <th
                       key={h.id}
                       aria-sort={dir === "asc" ? "ascending" : dir === "desc" ? "descending" : undefined}
-                      style={{ width: widthOf(id), ...sticky(id) }}
+                      style={{ width: widthOf(id), ...headSticky(id) }}
                       className={`group/h relative bg-surface px-2 font-medium whitespace-nowrap shadow-[inset_0_-1px_0_var(--color-line)] ${right ? "text-right" : ""}`}
                     >
                       <span className="flex min-w-0 items-center gap-1">
@@ -484,7 +470,7 @@ export function DataTable<T>(p: DataTableProps<T>) {
                 })}
                 {!fillerBefore && filler("th")}
                 {!menuHost && (
-                  <th className="bg-surface px-1 text-right shadow-[inset_0_-1px_0_var(--color-line)]" style={{ width: 32, position: "sticky", right: 0, zIndex: 1 }}>
+                  <th className="bg-surface px-1 text-right shadow-[inset_0_-1px_0_var(--color-line)]" style={{ width: 32, ...headSticky(), right: 0, zIndex: 3 }}>
                     {menu}
                   </th>
                 )}

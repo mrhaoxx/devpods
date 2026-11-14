@@ -1,6 +1,7 @@
 // DevPod 详情 (UI spec §5.2). One SSE connection carries status, events,
 // metrics and processes; with live data off, status and events come
 // from the plain detail stream instead.
+import { LoadMore, usePaged } from "../../audit/common";
 import { Provenance } from "./Provenance";
 import { preloadYamlEditor } from "../../../design/yaml/YamlEditor";
 import { Notice } from "../../../design/Form";
@@ -10,6 +11,7 @@ import { Link, useNavigate, useParams } from "react-router-dom";
 import { useQueryClient } from "@tanstack/react-query";
 import {
   ApiFailure,
+  listAuditSessions,
   shellPath,
   sshCommand,
   sshConfig,
@@ -18,6 +20,7 @@ import {
   type DevPodSample,
   type K8sEvent,
   type ProcLive,
+  type SessionSummary,
 } from "../../../data/api";
 import { segCluster } from "../../../data/cluster";
 import { useClusterList } from "../../../data/clusterFilter";
@@ -132,7 +135,12 @@ export function DetailPage() {
   }, [live, r, onDetail, onEvent]);
 
   const audit = !!me?.features.audit;
-  const sessions = useAuditSessions({ devpod: name, cluster }, { enabled: audit && (tab === "overview" || tab === "sessions"), refetchInterval: 10_000 });
+  // 概览 shows the open ones (of the newest); 会话 pages through them all, 50 at a time
+  const sessions = useAuditSessions({ devpod: name, cluster }, { enabled: audit && tab === "overview", refetchInterval: 10_000 });
+  const sessionPages = usePaged<SessionSummary>("devpod-sessions", { devpod: name, ...(cluster ? { cluster } : {}), limit: "50" }, listAuditSessions, {
+    enabled: audit && tab === "sessions",
+    refetchInterval: 10_000,
+  });
 
   const d = detail ?? q.data ?? null;
   const notFound = q.error instanceof ApiFailure && q.error.status === 404;
@@ -277,8 +285,9 @@ export function DetailPage() {
         </Panel>
       )}
       {tab === "sessions" && audit && (
-        <Panel title="会话">
-          <SessionList items={sessions.data?.items} error={sessions.error} now={now} />
+        <Panel title="会话（近 7 天）">
+          <SessionList items={sessionPages.isLoading ? undefined : sessionPages.items} error={sessionPages.error} now={now} />
+          <LoadMore hasMore={sessionPages.hasNextPage} busy={sessionPages.isFetchingNextPage} onClick={() => void sessionPages.fetchNextPage()} />
         </Panel>
       )}
       {tab === "ports" && me?.features.httpProxy && <PortsPanel r={r} sshPort={sshPort} />}

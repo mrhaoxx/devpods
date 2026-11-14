@@ -45,13 +45,19 @@ export function FilterBox({ label, value, onChange, width = "w-40" }: { label: s
 }
 
 /** usePaged pages through a cursor API; the filters form the query key. */
-export function usePaged<T>(key: string, filters: Record<string, string>, fetch: (q: Record<string, string | undefined>) => Promise<Page<T>>) {
+export function usePaged<T>(
+  key: string,
+  filters: Record<string, string>,
+  fetch: (q: Record<string, string | undefined>) => Promise<Page<T>>,
+  opts: { enabled?: boolean; refetchInterval?: number } = {},
+) {
   const q = useInfiniteQuery({
     queryKey: ["audit", key, filters],
     queryFn: ({ pageParam }) => fetch({ ...filters, cursor: pageParam || undefined }),
     initialPageParam: "",
     getNextPageParam: (last) => last.next || undefined,
     retry: false,
+    ...opts,
   });
   const items = useMemo(() => q.data?.pages.flatMap((p) => p.items ?? []) ?? [], [q.data]);
   return { ...q, items };
