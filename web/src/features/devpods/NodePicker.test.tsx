@@ -15,6 +15,8 @@ describe("NodePicker", () => {
     expect(nodeWarning(n({ next: { user: "bob", start: "2026-11-12T06:30:00Z" } }))).toBe("g206 将于 11-12 14:30 被 bob 预约，届时这个 DevPod 会被自动休眠。");
     expect(nodeWarning(n({ ready: false }))).toMatch(/未就绪/);
     expect(nodeWarning(n({}))).toBeNull();
+    expect(nodeWarning(n({ selectable: false, reservable: true, reservationRequired: true }))).toMatch(/^g206 必须预约才能使用/);
+    expect(nodeLabel(n({ selectable: false, reservable: true, reservationRequired: true }))).toMatch(/ · 需预约$/);
     expect(nodeLabel(n({ gpuModel: "A100", gpuTotal: 8, held: { user: "me", until: "2026-11-12T09:00:00Z" } }))).toMatch(/^g206 · A100 ×8 · .*你的预约至 11-12 17:00$/);
   });
 

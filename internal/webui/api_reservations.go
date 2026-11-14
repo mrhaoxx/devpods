@@ -17,7 +17,6 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
-	"k8s.io/client-go/util/retry"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	devpodv1alpha1 "github.com/mrhaoxx/devpod/api/v1alpha1"
@@ -91,18 +90,12 @@ func (s *Server) reservationRules(w http.ResponseWriter) (*ReservationRules, boo
 // allReservations reads from the API server: conflict resolution and
 // the node rule must not act on a stale cache.
 func (s *Server) allReservations(ctx context.Context) ([]devpodv1alpha1.Reservation, error) {
-	var list devpodv1alpha1.ReservationList
-	if err := s.kc(ctx).Reader.List(ctx, &list); err != nil {
+	// the console's own (reservation_store.go), of the request's cluster
+	all, err := s.nodeReservations(ctx)
+	if err != nil {
 		return nil, err
 	}
-	// one being deleted (it can linger on the controller's finalizer) is gone
-	out := list.Items[:0]
-	for i := range list.Items {
-		if list.Items[i].DeletionTimestamp == nil {
-			out = append(out, list.Items[i])
-		}
-	}
-	return out, nil
+	return reservationsOf(all, s.resCluster(ctx)), nil
 }
 
 // effectiveReservations drops conflict losers: a live reservation that
@@ -165,7 +158,8 @@ func pinnedNode(dp *devpodv1alpha1.DevPod) string {
 }
 
 // pinErr is the node choice rule: a DevPod owned by owner may sit on
-// node unless someone else holds the node now. It is judged by the
+// node unless someone else holds the node now — or, on a node that
+// requires a reservation, unless owner holds it now. It is judged by the
 // DevPod's owner, whoever performs the action (admins included).
 func (s *Server) pinErr(ctx context.Context, owner, node string) *serverErr {
 	if s.Reservations == nil || node == "" {
@@ -177,8 +171,22 @@ func (s *Server) pinErr(ctx context.Context, owner, node string) *serverErr {
 	}
 	all = effectiveReservations(all)
 	h := holderOf(all, node, s.Reservations.now())
-	if h == nil || h.Spec.User == owner {
+	if h != nil && h.Spec.User == owner {
 		return nil
+	}
+	if h == nil {
+		var n corev1.Node
+		if err := s.kc(ctx).Client.Get(ctx, types.NamespacedName{Name: node}, &n); err != nil {
+			if apierrors.IsNotFound(err) {
+				return nil // the caller says so, where it matters
+			}
+			return &serverErr{http.StatusInternalServerError, "INTERNAL", err.Error(), nil}
+		}
+		if !reservationRequired(&n) {
+			return nil
+		}
+		return &serverErr{http.StatusConflict, "RESERVATION_REQUIRED",
+			fmt.Sprintf("node %s may be used only by whoever has reserved it, while the reservation lasts", node), map[string]any{"node": node}}
 	}
 	until := heldUntil(all, h)
 	return &serverErr{http.StatusConflict, "NODE_RESERVED",
@@ -403,7 +411,7 @@ func (s *Server) reserve(ctx context.Context, user, node string, start, end time
 		ObjectMeta: metav1.ObjectMeta{Name: fmt.Sprintf("%s-%s-%s", node, user, randSuffix(6))},
 		Spec:       devpodv1alpha1.ReservationSpec{Node: node, User: user, Start: metav1.NewTime(start.UTC()), End: metav1.NewTime(end.UTC()), Extends: extends},
 	}
-	if err := s.kc(ctx).Client.Create(ctx, res); err != nil {
+	if err := s.createReservation(ctx, res); err != nil {
 		return nil, &serverErr{http.StatusBadRequest, "BAD_REQUEST", "reservation rejected", err.Error()}
 	}
 	if all, err = s.allReservations(ctx); err != nil {
@@ -424,11 +432,12 @@ func (s *Server) reserve(ctx context.Context, user, node string, start, end time
 	}
 	skipSelf[res.Name] = true
 	if c := conflictWith(all, node, start, end, skipSelf); c != nil && reservationBefore(c, self) {
-		if err := s.kc(ctx).Client.Delete(ctx, res); err != nil && !apierrors.IsNotFound(err) {
+		if err := s.deleteReservation(ctx, res.Name); err != nil {
 			return nil, internal(err)
 		}
 		return nil, conflictErr(c)
 	}
+	s.reservationHistory(ctx, &devpodv1alpha1.NodeReservation{ObjectMeta: self.ObjectMeta, Spec: devpodv1alpha1.NodeReservationSpec{Cluster: s.resCluster(ctx), ReservationSpec: self.Spec}}, "created")
 	return self, nil
 }
 
@@ -501,16 +510,12 @@ func (s *Server) handleCreateReservation(w http.ResponseWriter, r *http.Request)
 // cancelSegments writes spec.cancelled on the named segments.
 func (s *Server) cancelSegments(ctx context.Context, names []string, by string, at time.Time) error {
 	for _, name := range names {
-		err := retry.RetryOnConflict(retry.DefaultRetry, func() error {
-			var res devpodv1alpha1.Reservation
-			if err := s.kc(ctx).Reader.Get(ctx, types.NamespacedName{Name: name}, &res); err != nil {
-				return client.IgnoreNotFound(err)
+		err := s.changeReservation(ctx, name, func(spec *devpodv1alpha1.ReservationSpec) bool {
+			if spec.Cancelled != nil || !at.Before(spec.End.Time) {
+				return false // already over
 			}
-			if res.Spec.Cancelled != nil || !at.Before(res.Spec.End.Time) {
-				return nil // already over
-			}
-			res.Spec.Cancelled = &devpodv1alpha1.ReservationCancel{By: by, At: metav1.NewTime(at.UTC().Truncate(time.Second))}
-			return s.kc(ctx).Client.Update(ctx, &res)
+			spec.Cancelled = &devpodv1alpha1.ReservationCancel{By: by, At: metav1.NewTime(at.UTC().Truncate(time.Second))}
+			return true
 		})
 		if err != nil {
 			return err
@@ -670,17 +675,25 @@ func (s *Server) handleSetReservable(w http.ResponseWriter, r *http.Request) {
 	}
 	var req struct {
 		Reservable *bool `json:"reservable"`
+		// Required (with reservable): only a holder may pick the node;
+		// left out, it stays as it is
+		Required *bool `json:"required"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.Reservable == nil {
-		s.writeErr(w, http.StatusBadRequest, "BAD_REQUEST", "send {reservable: true|false}", nil)
+		s.writeErr(w, http.StatusBadRequest, "BAD_REQUEST", "send {reservable: true|false, required?: true|false}", nil)
 		return
 	}
 	name := r.PathValue("name")
-	var value any // null removes the label
+	labels := map[string]any{devpodv1alpha1.ReservableNodeLabel: nil, devpodv1alpha1.ReservationRequiredNodeLabel: nil} // null removes a label
 	if *req.Reservable {
-		value = "true"
+		labels[devpodv1alpha1.ReservableNodeLabel] = "true"
+		if req.Required == nil {
+			delete(labels, devpodv1alpha1.ReservationRequiredNodeLabel)
+		} else if *req.Required {
+			labels[devpodv1alpha1.ReservationRequiredNodeLabel] = "true"
+		}
 	}
-	patch, _ := json.Marshal(map[string]any{"metadata": map[string]any{"labels": map[string]any{devpodv1alpha1.ReservableNodeLabel: value}}})
+	patch, _ := json.Marshal(map[string]any{"metadata": map[string]any{"labels": labels}})
 	node := &corev1.Node{ObjectMeta: metav1.ObjectMeta{Name: name}}
 	if err := s.k(r).Client.Patch(r.Context(), node, client.RawPatch(types.MergePatchType, patch)); err != nil {
 		if apierrors.IsNotFound(err) {
@@ -695,7 +708,12 @@ func (s *Server) handleSetReservable(w http.ResponseWriter, r *http.Request) {
 		s.writeErr(w, http.StatusInternalServerError, "INTERNAL", err.Error(), nil)
 		return
 	}
-	s.writeJSON(w, http.StatusOK, map[string]any{"reservable": *req.Reservable, "pending": pendingOn(all, name, ru.now())})
+	s.writeJSON(w, http.StatusOK, map[string]any{"reservable": *req.Reservable, "required": reservationRequired(node), "pending": pendingOn(all, name, ru.now())})
+}
+
+// reservationRequired: only whoever holds the node may pick it.
+func reservationRequired(n *corev1.Node) bool {
+	return n.Labels[devpodv1alpha1.ReservableNodeLabel] == "true" && n.Labels[devpodv1alpha1.ReservationRequiredNodeLabel] == "true"
 }
 
 // pendingOn counts the node's reservations that are not over.
@@ -723,18 +741,20 @@ type nodeNext struct {
 // nodeChoice is one node in GET /api/nodes.
 type nodeChoice struct {
 	// Cluster: the cluster it is in, in a console of several.
-	Cluster    string    `json:"cluster,omitempty"`
-	Name       string    `json:"name"`
-	Ready      bool      `json:"ready"`
-	CPU        resView   `json:"cpu"`
-	Mem        resView   `json:"mem"`
-	GPUModel   string    `json:"gpuModel,omitempty"`
-	GPUTotal   int       `json:"gpuTotal"`
-	GPUUsed    int       `json:"gpuUsed"`
-	Reservable bool      `json:"reservable"`
-	Pending    int       `json:"pending"` // reservations not over yet
-	Held       *nodeHold `json:"held"`    // who holds it now
-	Next       *nodeNext `json:"next"`    // the next reservation by someone else
+	Cluster    string  `json:"cluster,omitempty"`
+	Name       string  `json:"name"`
+	Ready      bool    `json:"ready"`
+	CPU        resView `json:"cpu"`
+	Mem        resView `json:"mem"`
+	GPUModel   string  `json:"gpuModel,omitempty"`
+	GPUTotal   int     `json:"gpuTotal"`
+	GPUUsed    int     `json:"gpuUsed"`
+	Reservable bool    `json:"reservable"`
+	// ReservationRequired: only whoever holds it may pick it.
+	ReservationRequired bool      `json:"reservationRequired"`
+	Pending             int       `json:"pending"` // reservations not over yet
+	Held                *nodeHold `json:"held"`    // who holds it now
+	Next                *nodeNext `json:"next"`    // the next reservation by someone else
 	// Selectable: the caller's own DevPods may be pinned here now.
 	Selectable bool   `json:"selectable"`
 	Reason     string `json:"reason,omitempty"`
@@ -790,11 +810,14 @@ func (s *Server) nodeChoicesIn(ctx context.Context, sess Session) ([]nodeChoice,
 		c := nodeChoice{Name: v.Name, Ready: v.Ready, GPUModel: v.GPU.Model, GPUTotal: v.GPU.Total, GPUUsed: v.GPU.Used,
 			CPU: resView{Allocatable: v.CPU.Allocatable, Allocated: v.CPU.Allocated}, Mem: resView{Allocatable: v.Mem.Allocatable, Allocated: v.Mem.Allocated},
 			Reservable: v.Labels[devpodv1alpha1.ReservableNodeLabel] == "true", Pending: pendingOn(all, v.Name, now), Selectable: true}
+		c.ReservationRequired = c.Reservable && v.Labels[devpodv1alpha1.ReservationRequiredNodeLabel] == "true"
 		if h := holderOf(all, v.Name, now); h != nil {
 			c.Held = &nodeHold{User: h.Spec.User, Until: heldUntil(all, h).UTC()}
 			if h.Spec.User != sess.User {
 				c.Selectable, c.Reason = false, fmt.Sprintf("reserved by %s", h.Spec.User)
 			}
+		} else if c.ReservationRequired && s.Reservations != nil {
+			c.Selectable, c.Reason = false, "reservation required"
 		}
 		for i := range all {
 			x := &all[i]

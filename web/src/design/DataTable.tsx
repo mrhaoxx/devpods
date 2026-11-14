@@ -1,4 +1,5 @@
-// Dense full-width table (UI spec §3, §5.1): sorting, multi-select with a
+// Dense full-width table (UI spec §3, §5.1): sorting, multi-select (a
+// click picks a row, a press dragged across rows picks them all) with a
 // bulk bar floating at the bottom, columns of exact widths (dragged or by keyboard; the room they
 // leave goes to a filler, never into them), a 列 menu to choose the columns,
 // and sideways scrolling inside the table with the pinned columns staying.
@@ -323,6 +324,89 @@ export function DataTable<T>(p: DataTableProps<T>) {
   }, [any]);
   const rows = table.getRowModel().rows;
   const colCount = shown.length + (p.selectable ? 1 : 0) + 1 + (menuHost ? 0 : 1);
+  // a press dragged across rows picks (or, begun on a picked row, lets go
+  // of) every row from the one it began on to the one under the pointer;
+  // one that stays on its row is a click, and text in a row can still be
+  // selected. On a list page the list scrolls while the pointer is at its
+  // top or bottom edge.
+  const rowsNow = useRef(rows);
+  rowsNow.current = rows;
+  const drag = useRef<{ from: string; base: RowSelectionState; on: boolean; moved: boolean } | null>(null);
+  const afterDrag = useRef(false); // the click that ends a drag picks nothing more
+  const [dragging, setDragging] = useState(false);
+  const startDrag = (e: React.MouseEvent) => {
+    afterDrag.current = false; // a new press: its click counts
+    if (!p.selectable || e.button !== 0 || e.shiftKey || e.metaKey || e.ctrlKey || e.altKey) return;
+    const t = e.target as HTMLElement;
+    if (t.closest("button,a,select,textarea,label,[role='menu']") || (t.closest("input") && !t.closest("[data-pick]"))) return;
+    const from = t.closest("tr[data-row]")?.getAttribute("data-row");
+    const at = rowsNow.current.find((r) => r.id === from);
+    if (!from || !at) return;
+    drag.current = { from, base: liveSelection, on: !at.getIsSelected(), moved: false };
+    let x = e.clientX;
+    let y = e.clientY;
+    let raf = 0;
+    const pick = () => {
+      const d = drag.current;
+      const sc = scroller.current;
+      if (!d) return;
+      // over the rows, even when the pointer has gone above or below them
+      let py = y;
+      if (sc && p.fill) {
+        const r = sc.getBoundingClientRect();
+        py = Math.min(Math.max(y, r.top + (head.current?.offsetHeight ?? 0) + 1), r.bottom - 2);
+      }
+      const id = document.elementFromPoint(x, py)?.closest("tr[data-row]")?.getAttribute("data-row");
+      const all = rowsNow.current;
+      const i = all.findIndex((r) => r.id === id);
+      const j = all.findIndex((r) => r.id === d.from);
+      if (i < 0 || j < 0 || (!d.moved && i === j)) return;
+      if (!d.moved) {
+        d.moved = true;
+        setDragging(true);
+        window.getSelection()?.removeAllRanges();
+      }
+      const next = { ...d.base };
+      for (let k = Math.min(i, j); k <= Math.max(i, j); k++) {
+        if (d.on) next[all[k].id] = true;
+        else delete next[all[k].id];
+      }
+      setSelection(next);
+    };
+    const edge = () => {
+      const sc = scroller.current;
+      if (sc && p.fill && drag.current?.moved) {
+        const r = sc.getBoundingClientRect();
+        const top = r.top + (head.current?.offsetHeight ?? 0);
+        const dy = y < top + 24 ? -Math.ceil((top + 24 - y) / 2) : y > r.bottom - 24 ? Math.ceil((y - r.bottom + 24) / 2) : 0;
+        if (dy) {
+          sc.scrollTop += Math.max(-40, Math.min(40, dy));
+          pick();
+        }
+      }
+      raf = requestAnimationFrame(edge);
+    };
+    raf = requestAnimationFrame(edge);
+    const move = (ev: MouseEvent) => {
+      x = ev.clientX;
+      y = ev.clientY;
+      pick();
+    };
+    const end = () => {
+      cancelAnimationFrame(raf);
+      document.removeEventListener("mousemove", move);
+      document.removeEventListener("mouseup", end);
+      if (drag.current?.moved) {
+        afterDrag.current = true;
+        setTimeout(() => (afterDrag.current = false), 0);
+      }
+      drag.current = null;
+      setDragging(false);
+    };
+    document.addEventListener("mousemove", move);
+    document.addEventListener("mouseup", end);
+  };
+
   // the rows drawn: those in sight on a list page; the others are room
   const { first, last } = p.fill ? rowWindow(rows.length, view, rowH, head.current?.offsetHeight ?? ROW_H) : { first: 0, last: rows.length };
   const drawn = first === 0 && last === rows.length ? rows : rows.slice(first, last);
@@ -415,12 +499,12 @@ export function DataTable<T>(p: DataTableProps<T>) {
         onClick={(e) => {
           // (in the list itself: a menu's items are drawn elsewhere, though their clicks pass through here)
           const t = e.target as HTMLElement;
-          if (any && e.currentTarget.contains(t) && !t.closest("tr[data-row],thead")) setSelection({});
+          if (any && !afterDrag.current && e.currentTarget.contains(t) && !t.closest("tr[data-row],thead")) setSelection({});
         }}
         className={p.fill ? "min-h-0 flex-1 overflow-auto" : "overflow-x-auto"}
         style={selected.length > 0 && p.fill ? { paddingBottom: BAR_ROOM } : undefined}
       >
-        <table className="border-collapse text-xs" style={{ tableLayout: "fixed", width: "100%" }}>
+        <table className={`border-collapse text-xs ${dragging ? "select-none" : ""}`} style={{ tableLayout: "fixed", width: "100%" }}>
           <thead ref={head} className="bg-surface">
             {table.getHeaderGroups().map((hg) => (
               <tr key={hg.id} className="h-7 border-b border-line text-left text-[11px] text-muted">
@@ -490,7 +574,11 @@ export function DataTable<T>(p: DataTableProps<T>) {
               </tr>
             ))}
           </thead>
-          <Body menu={p.rowMenu ? { onContext, menuFor, close: () => setMenuFor(null) } : undefined} className={p.dim ? "opacity-60" : undefined}>
+          <Body
+            menu={p.rowMenu ? { onContext, menuFor, close: () => setMenuFor(null) } : undefined}
+            className={p.dim ? "opacity-60" : undefined}
+            onMouseDown={p.selectable ? startDrag : undefined}
+          >
             {rows.length === 0 && (
               <tr>
                 <td colSpan={colCount}>{p.empty ?? <EmptyState title="没有数据" />}</td>
@@ -505,7 +593,7 @@ export function DataTable<T>(p: DataTableProps<T>) {
                   data-row={row.id}
                   aria-selected={p.selectable ? sel : undefined}
                   onClick={(e) => {
-                    if ((e.target as HTMLElement).closest("button,a,input,select,label,[role='menu']")) return;
+                    if (afterDrag.current || (e.target as HTMLElement).closest("button,a,input,select,label,[role='menu']")) return;
                     if (p.onRowClick) return p.onRowClick(row.original);
                     // a selectable row with nothing else to do on a click: the click picks it
                     // (anywhere on it, not only the box) — unless text was being selected
@@ -515,7 +603,7 @@ export function DataTable<T>(p: DataTableProps<T>) {
                 >
                   {p.selectable && (
                     <td className={`px-2 ${pinnedBg(sel)}`} style={{ position: "sticky", left: 0, zIndex: 1 }}>
-                      <input type="checkbox" aria-label={`选择 ${row.id}`} checked={sel} onChange={row.getToggleSelectedHandler()} />
+                      <input data-pick type="checkbox" aria-label={`选择 ${row.id}`} checked={sel} onChange={row.getToggleSelectedHandler()} />
                     </td>
                   )}
                   {row.getVisibleCells().flatMap((cell) => {
@@ -565,19 +653,26 @@ export function DataTable<T>(p: DataTableProps<T>) {
 function Body({
   menu,
   className,
+  onMouseDown,
   children,
 }: {
   menu?: { onContext(e: React.MouseEvent): void; menuFor: { bulk: number; actions: RowAction[] } | null; close(): void };
   className?: string;
+  onMouseDown?(e: React.MouseEvent): void;
   children: ReactNode;
 }) {
-  if (!menu) return <tbody className={className}>{children}</tbody>;
+  if (!menu)
+    return (
+      <tbody className={className} onMouseDown={onMouseDown}>
+        {children}
+      </tbody>
+    );
   const item = "cursor-pointer rounded px-2 py-1 outline-none data-[disabled]:cursor-default data-[disabled]:opacity-50";
   return (
     <ContextMenu.Root modal={false} onOpenChange={(open) => !open && menu.close()}>
       <ContextMenu.Trigger asChild>
         {/* in the capture phase, before the menu's own handler: no row, nothing offered or Shift → the browser's menu */}
-        <tbody className={className} onContextMenuCapture={menu.onContext}>
+        <tbody className={className} onContextMenuCapture={menu.onContext} onMouseDown={onMouseDown}>
           {children}
         </tbody>
       </ContextMenu.Trigger>

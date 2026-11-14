@@ -129,6 +129,10 @@ spec:
         - --reservation-max-duration={{ .Values.reservation.maxDuration }}
         - --reservation-max-advance={{ .Values.reservation.maxAdvance }}
         - --reservation-clear-notice={{ .Values.reservation.clearNotice }}
+        {{- if not (include "devpod.telemetry.on" $) }}
+        # the replica that carries them out holds a Lease there
+        - --leader-election-namespace={{ .Values.namespaces.system }}
+        {{- end }}
         {{- end }}
         {{- if include "devpod.telemetry.on" $ }}
         - --ingest-listen=:8081

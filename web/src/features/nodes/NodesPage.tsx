@@ -6,17 +6,21 @@ import { RefreshControl } from "../../design/RefreshControl";
 import { useClusterFilter } from "../../data/clusterFilter";
 import type { Cluster } from "../clusters/api";
 import { devpodHref, keyOf, refOfKey, type Ref } from "../../data/cluster";
-import { useMemo, useState } from "react";
+import { createContext, useContext, useEffect, useMemo, useRef, useState } from "react";
 import { Link } from "react-router-dom";
-import { useQueryClient, useMutation } from "@tanstack/react-query";
+import { useQueryClient } from "@tanstack/react-query";
 import type { ColumnDef, SortingState } from "@tanstack/react-table";
 import { patchDevPod, type KoreNode, type NodeLive, type NodeView } from "../../data/api";
-import { useMe, useNode, useNodeChoices, useNodes, useNodesRecent } from "../../data/queries";
+import { qk, useMe, useNode, useNodeChoices, useNodes, useNodesRecent } from "../../data/queries";
 import { setReservable } from "../../data/api";
 import { overviewStream } from "../../data/live/streams";
 import { useLiveRow } from "../../data/live/hooks";
 import { useDebounced } from "../../lib/useDebounced";
-import { DataTable } from "../../design/DataTable";
+import { DataTable, type RowAction } from "../../design/DataTable";
+import { ActionMenu } from "../../design/ActionMenu";
+import { BulkToast, type BulkOutcome, type BulkProgress } from "../../design/BulkToast";
+import { Spinner } from "../../design/Spinner";
+import { copyText } from "../../design/Copy";
 import { Drawer } from "../../design/Drawer";
 import { Chip } from "../../design/Chip";
 import { Meter } from "../../design/Meter";
@@ -70,24 +74,71 @@ function matchesLabel(labels: Record<string, string>, f: string): boolean {
   return Object.entries(labels).some(([lk, lv]) => (lk === k || lk.endsWith(`/${k}`)) && lv === v);
 }
 
+/** NodeFlags: a node's reservation switches, as an action sets them. */
+type NodeFlags = { on: boolean; required?: boolean };
+type NodePending = { label: string; flags?: NodeFlags; error?: string; since: number };
+
+/** NodeOps: the page's actions on nodes and what they are doing, for the
+ *  switches in the rows (the columns are made once). */
+const NodeOps = createContext<{ pending: ReadonlyMap<string, NodePending>; setFlags(rows: Ref[], action: string, flags: (r: Ref) => NodeFlags): void }>({
+  pending: new Map(),
+  setFlags: () => {},
+});
+
 /** 可预约: admins open a node for reservation (the node label). Turning it
- *  off leaves reservations already made to run their course. */
+ *  off leaves reservations already made to run their course. 必须预约:
+ *  only whoever holds the node now may put DevPods there. While a change
+ *  is being saved the switches show it, turning. */
 function ReservableSwitch({ r }: { r: Ref }) {
-  const qc = useQueryClient();
   const me = useMe().data;
   const node = useNodeChoices(!!me?.features.reservations).data?.items.find((n) => n.name === r.name && n.cluster === r.cluster);
-  const set = useMutation({
-    mutationFn: (on: boolean) => setReservable(r, on),
-    onSettled: () => void qc.invalidateQueries({ queryKey: ["node-choices"] }),
-  });
+  const ops = useContext(NodeOps);
   if (!me?.features.reservations) return <span className="text-faint">—</span>;
-  const on = set.isPending ? !!set.variables : !!node?.reservable;
+  const p = ops.pending.get(keyOf(r));
+  const busy = !!p && !p.error;
+  const on = busy && p.flags ? p.flags.on : !!node?.reservable;
+  const required = busy && p.flags ? on && (p.flags.required ?? !!node?.reservationRequired) : !!node?.reservationRequired;
   return (
     <span className="inline-flex items-center gap-1.5">
-      <input type="checkbox" role="switch" aria-label={`${name} 可预约`} checked={on} disabled={set.isPending || !node} onChange={(e) => set.mutate(e.target.checked)} />
-      {!on && !!node?.pending && <span className="text-[11px] text-warm">还有 {node.pending} 个未结束的预约</span>}
-      {on && node?.held && <span className="text-[11px] text-muted">{node.held.user} 使用中</span>}
-      {set.isError && <span className="text-[11px] text-fail">保存失败</span>}
+      <input
+        type="checkbox"
+        role="switch"
+        aria-label={`${r.name} 可预约`}
+        checked={on}
+        disabled={busy || !node}
+        onChange={(e) => {
+          const v = e.target.checked;
+          ops.setFlags([r], v ? "开启可预约" : "关闭可预约", () => ({ on: v }));
+        }}
+      />
+      {on && (
+        <label className="inline-flex items-center gap-1 text-[11px] text-muted" title="开启后，只有正在预约这台节点的人能把 DevPod 放到这里">
+          <input
+            type="checkbox"
+            aria-label={`${r.name} 必须预约`}
+            checked={required}
+            disabled={busy || !node}
+            onChange={(e) => {
+              const v = e.target.checked;
+              ops.setFlags([r], v ? "开启必须预约" : "关闭必须预约", () => ({ on: true, required: v }));
+            }}
+          />
+          必须预约
+        </label>
+      )}
+      {busy && (
+        <span className="inline-flex items-center gap-1 text-[11px] text-accent" role="status">
+          <Spinner />
+          保存中…
+        </span>
+      )}
+      {p?.error && (
+        <span className="text-[11px] text-fail" title={p.error}>
+          保存失败
+        </span>
+      )}
+      {!busy && !p?.error && !on && !!node?.pending && <span className="text-[11px] text-warm">还有 {node.pending} 个未结束的预约</span>}
+      {!busy && !p?.error && on && node?.held && <span className="text-[11px] text-muted">{node.held.user} 使用中</span>}
     </span>
   );
 }
@@ -113,18 +164,20 @@ function withCluster(cs: ColumnDef<NodeView, unknown>[], clusters: Cluster[]): C
   return [cs[0], col, ...cs.slice(1)];
 }
 
-const columns: ColumnDef<NodeView, unknown>[] = [
+/** nodeColumns: the name opens the node's drawer (a click elsewhere on
+ *  the row picks it, as in the DevPod list); ⋯ offers what a right click does. */
+const nodeColumns = (open: (n: NodeView) => void, actions: (n: NodeView) => React.ReactNode): ColumnDef<NodeView, unknown>[] => [
   {
     id: "name",
     header: "名称",
     accessorKey: "name",
     meta: { priority: 1, width: 160 },
     cell: ({ row: { original: n } }) => (
-      <span className="inline-flex items-center gap-1.5">
+      <span className="inline-flex min-w-0 items-center gap-1.5">
         <StatusDot phase={n.ready ? "Running" : "NotReady"} showLabel={false} />
-        <span data-testid="node-name" className="mono">
+        <button type="button" data-testid="node-name" className="mono truncate hover:text-accent" onClick={() => open(n)}>
           {n.name}
-        </span>
+        </button>
         {!n.ready && <Badge tone="idle">NotReady</Badge>}
       </span>
     ),
@@ -133,7 +186,7 @@ const columns: ColumnDef<NodeView, unknown>[] = [
     id: "reservable",
     header: "可预约",
     enableSorting: false,
-    meta: { priority: 3, width: 150 },
+    meta: { priority: 3, width: 230 },
     cell: ({ row: { original: n } }) => <ReservableSwitch r={n} />,
   },
   {
@@ -186,6 +239,7 @@ const columns: ColumnDef<NodeView, unknown>[] = [
       );
     },
   },
+  { id: "actions", header: "", enableSorting: false, meta: { priority: 1, width: 48, align: "right", pin: "right" }, cell: ({ row }) => actions(row.original) },
 ];
 
 function NodeDrawerBody({ r }: { r: Ref }) {
@@ -308,10 +362,124 @@ function LabelBox({ value, onChange }: { value: string; onChange: (v: string) =>
 export function NodesPage() {
   const [every, setEvery] = useAutoRefresh("nodes", 10_000);
   const q = useNodes(true, every);
+  const qc = useQueryClient();
+  const me = useMe().data;
+  const reservations = !!me?.features.reservations;
+  const choices = useNodeChoices(reservations).data?.items;
   const [url, setUrl] = useUrlState(schema, { key: "nodes", omit: ["node"] });
   const { matches, several, clusters } = useClusterFilter();
   const items = useMemo(() => (q.data?.items ?? []).filter(matches), [q.data, matches]);
-  const cols = useMemo(() => (several ? withCluster(columns, clusters) : columns), [several, clusters]);
+
+  // every action on nodes — one or many — goes here: the rows say what is
+  // being done until it is, the corner how far it has got and how it ended
+  const [pending, setPending] = useState<ReadonlyMap<string, NodePending>>(() => new Map());
+  const [progress, setProgress] = useState<BulkProgress | null>(null);
+  const [outcome, setOutcome] = useState<BulkOutcome | null>(null);
+  const run = async (action: string, rows: Ref[], fn: (r: Ref) => Promise<unknown>, flags?: (r: Ref) => NodeFlags) => {
+    const since = Date.now();
+    setPending((cur) => {
+      const next = new Map(cur);
+      for (const r of rows) next.set(keyOf(r), { label: action, flags: flags?.(r), since });
+      return next;
+    });
+    setOutcome(null);
+    setProgress({ action, done: 0, failed: 0, total: rows.length });
+    const results = await runBulk(rows, async (r) => {
+      try {
+        await fn(r);
+      } catch (e) {
+        const error = e instanceof Error ? e.message : String(e);
+        setPending((cur) => new Map(cur).set(keyOf(r), { label: action, error, since: Date.now() }));
+        setProgress((p) => p && { ...p, done: p.done + 1, failed: p.failed + 1 });
+        throw e;
+      }
+      setProgress((p) => p && { ...p, done: p.done + 1 });
+    });
+    // the switches let go once they show what was saved
+    await Promise.all([qc.invalidateQueries({ queryKey: ["node-choices"] }), qc.invalidateQueries({ queryKey: qk.nodes })]);
+    setPending((cur) => {
+      const next = new Map(cur);
+      for (const r of rows) if (!next.get(keyOf(r))?.error) next.delete(keyOf(r));
+      return next;
+    });
+    setProgress(null);
+    setOutcome({ action, results: results.map((x) => ({ ...x, item: x.item.name })) });
+  };
+  // a failure is shown a minute
+  useEffect(() => {
+    if (![...pending.values()].some((p) => p.error)) return;
+    const t = setTimeout(() => {
+      const cut = Date.now() - 60_000;
+      setPending((cur) => new Map([...cur].filter(([, p]) => !p.error || p.since > cut)));
+    }, 60_000);
+    return () => clearTimeout(t);
+  }, [pending]);
+  const setFlags = (rows: Ref[], action: string, flags: (r: Ref) => NodeFlags) =>
+    void run(action, rows, (r) => setReservable(r, flags(r).on, flags(r).required), flags);
+
+  // what can be done to a node, a selection: said once, offered by the ⋯
+  // menu, the right-click menu and the bulk bar alike
+  const choiceOf = useMemo(() => new Map((choices ?? []).map((c) => [keyOf(c), c])), [choices]);
+  const busy = (r: Ref) => {
+    const p = pending.get(keyOf(r));
+    return !!p && !p.error;
+  };
+  const open = (n: Ref) => setUrl({ node: keyOf(n) }, "push");
+  const rowActions = (n: NodeView): RowAction[] => {
+    const c = choiceOf.get(keyOf(n));
+    const flags: RowAction[] = !reservations
+      ? []
+      : c?.reservable
+        ? [
+            { label: "关闭可预约", disabled: busy(n), onSelect: () => setFlags([n], "关闭可预约", () => ({ on: false })) },
+            c.reservationRequired
+              ? { label: "关闭必须预约", disabled: busy(n), onSelect: () => setFlags([n], "关闭必须预约", () => ({ on: true, required: false })) }
+              : { label: "开启必须预约", disabled: busy(n), onSelect: () => setFlags([n], "开启必须预约", () => ({ on: true, required: true })) },
+          ]
+        : [
+            { label: "开启可预约", disabled: busy(n) || !c, onSelect: () => setFlags([n], "开启可预约", () => ({ on: true })) },
+            { label: "开启必须预约", title: "同时开启可预约", disabled: busy(n) || !c, onSelect: () => setFlags([n], "开启必须预约", () => ({ on: true, required: true })) },
+          ];
+    return [
+      { label: "查看详情", onSelect: () => open(n) },
+      { label: "在新标签页打开", onSelect: () => window.open(`/admin/nodes?node=${encodeURIComponent(keyOf(n))}`, "_blank", "noopener") },
+      { label: "复制名称", onSelect: () => void copyText(n.name) },
+      ...flags,
+    ];
+  };
+  const bulkActions = (picked: NodeView[], clear: () => void): RowAction[] => [
+    ...(reservations
+      ? [
+          { label: "开启可预约", onSelect: () => void run("开启可预约", picked, (r) => setReservable(r, true), () => ({ on: true })).then(clear) },
+          { label: "关闭可预约", onSelect: () => void run("关闭可预约", picked, (r) => setReservable(r, false), () => ({ on: false })).then(clear) },
+          {
+            label: "开启必须预约",
+            title: "同时开启可预约",
+            onSelect: () => void run("开启必须预约", picked, (r) => setReservable(r, true, true), () => ({ on: true, required: true })).then(clear),
+          },
+          {
+            label: "关闭必须预约",
+            onSelect: () => {
+              const on = (r: Ref) => !!choiceOf.get(keyOf(r))?.reservable;
+              void run("关闭必须预约", picked, (r) => setReservable(r, on(r), false), (r) => ({ on: on(r), required: false })).then(clear);
+            },
+          },
+        ]
+      : []),
+    { label: "复制名称", onSelect: () => void copyText(picked.map((n) => n.name).join("\n")) },
+  ];
+  // the ⋯ menu is in the (memoised) columns: it asks for what is current
+  const rowActionsNow = useRef(rowActions);
+  rowActionsNow.current = rowActions;
+  const openNow = useRef(open);
+  openNow.current = open;
+  const cols = useMemo(() => {
+    const cs = nodeColumns(
+      (n) => openNow.current(n),
+      (n) => <ActionMenu label={`${n.name} 操作`} actions={() => rowActionsNow.current(n)} />,
+    );
+    return several ? withCluster(cs, clusters) : cs;
+  }, [several, clusters]);
   const shown = useMemo(
     () =>
       items.filter(
@@ -339,17 +507,29 @@ export function NodesPage() {
       {q.isError ? (
         <EmptyState tone="error" title="无法加载节点" hint={String(q.error)} />
       ) : (
-        <DataTable<NodeView> fill
-          storageKey="nodes"
-          data={shown}
-          columns={cols}
-          getRowId={keyOf}
-          sorting={sorting}
-          onSortingChange={(s) => setUrl({ sort: s[0] ? `${s[0].desc ? "-" : ""}${s[0].id}` : "" })}
-          onRowClick={(n) => setUrl({ node: keyOf(n) }, "push")}
-          empty={<EmptyState title={q.isLoading ? "加载中…" : "没有符合条件的节点"} />}
-        />
+        <NodeOps.Provider value={{ pending, setFlags }}>
+          <DataTable<NodeView>
+            fill
+            storageKey="nodes"
+            data={shown}
+            columns={cols}
+            getRowId={keyOf}
+            sorting={sorting}
+            onSortingChange={(s) => setUrl({ sort: s[0] ? `${s[0].desc ? "-" : ""}${s[0].id}` : "" })}
+            selectable
+            empty={<EmptyState title={q.isLoading ? "加载中…" : "没有符合条件的节点"} />}
+            bulkBar={(picked, clear) =>
+              bulkActions(picked, clear).map((a) => (
+                <Button key={a.label} variant={a.danger ? "danger" : undefined} disabled={a.disabled} title={a.title} onClick={a.onSelect}>
+                  {a.label}
+                </Button>
+              ))
+            }
+            rowMenu={(picked, isBulk, clear) => (isBulk ? bulkActions(picked, clear) : rowActions(picked[0]))}
+          />
+        </NodeOps.Provider>
       )}
+      <BulkToast progress={progress} outcome={outcome} onClose={() => setOutcome(null)} />
       {url.node && (
         <Drawer open onOpenChange={(o) => !o && setUrl({ node: "" }, "back")} title={`节点 ${refOfKey(url.node).name}`} width={620}>
           <NodeDrawerBody r={refOfKey(url.node)} />

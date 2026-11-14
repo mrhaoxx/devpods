@@ -508,6 +508,20 @@ func (c *CH) listLog(ctx context.Context, dst any, cols, table, keyExpr string, 
 	return "", nil
 }
 
+// InsertReservationEvent records one change of a reservation.
+func (c *CH) InsertReservationEvent(ctx context.Context, r ReservationEventRow) error {
+	ctx = clickhouse.Context(ctx, clickhouse.WithSettings(clickhouse.Settings{"insert_deduplicate": 0}))
+	batch, err := c.conn.PrepareBatch(ctx, fmt.Sprintf("INSERT INTO %s.reservations (%s)", c.db, c.known(ctx, "reservations", columns[ReservationEventRow]())))
+	if err != nil {
+		return err
+	}
+	if err := batch.AppendStruct(&r); err != nil {
+		_ = batch.Abort()
+		return err
+	}
+	return batch.Send()
+}
+
 // InsertAccessLog records one access. Identical rows are all kept.
 func (c *CH) InsertAccessLog(ctx context.Context, r AccessLogRow) error {
 	ctx = clickhouse.Context(ctx, clickhouse.WithSettings(clickhouse.Settings{"insert_deduplicate": 0}))

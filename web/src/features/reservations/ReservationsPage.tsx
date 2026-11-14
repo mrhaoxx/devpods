@@ -111,6 +111,7 @@ function ReserveDialog({ draft, nodes, rules, blocks, now, onClose }: { draft: D
                     {several && n.cluster ? `${n.cluster} · ` : ""}
                     {n.name}
                     {n.gpuTotal > 0 ? ` · ${n.gpuModel ?? "GPU"} ×${n.gpuTotal}` : ""}
+                    {n.reservationRequired ? " · 必须预约" : ""}
                   </option>
                 ))}
               </Select>

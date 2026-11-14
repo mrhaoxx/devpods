@@ -44,7 +44,7 @@ func rsvRig(t *testing.T, prefix string) (*webui.Server, *webui.SessionManager, 
 		t.Cleanup(func() { _ = k8sClient.Delete(ctx, n) })
 	}
 	t.Cleanup(func() {
-		var list devpodv1alpha1.ReservationList
+		var list devpodv1alpha1.NodeReservationList
 		_ = k8sClient.List(ctx, &list)
 		for i := range list.Items {
 			_ = k8sClient.Delete(ctx, &list.Items[i])
@@ -151,7 +151,7 @@ func TestReservationRulesAndConflicts(t *testing.T) {
 		if won != 1 {
 			t.Fatalf("winners %d: %v", won, codes)
 		}
-		var list devpodv1alpha1.ReservationList
+		var list devpodv1alpha1.NodeReservationList
 		if err := s.Reader.List(context.Background(), &list); err != nil {
 			t.Fatal(err)
 		}
@@ -234,7 +234,7 @@ func TestReservationRulesAndConflicts(t *testing.T) {
 		a := mine(alice, slot)
 		del(bob, a.ID, http.StatusForbidden)
 		del(alice, a.Segments[1], http.StatusNoContent) // any segment names the block
-		var all devpodv1alpha1.ReservationList
+		var all devpodv1alpha1.NodeReservationList
 		if err := s.Reader.List(context.Background(), &all); err != nil {
 			t.Fatal(err)
 		}
@@ -396,10 +396,10 @@ func TestNodeChoiceRule(t *testing.T) {
 	set(root, `{"reservable":true}`, http.StatusOK)
 
 	// a conflict loser (created later, overlapping) holds nothing — the
-	// controller ignores it too — and one being deleted is gone
-	mk := func(name, user string, finalizer bool) *devpodv1alpha1.Reservation {
-		r := &devpodv1alpha1.Reservation{ObjectMeta: metav1.ObjectMeta{Name: name},
-			Spec: devpodv1alpha1.ReservationSpec{Node: node, User: user, Start: metav1.NewTime(slot), End: metav1.NewTime(slot.Add(time.Hour))}}
+	// console ignores it too — and one being deleted is gone
+	mk := func(name, user string, finalizer bool) *devpodv1alpha1.NodeReservation {
+		r := &devpodv1alpha1.NodeReservation{ObjectMeta: metav1.ObjectMeta{Name: name},
+			Spec: devpodv1alpha1.NodeReservationSpec{ReservationSpec: devpodv1alpha1.ReservationSpec{Node: node, User: user, Start: metav1.NewTime(slot), End: metav1.NewTime(slot.Add(time.Hour))}}}
 		if finalizer {
 			r.Finalizers = []string{"devpod.io/reservation"}
 		}
@@ -416,7 +416,7 @@ func TestNodeChoiceRule(t *testing.T) {
 	patch(bob, "nc-bob-dev1", pin, http.StatusConflict)
 	// alice releases; bob's loser still does not count... but once hers is
 	// being deleted (lingering on a finalizer) it is gone and the node is free
-	var all devpodv1alpha1.ReservationList
+	var all devpodv1alpha1.NodeReservationList
 	if err := s.Reader.List(ctx, &all); err != nil {
 		t.Fatal(err)
 	}
@@ -452,3 +452,142 @@ func client_key(name string) types.NamespacedName {
 }
 
 func client_key_cluster(name string) types.NamespacedName { return types.NamespacedName{Name: name} }
+
+// The console carries reservations out: while alice holds the node, bob's
+// DevPod there is hibernated; when her time is up, hers is.
+func TestEnforceReservations(t *testing.T) {
+	s, sm, _, node := rsvRig(t, "en")
+	alice, bob := forge(sm, "en-alice", false), forge(sm, "en-bob", false)
+	slot := time.Date(2026, 11, 12, 2, 0, 0, 0, time.UTC)
+	now := slot.Add(10 * time.Minute)
+	s.Reservations.Now = func() time.Time { return now }
+	ctx := context.Background()
+	pin := fmt.Sprintf(`{"node":%q}`, node)
+	for _, c := range []*http.Cookie{alice, bob} {
+		if rec := doJSON(t, s.HandleCreateDevPodForTest(), "POST", "/api/devpods", nil, c, createBody); rec.Code != http.StatusCreated {
+			t.Fatalf("create: %d %s", rec.Code, rec.Body)
+		}
+	}
+	for _, name := range []string{"en-alice-dev1", "en-bob-dev1"} {
+		waitDevPod(t, name)
+		if rec := doJSON(t, s.HandlePatchDevPodForTest(), "PATCH", "/api/devpods/"+name, map[string]string{"name": name}, map[bool]*http.Cookie{true: alice, false: bob}[strings.HasPrefix(name, "en-alice")], pin); rec.Code != http.StatusOK {
+			t.Fatalf("pin %s: %d %s", name, rec.Code, rec.Body)
+		}
+	}
+	if rec := doJSON(t, s.HandleCreateReservationForTest(), "POST", "/api/reservations", nil, alice, rsvBody(node, slot, slot.Add(time.Hour))); rec.Code != http.StatusCreated {
+		t.Fatalf("reserve: %d %s", rec.Code, rec.Body)
+	}
+	// rounds until the cache has caught up with the pins
+	until := func(name, by string) {
+		t.Helper()
+		deadline := time.Now().Add(10 * time.Second)
+		for {
+			s.EnforceReservations(ctx)
+			var dp devpodv1alpha1.DevPod
+			if err := s.Reader.Get(ctx, types.NamespacedName{Namespace: "devpods", Name: name}, &dp); err != nil {
+				t.Fatal(err)
+			}
+			if !dp.Spec.Running && strings.HasPrefix(dp.Annotations[devpodv1alpha1.HibernatedByAnnotation], by) {
+				return
+			}
+			if time.Now().After(deadline) {
+				t.Fatalf("%s: running %v, hibernated by %q", name, dp.Spec.Running, dp.Annotations[devpodv1alpha1.HibernatedByAnnotation])
+			}
+			time.Sleep(200 * time.Millisecond)
+		}
+	}
+	until("en-bob-dev1", "reservation/")
+	if dp := waitDevPod(t, "en-alice-dev1"); !dp.Spec.Running {
+		t.Fatal("the holder's own DevPod was hibernated while she holds the node")
+	}
+	now = slot.Add(time.Hour)
+	until("en-alice-dev1", "reservation-end/")
+	var list devpodv1alpha1.NodeReservationList
+	if err := s.Reader.List(ctx, &list); err != nil {
+		t.Fatal(err)
+	}
+	for _, r := range list.Items {
+		if r.Spec.Node == node && (r.Status.Phase != devpodv1alpha1.ReservationEnded || len(r.Status.ClearedDevPods) != 1 || len(r.Status.HibernatedAtEnd) != 1) {
+			t.Fatalf("status %+v", r.Status)
+		}
+	}
+}
+
+// A node that requires a reservation: only whoever holds it now may put a
+// DevPod there.
+func TestReservationRequired(t *testing.T) {
+	s, sm, _, node := rsvRig(t, "rq")
+	alice, bob, root := forge(sm, "rq-alice", false), forge(sm, "rq-bob", false), forge(sm, "rq-root", true)
+	slot := time.Date(2026, 11, 12, 2, 0, 0, 0, time.UTC)
+	for _, c := range []*http.Cookie{alice, bob} {
+		if rec := doJSON(t, s.HandleCreateDevPodForTest(), "POST", "/api/devpods", nil, c, createBody); rec.Code != http.StatusCreated {
+			t.Fatalf("create: %d %s", rec.Code, rec.Body)
+		}
+	}
+	waitDevPod(t, "rq-alice-dev1")
+	waitDevPod(t, "rq-bob-dev1")
+	// the node's labels reach the cached client a moment later: retried
+	patch := func(c *http.Cookie, name string, want int) string {
+		t.Helper()
+		deadline := time.Now().Add(10 * time.Second)
+		for {
+			rec := doJSON(t, s.HandlePatchDevPodForTest(), "PATCH", "/api/devpods/"+name, map[string]string{"name": name}, c, fmt.Sprintf(`{"node":%q}`, node))
+			if rec.Code == want {
+				var e struct{ Code string }
+				_ = json.Unmarshal(rec.Body.Bytes(), &e)
+				return e.Code
+			}
+			if time.Now().After(deadline) {
+				t.Fatalf("pin %s: %d (want %d) %s", name, rec.Code, want, rec.Body)
+			}
+			time.Sleep(100 * time.Millisecond)
+		}
+	}
+	set := func(body string) map[string]any {
+		t.Helper()
+		rec := doJSON(t, s.HandleSetReservableForTest(), "PUT", "/api/admin/nodes/"+node+"/reservable", map[string]string{"name": node}, root, body)
+		var out map[string]any
+		if rec.Code != http.StatusOK || json.Unmarshal(rec.Body.Bytes(), &out) != nil {
+			t.Fatalf("reservable %s: %d %s", body, rec.Code, rec.Body)
+		}
+		return out
+	}
+	choice := func(c *http.Cookie) map[string]any {
+		t.Helper()
+		var out struct{ Items []map[string]any }
+		rec := doJSON(t, s.HandleNodesForTest(), "GET", "/api/nodes", nil, c, "")
+		_ = json.Unmarshal(rec.Body.Bytes(), &out)
+		for _, n := range out.Items {
+			if n["name"] == node {
+				return n
+			}
+		}
+		t.Fatalf("node not listed: %s", rec.Body)
+		return nil
+	}
+
+	if out := set(`{"reservable":true,"required":true}`); out["required"] != true {
+		t.Fatalf("switch: %v", out)
+	}
+	if code := patch(bob, "rq-bob-dev1", http.StatusConflict); code != "RESERVATION_REQUIRED" {
+		t.Fatalf("code %q", code)
+	}
+	if n := choice(bob); n["selectable"] != false || n["reservationRequired"] != true {
+		t.Fatalf("bob sees %v", n)
+	}
+	// alice reserves it: hers may go there, bob's still may not
+	if rec := doJSON(t, s.HandleCreateReservationForTest(), "POST", "/api/reservations", nil, alice, rsvBody(node, slot, slot.Add(time.Hour))); rec.Code != http.StatusCreated {
+		t.Fatalf("reserve: %d %s", rec.Code, rec.Body)
+	}
+	patch(alice, "rq-alice-dev1", http.StatusOK)
+	if code := patch(bob, "rq-bob-dev1", http.StatusConflict); code != "NODE_RESERVED" {
+		t.Fatalf("code %q", code)
+	}
+	// left out, the requirement stays; off with the node's reservability
+	if out := set(`{"reservable":true}`); out["required"] != true {
+		t.Fatalf("switch: %v", out)
+	}
+	if out := set(`{"reservable":false}`); out["required"] != false {
+		t.Fatalf("switch: %v", out)
+	}
+}

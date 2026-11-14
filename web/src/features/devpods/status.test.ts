@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { phaseSummary, reservationNotes } from "./status";
-import type { DevPod } from "../../data/api";
+import type { DevPod, Reservation } from "../../data/api";
 
 const now = new Date("2026-11-10T12:00:00Z");
 const dp = (spec: Partial<DevPod["spec"]>, status: DevPod["status"]): DevPod => ({
@@ -31,16 +31,34 @@ describe("phaseSummary", () => {
 });
 
 describe("reservationNotes", () => {
-  const dp = (o: { running?: boolean; ann?: Record<string, string>; conditions?: { type: string; status: string; message?: string }[] }) =>
-    ({ metadata: { name: "a", annotations: o.ann }, spec: { owner: "u", running: o.running ?? true }, status: { conditions: o.conditions } }) as DevPod;
-  it("shows the controller's conditions, and says a NodeReserved DevPod starts by itself", () => {
-    const notes = reservationNotes(dp({ conditions: [{ type: "NodeReserved", status: "True", message: "g206 被 alice 预约至 17:00" }, { type: "ReservationEnding", status: "False" }] }));
-    expect(notes.map((n) => n.label)).toEqual(["节点被预约"]);
-    expect(notes[0].message).toBe("g206 被 alice 预约至 17:00。节点空出来后会自动启动，不需要操作。");
+  const at = Date.parse("2026-11-12T02:10:00Z"); // 10:10 Shanghai
+  const dp = (o: { running?: boolean; ann?: Record<string, string>; pin?: string; persistence?: boolean }) =>
+    ({
+      metadata: { name: "a", annotations: o.ann },
+      spec: { owner: "u", running: o.running ?? true, persistence: o.persistence ? { size: "10Gi" } : undefined, pod: o.pin ? { spec: { nodeSelector: { "kubernetes.io/hostname": o.pin } } } : undefined },
+    }) as DevPod;
+  const rsv = (user: string, start: string, end: string, phase: Reservation["phase"] = "Active"): Reservation =>
+    ({ id: user + start, segments: [], node: "g1", user, start, end, phase, mine: user === "u" }) as Reservation;
+  const rs = (...items: Reservation[]) => ({ items, noticeMs: 30 * 60_000, now: at });
+  const labels = (d: DevPod, where: { node?: string }, r?: ReturnType<typeof rs>) => reservationNotes(d, where, r).map((n) => n.label);
+
+  it("warns a DevPod on a node someone reserves soon, with the loss when it keeps nothing", () => {
+    const soon = rs(rsv("alice", "2026-11-12T02:30:00Z", "2026-11-12T04:00:00Z", "Upcoming"));
+    const n = reservationNotes(dp({}), { node: "g1" }, soon);
+    expect(n.map((x) => x.label)).toEqual(["即将清场"]);
+    expect(n[0].message).toBe("g1 将于 10:30 被 alice 预约，届时自动休眠；休眠后容器内数据丢失");
+    expect(labels(dp({ persistence: true }), { node: "g2" }, soon)).toEqual([]); // another node
+    expect(labels(dp({}), { node: "g1" }, rs(rsv("alice", "2026-11-12T03:00:00Z", "2026-11-12T04:00:00Z", "Upcoming")))).toEqual([]); // not yet
   });
-  it("被预约清场休眠 only while the DevPod is stopped", () => {
-    const ann = { "devpod.io/hibernated-by": "reservation/r1" };
-    expect(reservationNotes(dp({ running: false, ann })).map((n) => n.label)).toEqual(["被预约清场休眠"]);
-    expect(reservationNotes(dp({ running: true, ann }))).toEqual([]);
+  it("says a stopped DevPod pinned to a held node cannot start there, and the holder's hold is running out", () => {
+    expect(labels(dp({ running: false, pin: "g1" }), {}, rs(rsv("alice", "2026-11-12T02:00:00Z", "2026-11-12T04:00:00Z")))).toEqual(["节点被预约"]);
+    expect(labels(dp({}), { node: "g1" }, rs(rsv("u", "2026-11-12T02:00:00Z", "2026-11-12T02:30:00Z")))).toEqual(["预约将到期"]);
+    expect(labels(dp({}), { node: "g1" }, rs(rsv("u", "2026-11-12T02:00:00Z", "2026-11-12T04:00:00Z")))).toEqual([]);
+    expect(labels(dp({ running: false, pin: "g1" }), {}, rs(rsv("alice", "2026-11-12T02:00:00Z", "2026-11-12T04:00:00Z", "Cancelled")))).toEqual([]);
+  });
+  it("says why one was hibernated, only while it is stopped", () => {
+    expect(labels(dp({ running: false, ann: { "devpod.io/hibernated-by": "reservation/r1" } }), {})).toEqual(["被预约清场休眠"]);
+    expect(labels(dp({ running: false, ann: { "devpod.io/hibernated-by": "reservation-end/r1" } }), {})).toEqual(["预约结束休眠"]);
+    expect(labels(dp({ running: true, ann: { "devpod.io/hibernated-by": "reservation/r1" } }), {})).toEqual([]);
   });
 });

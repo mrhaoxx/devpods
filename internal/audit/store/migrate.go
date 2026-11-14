@@ -50,6 +50,7 @@ var ttlRules = map[string]ttlRule{
 	"raw_segments":         {"first_ts", "DAY", auditDays},
 	"alerts":               {"ts", "DAY", auditDays},
 	"access_log":           {"ts", "DAY", auditDays},
+	"reservations":         {"ts", "DAY", auditDays},
 	"http_requests":        {"ts", "DAY", auditDays},
 	"ssh_conns":            {"first_seen", "DAY", auditDays},
 	"processes":            {"first_seen", "DAY", auditDays},

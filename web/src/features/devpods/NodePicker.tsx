@@ -14,6 +14,7 @@ export function nodeLabel(n: NodeChoice): string {
   bits.push(`CPU ${fmtCores(n.cpu.allocated)}/${fmtCores(n.cpu.allocatable)}`, `内存 ${fmtBytes(n.mem.allocated)}/${fmtBytes(n.mem.allocatable)}`);
   if (!n.ready) bits.push("未就绪");
   if (n.held) bits.push(n.selectable ? `你的预约至 ${fmtTime(n.held.until)}` : `${n.held.user} 预约至 ${fmtTime(n.held.until)}`);
+  else if (n.reservationRequired) bits.push("需预约");
   return bits.join(" · ");
 }
 
@@ -21,6 +22,7 @@ export function nodeLabel(n: NodeChoice): string {
 export function nodeWarning(n: NodeChoice | undefined): string | null {
   if (!n) return null;
   if (!n.selectable && n.held) return `${n.name} 正被 ${n.held.user} 预约至 ${fmtTime(n.held.until)}，现在不能使用。`;
+  if (!n.selectable && n.reservationRequired) return `${n.name} 必须预约才能使用：先在「节点预约」里预约它，预约开始后再选。`;
   if (n.next) return `${n.name} 将于 ${fmtTime(n.next.start)} 被 ${n.next.user} 预约，届时这个 DevPod 会被自动休眠。`;
   if (!n.ready) return `${n.name} 目前未就绪，DevPod 会一直等待。`;
   return null;

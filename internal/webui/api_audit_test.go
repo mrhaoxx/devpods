@@ -90,6 +90,10 @@ func (f *fakeAuditStore) ListAccessLog(context.Context, store.TimeFilter) ([]sto
 	return nil, "", nil
 }
 
+func (f *fakeAuditStore) InsertReservationEvent(context.Context, store.ReservationEventRow) error {
+	return nil
+}
+
 func (f *fakeAuditStore) InsertAccessLog(_ context.Context, r store.AccessLogRow) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()

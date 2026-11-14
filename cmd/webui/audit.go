@@ -183,6 +183,14 @@ func (l *lazyCH) InsertAccessLog(ctx context.Context, r store.AccessLogRow) erro
 	return c.InsertAccessLog(ctx, r)
 }
 
+func (l *lazyCH) InsertReservationEvent(ctx context.Context, r store.ReservationEventRow) error {
+	c, err := l.get(ctx)
+	if err != nil {
+		return err
+	}
+	return c.InsertReservationEvent(ctx, r)
+}
+
 func (l *lazyCH) Presence(ctx context.Context, uids []string) (map[string][]string, error) {
 	c, err := l.get(ctx)
 	if err != nil {

@@ -12,8 +12,8 @@ import (
 	"github.com/mrhaoxx/devpod/internal/webui"
 )
 
-// reservationFlags: node reservations (reservation spec §3.1). The
-// controller takes the same rule flags.
+// reservationFlags: node reservations (reservation spec §3.1), which the
+// console keeps (NodeReservation, in its own cluster) and carries out.
 type reservationFlags struct {
 	enabled                                       bool
 	granularity, maxDuration, maxAdvance, clearBy time.Duration
@@ -21,11 +21,11 @@ type reservationFlags struct {
 
 func addReservationFlags(fs *flag.FlagSet) *reservationFlags {
 	f := &reservationFlags{}
-	fs.BoolVar(&f.enabled, "reservations", false, "enable node reservations (needs the Reservation CRD and the controller's reservation reconciler)")
+	fs.BoolVar(&f.enabled, "reservations", false, "enable node reservations (needs the NodeReservation CRD in the console's cluster; the console carries them out)")
 	fs.DurationVar(&f.granularity, "reservation-granularity", 30*time.Minute, "reservation starts and ends align to this")
 	fs.DurationVar(&f.maxDuration, "reservation-max-duration", 24*time.Hour, "longest single reservation; 0 = unlimited")
 	fs.DurationVar(&f.maxAdvance, "reservation-max-advance", 336*time.Hour, "how far ahead a reservation may start; 0 = unlimited")
-	fs.DurationVar(&f.clearBy, "reservation-clear-notice", 30*time.Minute, "how long before a start the node's other DevPods are warned")
+	fs.DurationVar(&f.clearBy, "reservation-clear-notice", 30*time.Minute, "how long before a start (or an end) the DevPods on the node are warned")
 	return f
 }
 

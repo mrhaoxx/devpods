@@ -238,6 +238,36 @@ describe("picking rows by clicking", () => {
   });
 });
 
+describe("picking rows by dragging", () => {
+  afterEach(() => vi.restoreAllMocks());
+  it("a press dragged from a row to another picks every row between; begun on a picked row, it lets go of them", () => {
+    render(<Harness />);
+    const at = (name: string) => screen.getByText(name);
+    // where the pointer is: the cell of the row it is over (jsdom has no layout)
+    let over = at("a");
+    document.elementFromPoint = () => over;
+    fireEvent.mouseDown(at("a"), { button: 0 });
+    over = at("c");
+    fireEvent.mouseMove(document, { clientX: 1, clientY: 1 });
+    fireEvent.mouseUp(document);
+    fireEvent.click(document.body); // the click that ends a drag picks nothing more
+    expect(screen.getByText("休眠 a,b,c")).toBeTruthy();
+
+    over = at("b");
+    fireEvent.mouseDown(at("b"), { button: 0 });
+    over = at("c");
+    fireEvent.mouseMove(document, { clientX: 1, clientY: 1 });
+    fireEvent.mouseUp(document);
+    expect(screen.getByText("休眠 a")).toBeTruthy();
+
+    // a press that stays on its row is a click
+    fireEvent.mouseDown(at("c"), { button: 0 });
+    fireEvent.mouseUp(document);
+    fireEvent.click(at("c"));
+    expect(screen.getByText("休眠 a,c")).toBeTruthy();
+  });
+});
+
 describe("a list page's table (fill)", () => {
   it("works out the rows in sight, and all of them while its height is unknown", () => {
     expect(rowWindow(1000, { top: 0, height: 0 }, 29, 29)).toEqual({ first: 0, last: 1000 });

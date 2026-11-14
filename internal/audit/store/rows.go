@@ -190,6 +190,22 @@ type AccessLogRow struct {
 	ClientIP      string    `ch:"client_ip" json:"client_ip"`
 }
 
+// ReservationEventRow is one change of a node reservation: made, changed
+// or acted on (event), with the reservation as it then was.
+type ReservationEventRow struct {
+	TS          time.Time `ch:"ts" json:"ts"`
+	Cluster     string    `ch:"cluster" json:"cluster,omitempty"`
+	ID          string    `ch:"id" json:"id"`
+	Node        string    `ch:"node" json:"node"`
+	User        string    `ch:"user" json:"user"`
+	Start       time.Time `ch:"start" json:"start"`
+	End         time.Time `ch:"end" json:"end"`
+	Extends     string    `ch:"extends" json:"extends,omitempty"`
+	CancelledBy string    `ch:"cancelled_by" json:"cancelled_by,omitempty"`
+	Event       string    `ch:"event" json:"event"`
+	Detail      string    `ch:"detail" json:"detail,omitempty"`
+}
+
 // Batch groups rows written together.
 type Batch struct {
 	Sessions     []SessionRow     `json:"sessions,omitempty"`

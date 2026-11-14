@@ -114,7 +114,7 @@ func clusterCache(devpodNamespace string) ([]client.Object, map[client.Object]ca
 	inNS := cache.ByObject{Namespaces: map[string]cache.Config{devpodNamespace: {}}}
 	warm := []client.Object{
 		&devpodv1alpha1.DevPod{}, &corev1.Pod{}, &devpodv1alpha1.DevPodSnapshot{}, // in the DevPod namespace
-		&corev1.Node{}, &devpodv1alpha1.Reservation{}, // cluster-scoped
+		&corev1.Node{}, // cluster-scoped
 	}
 	byObject := map[client.Object]cache.ByObject{
 		&devpodv1alpha1.DevPod{}: inNS, &corev1.Pod{}: inNS, &corev1.Event{}: inNS, &devpodv1alpha1.DevPodSnapshot{}: inNS,

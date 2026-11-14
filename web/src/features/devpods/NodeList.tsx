@@ -15,6 +15,7 @@ const usable = (n: NodeChoice) => n.selectable && n.ready;
 
 function state(n: NodeChoice): string | null {
   if (!n.selectable && n.held) return `${n.held.user} 预约至 ${fmtTime(n.held.until)}`;
+  if (!n.selectable && n.reservationRequired) return "需预约";
   if (!n.ready) return "未就绪";
   if (n.held) return `你的预约至 ${fmtTime(n.held.until)}`;
   if (n.next) return `${fmtTime(n.next.start)} 起被 ${n.next.user} 预约`;

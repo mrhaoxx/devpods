@@ -4,6 +4,7 @@
 import type { Cluster } from "../clusters/api";
 import { devpodHref, keyOf } from "../../data/cluster";
 import { createContext, useContext } from "react";
+import { Spinner } from "../../design/Spinner";
 import { Link } from "react-router-dom";
 import type { ColumnDef } from "@tanstack/react-table";
 import type { DevPod, LiveItem, Me, PodInfo, RecentFrame } from "../../data/api";
@@ -13,7 +14,7 @@ import { MetricCell } from "../../design/MetricCell";
 import { StatusDot, phaseLabel } from "../../design/StatusDot";
 import { Badge } from "../../design/Badge";
 import { fmtAge, fmtBytes, fmtCores, fmtRate, parseQuantity, gpuCount } from "../../lib/format";
-import { phaseSummary, reservationNotes } from "./status";
+import { phaseSummary, reservationNotes, type ReservationsNow } from "./status";
 import { sparkSeries } from "../../lib/spark";
 import { provenance } from "./provenance";
 import type { UsageKey } from "./usage";
@@ -57,7 +58,21 @@ export function toRow(dp: DevPod, pod?: PodInfo): Row {
 /** Pending: what is being done to a DevPod (label, e.g. 启动), or that it failed and why. */
 export type Pending = { label: string; error?: string };
 
-export const TableCtx = createContext<{ scope: "mine" | "all"; now: Date; recent?: RecentFrame; pending?: ReadonlyMap<string, Pending> }>({
+/** ReservationBadges: what node reservations mean for the row's DevPod. */
+function ReservationBadges({ r }: { r: Row }) {
+  const rs = useContext(TableCtx).reservations;
+  return (
+    <>
+      {reservationNotes(r.dp, { node: r.pod?.node, cluster: r.cluster }, rs).map((n) => (
+        <Badge key={n.type} tone={n.tone} title={n.message}>
+          {n.label}
+        </Badge>
+      ))}
+    </>
+  );
+}
+
+export const TableCtx = createContext<{ scope: "mine" | "all"; now: Date; recent?: RecentFrame; pending?: ReadonlyMap<string, Pending>; reservations?: ReservationsNow }>({
   scope: "mine",
   now: new Date(),
 });
@@ -74,7 +89,7 @@ function PhaseNote({ r }: { r: Row }) {
   if (p)
     return (
       <span className="inline-flex shrink-0 items-center gap-1 text-[11px] text-accent">
-        <span aria-hidden className="inline-block size-2.5 animate-spin rounded-full border border-current border-t-transparent" />
+        <Spinner />
         {p.label}中…
       </span>
     );
@@ -257,11 +272,7 @@ export function devpodColumns(opts: {
             {r.name}
           </Link>
           <PhaseNote r={r} />
-          {reservationNotes(r.dp).map((n) => (
-            <Badge key={n.type} tone={n.tone} title={n.message}>
-              {n.label}
-            </Badge>
-          ))}
+          <ReservationBadges r={r} />
         </span>
       ),
     },

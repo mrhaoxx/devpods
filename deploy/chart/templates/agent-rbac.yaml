@@ -67,8 +67,9 @@ rules:
 - apiGroups: [""]
   resources: ["pods"]
   verbs: ["get", "list", "watch"]
-# Read always (the console keeps them in its cache of this cluster);
-# changed only where reservations are on.
+# Read always (consoles before v0.9.25 kept them in their cache of this
+# cluster; reservations are the console's own now); changed only where
+# reservations are on.
 - apiGroups: ["devpod.io"]
   resources: ["reservations"]
   verbs: ["get", "list", "watch"]

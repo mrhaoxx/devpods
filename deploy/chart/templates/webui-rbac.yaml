@@ -61,10 +61,15 @@ rules:
   verbs: ["get", "list", "watch"]
 {{- if dig "enabled" false (.Values.reservation | default dict) }}
 # Node reservations: users reserve through the webui; the 可预约 switch
-# patches the node's devpod.io/reservable label.
+# patches the node's devpod.io/reservable label. The console keeps them
+# (NodeReservation, in its own cluster) and carries them out itself;
+# reservations (in a cluster) are what a console of before kept.
 - apiGroups: ["devpod.io"]
   resources: ["reservations"]
   verbs: ["get", "list", "watch", "create", "update", "delete"]
+- apiGroups: ["devpod.io"]
+  resources: ["nodereservations", "nodereservations/status"]
+  verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
 - apiGroups: [""]
   resources: ["nodes"]
   verbs: ["patch"]
@@ -96,10 +101,11 @@ metadata:
 roleRef: {apiGroup: rbac.authorization.k8s.io, kind: ClusterRole, name: devpod-webui}
 subjects:
 - {kind: ServiceAccount, name: devpod-webui, namespace: {{ .Values.namespaces.system }}}
-{{- if include "devpod.telemetry.on" $ }}
+{{- if or (include "devpod.telemetry.on" $) (dig "enabled" false ($.Values.reservation | default dict)) }}
 ---
-# Telemetry leader election, and the ingest EndpointSlice the leader
-# points at itself.
+# Leader election (telemetry's, and the replica that carries the
+# reservations out), and the ingest EndpointSlice the leader points at
+# itself.
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
 metadata:

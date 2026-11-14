@@ -4,7 +4,6 @@ import { useClusterFilter } from "../../data/clusterFilter";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import { useQueryClient } from "@tanstack/react-query";
-import * as Menu from "@radix-ui/react-dropdown-menu";
 import type { SortingState } from "@tanstack/react-table";
 import { devpodHref, keyOf } from "../../data/cluster";
 import { deleteDevPod, podKey, patchDevPod, patchDevPodSpec, rebuildFromConfig, redeployDevPod, sshCommand, type LiveItem, shellPath } from "../../data/api";
@@ -12,19 +11,22 @@ import { useDevPods, useMe, useRecent } from "../../data/queries";
 import { devpodsStream } from "../../data/live/streams";
 import { useLiveEnabled, useLiveRow, useLiveValues } from "../../data/live/hooks";
 import { DataTable, type RowAction } from "../../design/DataTable";
+import { ActionMenu } from "../../design/ActionMenu";
+import { BulkToast, type BulkOutcome, type BulkProgress } from "../../design/BulkToast";
 import { Chip } from "../../design/Chip";
 import { Button } from "../../design/Button";
-import { Input, Notice } from "../../design/Form";
+import { Input } from "../../design/Form";
 import { ConfirmDialog } from "../../design/ConfirmDialog";
 import { EmptyState } from "../../design/EmptyState";
 import { copyText } from "../../design/Copy";
 import { matchesFilter, parseFilter } from "../../lib/filter";
 import { useUrlState, type Schema } from "../../lib/urlState";
-import { runBulk, type BulkResult } from "../../lib/bulk";
+import { runBulk } from "../../lib/bulk";
 import { BulkDialog, type BulkKind } from "./BulkDialog";
 import { useNow } from "../../lib/useNow";
 import { useDebounced } from "../../lib/useDebounced";
 import { TableCtx, devpodColumns, toRow, type Pending, type Row } from "./columns";
+import { useReservationsNow } from "../reservations/useReservationsNow";
 import { groupRows } from "./groups";
 import { groupUsage, usage, usageKeys, type UsageKey } from "./usage";
 
@@ -43,7 +45,6 @@ const schema = {
 const toSorting = (s: string): SortingState => (s ? [{ id: s.replace(/^-/, ""), desc: s.startsWith("-") }] : []);
 const fromSorting = (s: SortingState) => (s[0] ? `${s[0].desc ? "-" : ""}${s[0].id}` : "");
 
-type Outcome = { action: string; results: BulkResult<string>[] };
 // what a DevPod is being brought to: shown as pending until it gets there
 // (or fails, or two minutes pass); a failure stays a minute
 type Want = "Running" | "Stopped" | "gone";
@@ -51,35 +52,6 @@ type PendingEntry = Pending & { want?: Want; since: number };
 const START = { label: "启动", want: "Running" as const };
 const STOP = { label: "休眠", want: "Stopped" as const };
 const DELETE = { label: "删除", want: "gone" as const };
-
-/** ActionMenu: a row's ⋯ — the same actions its right-click menu offers,
- *  worked out when it opens. */
-function ActionMenu({ label, actions }: { label: string; actions: () => RowAction[] }) {
-  return (
-    <Menu.Root>
-      <Menu.Trigger aria-label={label} className="rounded px-1.5 text-muted hover:bg-sunk hover:text-ink">
-        ⋯
-      </Menu.Trigger>
-      <Menu.Portal>
-        <Menu.Content align="end" className="z-50 min-w-36 rounded-md border border-line bg-surface p-1 text-xs shadow-lg">
-          {actions().map((a) => (
-            <Menu.Item
-              key={a.label}
-              disabled={a.disabled}
-              title={a.title}
-              onSelect={a.onSelect}
-              className={`cursor-pointer rounded px-2 py-1 outline-none data-[disabled]:cursor-default data-[disabled]:opacity-50 ${
-                a.danger ? "text-fail data-[highlighted]:bg-fail-soft" : "data-[highlighted]:bg-sunk"
-              }`}
-            >
-              {a.label}
-            </Menu.Item>
-          ))}
-        </Menu.Content>
-      </Menu.Portal>
-    </Menu.Root>
-  );
-}
 
 const running = (r: Row) => r.phase === "Running";
 
@@ -116,6 +88,7 @@ export function DevPodTable({ scope }: { scope: "mine" | "all" }) {
   const spec = devpodsStream(scope);
   const { status } = useLiveRow(spec, "");
   const recent = useRecent({ scope }, useLiveEnabled());
+  const reservations = useReservationsNow();
   const [confirm, setConfirm] = useState<{ rows: Row[]; bulk: boolean } | null>(null);
   const [rebuildAsk, setRebuildAsk] = useState<Row | null>(null);
   const [open, setOpen] = useState<ReadonlySet<string>>(() => new Set(url.group ? [url.group] : []));
@@ -125,8 +98,8 @@ export function DevPodTable({ scope }: { scope: "mine" | "all" }) {
       if (!next.delete(id)) next.add(id);
       return next;
     });
-  const [outcome, setOutcome] = useState<Outcome | null>(null);
-  const [progress, setProgress] = useState<{ action: string; done: number; failed: number; total: number } | null>(null);
+  const [outcome, setOutcome] = useState<BulkOutcome | null>(null);
+  const [progress, setProgress] = useState<BulkProgress | null>(null);
   const [pending, setPending] = useState<ReadonlyMap<string, PendingEntry>>(() => new Map());
   const [dialog, setDialog] = useState<{ kind: BulkKind; rows: Row[]; clear: () => void } | null>(null);
 
@@ -263,16 +236,8 @@ export function DevPodTable({ scope }: { scope: "mine" | "all" }) {
     [admin, me, open, used, several, clusters],
   );
 
-  const failed = outcome?.results.filter((r) => !r.ok) ?? [];
-  // a success says so for a few seconds; a failure stays until closed
-  const allOk = !!outcome && failed.length === 0;
-  useEffect(() => {
-    if (!allOk) return;
-    const t = setTimeout(() => setOutcome(null), 5000);
-    return () => clearTimeout(t);
-  }, [allOk, outcome]);
   return (
-    <TableCtx.Provider value={{ scope, now, recent: recent.data, pending }}>
+    <TableCtx.Provider value={{ scope, now, recent: recent.data, pending, reservations }}>
       <div className="flex h-full min-h-0 flex-col">
         <div className="flex flex-wrap items-center gap-2 border-b border-line px-3 py-2">
           <FilterBox value={url.q} onChange={(q) => setUrl({ q })} />
@@ -303,31 +268,7 @@ export function DevPodTable({ scope }: { scope: "mine" | "all" }) {
             </Link>
           )}
         </div>
-        {/* what an action is doing and how it ended: over the window's corner, moving nothing */}
-        {(progress || outcome) && (
-          <div className="pointer-events-none fixed right-4 bottom-16 z-40 flex max-w-[min(32rem,calc(100vw-2rem))] flex-col gap-2">
-            {progress && (
-              <div role="status" className="pointer-events-auto rounded-lg border border-line bg-surface p-1 shadow-lg">
-                <Notice tone="idle">
-                  {progress.action}：进行中 {progress.done}/{progress.total}…{progress.failed > 0 && `（失败 ${progress.failed}）`}
-                </Notice>
-              </div>
-            )}
-            {outcome && (
-              <div role="status" className="pointer-events-auto flex items-start gap-2 rounded-lg border border-line bg-surface p-1 shadow-lg">
-                <div className="max-h-60 flex-1 overflow-y-auto">
-                  <Notice tone={failed.length ? "warm" : "run"}>
-                    {outcome.action}：成功 {outcome.results.length - failed.length}，失败 {failed.length}
-                    {failed.length > 0 && <>（{failed.map((f) => `${f.item}：${f.error}`).join("；")}）</>}
-                  </Notice>
-                </div>
-                <button type="button" onClick={() => setOutcome(null)} className="px-1 text-xs text-muted hover:text-ink" aria-label="关闭结果">
-                  ✕
-                </button>
-              </div>
-            )}
-          </div>
-        )}
+        <BulkToast progress={progress} outcome={outcome} onClose={() => setOutcome(null)} />
         {list.isError ? (
           <EmptyState tone="error" title="无法加载 DevPod 列表" hint={String(list.error)} />
         ) : (

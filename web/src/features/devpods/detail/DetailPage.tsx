@@ -6,6 +6,7 @@ import { Provenance } from "./Provenance";
 import { preloadYamlEditor } from "../../../design/yaml/YamlEditor";
 import { Notice } from "../../../design/Form";
 import { reservationNotes } from "../status";
+import { useReservationsNow } from "../../reservations/useReservationsNow";
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import { useQueryClient } from "@tanstack/react-query";
@@ -142,6 +143,7 @@ export function DetailPage() {
     refetchInterval: 10_000,
   });
 
+  const reservations = useReservationsNow();
   const d = detail ?? q.data ?? null;
   const notFound = q.error instanceof ApiFailure && q.error.status === 404;
   if (deleted || (notFound && !detail)) {
@@ -187,7 +189,7 @@ export function DetailPage() {
 
   return (
     <div className="space-y-3 p-3">
-      {reservationNotes(dp).map((n) => (
+      {reservationNotes(dp, { node: d.pod?.node, cluster }, reservations).map((n) => (
         <Notice key={n.type} tone={n.tone}>
           <span className="font-medium">{n.label}</span>
           {n.message && `：${n.message}`}

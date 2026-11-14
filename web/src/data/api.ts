@@ -535,6 +535,8 @@ export type NodeChoice = {
   gpuTotal: number;
   gpuUsed: number;
   reservable: boolean;
+  /** only whoever holds it now may put DevPods here */
+  reservationRequired?: boolean;
   pending: number;
   held: { user: string; until: string } | null;
   next: { user: string; start: string } | null;
@@ -566,7 +568,8 @@ export const previewReservation = (cluster: string | undefined, p: Period) => re
 export const createReservation = (cluster: string | undefined, p: Period) => req<Reservation>("POST", apiIn(cluster, "/api/reservations"), p);
 export const patchReservation = (r: ResRef, body: { start?: string; end?: string }) => req<Reservation>("PATCH", apiIn(r.cluster, `/api/reservations/${r.id}`), body);
 export const deleteReservation = (r: ResRef) => req<void>("DELETE", apiIn(r.cluster, `/api/reservations/${r.id}`));
-export const setReservable = (r: Ref, reservable: boolean) => req<{ reservable: boolean; pending: number }>("PUT", apiIn(r.cluster, `/api/admin/nodes/${r.name}/reservable`), { reservable });
+export const setReservable = (r: Ref, reservable: boolean, required?: boolean) =>
+  req<{ reservable: boolean; required: boolean; pending: number }>("PUT", apiIn(r.cluster, `/api/admin/nodes/${r.name}/reservable`), { reservable, required });
 
 /* api_snapshots.go: saving a DevPod as an image (snapshot spec v2) */
 export type SnapshotView = {

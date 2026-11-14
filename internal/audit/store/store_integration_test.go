@@ -58,7 +58,7 @@ func openTestCH(t *testing.T, db string) *CH {
 	return c
 }
 
-var auditTables = []string{"sessions", "channels", "commands", "file_events", "policy_events", "raw_segments", "alerts", "access_log", "http_requests"}
+var auditTables = []string{"sessions", "channels", "commands", "file_events", "policy_events", "raw_segments", "alerts", "access_log", "reservations", "http_requests"}
 
 func TestMigrate_Idempotent(t *testing.T) {
 	ctx := context.Background()
@@ -83,6 +83,27 @@ func TestMigrate_Idempotent(t *testing.T) {
 	var n uint64
 	if err := c.conn.QueryRow(ctx, "SELECT count() FROM audit_migrate.schema_migrations").Scan(&n); err != nil || n != uint64(len(files)) {
 		t.Fatalf("schema_migrations rows = %d for %d migrations (%v); a migration ran twice", n, len(files), err)
+	}
+}
+
+// A reservation's history: every change is a row of its own.
+func TestReservationEvents(t *testing.T) {
+	ctx := context.Background()
+	c := openTestCH(t, "audit_rsv")
+	if err := Migrate(ctx, c, DefaultRetention(180)); err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().UTC().Truncate(time.Millisecond)
+	row := ReservationEventRow{TS: now, Cluster: "st", ID: "g1-alice-abc", Node: "g1", User: "alice", Start: now, End: now.Add(time.Hour), Event: "created"}
+	for _, ev := range []string{"created", "created", "hibernated"} {
+		row.Event = ev
+		if err := c.InsertReservationEvent(ctx, row); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var n uint64
+	if err := c.conn.QueryRow(ctx, "SELECT count() FROM audit_rsv.reservations WHERE id = ?", row.ID).Scan(&n); err != nil || n != 3 {
+		t.Fatalf("rows = %d (%v); want 3, identical ones too", n, err)
 	}
 }
 
