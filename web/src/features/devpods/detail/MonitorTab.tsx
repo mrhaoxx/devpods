@@ -8,7 +8,6 @@ import { useMetrics } from "../../../data/queries";
 import { TimeSeriesChart, type ChartSeries } from "../../../design/TimeSeriesChart";
 import { Panel } from "../../../design/Panel";
 import { EmptyState } from "../../../design/EmptyState";
-import { Select } from "../../../design/Form";
 import { useUrlState, type Schema } from "../../../lib/urlState";
 import { fmtBytes, fmtCores, fmtRate } from "../../../lib/format";
 import { activeRDMA, chartsFromLive, chartsFromSeries, lastLimit, mergeLive, type ChartSet } from "./monitor";
@@ -55,7 +54,6 @@ const gpuMetric: Record<GpuMetric, [string, (v: number) => string]> = {
 };
 
 function Charts({ c, live, range }: { c: ChartSet; live: boolean; /** a new one ends a zoom */ range: string }) {
-  const [gm, setGm] = useState<GpuMetric>("util");
   const [splitTcp, setSplitTcp] = useState(false);
   const [rdmaHealth, setRdmaHealth] = useState(false);
   const gpus = Object.entries(c.gpu);
@@ -103,33 +101,20 @@ function Charts({ c, live, range }: { c: ChartSet; live: boolean; /** a new one 
           />
         </div>
       </Panel>
-      <Panel
-        title="GPU"
-        actions={
-          gpus.length > 0 && (
-            <Select aria-label="GPU 指标" value={gm} onChange={(e) => setGm(e.target.value as GpuMetric)} className="!h-6 !w-24 text-xs">
-              {Object.entries(gpuMetric).map(([k, [l]]) => (
-                <option key={k} value={k}>
-                  {l}
-                </option>
-              ))}
-            </Select>
-          )
-        }
-      >
-        {gpus.length ? (
-          <div className="p-2">
-            <TimeSeriesChart
-            zoomKey={range}
-              ts={c.ts}
-              series={gpus.map(([uuid, g], i) => ({ label: g.name ? `${g.name} ${uuid.slice(-6)}` : uuid.slice(-12), values: g[gm], color: palette[i % palette.length] }))}
-              yFormat={gpuMetric[gm][1]}
-            />
-          </div>
-        ) : (
-          <EmptyState title="没有 GPU" />
-        )}
-      </Panel>
+      {/* one chart per GPU metric, each card a line; none without GPUs */}
+      {gpus.length > 0 &&
+        (Object.entries(gpuMetric) as [GpuMetric, [string, (v: number) => string]][]).map(([m, [label, fmt]]) => (
+          <Panel key={m} title={`GPU ${label}`}>
+            <div className="p-2">
+              <TimeSeriesChart
+                zoomKey={range}
+                ts={c.ts}
+                series={gpus.map(([uuid, g], i) => ({ label: g.name ? `${g.name} ${uuid.slice(-6)}` : uuid.slice(-12), values: g[m], color: palette[i % palette.length] }))}
+                yFormat={fmt}
+              />
+            </div>
+          </Panel>
+        ))}
       <Panel
         title="网络"
         actions={
