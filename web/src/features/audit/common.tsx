@@ -82,6 +82,20 @@ export function LoadMore({ hasMore, busy, onClick }: { hasMore?: boolean; busy?:
 
 export const fmtTS = (iso: string) => new Date(iso).toLocaleString();
 
+/** KeyName: the key a session signed in with — its name among the user's
+ *  keys when it is still one of them, else its fingerprint, shortened
+ *  (the whole of it on hover). Through a trusted proxy (the web
+ *  terminal) it is the proxy's key. */
+export function KeyName({ fp, name, proxy }: { fp?: string; name?: string; proxy?: string }) {
+  if (!fp) return <span className="text-faint">—</span>;
+  const short = fp.replace(/^SHA256:/, "").slice(0, 10) + "…";
+  return (
+    <span title={`${fp}${proxy ? `（${proxy} 的密钥）` : name ? "" : "（不在该用户现在的公钥里）"}`}>
+      {name ? <span className="mono">{name}</span> : <span className="mono text-muted">{short}</span>}
+    </span>
+  );
+}
+
 /** confirmDownload: every audited download says it is logged first. */
 export function confirmDownload(e: React.MouseEvent | MouseEvent) {
   if (!window.confirm("此操作将被记录")) e.preventDefault();

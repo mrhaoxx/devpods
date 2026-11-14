@@ -17,7 +17,7 @@ import { ConfirmDialog } from "../../design/ConfirmDialog";
 import { EmptyState } from "../../design/EmptyState";
 import { Panel } from "../../design/Panel";
 import { SessionPlayer, type Marker } from "./SessionPlayer";
-import { AuditError, confirmDownload, fmtTS } from "./common";
+import { AuditError, confirmDownload, fmtTS, KeyName } from "./common";
 import { channelLabel, plainOutput, replayable } from "./replay";
 
 const kindTone: Record<TimelineItem["kind"], string> = {
@@ -140,6 +140,9 @@ export function SessionPage() {
         <span>
           来源 <span className="mono text-ink">{s.client_ip}</span> · {s.proxy_alias ? `${s.proxy_alias}/` : ""}
           {s.auth_kind}
+        </span>
+        <span>
+          公钥 <KeyName fp={s.pubkey_fp} name={q.data.pubkey_name} proxy={s.proxy_alias} />
         </span>
         <span>开始 {fmtTS(s.opened_at)}</span>
         <span>

@@ -265,7 +265,16 @@ export type SessionRow = {
   gaps: number;
 };
 /** cluster, gateway: of a session through a gateway of several clusters */
-export type SessionSummary = SessionRow & { commands: number; files: number; policy_hits: number; alerts: number; cluster?: string; gateway?: string };
+export type SessionSummary = SessionRow & {
+  commands: number;
+  files: number;
+  policy_hits: number;
+  alerts: number;
+  cluster?: string;
+  gateway?: string;
+  /** the comment of the user's key with the session's fingerprint, as the user's keys are now */
+  pubkey_name?: string;
+};
 export type ChannelRow = {
   session_id: string;
   channel_id: number;
@@ -346,6 +355,8 @@ export type AlertRow = { cluster?: string; ts: string; devpod_uid: string; sessi
 export type AccessLogRow = { ts: string; viewer: string; action: string; target_session: string; target_file: string; client_ip: string };
 export type SessionDetail = {
   session: SessionRow;
+  /** the comment of the user's key with the session's fingerprint, as the user's keys are now */
+  pubkey_name?: string;
   cluster?: string;
   gateway?: string;
   channels: ChannelRow[] | null;

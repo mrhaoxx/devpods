@@ -14,7 +14,7 @@ import { EmptyState } from "../../design/EmptyState";
 import { useUrlState, type Schema } from "../../lib/urlState";
 import { fmtDuration } from "../../lib/format";
 import { useNow } from "../../lib/useNow";
-import { AuditError, FilterBox, LoadMore, RangePicker, fmtTS, fromTo, usePaged } from "./common";
+import { AuditError, FilterBox, LoadMore, RangePicker, fmtTS, fromTo, usePaged, KeyName } from "./common";
 
 const schema = {
   range: { kind: "string", default: "7d" },
@@ -61,6 +61,13 @@ export function SessionsPage({ mine }: { mine?: boolean }) {
       accessorKey: "client_ip",
       meta: { priority: 5, width: 170, mono: true },
       cell: ({ row: { original: s } }) => `${s.client_ip} · ${s.proxy_alias ? `${s.proxy_alias}/` : ""}${s.auth_kind}`,
+    },
+    {
+      id: "key",
+      header: "公钥",
+      accessorFn: (s) => s.pubkey_name || s.pubkey_fp,
+      meta: { priority: 5, width: 150 },
+      cell: ({ row: { original: s } }) => <KeyName fp={s.pubkey_fp} name={s.pubkey_name} proxy={s.proxy_alias} />,
     },
     { id: "start", header: "开始", accessorKey: "opened_at", meta: { priority: 3, width: 150 }, cell: ({ getValue }) => fmtTS(String(getValue())) },
     {

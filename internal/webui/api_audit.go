@@ -191,7 +191,7 @@ func (s *Server) handleAuditSessions(w http.ResponseWriter, r *http.Request) {
 	if items == nil {
 		items = []store.SessionSummary{}
 	}
-	s.writeJSON(w, http.StatusOK, page[store.SessionSummary]{Items: items, Next: next})
+	s.writeJSON(w, http.StatusOK, page[sessionItem]{Items: s.namedSessions(r.Context(), items), Next: next})
 }
 
 // visibleSession loads a session the caller may see; non-admins get 404
@@ -221,7 +221,7 @@ func (s *Server) handleAuditSession(w http.ResponseWriter, r *http.Request) {
 	if d.Session.User != sess.User && !s.logAccess(w, r, sess.User, "view_session", d.Session.SessionID, "") {
 		return
 	}
-	s.writeJSON(w, http.StatusOK, d)
+	s.writeJSON(w, http.StatusOK, sessionDetailView{SessionDetail: d, PubkeyName: s.keyNames(r.Context(), []string{d.Session.User})[d.Session.User][d.Session.PubkeyFP]})
 }
 
 // segmentIterator walks a session's raw segments in order.
