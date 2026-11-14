@@ -59,7 +59,7 @@ export function ContainerTab({ r, ports = false }: { r: Ref; /** the 端口 tab 
     const i = info.data.info;
     const snap = info.data.snapshot;
     inside = (
-      <div className="grid gap-3 lg:grid-cols-2">
+      <div className="grid grid-cols-1 gap-3 lg:grid-cols-2 [&>*]:min-w-0">
         <Panel title="系统">
           <KV
             rows={[
@@ -114,7 +114,7 @@ export function ContainerTab({ r, ports = false }: { r: Ref; /** the 端口 tab 
       {inside}
       {kore}
       {(storage || (p && p.volumes.length > 0)) && (
-        <div className="grid gap-3 lg:grid-cols-2">
+        <div className="grid grid-cols-1 gap-3 lg:grid-cols-2 [&>*]:min-w-0">
           {storage}
           {p && <PodVolumes pod={p} />}
         </div>

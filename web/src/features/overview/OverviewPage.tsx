@@ -186,7 +186,7 @@ export function OverviewPage() {
       <Panel title="节点">
         <HeatStrip nodes={nodes.row?.value ?? []} />
       </Panel>
-      <div className="grid gap-3 lg:grid-cols-2">
+      <div className="grid grid-cols-1 gap-3 lg:grid-cols-2 [&>*]:min-w-0">
         <Panel title="需要处理">
           <Attention items={attention.row?.value ?? []} />
         </Panel>

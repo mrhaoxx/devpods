@@ -257,7 +257,7 @@ export function DetailPage() {
       </div>
 
       {tab === "overview" && (
-        <div className="grid gap-3 lg:grid-cols-2">
+        <div className="grid grid-cols-1 gap-3 lg:grid-cols-2 [&>*]:min-w-0">
           <Panel title="SSH">
             <div className="space-y-2 p-3">
               <CopyField value={ssh} />
