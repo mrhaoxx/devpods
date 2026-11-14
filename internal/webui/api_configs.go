@@ -178,8 +178,12 @@ func (s *Server) handleListConfigs(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	scope := r.URL.Query().Get("scope")
-	if scope != "" && scope != "mine" && scope != "shared" && scope != "public" && scope != "official" {
-		s.writeServerErr(w, badRequest("scope is mine, shared, public or official"))
+	if scope != "" && scope != "mine" && scope != "shared" && scope != "public" && scope != "official" && scope != "everyone" {
+		s.writeServerErr(w, badRequest("scope is mine, shared, public, official or everyone"))
+		return
+	}
+	if scope == "everyone" && !sess.Admin { // every user's configs, private ones too
+		s.writeErr(w, http.StatusForbidden, "FORBIDDEN", "only admins see everyone's configs", nil)
 		return
 	}
 	var list devpodv1alpha1.DevPodConfigList
@@ -202,6 +206,8 @@ func (s *Server) handleListConfigs(w http.ResponseWriter, r *http.Request) {
 			in = c.Spec.Public
 		case "official":
 			in = isOfficial(c) && (mine || shared || c.Spec.Public)
+		case "everyone":
+			in = true
 		default:
 			in = mine || shared || c.Spec.Public
 		}

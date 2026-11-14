@@ -40,7 +40,7 @@ export interface ConfigSummary {
 export interface Config extends ConfigSummary {
   content: string;
 }
-export type ConfigScope = "mine" | "shared" | "public" | "official";
+export type ConfigScope = "mine" | "shared" | "public" | "official" | "everyone";
 export type ConfigCreate = {
   id: string;
   title: string;

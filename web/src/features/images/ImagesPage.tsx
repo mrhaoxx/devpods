@@ -31,11 +31,12 @@ function CopyRef({ image }: { image: string }) {
   );
 }
 
-export function ImagesPage() {
+/** everyone: the admins' page — every user's snapshots, with their owner. */
+export function ImagesPage({ everyone }: { everyone?: boolean }) {
   const me = useMe().data;
   const qc = useQueryClient();
-  const [all, setAll] = useState(false);
-  const q = useSnapshots({ all: all && !!me?.admin });
+  const all = !!everyone && !!me?.admin;
+  const q = useSnapshots({ all });
   const [follow, setFollow] = useState<SnapshotView | null>(null);
   const [forget, setForget] = useState<SnapshotView | null>(null);
   const del = useMutation({ mutationFn: (s: SnapshotView) => deleteSnapshot(s), onSettled: () => void qc.invalidateQueries({ queryKey: ["snapshots"] }) });
@@ -46,17 +47,7 @@ export function ImagesPage() {
 
   return (
     <div className="space-y-3 p-3">
-      <Panel
-        title="我的镜像"
-        actions={
-          me?.admin && (
-            <label className="flex items-center gap-1.5 text-[11px] text-muted">
-              <input type="checkbox" checked={all} onChange={(e) => setAll(e.target.checked)} />
-              全部用户
-            </label>
-          )
-        }
-      >
+      <Panel title={all ? "全部镜像（所有用户的快照）" : "我的镜像"}>
         {retry.isError && (
           <p role="alert" className="border-b border-line bg-fail-soft px-3 py-1.5 text-xs text-fail">
             重试失败：{retry.error instanceof ApiFailure ? retry.error.body.message : String(retry.error)}

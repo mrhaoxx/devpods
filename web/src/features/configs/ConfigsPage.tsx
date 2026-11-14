@@ -28,20 +28,23 @@ import {
 } from "./api";
 
 export const configsKey = (scope: ConfigScope) => ["configs", scope] as const;
-const useConfigs = (scope: ConfigScope) =>
+const useConfigs = (scope: ConfigScope, enabled = true) =>
   useQuery({
     queryKey: configsKey(scope),
     queryFn: () => listConfigs(scope),
     retry: false,
+    enabled,
   });
 
-type Scope = "all" | "official" | "mine" | "shared" | "public";
+type Scope = "all" | "official" | "mine" | "shared" | "public" | "everyone";
 const SCOPES: [Scope, string, string][] = [
   ["all", "全部", "没有符合的配置。"],
   ["official", "官方", "还没有官方配置。"],
   ["mine", "我的", "你还没有保存过配置。"],
   ["shared", "分享给我的", "没有人单独分享配置给你。"],
   ["public", "公开", "没有公开的配置。"],
+  // admins: every user's, private ones too
+  ["everyone", "所有用户的", "还没有人保存过配置。"],
 ];
 const schema = {
   scope: { kind: "string", default: "all" },
@@ -130,7 +133,8 @@ function RowMenu({
   );
 }
 
-export function ConfigsPage() {
+/** everyone: the admins' page — every user's configs, private ones too. */
+export function ConfigsPage({ everyone }: { everyone?: boolean }) {
   const me = useMe().data;
   const admin = !!me?.admin;
   const nav = useNavigate();
@@ -141,6 +145,7 @@ export function ConfigsPage() {
     mine: useConfigs("mine"),
     shared: useConfigs("shared"),
     public: useConfigs("public"),
+    everyone: useConfigs("everyone", !!everyone && admin),
   };
   const [forget, setForget] = useState<ConfigSummary | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -182,6 +187,7 @@ export function ConfigsPage() {
     mine: lists.mine.data?.items,
     shared: lists.shared.data?.items,
     public: lists.public.data?.items,
+    everyone: lists.everyone.data?.items,
   };
   const used = useMemo(
     () => new Map(recentConfigs(me?.user ?? "").map((r) => [r.name, r.at])),
@@ -191,6 +197,7 @@ export function ConfigsPage() {
     const row = (c: ConfigSummary): Row => ({ ...c, usedAt: used.get(c.name) });
     const out = {} as Record<Scope, Row[]>;
     const seen = new Map<string, Row>();
+    out.everyone = (data.everyone ?? []).map(row);
     for (const k of ["official", "mine", "shared", "public"] as const) {
       out[k] = (data[k] ?? []).map(row);
       for (const c of out[k]) if (!seen.has(c.name)) seen.set(c.name, c);
@@ -198,10 +205,12 @@ export function ConfigsPage() {
     out.all = [...seen.values()];
     return out;
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [data.official, data.mine, data.shared, data.public, used]);
+  }, [data.official, data.mine, data.shared, data.public, data.everyone, used]);
 
+  // the admins' page shows every user's; this one, the viewer's own scopes
+  const scopes = SCOPES.filter(([k]) => k !== "everyone");
   const scope = (
-    SCOPES.some(([k]) => k === url.scope) ? url.scope : "all"
+    everyone && admin ? "everyone" : scopes.some(([k]) => k === url.scope) ? url.scope : "all"
   ) as Scope;
   // without a sort asked for: official first, then the latest updated
   const shown = useMemo(
@@ -339,7 +348,7 @@ export function ConfigsPage() {
     [admin],
   );
 
-  const all = Object.values(lists);
+  const all = Object.values(lists).filter((q) => q.fetchStatus !== "idle" || q.data || q.isError);
   const loading = all.some((q) => q.isLoading);
   const failed = all.every((q) => q.isError);
   const none = !loading && !failed && byScope.all.length === 0;
@@ -350,12 +359,15 @@ export function ConfigsPage() {
   return (
     <div className="space-y-3 p-3">
       <header className="flex flex-wrap items-center gap-2">
+        {everyone && admin ? (
+          <h1 className="text-sm font-semibold">所有用户的配置 <span className="mono text-faint">{byScope.everyone.length}</span></h1>
+        ) : (
         <div
           role="tablist"
           aria-label="范围"
           className="inline-flex rounded-md border border-line bg-sunk p-0.5 text-xs"
         >
-          {SCOPES.map(([k, label]) => (
+          {scopes.map(([k, label]) => (
             <button
               key={k}
               type="button"
@@ -369,6 +381,7 @@ export function ConfigsPage() {
             </button>
           ))}
         </div>
+        )}
         <Input
           aria-label="搜索配置"
           placeholder="标题、名字、所有者、说明或变量…"

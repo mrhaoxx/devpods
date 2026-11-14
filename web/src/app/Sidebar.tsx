@@ -79,6 +79,9 @@ export function Sidebar({ me, onNavigate }: { me: Me; onNavigate?: () => void })
     { to: "/admin/nodes", label: "节点", icon: "⬡", count: nodes.data ? String(nodes.data.items.length) : undefined },
     { to: "/admin/users", label: "用户与配额", icon: "☺", count: users.data ? String(users.data.items.length) : undefined },
     ...(me.features.clusters ? [{ to: "/admin/clusters", label: "集群", icon: "◈" }] : []),
+    // every user's snapshots (saving, failed, done) and configs, private ones too
+    ...(me.features.snapshots ? [{ to: "/admin/images", label: "全部镜像", icon: "◫" }] : []),
+    { to: "/admin/configs", label: "全部配置", icon: "▧" },
   ];
   const auditItems: Item[] = [
     { to: "/audit/sessions", label: "会话 / 回放", icon: "▶" },

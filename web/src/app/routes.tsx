@@ -68,6 +68,8 @@ export function AppRoutes() {
           <Route path="admin/topology" element={<Navigate to="/admin/nodes" replace />} />
           <Route path="admin/users" element={<UsersPage />} />
           <Route path="admin/clusters" element={<ClustersPage />} />
+          <Route path="admin/images" element={<ImagesPage everyone />} />
+          <Route path="admin/configs" element={<ConfigsPage everyone />} />
         </Route>
         <Route path="*" element={<Navigate to="/" replace />} />
       </Route>

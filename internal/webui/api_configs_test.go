@@ -10,6 +10,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -191,6 +192,11 @@ func TestConfigAPI(t *testing.T) {
 			t.Fatalf("after unpublish %+v", v)
 		}
 		call("GET", "/api/configs/cf-alice-sg", carol, "", http.StatusNotFound)
+		// an admin lists every user's configs, private ones too; nobody else does
+		if got := configNames(call("GET", "/api/configs?scope=everyone", root, "", http.StatusOK)); !slices.Contains(got, "cf-alice-sg") || !slices.Contains(got, "cf-alice-odd") {
+			t.Fatalf("everyone's, as an admin: %v", got)
+		}
+		call("GET", "/api/configs?scope=everyone", carol, "", http.StatusForbidden)
 		// an admin sees every config, in the full list too
 		call("GET", "/api/configs/cf-alice-odd", root, "", http.StatusOK)
 		call("DELETE", "/api/configs/cf-alice-odd", root, "", http.StatusNoContent)
