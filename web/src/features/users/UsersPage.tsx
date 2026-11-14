@@ -1,5 +1,7 @@
 // 用户与配额 (UI spec §5.5): one table, quick filters, batch actions, CSV
 // import and a drawer per user (?user=).
+import { useAutoRefresh } from "../../lib/autoRefresh";
+import { RefreshControl } from "../../design/RefreshControl";
 import { useMemo, useState } from "react";
 import { useClusterFilter } from "../../data/clusterFilter";
 import { useQueryClient } from "@tanstack/react-query";
@@ -74,7 +76,8 @@ function NewUserDialog({ onClose }: { onClose: (changed: boolean) => void }) {
 }
 
 export function UsersPage() {
-  const q = useUsers();
+  const [every, setEvery] = useAutoRefresh("users", 30_000);
+  const q = useUsers(true, every);
   const qc = useQueryClient();
   const [url, setUrl] = useUrlState(schema, { key: "users", omit: ["user"] });
   const { filter } = useClusterFilter();
@@ -167,6 +170,7 @@ export function UsersPage() {
           </Chip>
         ))}
         <span className="flex-1" />
+        <RefreshControl every={every} onEvery={setEvery} onRefresh={() => void q.refetch()} busy={q.isFetching} />
         <Button onClick={() => setDialog("import")}>导入 CSV</Button>
         <Button variant="primary" onClick={() => setDialog("new")}>
           + 新建用户

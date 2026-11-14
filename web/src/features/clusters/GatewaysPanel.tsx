@@ -26,7 +26,7 @@ import {
 } from "./api";
 
 export const gatewaysKey = ["admin", "gateways"] as const;
-export const useAdminGateways = () => useQuery({ queryKey: gatewaysKey, queryFn: listAdminGateways, refetchInterval: 10_000, retry: false });
+export const useAdminGateways = (every = 10_000) => useQuery({ queryKey: gatewaysKey, queryFn: listAdminGateways, refetchInterval: every || false, retry: false });
 
 const errText = (e: unknown) => (e instanceof Error ? e.message : String(e));
 
@@ -143,9 +143,10 @@ function Replica({ r }: { r: GatewayReplica }) {
   );
 }
 
-export function GatewaysPanel() {
+/** every: how often it refreshes — the 集群 page's 自动刷新 */
+export function GatewaysPanel({ every = 10_000 }: { every?: number }) {
   const qc = useQueryClient();
-  const q = useAdminGateways();
+  const q = useAdminGateways(every);
   const [creating, setCreating] = useState(false);
   const [joining, setJoining] = useState<GatewayJoining | null>(null);
   const [ask, setAsk] = useState<Ask | null>(null);

@@ -12,7 +12,7 @@ import { Panel } from "../../design/Panel";
 import { Notice } from "../../design/Form";
 import { Badge } from "../../design/Badge";
 import { useUrlState, type Schema } from "../../lib/urlState";
-import { AuditError, FilterBox, LoadMore, RangePicker, fmtTS, fromTo, usePaged, withCluster } from "./common";
+import { AuditError, FilterBox, LoadMore, RangePicker, fmtTS, fromTo, usePaged, withCluster, PagedRefresh, endOf } from "./common";
 
 const alertSchema = { range: { kind: "string", default: "7d" }, devpod: { kind: "string", default: "" } } satisfies Schema;
 
@@ -38,12 +38,14 @@ export function AlertsPage() {
       <div className="flex flex-wrap items-center gap-2 border-b border-line px-3 py-2">
         <RangePicker value={url.range} onChange={(range) => setUrl({ range })} />
         <FilterBox label="DevPod" value={url.devpod} onChange={(devpod) => setUrl({ devpod })} />
+        <span className="flex-1" />
+        <PagedRefresh q={q} />
       </div>
       {q.isError ? (
         <AuditError error={q.error} />
       ) : (
         <>
-          <DataTable<AlertRow> fill storageKey="alerts" data={rows} columns={withCluster(columns, several)} getRowId={(a) => `${a.ts}:${a.kind}:${a.session_id}:${a.detail}`} sorting={sorting} onSortingChange={setSorting} empty={<EmptyState title={q.isLoading ? "加载中…" : "这段时间没有告警"} />} />
+          <DataTable<AlertRow> fill onEnd={endOf(q)} storageKey="alerts" data={rows} columns={withCluster(columns, several)} getRowId={(a) => `${a.ts}:${a.kind}:${a.session_id}:${a.detail}`} sorting={sorting} onSortingChange={setSorting} empty={<EmptyState title={q.isLoading ? "加载中…" : "这段时间没有告警"} />} />
           <LoadMore hasMore={q.hasNextPage} busy={q.isFetchingNextPage} onClick={() => void q.fetchNextPage()} />
         </>
       )}
@@ -99,12 +101,14 @@ export function AccessLogPage() {
       <div className="flex flex-wrap items-center gap-2 border-b border-line px-3 py-2">
         <RangePicker value={url.range} onChange={(range) => setUrl({ range })} />
         <FilterBox label="查看者" value={url.viewer} onChange={(viewer) => setUrl({ viewer })} width="w-32" />
+        <span className="flex-1" />
+        <PagedRefresh q={q} />
       </div>
       {q.isError ? (
         <AuditError error={q.error} />
       ) : (
         <>
-          <DataTable<AccessLogRow> fill storageKey="access-log" data={rows} columns={columns} getRowId={(a) => `${a.ts}:${a.viewer}:${a.action}:${a.target_session}:${a.target_file}`} sorting={sorting} onSortingChange={setSorting} empty={<EmptyState title={q.isLoading ? "加载中…" : "这段时间没有访问记录"} />} />
+          <DataTable<AccessLogRow> fill onEnd={endOf(q)} storageKey="access-log" data={rows} columns={columns} getRowId={(a) => `${a.ts}:${a.viewer}:${a.action}:${a.target_session}:${a.target_file}`} sorting={sorting} onSortingChange={setSorting} empty={<EmptyState title={q.isLoading ? "加载中…" : "这段时间没有访问记录"} />} />
           <LoadMore hasMore={q.hasNextPage} busy={q.isFetchingNextPage} onClick={() => void q.fetchNextPage()} />
         </>
       )}

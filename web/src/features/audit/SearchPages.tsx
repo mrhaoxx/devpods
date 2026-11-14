@@ -12,7 +12,7 @@ import { Badge } from "../../design/Badge";
 import { EmptyState } from "../../design/EmptyState";
 import { useUrlState, type Schema } from "../../lib/urlState";
 import { fmtBytes } from "../../lib/format";
-import { AuditError, FilterBox, LoadMore, RangePicker, confirmDownload, fmtTS, fromTo, usePaged, withCluster } from "./common";
+import { AuditError, FilterBox, LoadMore, RangePicker, confirmDownload, fmtTS, fromTo, usePaged, withCluster, PagedRefresh, endOf } from "./common";
 
 function Tabs() {
   const cls = ({ isActive }: { isActive: boolean }) => `-mb-px border-b-2 px-3 py-1.5 ${isActive ? "border-accent font-semibold text-accent" : "border-transparent text-muted hover:text-ink"}`;
@@ -56,12 +56,14 @@ export function CommandsPage() {
         <FilterBox label="命令包含" value={url.q} onChange={(v) => setUrl({ q: v })} width="w-56" />
         {admin && <FilterBox label="用户" value={url.user} onChange={(user) => setUrl({ user })} width="w-32" />}
         <FilterBox label="DevPod" value={url.devpod} onChange={(devpod) => setUrl({ devpod })} />
+        <span className="flex-1" />
+        <PagedRefresh q={q} />
       </div>
       {q.isError ? (
         <AuditError error={q.error} />
       ) : (
         <>
-          <DataTable<CommandRow> fill storageKey="commands" data={q.items} columns={withCluster(columns, several)} getRowId={(c) => c.event_id} sorting={sorting} onSortingChange={setSorting} empty={<EmptyState title={q.isLoading ? "加载中…" : "这段时间没有命令"} />} />
+          <DataTable<CommandRow> fill onEnd={endOf(q)} storageKey="commands" data={q.items} columns={withCluster(columns, several)} getRowId={(c) => c.event_id} sorting={sorting} onSortingChange={setSorting} empty={<EmptyState title={q.isLoading ? "加载中…" : "这段时间没有命令"} />} />
           <LoadMore hasMore={q.hasNextPage} busy={q.isFetchingNextPage} onClick={() => void q.fetchNextPage()} />
         </>
       )}
@@ -113,12 +115,14 @@ export function FilesPage() {
         <FilterBox label="路径包含" value={url.path} onChange={(path) => setUrl({ path })} width="w-56" />
         <FilterBox label="sha256" value={url.sha256} onChange={(sha256) => setUrl({ sha256 })} width="w-56" />
         {admin && <FilterBox label="用户" value={url.user} onChange={(user) => setUrl({ user })} width="w-32" />}
+        <span className="flex-1" />
+        <PagedRefresh q={q} />
       </div>
       {q.isError ? (
         <AuditError error={q.error} />
       ) : (
         <>
-          <DataTable<FileEventRow> fill storageKey="files" data={q.items} columns={withCluster(columns, several)} getRowId={(f) => f.event_id} sorting={sorting} onSortingChange={setSorting} empty={<EmptyState title={q.isLoading ? "加载中…" : "这段时间没有文件传输"} />} />
+          <DataTable<FileEventRow> fill onEnd={endOf(q)} storageKey="files" data={q.items} columns={withCluster(columns, several)} getRowId={(f) => f.event_id} sorting={sorting} onSortingChange={setSorting} empty={<EmptyState title={q.isLoading ? "加载中…" : "这段时间没有文件传输"} />} />
           <LoadMore hasMore={q.hasNextPage} busy={q.isFetchingNextPage} onClick={() => void q.fetchNextPage()} />
         </>
       )}
@@ -180,12 +184,14 @@ export function HTTPPage() {
         <FilterBox label="端口" value={url.port} onChange={(port) => setUrl({ port })} width="w-20" />
         <FilterBox label="状态" value={url.status} onChange={(status) => setUrl({ status })} width="w-20" />
         <FilterBox label="方法" value={url.method} onChange={(method) => setUrl({ method: method.toUpperCase() })} width="w-20" />
+        <span className="flex-1" />
+        <PagedRefresh q={q} />
       </div>
       {q.isError ? (
         <AuditError error={q.error} />
       ) : (
         <>
-          <DataTable<HTTPRequestRow> fill
+          <DataTable<HTTPRequestRow> fill onEnd={endOf(q)}
             storageKey="http"
             data={q.items}
             columns={withCluster(columns, several)}

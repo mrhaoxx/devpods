@@ -272,4 +272,28 @@ describe("a list page's table (fill)", () => {
       else delete (HTMLElement.prototype as { clientHeight?: number }).clientHeight;
     }
   });
+
+  it("asks for more at the end of what is loaded, once for each length of the list", async () => {
+    const own = Object.getOwnPropertyDescriptor(HTMLElement.prototype, "clientHeight");
+    Object.defineProperty(HTMLElement.prototype, "clientHeight", {
+      configurable: true,
+      get() {
+        return (this as HTMLElement).hasAttribute("data-table-scroller") ? 290 : 0;
+      },
+    });
+    try {
+      const onEnd = vi.fn();
+      const few = rows.slice(0, 2);
+      const table = (data: Row[]) => <DataTable fill onEnd={onEnd} data={data} columns={columns} getRowId={(r) => r.name} sorting={[]} onSortingChange={() => {}} />;
+      const { rerender } = render(table(few)); // shorter than the box: at its end already
+      await waitFor(() => expect(onEnd).toHaveBeenCalledTimes(1));
+      rerender(table(few));
+      expect(onEnd).toHaveBeenCalledTimes(1);
+      rerender(table(rows)); // more came, still at the end
+      await waitFor(() => expect(onEnd).toHaveBeenCalledTimes(2));
+    } finally {
+      if (own) Object.defineProperty(HTMLElement.prototype, "clientHeight", own);
+      else delete (HTMLElement.prototype as { clientHeight?: number }).clientHeight;
+    }
+  });
 });

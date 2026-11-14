@@ -98,9 +98,10 @@ export function useDevPods(scope: "mine" | "all" = "mine", enabled = true) {
 }
 
 export const useDevPod = (r: Ref) => useQuery({ queryKey: qk.devpod(r), queryFn: () => getDevPod(r) });
-export const useUsers = (enabled = true) =>
-  useQuery({ queryKey: qk.users, queryFn: listAdminUsers, enabled, refetchInterval: 30_000 });
-export const useNodes = (enabled = true) => useQuery({ queryKey: qk.nodes, queryFn: listNodes, enabled, refetchInterval: 10_000 });
+export const useUsers = (enabled = true, every = 30_000) =>
+  useQuery({ queryKey: qk.users, queryFn: listAdminUsers, enabled, refetchInterval: every || false });
+/** every: how often it refreshes (0: not by itself) — the page's 自动刷新 */
+export const useNodes = (enabled = true, every = 10_000) => useQuery({ queryKey: qk.nodes, queryFn: listNodes, enabled, refetchInterval: every || false });
 export const useNode = (r: Ref | undefined) =>
   useQuery({ queryKey: qk.node(r ?? { name: "" }), queryFn: () => getNode(r!), enabled: !!r?.name, refetchInterval: 10_000 });
 

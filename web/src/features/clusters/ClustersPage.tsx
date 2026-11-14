@@ -1,6 +1,8 @@
 // 集群 (admins): the clusters this console manages. A cluster is
 // registered here, joins with the token shown once, and from then on its
 // agent keeps the connection.
+import { useAutoRefresh } from "../../lib/autoRefresh";
+import { RefreshControl } from "../../design/RefreshControl";
 import { useState } from "react";
 import * as Dialog from "@radix-ui/react-dialog";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
@@ -44,7 +46,8 @@ type Ask = { kind: "pause" | "resume" | "remove" | "reissue"; cluster: AdminClus
 
 export function ClustersPage() {
   const qc = useQueryClient();
-  const q = useQuery({ queryKey: ["admin", "clusters"], queryFn: listAdminClusters, refetchInterval: 10_000 });
+  const [every, setEvery] = useAutoRefresh("clusters", 10_000);
+  const q = useQuery({ queryKey: ["admin", "clusters"], queryFn: listAdminClusters, refetchInterval: every || false });
   const [creating, setCreating] = useState(false);
   const [joining, setJoining] = useState<Joining | null>(null);
   const [ask, setAsk] = useState<Ask | null>(null);
@@ -70,7 +73,8 @@ export function ClustersPage() {
     onSettled: refresh,
   });
 
-  const gateways = useAdminGateways().data?.items ?? [];
+  const gw = useAdminGateways(every); // the gateways below refresh with the clusters
+  const gateways = gw.data?.items ?? [];
   const gateway = useMutation({
     mutationFn: (v: { cluster: string; gateway: string }) => setClusterGateway(v.cluster, v.gateway),
     onError: (e) => setError(errText(e)),
@@ -82,6 +86,15 @@ export function ClustersPage() {
     <div className="space-y-3 p-3">
       <header className="flex flex-wrap items-center gap-2">
         <p className="min-w-0 flex-1 text-xs text-muted">各集群里的 agent 主动连到本控制台；这里登记集群、发放加入令牌。</p>
+        <RefreshControl
+          every={every}
+          onEvery={setEvery}
+          onRefresh={() => {
+            void q.refetch();
+            void gw.refetch();
+          }}
+          busy={q.isFetching || gw.isFetching}
+        />
         <Button variant="primary" onClick={() => setCreating(true)}>
           新建集群
         </Button>
@@ -167,7 +180,7 @@ export function ClustersPage() {
         </div>
       )}
 
-      <GatewaysPanel />
+      <GatewaysPanel every={every} />
 
       <CreateDialog
         open={creating}

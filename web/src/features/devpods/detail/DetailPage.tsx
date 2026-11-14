@@ -287,7 +287,7 @@ export function DetailPage() {
       {tab === "sessions" && audit && (
         <Panel title="会话（近 7 天）">
           <SessionList items={sessionPages.isLoading ? undefined : sessionPages.items} error={sessionPages.error} now={now} />
-          <LoadMore hasMore={sessionPages.hasNextPage} busy={sessionPages.isFetchingNextPage} onClick={() => void sessionPages.fetchNextPage()} />
+          <LoadMore auto hasMore={sessionPages.hasNextPage} busy={sessionPages.isFetchingNextPage} onClick={() => void sessionPages.fetchNextPage()} />
         </Panel>
       )}
       {tab === "ports" && me?.features.httpProxy && <PortsPanel r={r} sshPort={sshPort} />}

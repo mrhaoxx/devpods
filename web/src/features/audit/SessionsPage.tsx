@@ -14,7 +14,7 @@ import { EmptyState } from "../../design/EmptyState";
 import { useUrlState, type Schema } from "../../lib/urlState";
 import { fmtDuration } from "../../lib/format";
 import { useNow } from "../../lib/useNow";
-import { AuditError, FilterBox, LoadMore, RangePicker, fmtTS, fromTo, usePaged, KeyName } from "./common";
+import { AuditError, FilterBox, LoadMore, RangePicker, fmtTS, fromTo, usePaged, KeyName, PagedRefresh, endOf } from "./common";
 
 const schema = {
   range: { kind: "string", default: "7d" },
@@ -116,12 +116,14 @@ export function SessionsPage({ mine }: { mine?: boolean }) {
         <Chip active={url.alerts} onClick={() => setUrl({ alerts: !url.alerts })}>
           有拦截 / 告警
         </Chip>
+        <span className="flex-1" />
+        <PagedRefresh q={q} />
       </div>
       {q.isError ? (
         <AuditError error={q.error} />
       ) : (
         <>
-          <DataTable<SessionSummary> fill
+          <DataTable<SessionSummary> fill onEnd={endOf(q)}
           storageKey="sessions"
             data={q.items}
             columns={columns}

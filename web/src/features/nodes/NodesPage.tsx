@@ -1,6 +1,8 @@
 // 节点 (UI spec §5.4): one row per node; the drawer (?node=) lists the
 // node's DevPods, each GPU card's occupant and the Kore CPU layout.
 // Reservation columns arrive with the reservation backend (ruling R1).
+import { useAutoRefresh } from "../../lib/autoRefresh";
+import { RefreshControl } from "../../design/RefreshControl";
 import { useClusterFilter } from "../../data/clusterFilter";
 import type { Cluster } from "../clusters/api";
 import { devpodHref, keyOf, refOfKey, type Ref } from "../../data/cluster";
@@ -304,7 +306,8 @@ function LabelBox({ value, onChange }: { value: string; onChange: (v: string) =>
 }
 
 export function NodesPage() {
-  const q = useNodes();
+  const [every, setEvery] = useAutoRefresh("nodes", 10_000);
+  const q = useNodes(true, every);
   const [url, setUrl] = useUrlState(schema, { key: "nodes", omit: ["node"] });
   const { matches, several, clusters } = useClusterFilter();
   const items = useMemo(() => (q.data?.items ?? []).filter(matches), [q.data, matches]);
@@ -330,6 +333,8 @@ export function NodesPage() {
           NotReady
         </Chip>
         <LabelBox value={url.label} onChange={(label) => setUrl({ label })} />
+        <span className="flex-1" />
+        <RefreshControl every={every} onEvery={setEvery} onRefresh={() => void q.refetch()} busy={q.isFetching} />
       </div>
       {q.isError ? (
         <EmptyState tone="error" title="无法加载节点" hint={String(q.error)} />

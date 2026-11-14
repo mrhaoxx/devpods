@@ -1,7 +1,9 @@
 // Shared bits of the audit pages: the time range in the URL, paged
 // queries, the error state when ClickHouse is unavailable.
+import { useAutoRefresh } from "../../lib/autoRefresh";
+import { RefreshControl } from "../../design/RefreshControl";
 import { useDebounced } from "../../lib/useDebounced";
-import { useMemo } from "react";
+import { useMemo, useEffect, useRef } from "react";
 import { useInfiniteQuery } from "@tanstack/react-query";
 import { ApiFailure, type Page } from "../../data/api";
 import { EmptyState } from "../../design/EmptyState";
@@ -51,17 +53,30 @@ export function usePaged<T>(
   fetch: (q: Record<string, string | undefined>) => Promise<Page<T>>,
   opts: { enabled?: boolean; refetchInterval?: number } = {},
 ) {
+  // how often it refreshes is the page's own choice (off until chosen),
+  // unless the caller says
+  const [every, setEvery] = useAutoRefresh(`audit.${key}`, 0);
   const q = useInfiniteQuery({
     queryKey: ["audit", key, filters],
     queryFn: ({ pageParam }) => fetch({ ...filters, cursor: pageParam || undefined }),
     initialPageParam: "",
     getNextPageParam: (last) => last.next || undefined,
     retry: false,
+    refetchInterval: every || false,
     ...opts,
   });
   const items = useMemo(() => q.data?.pages.flatMap((p) => p.items ?? []) ?? [], [q.data]);
-  return { ...q, items };
+  return { ...q, items, every, setEvery };
 }
+
+/** PagedRefresh: a paged list's 自动刷新 and refresh now. */
+export function PagedRefresh({ q }: { q: ReturnType<typeof usePaged<unknown>> }) {
+  return <RefreshControl every={q.every} onEvery={q.setEvery} onRefresh={() => void q.refetch()} busy={q.isFetching && !q.isFetchingNextPage} />;
+}
+
+/** endOf: what a list does at its end — the next page, when there is one and none is coming. */
+export const endOf = (q: { hasNextPage?: boolean; isFetchingNextPage?: boolean; fetchNextPage(): unknown }) =>
+  q.hasNextPage && !q.isFetchingNextPage ? () => void q.fetchNextPage() : undefined;
 
 export function AuditError({ error }: { error: unknown }) {
   if (error instanceof ApiFailure && error.code === "AMBIGUOUS_CLUSTER")
@@ -69,10 +84,20 @@ export function AuditError({ error }: { error: unknown }) {
   return <EmptyState tone="error" title="审计数据暂不可用" hint={error instanceof ApiFailure ? error.body.message : String(error)} />;
 }
 
-export function LoadMore({ hasMore, busy, onClick }: { hasMore?: boolean; busy?: boolean; onClick: () => void }) {
+export function LoadMore({ hasMore, busy, onClick, auto }: { hasMore?: boolean; busy?: boolean; onClick: () => void; /** load when it comes into sight */ auto?: boolean }) {
+  const el = useRef<HTMLDivElement>(null);
+  const go = useRef(onClick);
+  go.current = onClick;
+  useEffect(() => {
+    const node = el.current;
+    if (!auto || !node || !hasMore || busy || typeof IntersectionObserver === "undefined") return;
+    const io = new IntersectionObserver(([e]) => e.isIntersecting && go.current());
+    io.observe(node);
+    return () => io.disconnect();
+  }, [auto, hasMore, busy]);
   if (!hasMore) return null;
   return (
-    <div className="p-2 text-center">
+    <div ref={el} className="p-2 text-center">
       <Button variant="ghost" disabled={busy} onClick={onClick}>
         {busy ? "加载中…" : "加载更多"}
       </Button>

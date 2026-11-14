@@ -107,6 +107,9 @@ export type DataTableProps<T> = {
   /** sorted: data comes in the order to show (the caller sorts, say to
    *  hold an order while values change); the headers still say and ask */
   sorted?: boolean;
+  /** onEnd: scrolled to (near) the last row of a list page's table — to
+   *  load the next page; asked once per length of the list */
+  onEnd?(): void;
   /** fill: a list page's table — it takes the rest of its flex column and
    *  scrolls itself, the header staying, drawing only the rows in sight */
   fill?: boolean;
@@ -346,6 +349,16 @@ export function DataTable<T>(p: DataTableProps<T>) {
     return () => clearTimeout(t);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [view.top]);
+  // near the end of what is loaded: the page asks for more (once for each
+  // length of the list — again only after more came)
+  const endAsked = useRef(-1);
+  useEffect(() => {
+    const el = scroller.current;
+    if (!p.fill || !p.onEnd || !el || view.height <= 0 || endAsked.current === rows.length) return;
+    if (el.scrollHeight - (view.top + view.height) > 4 * rowH) return;
+    endAsked.current = rows.length;
+    p.onEnd();
+  });
   // a row as tall as it is drawn (zoom, fonts): measured, not assumed
   useLayoutEffect(() => {
     if (!p.fill) return;
