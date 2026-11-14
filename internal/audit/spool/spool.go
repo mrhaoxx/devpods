@@ -315,6 +315,28 @@ func (s *Spool) Done(it Item) error {
 	return nil
 }
 
+// Quarantine moves an item that can never be uploaded (a batch that does
+// not parse) out of the queue, into failed/ beside it, for whoever looks
+// into it; it no longer counts against the budget (failed/ is not read
+// again).
+func (s *Spool) Quarantine(it Item) error {
+	dir := filepath.Join(s.dir, "failed")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return err
+	}
+	if err := os.Rename(it.Path, filepath.Join(dir, filepath.Base(it.Path))); err != nil {
+		return err
+	}
+	freed := it.Size
+	if it.Kind == ItemObject {
+		keyPath := strings.TrimSuffix(it.Path, ".bin") + ".key"
+		freed += int64(len(it.ObjectKey))
+		_ = os.Rename(keyPath, filepath.Join(dir, filepath.Base(keyPath)))
+	}
+	s.usage.Add(-freed)
+	return nil
+}
+
 func ulidTime(id string) time.Time {
 	u, err := ulid.Parse(id)
 	if err != nil {
