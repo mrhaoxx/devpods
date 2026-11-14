@@ -5,6 +5,12 @@
 // limit as a labelled reference line, and the legend below with each
 // series' latest value (click: only this one; ctrl / ⌘ click: toggle).
 // Colors are theme variables, re-read when the theme changes.
+//
+// A zoom is what the x scale shows, whoever set it (this chart, a chart
+// it is synced with, a double click anywhere): it holds while the data
+// ticks in, survives the chart being rebuilt, and ends with zoomKey (a
+// new time range). Zoomed in, the y axis fits what is shown. On a touch
+// screen a finger moved along a chart shows the values under it.
 import { useEffect, useMemo, useRef, useState } from "react";
 import uPlot from "uplot";
 import "uplot/dist/uPlot.min.css";
@@ -47,6 +53,21 @@ function useThemeVersion(): number {
   return v;
 }
 
+/** visibleMax: the y range's top for the part of the data a zoom shows. */
+function visibleMax(c: { limit: number | null; p: ReturnType<typeof plotData> }, min: number | undefined, max: number | undefined): number {
+  const { x, series, yMax } = c.p;
+  if (min == null || max == null) return yMax;
+  let top = c.limit ?? 0;
+  for (let i = 0; i < x.length; i++) {
+    if (x[i] < min || x[i] > max) continue;
+    for (const s of series) {
+      const v = s.drawn[i];
+      if (v != null && v > top) top = v;
+    }
+  }
+  return top > 0 ? top * 1.06 : yMax;
+}
+
 type TipParam = { seriesName: string; value: [number, number | null]; color: string };
 /** The tooltip, built as DOM so series names are never parsed as HTML. */
 function tip(params: TipParam[], th: ChartTheme, yFormat: (v: number) => string): HTMLElement {
@@ -80,6 +101,7 @@ export function TimeSeriesChart({
   limit,
   yFormat = (v) => String(+v.toFixed(2)),
   height = 150,
+  zoomKey,
 }: {
   /** timestamps in ms */
   ts: number[];
@@ -89,10 +111,15 @@ export function TimeSeriesChart({
   limit?: number | null;
   yFormat?: (v: number) => string;
   height?: number;
+  /** a change of it (a new time range) ends a zoom */
+  zoomKey?: string;
 }) {
   const el = useRef<HTMLDivElement>(null);
   const plot = useRef<uPlot | null>(null);
   const zoomed = useRef(false);
+  // the zoom to put back when the chart is rebuilt (its series changed)
+  const kept = useRef<{ min: number; max: number } | null>(null);
+  const lastKey = useRef(zoomKey);
   const theme = useThemeVersion();
   const [hidden, setHidden] = useState<ReadonlySet<string>>(new Set());
   const th = useMemo(readTheme, [theme]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -122,7 +149,11 @@ export function TimeSeriesChart({
         x: true,
         y: false,
       },
-      scales: { x: { time: true }, y: { range: () => [0, cur.current.p.yMax] } },
+      scales: {
+        x: { time: true },
+        // zoomed in: the highest value shown, not the highest of all
+        y: { range: (u) => [0, zoomed.current ? visibleMax(cur.current, u.scales.x.min, u.scales.x.max) : cur.current.p.yMax] },
+      },
       axes: [
         {
           stroke: th.muted,
@@ -164,9 +195,14 @@ export function TimeSeriesChart({
         }),
       ],
       hooks: {
-        setSelect: [
-          (u) => {
-            if (u.select.width > 0) zoomed.current = true;
+        setScale: [
+          (u, key) => {
+            if (key !== "x") return;
+            const x = cur.current.p.x;
+            const { min, max } = u.scales.x;
+            // zoomed: the scale shows less than the data spans
+            zoomed.current = x.length > 1 && min != null && max != null && (min > x[0] + 1e-6 || max < x[x.length - 1] - 1e-6);
+            kept.current = zoomed.current && min != null && max != null ? { min, max } : null;
           },
         ],
         draw: [
@@ -199,7 +235,7 @@ export function TimeSeriesChart({
               return;
             }
             const now = cur.current;
-            const rows = now.p.series.map((s) => ({ seriesName: s.label, value: [now.p.x[i] * 1000, s.raw[i] ?? null] as [number, number | null], color: th.color(s.color) }));
+            const rows = now.p.series.filter((s) => !s.hidden).map((s) => ({ seriesName: s.label, value: [now.p.x[i] * 1000, s.raw[i] ?? null] as [number, number | null], color: th.color(s.color) }));
             tipEl.replaceChildren(tip(stacked ? [...rows].reverse() : rows, th, (v) => now.yFormat(v)));
             tipEl.style.display = "block";
             const left = u.over.offsetLeft + u.cursor.left;
@@ -210,22 +246,45 @@ export function TimeSeriesChart({
         ],
       },
     };
+    const keep = kept.current;
     const u = new uPlot(opts, data, host);
     plot.current = u;
-    zoomed.current = false;
+    if (keep) u.setScale("x", keep); // rebuilt (its series changed): the zoom stays
     host.append(tipEl);
     const enter = () => (inside = true);
     const leave = () => {
       inside = false;
       tipEl.style.display = "none";
     };
-    const unzoom = () => (zoomed.current = false);
+    // a finger along the chart shows the values under it (uPlot follows
+    // the mouse only); the page still scrolls up and down (touch-action)
+    let lift: ReturnType<typeof setTimeout> | undefined;
+    const touch = (e: TouchEvent) => {
+      const t = e.touches[0];
+      if (!t) return;
+      clearTimeout(lift);
+      const r = u.over.getBoundingClientRect();
+      inside = true;
+      u.setCursor({ left: Math.min(Math.max(0, t.clientX - r.left), r.width), top: Math.min(Math.max(0, t.clientY - r.top), r.height) });
+    };
+    const untouch = () => {
+      clearTimeout(lift);
+      lift = setTimeout(() => {
+        leave();
+        u.setCursor({ left: -10, top: -10 });
+      }, 1500);
+    };
+    u.over.style.touchAction = "pan-y";
     u.over.addEventListener("mouseenter", enter);
     u.over.addEventListener("mouseleave", leave);
-    u.over.addEventListener("dblclick", unzoom);
+    u.over.addEventListener("touchstart", touch, { passive: true });
+    u.over.addEventListener("touchmove", touch, { passive: true });
+    u.over.addEventListener("touchend", untouch);
+    u.over.addEventListener("touchcancel", untouch);
     const ro = new ResizeObserver(([e]) => u.setSize({ width: Math.floor(e.contentRect.width), height }));
     ro.observe(host);
     return () => {
+      clearTimeout(lift);
       ro.disconnect();
       u.destroy();
       tipEl.remove();
@@ -236,6 +295,12 @@ export function TimeSeriesChart({
   }, [signature, height, th]);
 
   useEffect(() => {
+    // a new time range ends a zoom
+    if (lastKey.current !== zoomKey) {
+      lastKey.current = zoomKey;
+      zoomed.current = false;
+      kept.current = null;
+    }
     // a zoom survives the data ticking in every second
     plot.current?.setData(data, !zoomed.current);
     if (zoomed.current) plot.current?.redraw();

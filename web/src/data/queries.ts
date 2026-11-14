@@ -1,7 +1,7 @@
 // Query keys and hooks over the typed client. Server data lives in the
 // TanStack Query cache; live metrics never do (they live in LiveHub).
 import { useEffect } from "react";
-import { useMutation, useQuery, useQueryClient, type QueryClient } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient, type QueryClient, keepPreviousData } from "@tanstack/react-query";
 import { keyOf, type Ref } from "./cluster";
 import {
   auditPresence,
@@ -110,6 +110,8 @@ export const useMetrics = (r: Ref, range: MetricRange | undefined) =>
     queryKey: qk.metrics(r, range ?? "15m"),
     queryFn: () => getMetrics(r, range!),
     enabled: !!range,
+    // a new range keeps the charts of the last until its own arrive
+    placeholderData: keepPreviousData,
     refetchInterval: range === "15m" || range === "1h" ? 10_000 : 60_000,
     retry: false,
   });

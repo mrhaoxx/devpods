@@ -54,7 +54,7 @@ const gpuMetric: Record<GpuMetric, [string, (v: number) => string]> = {
   temp: ["温度", (v) => `${Math.round(v)}°C`],
 };
 
-function Charts({ c, live }: { c: ChartSet; live: boolean }) {
+function Charts({ c, live, range }: { c: ChartSet; live: boolean; /** a new one ends a zoom */ range: string }) {
   const [gm, setGm] = useState<GpuMetric>("util");
   const [splitTcp, setSplitTcp] = useState(false);
   const [rdmaHealth, setRdmaHealth] = useState(false);
@@ -73,10 +73,11 @@ function Charts({ c, live }: { c: ChartSet; live: boolean }) {
       : []),
   ];
   return (
-    <div className="grid gap-3 lg:grid-cols-2">
+    <div className="grid grid-cols-1 gap-3 lg:grid-cols-2 [&>*]:min-w-0">
       <Panel title="CPU（核）">
         <div className="p-2">
           <TimeSeriesChart
+            zoomKey={range}
             ts={c.ts}
             series={[
               { label: "使用", values: c.cpu.used, color: "--chart-1", fill: true },
@@ -90,6 +91,7 @@ function Charts({ c, live }: { c: ChartSet; live: boolean }) {
       <Panel title="内存">
         <div className="p-2">
           <TimeSeriesChart
+            zoomKey={range}
             ts={c.ts}
             stacked
             series={[
@@ -118,6 +120,7 @@ function Charts({ c, live }: { c: ChartSet; live: boolean }) {
         {gpus.length ? (
           <div className="p-2">
             <TimeSeriesChart
+            zoomKey={range}
               ts={c.ts}
               series={gpus.map(([uuid, g], i) => ({ label: g.name ? `${g.name} ${uuid.slice(-6)}` : uuid.slice(-12), values: g[gm], color: palette[i % palette.length] }))}
               yFormat={gpuMetric[gm][1]}
@@ -136,7 +139,8 @@ function Charts({ c, live }: { c: ChartSet; live: boolean }) {
         }
       >
         <div className="p-2">
-          <TimeSeriesChart ts={c.ts} series={net} yFormat={fmtRate} />
+          <TimeSeriesChart
+            zoomKey={range} ts={c.ts} series={net} yFormat={fmtRate} />
         </div>
       </Panel>
       <Panel
@@ -153,6 +157,7 @@ function Charts({ c, live }: { c: ChartSet; live: boolean }) {
         {rdmaShown.length ? (
           <div className="p-2">
             <TimeSeriesChart
+            zoomKey={range}
               ts={c.ts}
               series={rdmaShown.flatMap(([k, r], i) =>
                 rdmaHealth && live
@@ -178,6 +183,7 @@ function Charts({ c, live }: { c: ChartSet; live: boolean }) {
       <Panel title="磁盘 IO">
         <div className="p-2">
           <TimeSeriesChart
+            zoomKey={range}
             ts={c.ts}
             series={[
               { label: "读", values: c.io.r, color: "--chart-1" },
@@ -229,7 +235,10 @@ export function MonitorTab({ r, history }: { r: Ref; history?: ReadonlyArray<{ t
           hint={hist.error instanceof ApiFailure ? hist.error.body.message : String(hist.error)}
         />
       ) : charts ? (
-        <Charts c={charts} live={live} />
+        // while a new range loads, the last one's charts stay, dimmed
+        <div className={hist.isPlaceholderData ? "opacity-60 transition-opacity" : "transition-opacity"} aria-busy={hist.isPlaceholderData}>
+          <Charts c={charts} live={live && !hist.isPlaceholderData} range={range} />
+        </div>
       ) : (
         <EmptyState title="加载中…" />
       )}

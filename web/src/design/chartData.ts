@@ -56,14 +56,20 @@ export function stackSeries(series: (number | null)[][]): (number | null)[][] {
   );
 }
 
-export type Plotted = { label: string; color: string; fill: boolean; raw: (number | null)[]; drawn: (number | null)[] };
+export type Plotted = { label: string; color: string; fill: boolean; hidden: boolean; raw: (number | null)[]; drawn: (number | null)[] };
 /** plotData lays the visible series out for uPlot: seconds on x, and for
  *  a stacked chart cumulative layers listed top first, so each lower
  *  layer paints over the one above it. */
 export function plotData(c: ChartInput): { x: number[]; series: Plotted[]; yMax: number } {
+  // a hidden series stays in the list, drawn as nothing: hiding one does
+  // not change the chart's series (which would rebuild it)
   const shown = c.series.filter((s) => !c.hidden?.has(s.label));
-  const drawn = c.stacked ? stackSeries(shown.map((s) => s.values)) : shown.map((s) => s.values);
-  let series = shown.map((s, i) => ({ label: s.label, color: s.color, fill: !!c.stacked || !!s.fill, raw: s.values, drawn: drawn[i] }));
+  const stack = c.stacked ? stackSeries(shown.map((s) => s.values)) : shown.map((s) => s.values);
+  const drawnOf = new Map(shown.map((s, i) => [s, stack[i]]));
+  let series = c.series.map((s) => {
+    const hidden = !drawnOf.has(s);
+    return { label: s.label, color: s.color, fill: !!c.stacked || !!s.fill, hidden, raw: s.values, drawn: drawnOf.get(s) ?? s.values.map(() => null) };
+  });
   if (c.stacked) series = series.reverse();
   let yMax = c.limit ?? 0;
   for (const s of series) for (const v of s.drawn) if (v != null && v > yMax) yMax = v;

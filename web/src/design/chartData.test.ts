@@ -29,7 +29,12 @@ describe("chart data", () => {
       ["b", [3, 3], [2, 3]],
       ["a", [1, null], [1, null]],
     ]);
-    expect(plotData({ ...base, hidden: new Set(["a"]) }).series.map((s) => s.label)).toEqual(["b"]);
+    // a hidden series stays, drawn as nothing (so hiding does not rebuild the chart), and is out of the stack
+    const h = plotData({ ...base, stacked: true, hidden: new Set(["a"]) });
+    expect(h.series.map((s) => [s.label, s.hidden, s.drawn])).toEqual([
+      ["b", false, [2, 3]],
+      ["a", true, [null, null]],
+    ]);
   });
   it("latest skips trailing gaps; the axis shows dates only for long ranges", () => {
     expect(latest([1, 2, null])).toBe(2);
