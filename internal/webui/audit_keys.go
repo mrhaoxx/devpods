@@ -20,15 +20,18 @@ import (
 // the console names it at the time of looking (a key since removed, or
 // one only the directory knows, stays a fingerprint).
 
-// keyNames maps each user's key fingerprints to the keys' comments (their
-// type when they have none).
-func (s *Server) keyNames(ctx context.Context, users []string) map[string]map[string]string {
-	out := map[string]map[string]string{}
+// userKey is one of a user's keys: its comment (its type when it has
+// none) and its authorized_keys line.
+type userKey struct{ name, line string }
+
+// keyNames maps each user's key fingerprints to the keys.
+func (s *Server) keyNames(ctx context.Context, users []string) map[string]map[string]userKey {
+	out := map[string]map[string]userKey{}
 	for _, name := range users {
 		if _, done := out[name]; done || name == "" {
 			continue
 		}
-		names := map[string]string{}
+		names := map[string]userKey{}
 		out[name] = names
 		var u devpodv1alpha1.User
 		if err := s.Reader.Get(ctx, types.NamespacedName{Name: name}, &u); err != nil {
@@ -42,7 +45,7 @@ func (s *Server) keyNames(ctx context.Context, users []string) map[string]map[st
 			if comment = strings.TrimSpace(comment); comment == "" {
 				comment = pk.Type()
 			}
-			names[ssh.FingerprintSHA256(pk)] = comment
+			names[ssh.FingerprintSHA256(pk)] = userKey{name: comment, line: strings.TrimSpace(line)}
 		}
 	}
 	return out
@@ -54,10 +57,22 @@ type sessionItem struct {
 	PubkeyName string `json:"pubkey_name,omitempty"`
 }
 
-// sessionDetailView is a session's detail with the name of its key.
+// sessionDetailView is a session's detail with the name of its key and
+// the key itself: as the session recorded it, else (a session of before
+// keys were kept) the user's key with that fingerprint, if it still is one.
 type sessionDetailView struct {
 	*store.SessionDetail
 	PubkeyName string `json:"pubkey_name,omitempty"`
+	PubkeyLine string `json:"pubkey_line,omitempty"`
+}
+
+func (s *Server) detailView(ctx context.Context, d *store.SessionDetail) sessionDetailView {
+	k := s.keyNames(ctx, []string{d.Session.User})[d.Session.User][d.Session.PubkeyFP]
+	v := sessionDetailView{SessionDetail: d, PubkeyName: k.name, PubkeyLine: d.Session.Pubkey}
+	if v.PubkeyLine == "" {
+		v.PubkeyLine = k.line
+	}
+	return v
 }
 
 func (s *Server) namedSessions(ctx context.Context, items []store.SessionSummary) []sessionItem {
@@ -68,7 +83,7 @@ func (s *Server) namedSessions(ctx context.Context, items []store.SessionSummary
 	names := s.keyNames(ctx, users)
 	out := make([]sessionItem, len(items))
 	for i, it := range items {
-		out[i] = sessionItem{SessionSummary: it, PubkeyName: names[it.User][it.PubkeyFP]}
+		out[i] = sessionItem{SessionSummary: it, PubkeyName: names[it.User][it.PubkeyFP].name}
 	}
 	return out
 }

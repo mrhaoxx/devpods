@@ -36,6 +36,7 @@ type Config struct {
 // SessionMeta identifies a session.
 type SessionMeta struct {
 	ID, User, DevPod, DevPodUID, Owner, ClientIP, PubkeyFP, AuthKind, ProxyAlias string
+	Pubkey                                                                       string // authorized_keys line, no comment
 	OpenedAt                                                                     time.Time
 	// Cluster the DevPod is in and Gateway (by registered name) the
 	// session came in at: set by a gateway that serves several clusters.

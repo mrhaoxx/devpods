@@ -16,15 +16,18 @@ type SessionRow struct {
 	Cluster string `ch:"cluster" json:"cluster,omitempty"`
 	// Gateway: the registered gateway it came in at, for a gateway of
 	// several clusters.
-	Gateway          string     `ch:"gateway" json:"gateway,omitempty"`
-	SessionID        string     `ch:"session_id" json:"session_id"`
-	User             string     `ch:"user" json:"user"`
-	DevPod           string     `ch:"devpod" json:"devpod"`
-	DevPodUID        string     `ch:"devpod_uid" json:"devpod_uid"`
-	Owner            string     `ch:"owner" json:"owner"`
-	GatewayPod       string     `ch:"gateway_pod" json:"gateway_pod"`
-	ClientIP         string     `ch:"client_ip" json:"client_ip"`
-	PubkeyFP         string     `ch:"pubkey_fp" json:"pubkey_fp"`
+	Gateway    string `ch:"gateway" json:"gateway,omitempty"`
+	SessionID  string `ch:"session_id" json:"session_id"`
+	User       string `ch:"user" json:"user"`
+	DevPod     string `ch:"devpod" json:"devpod"`
+	DevPodUID  string `ch:"devpod_uid" json:"devpod_uid"`
+	Owner      string `ch:"owner" json:"owner"`
+	GatewayPod string `ch:"gateway_pod" json:"gateway_pod"`
+	ClientIP   string `ch:"client_ip" json:"client_ip"`
+	PubkeyFP   string `ch:"pubkey_fp" json:"pubkey_fp"`
+	// Pubkey: the key itself, an authorized_keys line without a comment
+	// ("" in a session of before it was kept)
+	Pubkey           string     `ch:"pubkey" json:"pubkey,omitempty"`
 	AuthKind         string     `ch:"auth_kind" json:"auth_kind"`
 	ProxyAlias       string     `ch:"proxy_alias" json:"proxy_alias"`
 	BackendLocalAddr string     `ch:"backend_local_addr" json:"backend_local_addr"`

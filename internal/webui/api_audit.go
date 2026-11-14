@@ -221,7 +221,7 @@ func (s *Server) handleAuditSession(w http.ResponseWriter, r *http.Request) {
 	if d.Session.User != sess.User && !s.logAccess(w, r, sess.User, "view_session", d.Session.SessionID, "") {
 		return
 	}
-	s.writeJSON(w, http.StatusOK, sessionDetailView{SessionDetail: d, PubkeyName: s.keyNames(r.Context(), []string{d.Session.User})[d.Session.User][d.Session.PubkeyFP]})
+	s.writeJSON(w, http.StatusOK, s.detailView(r.Context(), d))
 }
 
 // segmentIterator walks a session's raw segments in order.

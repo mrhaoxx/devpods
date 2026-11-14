@@ -540,6 +540,7 @@ func handle(parent context.Context, id uint64, conn net.Conn, hostSigner ssh.Sig
 				"devpod.io/ambiguous": strings.Join(res.Ambiguous, " "),
 				"devpod.io/auth-path": string(apJSON),
 				"devpod.io/pubkey-fp": ssh.FingerprintSHA256(key),
+				"devpod.io/pubkey":    strings.TrimSpace(string(ssh.MarshalAuthorizedKey(key))),
 			},
 		}, nil
 	}
@@ -580,7 +581,7 @@ func handle(parent context.Context, id uint64, conn net.Conn, hostSigner ssh.Sig
 	sessionID := audit.NewSessionID(start)
 	gateway.SessionOpen(slog.Default(), sessionID, ap, clientIP, fp)
 	hooks, auditSess := ad.startSession(parent, audit.SessionMeta{
-		ID: sessionID, User: ap.User, DevPod: devpodName, ClientIP: clientIP, PubkeyFP: fp,
+		ID: sessionID, User: ap.User, DevPod: devpodName, ClientIP: clientIP, PubkeyFP: fp, Pubkey: srvConn.Permissions.Extensions["devpod.io/pubkey"],
 		AuthKind: ap.Kind, ProxyAlias: ap.Alias, OpenedAt: start,
 		DevPodUID: srvConn.Permissions.Extensions["devpod.io/uid"], Owner: srvConn.Permissions.Extensions["devpod.io/owner"],
 		Cluster: srvConn.Permissions.Extensions["devpod.io/cluster"], Gateway: ad.gatewayName,

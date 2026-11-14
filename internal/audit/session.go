@@ -75,7 +75,7 @@ func (s *Session) row(version uint64, closedAt *time.Time, reason string, in, ou
 	snap, _ := json.Marshal(s.pol)
 	return store.SessionRow{
 		SessionID: s.meta.ID, User: s.meta.User, DevPod: s.meta.DevPod, DevPodUID: s.meta.DevPodUID,
-		Owner: s.meta.Owner, GatewayPod: s.r.cfg.GatewayPod, ClientIP: s.meta.ClientIP, PubkeyFP: s.meta.PubkeyFP,
+		Owner: s.meta.Owner, GatewayPod: s.r.cfg.GatewayPod, ClientIP: s.meta.ClientIP, PubkeyFP: s.meta.PubkeyFP, Pubkey: s.meta.Pubkey,
 		AuthKind: s.meta.AuthKind, ProxyAlias: s.meta.ProxyAlias, BackendLocalAddr: s.backend,
 		OpenedAt: s.meta.OpenedAt, ClosedAt: closedAt, CloseReason: reason, BytesIn: in, BytesOut: out,
 		PolicySnapshot: string(snap), Gaps: s.gaps.Load(), Version: version,

@@ -253,6 +253,8 @@ export type SessionRow = {
   gateway_pod: string;
   client_ip: string;
   pubkey_fp: string;
+  /** the key itself, an authorized_keys line (absent in a session of before keys were kept) */
+  pubkey?: string;
   auth_kind: string;
   proxy_alias: string;
   backend_local_addr: string;
@@ -357,6 +359,8 @@ export type SessionDetail = {
   session: SessionRow;
   /** the comment of the user's key with the session's fingerprint, as the user's keys are now */
   pubkey_name?: string;
+  /** the key as an authorized_keys line: recorded, else the user's key with that fingerprint */
+  pubkey_line?: string;
   cluster?: string;
   gateway?: string;
   channels: ChannelRow[] | null;

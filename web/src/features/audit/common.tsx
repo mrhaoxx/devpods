@@ -82,16 +82,16 @@ export function LoadMore({ hasMore, busy, onClick }: { hasMore?: boolean; busy?:
 
 export const fmtTS = (iso: string) => new Date(iso).toLocaleString();
 
-/** KeyName: the key a session signed in with — its name among the user's
- *  keys when it is still one of them, else its fingerprint, shortened
- *  (the whole of it on hover). Through a trusted proxy (the web
- *  terminal) it is the proxy's key. */
+/** KeyName: the key a session signed in with — its whole SHA256
+ *  fingerprint, and its name among the user's keys when it is still one
+ *  of them. Through a trusted proxy (the web terminal) it is the proxy's
+ *  key. */
 export function KeyName({ fp, name, proxy }: { fp?: string; name?: string; proxy?: string }) {
   if (!fp) return <span className="text-faint">—</span>;
-  const short = fp.replace(/^SHA256:/, "").slice(0, 10) + "…";
   return (
-    <span title={`${fp}${proxy ? `（${proxy} 的密钥）` : name ? "" : "（不在该用户现在的公钥里）"}`}>
-      {name ? <span className="mono">{name}</span> : <span className="mono text-muted">{short}</span>}
+    <span className="inline-flex min-w-0 items-baseline gap-1.5" title={proxy ? `${proxy} 的密钥` : name ? undefined : "不在该用户现在的公钥里"}>
+      {name && <span className="shrink-0">{name}</span>}
+      <span className="mono truncate text-muted">{fp}</span>
     </span>
   );
 }

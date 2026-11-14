@@ -193,7 +193,7 @@ func (c *CH) ListSessions(ctx context.Context, f SessionFilter) ([]SessionSummar
 		return nil, "", err
 	}
 	var rows []SessionRow
-	q := fmt.Sprintf("SELECT %s FROM %s.sessions FINAL WHERE %s ORDER BY opened_at DESC, session_id DESC LIMIT %d", columns[SessionRow](), c.db, w.sql(), limit+1)
+	q := fmt.Sprintf("SELECT %s FROM %s.sessions FINAL WHERE %s ORDER BY opened_at DESC, session_id DESC LIMIT %d", c.known(ctx, "sessions", columns[SessionRow]()), c.db, w.sql(), limit+1)
 	if err := c.conn.Select(ctx, &rows, q, w.args...); err != nil {
 		return nil, "", fmt.Errorf("list sessions: %w", err)
 	}
@@ -277,7 +277,7 @@ func (c *CH) GetSession(ctx context.Context, id string) (*SessionDetail, error) 
 	}
 	ctx = c.readCtx(ctx)
 	var sessions []SessionRow
-	if err := c.conn.Select(ctx, &sessions, fmt.Sprintf("SELECT %s FROM %s.sessions FINAL WHERE session_id = ? AND opened_at >= ? AND opened_at < ? LIMIT 1", columns[SessionRow](), c.db),
+	if err := c.conn.Select(ctx, &sessions, fmt.Sprintf("SELECT %s FROM %s.sessions FINAL WHERE session_id = ? AND opened_at >= ? AND opened_at < ? LIMIT 1", c.known(ctx, "sessions", columns[SessionRow]()), c.db),
 		id, at.Add(-idSkew), at.Add(idSkew)); err != nil {
 		return nil, fmt.Errorf("get session: %w", err)
 	}

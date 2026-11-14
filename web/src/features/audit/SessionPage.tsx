@@ -16,8 +16,9 @@ import { Button } from "../../design/Button";
 import { ConfirmDialog } from "../../design/ConfirmDialog";
 import { EmptyState } from "../../design/EmptyState";
 import { Panel } from "../../design/Panel";
+import { CopyBlock, CopyField } from "../../design/Copy";
 import { SessionPlayer, type Marker } from "./SessionPlayer";
-import { AuditError, confirmDownload, fmtTS, KeyName } from "./common";
+import { AuditError, confirmDownload, fmtTS } from "./common";
 import { channelLabel, plainOutput, replayable } from "./replay";
 
 const kindTone: Record<TimelineItem["kind"], string> = {
@@ -141,9 +142,6 @@ export function SessionPage() {
           来源 <span className="mono text-ink">{s.client_ip}</span> · {s.proxy_alias ? `${s.proxy_alias}/` : ""}
           {s.auth_kind}
         </span>
-        <span>
-          公钥 <KeyName fp={s.pubkey_fp} name={q.data.pubkey_name} proxy={s.proxy_alias} />
-        </span>
         <span>开始 {fmtTS(s.opened_at)}</span>
         <span>
           时长 <span className="mono text-ink">{fmtDuration(end.getTime() - new Date(s.opened_at).getTime())}</span>
@@ -173,6 +171,21 @@ export function SessionPage() {
       >
         <span className="mono">{s.user}</span> 到 <span className="mono">{s.devpod}</span> 的 SSH 连接会立刻被切断，其中正在运行的前台程序会收到挂断信号。DevPod 本身不受影响，用户可以重新连接。此操作会写入访问记录。
       </ConfirmDialog>
+      {s.pubkey_fp && (
+        <section aria-label="登录公钥" className="space-y-1 text-xs">
+          <div className="flex flex-wrap items-baseline gap-x-2 text-muted">
+            <span>登录公钥</span>
+            {q.data.pubkey_name && <span className="text-ink">{q.data.pubkey_name}</span>}
+            {s.proxy_alias && <span>（{s.proxy_alias} 的密钥：经它登录）</span>}
+          </div>
+          <CopyField value={s.pubkey_fp} />
+          {q.data.pubkey_line ? (
+            <CopyBlock value={q.data.pubkey_line} />
+          ) : (
+            <p className="text-faint">这个会话没有记下公钥本身，用户现在的公钥里也没有这个指纹。</p>
+          )}
+        </section>
+      )}
       <p className="mono text-[11px] text-faint">
         策略：{snapshot.join(", ") || "全部允许"} · 会话 {s.session_id}
       </p>

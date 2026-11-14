@@ -470,3 +470,38 @@ func TestCluster_OldRecords(t *testing.T) {
 		t.Fatalf("session_origin still there: %d %v", gone, err)
 	}
 }
+
+// A gateway or console newer than the schema (b300 runs the migration
+// after the Deployments roll) reads and writes the columns there are,
+// and the new one once the migration adds it.
+func TestNewerThanTheSchema(t *testing.T) {
+	ctx := context.Background()
+	db := fmt.Sprintf("q_%d", time.Now().UnixNano())
+	c := openTestCH(t, db)
+	t.Cleanup(func() { _ = c.conn.Exec(context.Background(), "DROP DATABASE IF EXISTS "+db) })
+	if err := migrate(ctx, c, DefaultRetention(30), 5); err != nil { // before sessions.pubkey
+		t.Fatal(err)
+	}
+	old := colsFresh
+	colsFresh = 0 // read the columns afresh every time
+	t.Cleanup(func() { colsFresh = old })
+	at := time.Now().UTC().Truncate(time.Millisecond)
+	row := SessionRow{SessionID: "S1", User: "alice", DevPod: "alice-x", DevPodUID: "u1", PubkeyFP: "SHA256:x", Pubkey: "ssh-ed25519 AAAA", OpenedAt: at, Version: 1}
+	if err := c.Insert(ctx, Batch{Sessions: []SessionRow{row}}, "t1"); err != nil {
+		t.Fatalf("a row with a column the table lacks: %v", err)
+	}
+	f := SessionFilter{From: at.Add(-time.Hour), To: at.Add(time.Hour)}
+	if rows, _, err := c.ListSessions(ctx, f); err != nil || len(rows) != 1 || rows[0].PubkeyFP != "SHA256:x" || rows[0].Pubkey != "" {
+		t.Fatalf("read before the migration: %+v %v", rows, err)
+	}
+	if err := Migrate(ctx, c, DefaultRetention(30)); err != nil {
+		t.Fatal(err)
+	}
+	row.SessionID, row.Version = ulidAt(at), 1
+	if err := c.Insert(ctx, Batch{Sessions: []SessionRow{row}}, "t2"); err != nil {
+		t.Fatal(err)
+	}
+	if d, err := c.GetSession(ctx, row.SessionID); err != nil || d.Session.Pubkey != "ssh-ed25519 AAAA" {
+		t.Fatalf("after the migration the key is kept: %+v %v", d, err)
+	}
+}

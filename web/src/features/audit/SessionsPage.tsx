@@ -66,7 +66,7 @@ export function SessionsPage({ mine }: { mine?: boolean }) {
       id: "key",
       header: "公钥",
       accessorFn: (s) => s.pubkey_name || s.pubkey_fp,
-      meta: { priority: 5, width: 150 },
+      meta: { priority: 5, width: 420 },
       cell: ({ row: { original: s } }) => <KeyName fp={s.pubkey_fp} name={s.pubkey_name} proxy={s.proxy_alias} />,
     },
     { id: "start", header: "开始", accessorKey: "opened_at", meta: { priority: 3, width: 150 }, cell: ({ getValue }) => fmtTS(String(getValue())) },

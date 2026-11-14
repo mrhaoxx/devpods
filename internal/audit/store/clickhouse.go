@@ -48,6 +48,8 @@ type CH struct {
 	// readExtra is merged into every read query's settings (tests set
 	// force_index_by_date to prove each query is time-bounded).
 	readExtra clickhouse.Settings
+	// tables: the columns each table has, as last read (see known)
+	tables *tableCols
 }
 
 // CheckCHURL says whether the client takes url: one it does not never
@@ -82,7 +84,7 @@ func OpenCH(ctx context.Context, cfg CHConfig) (*CH, error) {
 		_ = conn.Close()
 		return nil, fmt.Errorf("clickhouse ping: %w", err)
 	}
-	return &CH{conn: conn, db: db}, nil
+	return &CH{conn: conn, db: db, tables: &tableCols{m: map[string]colSet{}}}, nil
 }
 
 // Close releases the connection pool.
@@ -114,7 +116,7 @@ func insertRows[T any](ctx context.Context, c *CH, table, token string, rows []T
 	}))
 	// the columns named: a table that has more (a later version's) takes
 	// their defaults, so adding a column never breaks a writer
-	batch, err := c.conn.PrepareBatch(ctx, fmt.Sprintf("INSERT INTO %s.%s (%s)", c.db, table, columns[T]()))
+	batch, err := c.conn.PrepareBatch(ctx, fmt.Sprintf("INSERT INTO %s.%s (%s)", c.db, table, c.known(ctx, table, columns[T]())))
 	if err != nil {
 		return fmt.Errorf("prepare %s: %w", table, err)
 	}

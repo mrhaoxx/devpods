@@ -285,7 +285,7 @@ func (c *CH) HookMissing(ctx context.Context, from, to time.Time) ([]SessionRow,
 	q := fmt.Sprintf(`SELECT %[2]s FROM %[1]s.sessions FINAL
 		WHERE opened_at >= ? AND closed_at >= ? AND closed_at < ? AND dateDiff('second', opened_at, closed_at) >= 60
 		  AND session_id IN (SELECT session_id FROM %[1]s.channels WHERE opened_at >= ? AND pty AND bytes_in >= 1024)
-		  AND session_id NOT IN (SELECT session_id FROM %[1]s.commands WHERE ts >= ? AND source = 'shell_hook')`, c.db, columns[SessionRow]())
+		  AND session_id NOT IN (SELECT session_id FROM %[1]s.commands WHERE ts >= ? AND source = 'shell_hook')`, c.db, c.known(ctx, "sessions", columns[SessionRow]()))
 	var out []SessionRow
 	if err := c.conn.Select(c.readCtx(ctx), &out, q, lo, from, to, lo, lo); err != nil {
 		return nil, fmt.Errorf("hook missing: %w", err)
