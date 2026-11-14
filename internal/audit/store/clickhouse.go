@@ -94,6 +94,17 @@ func (c *CH) Close() error { return c.conn.Close() }
 // insert_deduplication_token = token+"/"+table, so a retried batch is a
 // no-op.
 func (c *CH) Insert(ctx context.Context, b Batch, token string) error {
+	// a session's rows expire by last_active: one written without it (a
+	// writer of before, a test) has its close or opening, as the column's
+	// default gives a writer that does not name it — never 1970, gone at once
+	for i := range b.Sessions {
+		if r := &b.Sessions[i]; r.LastActive.IsZero() {
+			r.LastActive = r.OpenedAt
+			if r.ClosedAt != nil {
+				r.LastActive = *r.ClosedAt
+			}
+		}
+	}
 	var errs []error
 	errs = append(errs, insertRows(ctx, c, "sessions", token, b.Sessions))
 	errs = append(errs, insertRows(ctx, c, "channels", token, b.Channels))

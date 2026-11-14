@@ -156,3 +156,31 @@ type closeCounter struct {
 }
 
 func (c closeCounter) Close() error { *c.n++; return nil }
+
+// A segment under MinBytes is not sealed at MaxAge but at MaxAgeSmall:
+// a long session that prints a little all the time makes few segments.
+func TestSegment_SmallOnesWaitLonger(t *testing.T) {
+	now := time.Unix(1000, 0)
+	m := newMemSegs()
+	cfg := m.cfg(8<<20, time.Minute, func() time.Time { return now })
+	cfg.MinBytes, cfg.MaxAgeSmall = 1000, 10*time.Minute
+	w := NewSegmentWriter(cfg)
+	if err := w.Write(bigRecord(10, 1)); err != nil {
+		t.Fatal(err)
+	}
+	now = now.Add(61 * time.Second)
+	if _ = w.Tick(); len(m.sealed) != 0 {
+		t.Fatal("a small segment sealed at MaxAge")
+	}
+	now = now.Add(9 * time.Minute)
+	if _ = w.Tick(); len(m.sealed) != 1 {
+		t.Fatalf("a small segment not sealed at MaxAgeSmall: %v", m.sealed)
+	}
+	if err := w.Write(bigRecord(2000, 1)); err != nil { // one big enough: MaxAge as before
+		t.Fatal(err)
+	}
+	now = now.Add(61 * time.Second)
+	if _ = w.Tick(); len(m.sealed) != 2 {
+		t.Fatalf("a segment of MinBytes not sealed at MaxAge: %v", m.sealed)
+	}
+}

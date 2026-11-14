@@ -541,3 +541,28 @@ func TestSession_OpenRowCarriesBackendAddr(t *testing.T) {
 		}
 	})
 }
+
+// An open session's row is written again every RowInterval with its bytes
+// so far and its last activity, each time a later version; the close row
+// is the latest.
+func TestSession_LongSessionRowsKeepUp(t *testing.T) {
+	g := newRig(t, 1<<20)
+	s := g.start(policy.Effective{})
+	s.SetBytes(func() (int64, int64) { return 100, 200 })
+	s.tick(time.Now().Add(61 * time.Second))
+	s.Close("client_disconnect", 300, 400)
+	rows := g.drain().Sessions
+	if len(rows) != 3 {
+		t.Fatalf("rows %d, want open, a minute in, closed", len(rows))
+	}
+	mid, end := rows[1], rows[2]
+	if rows[0].Version != 1 || mid.Version != 2 || end.Version != 3 {
+		t.Fatalf("versions %d %d %d", rows[0].Version, mid.Version, end.Version)
+	}
+	if mid.ClosedAt != nil || mid.BytesIn != 100 || mid.BytesOut != 200 || mid.LastActive.IsZero() {
+		t.Fatalf("the row while open: %+v", mid)
+	}
+	if end.ClosedAt == nil || end.BytesIn != 300 || !end.LastActive.Equal(*end.ClosedAt) {
+		t.Fatalf("the close row: %+v", end)
+	}
+}

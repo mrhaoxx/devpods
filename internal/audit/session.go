@@ -47,6 +47,12 @@ type Session struct {
 	gapAlert  bool
 	closed    bool
 	watchers  []*watcher // live viewers (live.go)
+
+	// its row is written again now and then while it is open (its bytes
+	// and last activity so far), each time with the next version
+	version uint64
+	lastRow time.Time
+	bytes   func() (in, out int64) // the proxy's counts, when given
 }
 
 var _ SessionHooks = (*Session)(nil)
@@ -66,20 +72,50 @@ func (g *segFile) Close() error {
 }
 
 func newSession(r *Recorder, meta SessionMeta, pol policy.Effective) *Session {
-	s := &Session{r: r, meta: meta, pol: pol, done: make(chan struct{}), lastFlush: r.cfg.Now()}
-	s.buf.Sessions = append(s.buf.Sessions, s.row(1, nil, "", 0, 0))
+	s := &Session{r: r, meta: meta, pol: pol, done: make(chan struct{}), lastFlush: r.cfg.Now(), lastRow: r.cfg.Now()}
+	s.buf.Sessions = append(s.buf.Sessions, s.row(s.nextVersion(), nil, "", 0, 0))
 	return s
+}
+
+// nextVersion: each row written is a later version than the one before.
+func (s *Session) nextVersion() uint64 {
+	s.version++
+	return s.version
+}
+
+// SetBytes gives the session its bytes so far (the proxy's counts), for
+// the rows written while it is open.
+func (s *Session) SetBytes(f func() (in, out int64)) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.bytes = f
+}
+
+// rowNowLocked writes the open session's row again: bytes and last
+// activity so far, and a session longer than the retention is kept (its
+// rows expire by last activity).
+func (s *Session) rowNowLocked(now time.Time) {
+	var in, out int64
+	if s.bytes != nil {
+		in, out = s.bytes()
+	}
+	s.lastRow = now
+	s.buf.Sessions = append(s.buf.Sessions, s.row(s.nextVersion(), nil, "", in, out))
 }
 
 func (s *Session) row(version uint64, closedAt *time.Time, reason string, in, out int64) store.SessionRow {
 	snap, _ := json.Marshal(s.pol)
+	last := s.r.cfg.Now()
+	if closedAt != nil {
+		last = *closedAt
+	}
 	return store.SessionRow{
 		SessionID: s.meta.ID, User: s.meta.User, DevPod: s.meta.DevPod, DevPodUID: s.meta.DevPodUID,
 		Owner: s.meta.Owner, GatewayPod: s.r.cfg.GatewayPod, ClientIP: s.meta.ClientIP, PubkeyFP: s.meta.PubkeyFP, Pubkey: s.meta.Pubkey,
 		AuthKind: s.meta.AuthKind, ProxyAlias: s.meta.ProxyAlias, BackendLocalAddr: s.backend,
 		OpenedAt: s.meta.OpenedAt, ClosedAt: closedAt, CloseReason: reason, BytesIn: in, BytesOut: out,
 		PolicySnapshot: string(snap), Gaps: s.gaps.Load(), Version: version,
-		Cluster: s.meta.Cluster, Gateway: s.meta.Gateway,
+		Cluster: s.meta.Cluster, Gateway: s.meta.Gateway, LastActive: last,
 	}
 }
 
@@ -104,7 +140,7 @@ func (s *Session) SetBackendAddr(addr string) {
 			return
 		}
 	}
-	s.buf.Sessions = append(s.buf.Sessions, s.row(1, nil, "", 0, 0))
+	s.buf.Sessions = append(s.buf.Sessions, s.row(s.nextVersion(), nil, "", 0, 0))
 }
 
 // Done is closed when a fail-closed session must be torn down.
@@ -130,9 +166,11 @@ func (s *Session) KillReason() string {
 func (s *Session) newSegWriter() *rawlog.SegmentWriter {
 	cfg := s.r.cfg
 	return rawlog.NewSegmentWriter(rawlog.SegmentConfig{
-		MaxBytes: cfg.SegmentMaxBytes,
-		MaxAge:   cfg.SegmentMaxAge,
-		Now:      cfg.Now,
+		MaxBytes:    cfg.SegmentMaxBytes,
+		MaxAge:      cfg.SegmentMaxAge,
+		MinBytes:    cfg.SegmentMinBytes,
+		MaxAgeSmall: cfg.SegmentMaxAgeSmall,
+		Now:         cfg.Now,
 		Create: func(uint32) (io.WriteCloser, error) {
 			s.segSeq++
 			key := store.RawKey(s.meta.OpenedAt, s.meta.ID, s.segSeq)
@@ -224,6 +262,9 @@ func (s *Session) tick(now time.Time) {
 		if err := s.seg.Tick(); err != nil {
 			s.abandonSegmentLocked(err)
 		}
+	}
+	if now.Sub(s.lastRow) >= s.r.cfg.RowInterval {
+		s.rowNowLocked(now)
 	}
 	if now.Sub(s.lastFlush) >= s.r.cfg.FlushInterval {
 		s.flushLocked(now)
@@ -347,7 +388,7 @@ func (s *Session) Close(reason string, bytesIn, bytesOut int64) {
 		s.seg = nil
 	}
 	now := s.r.cfg.Now()
-	s.buf.Sessions = append(s.buf.Sessions, s.row(2, &now, reason, bytesIn, bytesOut))
+	s.buf.Sessions = append(s.buf.Sessions, s.row(s.nextVersion(), &now, reason, bytesIn, bytesOut))
 	s.flushLocked(now)
 	s.closed = true
 	s.endWatchersLocked()

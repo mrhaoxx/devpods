@@ -588,6 +588,9 @@ func handle(parent context.Context, id uint64, conn net.Conn, hostSigner ssh.Sig
 	})
 
 	stats := &gateway.ProxyStats{}
+	if auditSess != nil { // its row says its bytes so far while it is open
+		auditSess.SetBytes(func() (int64, int64) { return stats.BytesClientToBackend.Load(), stats.BytesBackendToClient.Load() })
+	}
 	sessionResult := "ok"
 	closeReason := "client_disconnect"
 

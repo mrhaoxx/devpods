@@ -27,7 +27,11 @@ type SessionRow struct {
 	PubkeyFP   string `ch:"pubkey_fp" json:"pubkey_fp"`
 	// Pubkey: the key itself, an authorized_keys line without a comment
 	// ("" in a session of before it was kept)
-	Pubkey           string     `ch:"pubkey" json:"pubkey,omitempty"`
+	Pubkey string `ch:"pubkey" json:"pubkey,omitempty"`
+	// LastActive: when its row was last written — open, every minute
+	// while open, closed; a session's rows expire by it, so one longer
+	// than the retention is not lost while it lasts
+	LastActive       time.Time  `ch:"last_active" json:"last_active"`
 	AuthKind         string     `ch:"auth_kind" json:"auth_kind"`
 	ProxyAlias       string     `ch:"proxy_alias" json:"proxy_alias"`
 	BackendLocalAddr string     `ch:"backend_local_addr" json:"backend_local_addr"`

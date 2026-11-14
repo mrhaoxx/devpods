@@ -22,7 +22,12 @@ const Magic = "DPRAW1\n"
 // SegmentConfig parameterises a SegmentWriter.
 type SegmentConfig struct {
 	MaxBytes int64         // seal once this many uncompressed bytes were written
-	MaxAge   time.Duration // seal on Tick once the segment is this old
+	MaxAge   time.Duration // seal on Tick once the segment is this old…
+	// …and holds MinBytes; a smaller one waits until it is MaxAgeSmall
+	// old (a long session printing a little every second — top — makes
+	// tens of segments an hour, not hundreds). 0: every segment at MaxAge.
+	MinBytes    int64
+	MaxAgeSmall time.Duration
 	// Create opens the destination of segment seq (1-based).
 	Create func(seq uint32) (io.WriteCloser, error)
 	// OnSeal is called after segment seq was flushed and closed.
@@ -100,12 +105,14 @@ func (w *SegmentWriter) Write(r Record) error {
 	return nil
 }
 
-// Tick seals a non-empty segment that has reached MaxAge.
+// Tick seals a non-empty segment that has reached MaxAge (a small one:
+// MaxAgeSmall).
 func (w *SegmentWriter) Tick() error {
 	if w.enc == nil || w.rawBytes == 0 {
 		return nil
 	}
-	if w.cfg.MaxAge > 0 && w.cfg.Now().Sub(w.started) >= w.cfg.MaxAge {
+	age := w.cfg.Now().Sub(w.started)
+	if w.cfg.MaxAge > 0 && age >= w.cfg.MaxAge && (w.rawBytes >= w.cfg.MinBytes || w.cfg.MaxAgeSmall <= 0 || age >= w.cfg.MaxAgeSmall) {
 		return w.seal()
 	}
 	return nil

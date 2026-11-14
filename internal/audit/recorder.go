@@ -28,9 +28,17 @@ type Config struct {
 	GatewayPod    string
 
 	SegmentMaxBytes int64         // default 8 MiB
-	SegmentMaxAge   time.Duration // default 60s
-	FlushInterval   time.Duration // default 5s
-	Now             func() time.Time
+	SegmentMaxAge   time.Duration // default 60s…
+	// …for a segment of at least SegmentMinBytes (default 256 KiB); a
+	// smaller one is sealed at SegmentMaxAgeSmall (default 10 min). An
+	// open segment is the part a gateway that dies hard loses.
+	SegmentMinBytes    int64
+	SegmentMaxAgeSmall time.Duration
+	FlushInterval      time.Duration // default 5s
+	// RowInterval: how often an open session's row is written again —
+	// its bytes and last activity so far (default 1 min).
+	RowInterval time.Duration
+	Now         func() time.Time
 }
 
 // SessionMeta identifies a session.
@@ -83,6 +91,15 @@ func NewRecorder(cfg Config) (*Recorder, error) {
 	}
 	if cfg.SegmentMaxAge <= 0 {
 		cfg.SegmentMaxAge = 60 * time.Second
+	}
+	if cfg.SegmentMinBytes <= 0 {
+		cfg.SegmentMinBytes = 256 << 10
+	}
+	if cfg.SegmentMaxAgeSmall <= 0 {
+		cfg.SegmentMaxAgeSmall = 10 * time.Minute
+	}
+	if cfg.RowInterval <= 0 {
+		cfg.RowInterval = time.Minute
 	}
 	if cfg.FlushInterval <= 0 {
 		cfg.FlushInterval = 5 * time.Second

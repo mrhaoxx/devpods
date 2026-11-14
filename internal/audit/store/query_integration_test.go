@@ -479,7 +479,7 @@ func TestNewerThanTheSchema(t *testing.T) {
 	db := fmt.Sprintf("q_%d", time.Now().UnixNano())
 	c := openTestCH(t, db)
 	t.Cleanup(func() { _ = c.conn.Exec(context.Background(), "DROP DATABASE IF EXISTS "+db) })
-	if err := migrate(ctx, c, DefaultRetention(30), 5); err != nil { // before sessions.pubkey
+	if err := migrate(ctx, c, DefaultRetention(30), 5); err != nil { // before sessions.pubkey and last_active
 		t.Fatal(err)
 	}
 	old := colsFresh
@@ -496,6 +496,10 @@ func TestNewerThanTheSchema(t *testing.T) {
 	}
 	if err := Migrate(ctx, c, DefaultRetention(30)); err != nil {
 		t.Fatal(err)
+	}
+	// a row of before has its opening (here: no close) as last activity
+	if rows, _, err := c.ListSessions(ctx, f); err != nil || len(rows) != 1 || !rows[0].LastActive.Equal(at) {
+		t.Fatalf("an old row's last activity: %+v %v", rows, err)
 	}
 	row.SessionID, row.Version = ulidAt(at), 1
 	if err := c.Insert(ctx, Batch{Sessions: []SessionRow{row}}, "t2"); err != nil {
