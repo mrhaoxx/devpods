@@ -559,7 +559,11 @@ func runList(e *Env, a *parsed) int {
 			if several {
 				fmt.Fprintf(w, "%s\t", dash(it.Cluster))
 			}
-			fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n", dp.Name, dp.Spec.Owner, dash(string(dp.Status.Phase)), dash(list.Pods[joinRef(it.Cluster, dp.Name)].Node),
+			node := list.Pods[joinRef(it.Cluster, dp.Name)].Node
+			if node == "" {
+				node = pinnedNode(dp) // hibernated or not placed yet: where it is pinned
+			}
+			fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n", dp.Name, dp.Spec.Owner, dash(string(dp.Status.Phase)), dash(node),
 				dash(image(c)), dash(limit(c, corev1.ResourceCPU)), dash(limit(c, corev1.ResourceMemory)), dash(gpuLimit(c)),
 				age(e.Now(), dp.CreationTimestamp.Time))
 		}
@@ -608,6 +612,8 @@ func runShow(e *Env, a *parsed) int {
 	}
 	if d.Pod != nil {
 		kv = append(kv, [2]string{"node", d.Pod.Node}, [2]string{"ip", d.Pod.IP})
+	} else if n := pinnedNode(dp); n != "" {
+		kv = append(kv, [2]string{"node", n})
 	}
 	kv = append(kv, [2]string{"image", image(c)}, [2]string{"cpu", limit(c, corev1.ResourceCPU)}, [2]string{"memory", limit(c, corev1.ResourceMemory)},
 		[2]string{"gpu", gpuLimit(c)}, [2]string{"shell", dp.Spec.Shell}, [2]string{"collaborators", strings.Join(dp.Spec.Collaborators, ", ")})
@@ -1114,4 +1120,9 @@ func portAccess(public, users []int, port int) string {
 		return "users"
 	}
 	return "private"
+}
+
+// pinnedNode: the node dp is pinned to ("" when the scheduler picks).
+func pinnedNode(dp *devpodv1alpha1.DevPod) string {
+	return dp.Spec.Pod.Spec.NodeSelector["kubernetes.io/hostname"]
 }

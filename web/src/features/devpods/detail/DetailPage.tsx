@@ -5,7 +5,7 @@ import { LoadMore, usePaged } from "../../audit/common";
 import { Provenance } from "./Provenance";
 import { preloadYamlEditor } from "../../../design/yaml/YamlEditor";
 import { Notice } from "../../../design/Form";
-import { reservationNotes } from "../status";
+import { pinnedNode, reservationNotes } from "../status";
 import { useReservationsNow } from "../../reservations/useReservationsNow";
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
@@ -228,7 +228,7 @@ export function DetailPage() {
       <Provenance dp={cluster ? { ...dp, cluster } : dp} outdated={d.configOutdated} />
       <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs">
         {me?.admin && <Meta k="Owner">{owner}</Meta>}
-        <Meta k="节点">{pod?.node}</Meta>
+        <Meta k="节点">{pod?.node || pinnedNode(dp)}</Meta>
         <Meta k="镜像">{image}</Meta>
         <Meta k="IP">{pod?.ip}</Meta>
         <Meta k="home">{dp.spec.persistence ? `PVC ${dp.spec.persistence.size}` : "无持久化"}</Meta>

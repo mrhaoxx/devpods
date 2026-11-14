@@ -29,7 +29,8 @@ export function phaseSummary(dp: DevPod, _pod: PodInfo | undefined, now: Date): 
 export type ReservationsNow = { items: Reservation[]; noticeMs: number; now: number };
 export type ReservationNote = { type: string; label: string; tone: "fail" | "warm"; message: string };
 
-const pinnedNode = (dp: DevPod) => dp.spec.pod?.spec?.nodeSelector?.["kubernetes.io/hostname"] ?? "";
+/** pinnedNode: the node a DevPod is pinned to ("" when the scheduler picks). */
+export const pinnedNode = (dp: DevPod) => dp.spec.pod?.spec?.nodeSelector?.["kubernetes.io/hostname"] ?? "";
 const lossWarning = (dp: DevPod) => (dp.spec.persistence ? "" : "；休眠后容器内数据丢失");
 
 /** reservationNotes: what node reservations mean for a DevPod now — it is

@@ -14,7 +14,7 @@ import { MetricCell } from "../../design/MetricCell";
 import { StatusDot, phaseLabel } from "../../design/StatusDot";
 import { Badge } from "../../design/Badge";
 import { fmtAge, fmtBytes, fmtCores, fmtRate, parseQuantity, gpuCount } from "../../lib/format";
-import { phaseSummary, reservationNotes, type ReservationsNow } from "./status";
+import { phaseSummary, pinnedNode, reservationNotes, type ReservationsNow } from "./status";
 import { sparkSeries } from "../../lib/spark";
 import { provenance } from "./provenance";
 import type { UsageKey } from "./usage";
@@ -46,7 +46,8 @@ export function toRow(dp: DevPod, pod?: PodInfo): Row {
     name: dp.metadata.name,
     owner: dp.spec.owner,
     phase: dp.status?.phase ?? (dp.spec.running ? "Pending" : "Stopped"),
-    node: pod?.node ?? "",
+    // where its Pod is — or, with none (hibernated, not placed yet), where it is pinned
+    node: pod?.node || pinnedNode(dp),
     image: c?.image ?? "",
     gpu: gpuCount(lim),
     cpuLimit: parseQuantity(lim.cpu),
