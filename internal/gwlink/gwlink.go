@@ -28,6 +28,7 @@ import (
 
 	devpodv1alpha1 "github.com/mrhaoxx/devpod/api/v1alpha1"
 	"github.com/mrhaoxx/devpod/internal/agent"
+	"github.com/mrhaoxx/devpod/internal/tunnel"
 )
 
 // Request headers of a signed request.
@@ -151,6 +152,43 @@ type Report struct {
 	// InternalKey: the key it signs into DevPods with (authorized_keys
 	// line), for the DevPods of the clusters it serves to trust.
 	InternalKey string `json:"internalKey,omitempty"`
+}
+
+// StatusPath is where the console asks a gateway replica, over the link
+// that replica keeps to it, what it holds now: Status.
+const StatusPath = "/gateway/status"
+
+// Status is a gateway replica as it is now.
+type Status struct {
+	Instance string `json:"instance"`
+	Version  string `json:"version,omitempty"`
+	// Clusters whose agents are connected to it, and their links.
+	Clusters []ClusterLink `json:"clusters"`
+	// Sessions it carries now.
+	Sessions []Session `json:"sessions"`
+}
+
+// ClusterLink is a cluster's agent's link to a gateway replica.
+type ClusterLink struct {
+	Name string `json:"name"`
+	tunnel.LinkStats
+}
+
+// Session is an SSH session a gateway replica carries.
+type Session struct {
+	ID      string `json:"id"`
+	User    string `json:"user"`
+	DevPod  string `json:"devpod"`
+	Cluster string `json:"cluster,omitempty"`
+	Client  string `json:"client"`         // its address, or "console" for the web terminal
+	Kind    string `json:"kind,omitempty"` // how it signed in
+	// PubkeyFP: the fingerprint of the key it signed in with (a trusted
+	// proxy's — the web terminal's — when it came through one)
+	PubkeyFP string    `json:"pubkeyFp,omitempty"`
+	Since    time.Time `json:"since"`
+	// Up and Down: bytes from the client to the DevPod and back.
+	Up   int64 `json:"up"`
+	Down int64 `json:"down"`
 }
 
 // ReportAnswer is what the console says back to a report.

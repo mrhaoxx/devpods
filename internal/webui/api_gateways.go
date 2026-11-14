@@ -30,6 +30,7 @@ import (
 	devpodv1alpha1 "github.com/mrhaoxx/devpod/api/v1alpha1"
 	"github.com/mrhaoxx/devpod/internal/gwlink"
 	"github.com/mrhaoxx/devpod/internal/httpauth"
+	"github.com/mrhaoxx/devpod/internal/tunnel"
 	"github.com/mrhaoxx/devpod/internal/webui/clusters"
 )
 
@@ -59,6 +60,17 @@ type adminGatewayView struct {
 	Version      string     `json:"version,omitempty"`
 	Clusters     []string   `json:"clusters,omitempty"`
 	CreatedAt    time.Time  `json:"createdAt"`
+	// Replicas connected to this console replica, as they are now.
+	Replicas []gatewayReplicaView `json:"replicas,omitempty"`
+}
+
+// gatewayReplicaView is one replica of a gateway: its link to this
+// console replica and what it said it holds (or why it said nothing).
+type gatewayReplicaView struct {
+	Pod    string           `json:"pod"`
+	Link   tunnel.LinkStats `json:"link"`
+	Status *gwlink.Status   `json:"status,omitempty"`
+	Error  string           `json:"error,omitempty"`
 }
 
 func viewGateway(g *devpodv1alpha1.Gateway) gatewayView {
@@ -123,7 +135,42 @@ func (s *Server) handleAdminGateways(w http.ResponseWriter, r *http.Request) {
 	for i := range list {
 		items = append(items, viewAdminGateway(&list[i]))
 	}
+	s.gatewayReplicas(r.Context(), items)
 	s.writeJSON(w, http.StatusOK, map[string]any{"items": items})
+}
+
+// gatewayReplicas asks every replica of every gateway connected to this
+// console what it holds now, all at once, a few seconds at most.
+func (s *Server) gatewayReplicas(ctx context.Context, items []adminGatewayView) {
+	if s.GatewayLinks == nil {
+		return
+	}
+	ctx, cancel := context.WithTimeout(ctx, 4*time.Second)
+	defer cancel()
+	var wg sync.WaitGroup
+	for i := range items {
+		links := s.GatewayLinks.Replicas(items[i].Name)
+		pods := make([]string, 0, len(links))
+		for pod := range links {
+			pods = append(pods, pod)
+		}
+		sort.Strings(pods)
+		items[i].Replicas = make([]gatewayReplicaView, len(pods))
+		for j, pod := range pods {
+			items[i].Replicas[j] = gatewayReplicaView{Pod: pod, Link: links[pod]}
+			wg.Add(1)
+			go func(rv *gatewayReplicaView, gw string) {
+				defer wg.Done()
+				st, err := s.GatewayLinks.Status(ctx, gw, rv.Pod)
+				if err != nil {
+					rv.Error = err.Error()
+					return
+				}
+				rv.Status = st
+			}(&items[i].Replicas[j], items[i].Name)
+		}
+	}
+	wg.Wait()
 }
 
 // gatewayJoinCommand is what the admin runs where the gateway is installed.

@@ -11,6 +11,7 @@ import { CopyBlock } from "../../design/Copy";
 import { EmptyState } from "../../design/EmptyState";
 import { Field, Input, Notice, Select } from "../../design/Form";
 import { GatewaysPanel, useAdminGateways } from "./GatewaysPanel";
+import { Rtt, Since, Traffic, ago } from "./links";
 import {
   createCluster,
   deleteCluster,
@@ -23,14 +24,12 @@ import {
   type Joining,
 } from "./api";
 
-const ago = (iso?: string) => {
-  if (!iso) return "—";
-  const s = Math.max(0, Math.round((Date.now() - new Date(iso).getTime()) / 1000));
-  if (s < 60) return "刚刚";
-  if (s < 3600) return `${Math.floor(s / 60)} 分钟前`;
-  if (s < 86400) return `${Math.floor(s / 3600)} 小时前`;
-  return `${Math.floor(s / 86400)} 天前`;
-};
+/** Connection: since when its agent's link is up, or when it was last seen. */
+function Connection({ c }: { c: AdminCluster }) {
+  if (c.link) return <Since l={c.link} />;
+  if (c.connected && !c.paused) return <span className="text-muted" title="这次回答的控制台副本没有它的连接；刷新可能换到另一个副本">在另一个控制台副本上</span>;
+  return <span className="text-muted">{c.lastSeen ? `最后在线 ${ago(c.lastSeen)}` : "—"}</span>;
+}
 
 function State({ c }: { c: AdminCluster }) {
   if (c.paused) return <Badge tone="idle">已暂停</Badge>;
@@ -95,7 +94,7 @@ export function ClustersPage() {
           <table className="w-full text-left text-xs">
             <thead className="border-b border-line text-muted">
               <tr>
-                {["名称", "显示名", "状态", "最近联系", "版本", "能力", "网关", ""].map((h) => (
+                {["名称", "显示名", "状态", "连接", "延迟", "流量（收 / 发）", "版本", "能力", "网关", ""].map((h) => (
                   <th key={h} className="px-3 py-2 font-medium">
                     {h}
                   </th>
@@ -110,7 +109,15 @@ export function ClustersPage() {
                   <td className="px-3 py-2">
                     <State c={c} />
                   </td>
-                  <td className="px-3 py-2 text-muted">{c.connected && !c.paused ? "现在" : ago(c.lastSeen)}</td>
+                  <td className="px-3 py-2 whitespace-nowrap">
+                    <Connection c={c} />
+                  </td>
+                  <td className="px-3 py-2">
+                    <Rtt l={c.link} />
+                  </td>
+                  <td className="px-3 py-2">
+                    <Traffic l={c.link} />
+                  </td>
                   <td className="px-3 py-2 text-muted">
                     {c.agentVersion ? (
                       <span title={`controller ${c.controllerVersion || "?"} · Kubernetes ${c.kubernetesVersion || "?"}`}>agent {c.agentVersion}</span>

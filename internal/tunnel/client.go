@@ -302,6 +302,15 @@ func (c *Client) connect(ctx context.Context) (used bool, err error) {
 // been silent for Dead.
 func (c *Client) controlLoop(ctx context.Context, name string, nc net.Conn) {
 	done := make(chan struct{})
+	// the server's own pings are said back, for it to know the round
+	// trip — by this loop, the only writer: the reader never waits on a
+	// write (over a connection with no room, the reader waiting to write
+	// and the server waiting for it to read would hold each other)
+	pings := make(chan uint64, 1)
+	write := func(m ctrlMsg) error {
+		_ = nc.SetWriteDeadline(time.Now().Add(c.o.Dead))
+		return writeFrame(nc, m)
+	}
 	go func() {
 		defer close(done)
 		for {
@@ -310,6 +319,13 @@ func (c *Client) controlLoop(ctx context.Context, name string, nc net.Conn) {
 			if err := readFrame(nc, &m); err != nil {
 				return
 			}
+			if m.T == "ping" && m.N != 0 {
+				select { // only the latest matters
+				case <-pings:
+				default:
+				}
+				pings <- m.N
+			}
 		}
 	}()
 	tick := time.NewTicker(c.o.Heartbeat)
@@ -317,9 +333,12 @@ func (c *Client) controlLoop(ctx context.Context, name string, nc net.Conn) {
 loop:
 	for {
 		select {
+		case n := <-pings:
+			if err := write(ctrlMsg{T: "pong", N: n}); err != nil {
+				break loop
+			}
 		case <-tick.C:
-			_ = nc.SetWriteDeadline(time.Now().Add(c.o.Dead))
-			if err := writeFrame(nc, ctrlMsg{T: "ping"}); err != nil {
+			if err := write(ctrlMsg{T: "ping"}); err != nil {
 				break loop
 			}
 		case <-done:

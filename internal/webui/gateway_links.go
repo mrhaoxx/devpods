@@ -6,12 +6,15 @@ package webui
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"math/rand/v2"
 	"net"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/coder/websocket"
 	"k8s.io/apimachinery/pkg/types"
@@ -34,7 +37,8 @@ const gatewayLinkHost = ".gateway-link.invalid"
 
 // GatewayLinks accepts the gateways' connections.
 type GatewayLinks struct {
-	srv *tunnel.Server
+	srv    *tunnel.Server
+	client *http.Client // to a replica, over its link
 }
 
 // NewGatewayLinks: reader reads Gateway objects; instance and instances
@@ -43,7 +47,9 @@ func NewGatewayLinks(reader client.Reader, instance string, instances func() []s
 	if instances == nil {
 		instances = func() []string { return []string{instance} }
 	}
-	return &GatewayLinks{srv: tunnel.NewServer(tunnel.ServerOptions{
+	g := &GatewayLinks{}
+	g.client = &http.Client{Transport: &http.Transport{DialContext: g.DialContext}, Timeout: 4 * time.Second}
+	g.srv = tunnel.NewServer(tunnel.ServerOptions{
 		Instance: instance, Instances: instances,
 		Authorize: func(ctx context.Context, hello tunnel.Hello, nonce, proof []byte) (string, error) {
 			name, replica, ok := strings.Cut(hello.Name, ".")
@@ -60,7 +66,45 @@ func NewGatewayLinks(reader client.Reader, instance string, instances func() []s
 			}
 			return hello.Name, nil
 		},
-	})}
+	})
+	return g
+}
+
+// Replicas are the replicas of gateway connected to this console, by Pod,
+// with their links to it.
+func (g *GatewayLinks) Replicas(gateway string) map[string]tunnel.LinkStats {
+	out := map[string]tunnel.LinkStats{}
+	for peer, l := range g.srv.Stats() {
+		if pod, ok := strings.CutPrefix(peer, gateway+"."); ok && gateway != "" {
+			out[pod] = l
+		}
+	}
+	return out
+}
+
+// Status asks a replica of gateway what it holds now (gwlink.Status).
+func (g *GatewayLinks) Status(ctx context.Context, gateway, pod string) (*gwlink.Status, error) {
+	addr, ok := g.AddrOf(gateway, pod)
+	if !ok {
+		return nil, fmt.Errorf("gateway %s (replica %s) is not connected to this console", gateway, pod)
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "http://"+addr+gwlink.StatusPath, nil)
+	if err != nil {
+		return nil, err
+	}
+	resp, err := g.client.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("the replica answered %s (a gateway of before v0.9.23 has no status)", resp.Status)
+	}
+	var st gwlink.Status
+	if err := json.NewDecoder(io.LimitReader(resp.Body, 8<<20)).Decode(&st); err != nil {
+		return nil, err
+	}
+	return &st, nil
 }
 
 // Accept runs one connection of a gateway until it ends.

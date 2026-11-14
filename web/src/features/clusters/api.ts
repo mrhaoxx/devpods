@@ -12,6 +12,20 @@ export interface Cluster {
   gateway?: string;
 }
 
+/** A link as the end that accepted it sees it: since when, the latest
+ *  round trip (absent: the other end does not answer pings), and bytes
+ *  received (rx) and sent (tx) — in all and per second. */
+export interface LinkStats {
+  since: string;
+  rttMs?: number;
+  rxRate: number;
+  txRate: number;
+  rx: number;
+  tx: number;
+  streams: number;
+  idle: number;
+}
+
 /** GET /api/admin/clusters adds what an admin manages. */
 export interface AdminCluster extends Cluster {
   joined: boolean;
@@ -20,6 +34,8 @@ export interface AdminCluster extends Cluster {
   controllerVersion?: string;
   kubernetesVersion?: string;
   createdAt: string;
+  /** its agent's link to the console replica that answered */
+  link?: LinkStats;
 }
 
 /** A join token is answered once, with the command to run in the cluster. */
@@ -59,6 +75,37 @@ export interface AdminGateway {
   version?: string;
   clusters?: string[];
   createdAt: string;
+  /** its replicas linked to the console replica that answered */
+  replicas?: GatewayReplica[];
+}
+
+/** An SSH session a gateway replica carries. */
+export interface GatewaySession {
+  id: string;
+  user: string;
+  devpod: string;
+  cluster?: string;
+  client: string;
+  kind?: string;
+  pubkeyFp?: string;
+  since: string;
+  up: number;
+  down: number;
+}
+/** What a gateway replica holds now. */
+export interface GatewayStatus {
+  instance: string;
+  version?: string;
+  clusters: (LinkStats & { name: string })[];
+  sessions: GatewaySession[];
+}
+export interface GatewayReplica {
+  pod: string;
+  /** its link to the console replica that answered */
+  link: LinkStats;
+  status?: GatewayStatus;
+  /** why it said nothing (a gateway of before v0.9.23 has no status) */
+  error?: string;
 }
 export interface GatewayJoining {
   gateway: AdminGateway;

@@ -468,3 +468,38 @@ func TestAuthorize(t *testing.T) {
 		t.Fatalf("nonces %x %x", n1, n2)
 	}
 }
+
+// An instance knows each link's round trip (it pings, the peer answers),
+// what its streams carried and how many are open.
+func TestStats_RoundTripBytesAndStreams(t *testing.T) {
+	ctx, s := setup(t)
+	srv := s.add(t, "i0", nil, nil)
+	c, got := newClient(t, ctx, s, "mulan", 1)
+	eventually(t, "connected", func() bool { return settled(c, []string{"i0"}, 1) })
+	eventually(t, "a round trip", func() bool { return srv.Peers()["mulan"].RTT > 0 })
+
+	conn, err := srv.Dial(ctx, "mulan", []byte("kube"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	st := <-got
+	go func() { _, _ = st.conn.Write(make([]byte, 1000)) }()
+	if _, err := io.ReadFull(conn, make([]byte, 1000)); err != nil {
+		t.Fatal(err)
+	}
+	go func() { _, _ = io.ReadFull(st.conn, make([]byte, 300)) }()
+	if _, err := conn.Write(make([]byte, 300)); err != nil {
+		t.Fatal(err)
+	}
+	p := srv.Peers()["mulan"]
+	if p.Rx != 1000 || p.Tx < 300 || p.Streams != 1 {
+		t.Fatalf("rx %d tx %d streams %d: want 1000, ≥300 (the purpose too), 1", p.Rx, p.Tx, p.Streams)
+	}
+	if l := srv.Stats()["mulan"]; l.Rx != 1000 || l.RxRate <= 0 || l.RTTMillis <= 0 || l.Since.IsZero() {
+		t.Fatalf("stats %+v", l)
+	}
+	_ = conn.Close()
+	if p := srv.Peers()["mulan"]; p.Streams != 0 {
+		t.Fatalf("streams after close: %d", p.Streams)
+	}
+}

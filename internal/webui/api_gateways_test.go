@@ -204,6 +204,12 @@ func TestGateways(t *testing.T) {
 	defer stopLink()
 	ln := tunnel.NewListener()
 	replica := &http.Server{Handler: http.HandlerFunc(func(rw http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == gwlink.StatusPath { // what the replica holds now
+			_ = json.NewEncoder(rw).Encode(gwlink.Status{Instance: "gw-pod-1", Version: "v9",
+				Clusters: []gwlink.ClusterLink{{Name: "mulan", LinkStats: tunnel.LinkStats{RTTMillis: 3.5, Streams: 2}}},
+				Sessions: []gwlink.Session{{ID: "s1", User: "gl-alice", DevPod: "dev", Cluster: "mulan", Client: "1.2.3.4:5", Up: 10, Down: 20}}})
+			return
+		}
 		_, _ = rw.Write([]byte("live endpoint of gw-pod-1: " + r.Method + " " + r.URL.Path))
 	})}
 	go func() { _ = replica.Serve(ln) }()
@@ -253,6 +259,20 @@ func TestGateways(t *testing.T) {
 	_ = lresp.Body.Close()
 	if string(lbody) != "live endpoint of gw-pod-1: GET /live/session-1" {
 		t.Fatalf("over the link: %q", lbody)
+	}
+	// the admin list shows each replica linked here: its link, its clusters' links, its sessions
+	_, gws, _ := w.call("root", "GET", "/api/admin/gateways", "")
+	reps, _ := gws["items"].([]any)[0].(map[string]any)["replicas"].([]any)
+	if len(reps) != 1 {
+		t.Fatalf("replicas: %v", gws)
+	}
+	rep := reps[0].(map[string]any)
+	st, _ := rep["status"].(map[string]any)
+	cls, _ := st["clusters"].([]any)
+	sess, _ := st["sessions"].([]any)
+	if rep["pod"] != "gw-pod-1" || rep["link"].(map[string]any)["since"] == nil || len(cls) != 1 || cls[0].(map[string]any)["rttMs"] != 3.5 ||
+		len(sess) != 1 || sess[0].(map[string]any)["user"] != "gl-alice" {
+		t.Fatalf("the replica as the admin sees it: %v", rep)
 	}
 	// the web terminal reaches the gateway's SSH over a replica's link
 	sc, err := w.s.GatewayLinks.DialSSH(ctx, "b300")

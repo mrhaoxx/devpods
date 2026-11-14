@@ -177,6 +177,13 @@ func (r *Registry) Connected(cluster string) (bool, time.Time) {
 	return false, r.seen[cluster]
 }
 
+// Link is the cluster's agent's link to this instance: since when, its
+// round trip and what it carries.
+func (r *Registry) Link(cluster string) (tunnel.LinkStats, bool) {
+	l, ok := r.srv.Stats()[cluster]
+	return l, ok
+}
+
 // Info is the latest a connected cluster said about itself.
 func (r *Registry) Info(cluster string) (agent.Info, bool) {
 	r.mu.Lock()

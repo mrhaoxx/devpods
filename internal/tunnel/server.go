@@ -11,6 +11,7 @@ import (
 	"net"
 	"slices"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -45,6 +46,14 @@ type ServerOptions struct {
 type PeerStatus struct {
 	Idle  int
 	Since time.Time
+	// RTT is the round trip of the latest ping this instance sent and the
+	// peer answered (0: none answered yet — a peer of before pings both
+	// ways never answers).
+	RTT time.Duration
+	// Rx and Tx: bytes read from and written to the peer's streams, since
+	// it connected. Streams: those open now.
+	Rx, Tx  int64
+	Streams int
 }
 
 // Server is one instance accepting initiators.
@@ -55,6 +64,7 @@ type Server struct {
 	peers  map[string]*peer
 	conns  map[net.Conn]struct{}
 	closed bool
+	meter  meter // what Stats last read
 }
 
 type peer struct {
@@ -64,6 +74,13 @@ type peer struct {
 	gone     chan struct{} // closed when the control connection ends
 	goneOnce sync.Once
 	since    time.Time
+	io       *peerIO
+}
+
+// peerIO counts what a peer's streams carry, and its round trip.
+type peerIO struct {
+	rx, tx, streams atomic.Int64
+	rtt             atomic.Int64 // nanoseconds
 }
 
 // conn is a data connection; done closes when it is closed.
@@ -75,10 +92,33 @@ type conn struct {
 	// connection is the stream's and nothing else is written to it.
 	wmu   sync.Mutex
 	taken bool
+	// io counts the stream's bytes; set (under wmu) when it is taken
+	io *peerIO
+}
+
+func (c *conn) Read(b []byte) (int, error) {
+	n, err := c.Conn.Read(b)
+	if c.io != nil {
+		c.io.rx.Add(int64(n))
+	}
+	return n, err
+}
+
+func (c *conn) Write(b []byte) (int, error) {
+	n, err := c.Conn.Write(b)
+	if c.io != nil {
+		c.io.tx.Add(int64(n))
+	}
+	return n, err
 }
 
 func (c *conn) Close() error {
-	c.once.Do(func() { close(c.done) })
+	c.once.Do(func() {
+		close(c.done)
+		if c.io != nil {
+			c.io.streams.Add(-1)
+		}
+	})
 	return c.Conn.Close()
 }
 
@@ -148,7 +188,8 @@ func (s *Server) Peers() map[string]PeerStatus {
 	defer s.mu.Unlock()
 	out := make(map[string]PeerStatus, len(s.peers))
 	for name, p := range s.peers {
-		out[name] = PeerStatus{Idle: len(p.idle), Since: p.since}
+		out[name] = PeerStatus{Idle: len(p.idle), Since: p.since, RTT: time.Duration(p.io.rtt.Load()),
+			Rx: p.io.rx.Load(), Tx: p.io.tx.Load(), Streams: int(p.io.streams.Load())}
 	}
 	return out
 }
@@ -193,7 +234,7 @@ func (s *Server) Accept(ctx context.Context, nc net.Conn) {
 }
 
 func (s *Server) control(ctx context.Context, name string, nc net.Conn, ok result) {
-	p := &peer{control: nc, arrive: make(chan struct{}, 1), gone: make(chan struct{}), since: time.Now()}
+	p := &peer{control: nc, arrive: make(chan struct{}, 1), gone: make(chan struct{}), since: time.Now(), io: &peerIO{}}
 	// a peer's coming and going are told in the order they happen
 	s.notify.Lock()
 	s.mu.Lock()
@@ -214,19 +255,59 @@ func (s *Server) control(ctx context.Context, name string, nc net.Conn, ok resul
 	stop := context.AfterFunc(ctx, func() { _ = nc.Close() })
 	defer stop()
 	var wmu sync.Mutex
+	// this instance pings too, numbered, to know the round trip
+	var sent struct {
+		sync.Mutex
+		n  uint64
+		at time.Time
+	}
+	ended := make(chan struct{})
+	defer close(ended)
+	go func() {
+		tick := time.NewTicker(s.o.Heartbeat)
+		defer tick.Stop()
+		for {
+			ping := func() bool {
+				sent.Lock()
+				sent.n++
+				n := sent.n
+				sent.at = time.Now()
+				sent.Unlock()
+				wmu.Lock()
+				defer wmu.Unlock()
+				return writeFrame(nc, ctrlMsg{T: "ping", N: n}) == nil
+			}
+			if !ping() {
+				return
+			}
+			select {
+			case <-ended:
+				return
+			case <-tick.C:
+			}
+		}
+	}()
 	for {
 		_ = nc.SetDeadline(time.Now().Add(s.o.Dead))
 		var m ctrlMsg
 		if err := readFrame(nc, &m); err != nil {
 			break
 		}
-		if m.T == "ping" {
+		switch m.T {
+		case "ping":
 			wmu.Lock()
 			err := writeFrame(nc, ctrlMsg{T: "pong"})
 			wmu.Unlock()
 			if err != nil {
-				break
+				s.drop(name, p)
+				return
 			}
+		case "pong":
+			sent.Lock()
+			if m.N != 0 && m.N == sent.n {
+				p.io.rtt.Store(int64(time.Since(sent.at)))
+			}
+			sent.Unlock()
 		}
 	}
 	s.drop(name, p)
@@ -355,6 +436,8 @@ func (s *Server) Dial(ctx context.Context, name string, purpose []byte) (net.Con
 		}
 		c.wmu.Lock()
 		c.taken = true
+		c.io = p.io
+		p.io.streams.Add(1)
 		_ = c.SetWriteDeadline(time.Now().Add(handshakeTimeout))
 		err := writeFrame(c, useMsg{Purpose: purpose})
 		_ = c.SetWriteDeadline(time.Time{})

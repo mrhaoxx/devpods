@@ -19,6 +19,7 @@ import (
 	"k8s.io/client-go/util/retry"
 
 	devpodv1alpha1 "github.com/mrhaoxx/devpod/api/v1alpha1"
+	"github.com/mrhaoxx/devpod/internal/tunnel"
 	"github.com/mrhaoxx/devpod/internal/webui/clusters"
 )
 
@@ -54,6 +55,9 @@ type adminClusterView struct {
 	KubernetesVersion string                    `json:"kubernetesVersion,omitempty"`
 	DefaultQuota      *devpodv1alpha1.UserQuota `json:"defaultQuota,omitempty"`
 	CreatedAt         time.Time                 `json:"createdAt"`
+	// Link: its agent's link to this console replica (absent: not
+	// connected to this one).
+	Link *tunnel.LinkStats `json:"link,omitempty"`
 }
 
 func (s *Server) clusterView(c *devpodv1alpha1.Cluster) clusterView {
@@ -85,6 +89,9 @@ func (s *Server) adminClusterView(c *devpodv1alpha1.Cluster) adminClusterView {
 	}
 	if in, ok := s.Clusters.Info(c.Name); ok {
 		v.AgentVersion, v.ControllerVersion, v.KubernetesVersion = in.AgentVersion, in.ControllerVersion, in.KubernetesVersion
+	}
+	if l, ok := s.Clusters.Link(c.Name); ok {
+		v.Link = &l
 	}
 	if !v.Joined {
 		if t, err := time.Parse(time.RFC3339, c.Annotations[clusters.TokenExpiresAnnotation]); err == nil {

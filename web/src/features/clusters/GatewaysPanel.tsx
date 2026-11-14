@@ -1,7 +1,7 @@
 // 网关 (admins): the gateways that serve several clusters. One is
 // registered here, joins with the token shown once, and from then on asks
 // the console who may log in where; the clusters' agents connect to it.
-import { useState } from "react";
+import { Fragment, useState } from "react";
 import * as Dialog from "@radix-ui/react-dialog";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Badge } from "../../design/Badge";
@@ -9,6 +9,8 @@ import { Button } from "../../design/Button";
 import { ConfirmDialog } from "../../design/ConfirmDialog";
 import { CopyBlock } from "../../design/Copy";
 import { Field, Input, Notice } from "../../design/Form";
+import { fmtBytes } from "../../lib/format";
+import { Rtt, Since, Traffic, ago } from "./links";
 import {
   createGateway,
   deleteGateway,
@@ -19,6 +21,8 @@ import {
   type AdminGateway,
   type GatewayFields,
   type GatewayJoining,
+  type GatewayReplica,
+  type LinkStats,
 } from "./api";
 
 export const gatewaysKey = ["admin", "gateways"] as const;
@@ -36,6 +40,108 @@ function State({ g }: { g: AdminGateway }) {
 }
 
 type Ask = { kind: "pause" | "resume" | "remove" | "reissue"; gateway: AdminGateway };
+
+/** clusterLinks: each cluster's link to the gateway, from the replicas that said (the first that has it). */
+function clusterLinks(g: AdminGateway): Map<string, LinkStats> {
+  const out = new Map<string, LinkStats>();
+  for (const r of g.replicas ?? []) for (const c of r.status?.clusters ?? []) if (!out.has(c.name)) out.set(c.name, c);
+  return out;
+}
+const sessionCount = (g: AdminGateway) => (g.replicas ?? []).reduce((n, r) => n + (r.status?.sessions.length ?? 0), 0);
+
+const th = "px-2 py-1 font-medium";
+const td = "px-2 py-1";
+
+/** Replica: one replica of a gateway — its link to this console, the clusters connected to it, the sessions it carries. */
+function Replica({ r }: { r: GatewayReplica }) {
+  const st = r.status;
+  const sessions = st?.sessions ?? [];
+  return (
+    <div className="space-y-2 rounded-md border border-line bg-sunk/40 p-2">
+      <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+        <span className="mono font-medium">{r.pod}</span>
+        {st?.version && <span className="text-muted">{st.version}</span>}
+        <span className="text-muted">
+          到控制台 <Since l={r.link} /> · 延迟 <Rtt l={r.link} /> · 收 / 发 <Traffic l={r.link} />
+        </span>
+      </div>
+      {!st ? (
+        <p className="text-muted">这个副本没有给出它的状态{r.error ? `：${r.error}` : ""}（网关升级到 v0.9.23 以上才有）。</p>
+      ) : (
+        <>
+          <div className="overflow-x-auto">
+            <table className="w-full min-w-[28rem] text-left">
+              <caption className="pb-1 text-left text-muted">已连上的集群（{st.clusters.length}）</caption>
+              <thead className="text-muted">
+                <tr>
+                  {["集群", "连接", "延迟", "流量（收 / 发）", "流"].map((h) => (
+                    <th key={h} className={th}>
+                      {h}
+                    </th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {st.clusters.map((c) => (
+                  <tr key={c.name} className="border-t border-line">
+                    <td className={`mono ${td}`}>{c.name}</td>
+                    <td className={`${td} whitespace-nowrap`}>
+                      <Since l={c} />
+                    </td>
+                    <td className={td}>
+                      <Rtt l={c} />
+                    </td>
+                    <td className={td}>
+                      <Traffic l={c} />
+                    </td>
+                    <td className={`mono ${td}`}>{c.streams}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          <div className="overflow-x-auto">
+            <table className="w-full min-w-[40rem] text-left">
+              <caption className="pb-1 text-left text-muted">当前会话（{sessions.length}）</caption>
+              {sessions.length > 0 && (
+                <thead className="text-muted">
+                  <tr>
+                    {["用户", "DevPod", "集群", "客户端", "公钥", "开始", "上行 / 下行"].map((h) => (
+                      <th key={h} className={th}>
+                        {h}
+                      </th>
+                    ))}
+                  </tr>
+                </thead>
+              )}
+              <tbody>
+                {sessions.map((x) => (
+                  <tr key={x.id} className="border-t border-line">
+                    <td className={`mono ${td}`}>{x.user}</td>
+                    <td className={`mono ${td}`}>{x.devpod}</td>
+                    <td className={`mono ${td}`}>{x.cluster || "—"}</td>
+                    <td className={`mono ${td}`} title={x.kind ? `认证 ${x.kind}` : undefined}>
+                      {x.client === "console" ? "网页终端" : x.client}
+                    </td>
+                    <td className={`mono ${td} text-muted`} title={x.pubkeyFp}>
+                      {x.pubkeyFp ? x.pubkeyFp.replace(/^SHA256:/, "").slice(0, 10) + "…" : "—"}
+                    </td>
+                    <td className={`${td} whitespace-nowrap`} title={new Date(x.since).toLocaleString("zh-CN")}>
+                      {ago(x.since)}
+                    </td>
+                    <td className={`mono ${td} whitespace-nowrap`}>
+                      {fmtBytes(x.up)} / {fmtBytes(x.down)}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
 
 export function GatewaysPanel() {
   const qc = useQueryClient();
@@ -62,6 +168,13 @@ export function GatewaysPanel() {
     onSettled: refresh,
   });
   const items = q.data?.items ?? [];
+  const [open, setOpen] = useState<ReadonlySet<string>>(new Set());
+  const toggle = (n: string) =>
+    setOpen((cur) => {
+      const next = new Set(cur);
+      if (!next.delete(n)) next.add(n);
+      return next;
+    });
   return (
     <section aria-label="网关" className="space-y-2">
       <header className="flex flex-wrap items-center gap-2">
@@ -75,7 +188,7 @@ export function GatewaysPanel() {
           <table className="w-full text-left text-xs">
             <thead className="border-b border-line text-muted">
               <tr>
-                {["名称", "SSH 地址", "端口链接域名", "状态", "已连上的集群", ""].map((h) => (
+                {["名称", "SSH 地址", "端口链接域名", "状态", "已连上的集群", "会话", ""].map((h) => (
                   <th key={h} className="px-3 py-2 font-medium">
                     {h}
                   </th>
@@ -83,11 +196,29 @@ export function GatewaysPanel() {
               </tr>
             </thead>
             <tbody>
-              {items.map((g) => (
-                <tr key={g.name} className="border-b border-line last:border-0">
+              {items.map((g) => {
+                const links = clusterLinks(g);
+                const expandable = (g.replicas?.length ?? 0) > 0;
+                return (
+                <Fragment key={g.name}>
+                <tr className="border-b border-line last:border-0">
                   <td className="px-3 py-2">
-                    <span className="mono">{g.name}</span>
+                    {expandable ? (
+                      <button
+                        type="button"
+                        aria-expanded={open.has(g.name)}
+                        onClick={() => toggle(g.name)}
+                        className="inline-flex items-center gap-1 hover:text-accent"
+                        title="展开：副本、已连上的集群、当前会话"
+                      >
+                        <span aria-hidden className="w-3 text-muted">{open.has(g.name) ? "▾" : "▸"}</span>
+                        <span className="mono">{g.name}</span>
+                      </button>
+                    ) : (
+                      <span className="mono">{g.name}</span>
+                    )}
                     {g.displayName && <span className="ml-2 text-muted">{g.displayName}</span>}
+                    {expandable && <span className="ml-2 text-faint">{g.replicas!.length} 个副本</span>}
                   </td>
                   <td className="mono px-3 py-2">{g.sshAddress || <span className="font-sans text-faint">—</span>}</td>
                   <td className="mono px-3 py-2">{g.httpBaseDomain || <span className="font-sans text-faint">—</span>}</td>
@@ -96,11 +227,18 @@ export function GatewaysPanel() {
                   </td>
                   <td className="px-3 py-2">
                     <span className="flex flex-wrap gap-1">
-                      {(g.clusters ?? []).map((c) => (
-                        <Badge key={c}>{c}</Badge>
-                      ))}
+                      {(g.clusters ?? []).map((c) => {
+                        const l = links.get(c);
+                        return (
+                          <Badge key={c} title={l ? `连到网关：收 ${fmtBytes(l.rxRate)}/s · 发 ${fmtBytes(l.txRate)}/s` : undefined}>
+                            {c}
+                            {l?.rttMs ? <span className="ml-1 text-muted">{l.rttMs < 10 ? l.rttMs.toFixed(1) : Math.round(l.rttMs)}ms</span> : null}
+                          </Badge>
+                        );
+                      })}
                     </span>
                   </td>
+                  <td className="mono px-3 py-2">{g.replicas?.some((r) => r.status) ? sessionCount(g) : <span className="font-sans text-faint">—</span>}</td>
                   <td className="px-3 py-2">
                     <span className="flex justify-end gap-1">
                       <Button variant="ghost" onClick={() => setAsk({ kind: g.paused ? "resume" : "pause", gateway: g })}>
@@ -115,7 +253,18 @@ export function GatewaysPanel() {
                     </span>
                   </td>
                 </tr>
-              ))}
+                {open.has(g.name) && (
+                  <tr className="border-b border-line last:border-0">
+                    <td colSpan={7} className="space-y-2 px-3 pb-3">
+                      {(g.replicas ?? []).map((r) => (
+                        <Replica key={r.pod} r={r} />
+                      ))}
+                    </td>
+                  </tr>
+                )}
+                </Fragment>
+                );
+              })}
             </tbody>
           </table>
         </div>

@@ -6,6 +6,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
@@ -230,12 +231,18 @@ func (h *hub) trustConsole(keys []devpodv1alpha1.TrustedProxyKey) {
 
 // linkConsole keeps connections from this replica to every instance of
 // the console: the console cannot dial a gateway that is elsewhere. Over
-// them it reaches live (watching a session, ending one; nil: not here)
-// and this gateway's SSH, which the returned listener gives out.
+// them it reaches this replica's status (its clusters' links, the
+// sessions it carries), live (watching a session, ending one; nil: not
+// here) and this gateway's SSH, which the returned listener gives out.
 func (h *hub) linkConsole(ctx context.Context, live http.Handler) net.Listener {
 	ln, sshLn := tunnel.NewListener(), tunnel.NewListener()
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET "+gwlink.StatusPath, h.status)
 	if live != nil {
-		server := &http.Server{Handler: live, ReadHeaderTimeout: 10 * time.Second}
+		mux.Handle("/", live)
+	}
+	{
+		server := &http.Server{Handler: mux, ReadHeaderTimeout: 10 * time.Second}
 		go func() { _ = server.Serve(ln) }()
 		go func() {
 			<-ctx.Done()
@@ -266,7 +273,7 @@ func (h *hub) linkConsole(ctx context.Context, live http.Handler) net.Listener {
 			switch {
 			case string(purpose) == string(gwlink.PurposeSSH):
 				sshLn.Offer(fromConsole{conn})
-			case string(purpose) == string(gwlink.PurposeLive) && live != nil:
+			case string(purpose) == string(gwlink.PurposeLive): // status, and live when there is
 				ln.Offer(conn)
 			default:
 				_ = conn.Close() // the console is given these here, nothing else
@@ -276,6 +283,18 @@ func (h *hub) linkConsole(ctx context.Context, live http.Handler) net.Listener {
 	})
 	go func() { _ = c.Run(ctx) }()
 	return sshLn
+}
+
+// status answers the console: this replica, the links of the clusters
+// connected to it, and the sessions it carries.
+func (h *hub) status(w http.ResponseWriter, _ *http.Request) {
+	st := gwlink.Status{Instance: h.instance, Version: version, Clusters: []gwlink.ClusterLink{}, Sessions: gateway.OpenSessions.List()}
+	for name, l := range h.srv.Stats() {
+		st.Clusters = append(st.Clusters, gwlink.ClusterLink{Name: name, LinkStats: l})
+	}
+	slices.SortFunc(st.Clusters, func(a, b gwlink.ClusterLink) int { return strings.Compare(a.Name, b.Name) })
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(st)
 }
 
 // fromConsole is an SSH connection the console made over the link: its

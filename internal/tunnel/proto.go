@@ -63,6 +63,10 @@ type result struct {
 // ctrlMsg is all a control connection carries after the handshake.
 type ctrlMsg struct {
 	T string `json:"t"` // "ping", "pong"
+	// N numbers a server's ping; the pong says it back, and the server
+	// knows the round trip. (An initiator's pings carry none: the server
+	// answers those without asking.)
+	N uint64 `json:"n,omitempty"`
 }
 
 // useMsg is what a data connection carries before it becomes a stream:

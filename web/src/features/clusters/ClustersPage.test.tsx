@@ -14,6 +14,7 @@ const mulan = {
   controllerVersion: "v0.7.0",
   kubernetesVersion: "v1.36.4",
   createdAt: new Date().toISOString(),
+  link: { since: new Date(Date.now() - 3 * 3600e3).toISOString(), rttMs: 2.4, rxRate: 2048, txRate: 512, rx: 1 << 30, tx: 1 << 20, streams: 3, idle: 4 },
 };
 const fresh = { name: "st2", connected: false, joined: false, tokenExpires: new Date(Date.now() + 3600e3).toISOString(), createdAt: new Date().toISOString() };
 const paused = { ...mulan, name: "old", displayName: "", connected: false, paused: true };
@@ -30,6 +31,10 @@ describe("集群 page", () => {
     const m = within(row("mulan"));
     expect(m.getByText("木兰")).toBeTruthy();
     expect(m.getByText("已连接")).toBeTruthy();
+    // its agent's link: up 3 hours, 2.4 ms, 2 KiB/s in and 512 B/s out
+    expect(m.getByText(/已连 3h/)).toBeTruthy();
+    expect(m.getByText("2.4 ms")).toBeTruthy();
+    expect(m.getByText(/\/s \/ .*\/s/).textContent).toBe("2.0K/s / 512/s");
     expect(m.getByText(/v0\.7\.0/)).toBeTruthy();
     expect(m.getByText("snapshots")).toBeTruthy();
     expect(within(row("st2")).getByText("等待加入")).toBeTruthy();

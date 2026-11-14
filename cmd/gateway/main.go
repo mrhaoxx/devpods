@@ -43,6 +43,7 @@ import (
 	"github.com/mrhaoxx/devpod/internal/audit"
 	"github.com/mrhaoxx/devpod/internal/gateway"
 	"github.com/mrhaoxx/devpod/internal/gpures"
+	"github.com/mrhaoxx/devpod/internal/gwlink"
 )
 
 var scheme = runtime.NewScheme()
@@ -620,6 +621,11 @@ func handle(parent context.Context, id uint64, conn net.Conn, hostSigner ssh.Sig
 	}
 
 	recorder.SessionConnected(parent, devpodName, ap.User, clientIP, ap.Kind)
+	// open until it ends, for the console's 集群 page
+	defer gateway.OpenSessions.Add(gwlink.Session{
+		ID: sessionID, User: ap.User, DevPod: devpodName, Cluster: srvConn.Permissions.Extensions["devpod.io/cluster"],
+		Client: clientIP, Kind: ap.Kind, PubkeyFP: fp, Since: start,
+	}, stats)()
 	slog.Info("proxy_start", "id", id)
 	if err := gateway.Proxy(srvConn, srvChans, srvReqs, cliConn, cliChans, cliReqs, stats, hooks); err != nil {
 		slog.Info("proxy_end", "id", id, "err", err)
