@@ -100,6 +100,8 @@ type httpView struct {
 	PublicPorts []int  `json:"publicPorts"`
 	// UserPorts are open to anyone signed in to the console.
 	UserPorts []int `json:"userPorts"`
+	// HTTPSPorts are reached over TLS: their program speaks HTTPS.
+	HTTPSPorts []int `json:"httpsPorts"`
 }
 
 func (h *HTTPProxy) view(dp *devpodv1alpha1.DevPod) httpView {
@@ -112,7 +114,11 @@ func (h *HTTPProxy) view(dp *devpodv1alpha1.DevPod) httpView {
 	if users == nil {
 		users = []int{}
 	}
-	return httpView{ID: id, URLTemplate: h.Scheme + "://" + h.authority(strings.Replace(h.HostTemplate, "{id}", id, 1)), PublicPorts: ports, UserPorts: users}
+	tls := httpauth.HTTPSPorts(dp)
+	if tls == nil {
+		tls = []int{}
+	}
+	return httpView{ID: id, URLTemplate: h.Scheme + "://" + h.authority(strings.Replace(h.HostTemplate, "{id}", id, 1)), PublicPorts: ports, UserPorts: users, HTTPSPorts: tls}
 }
 
 func (s *Server) httpProxy(w http.ResponseWriter) (*HTTPProxy, bool) {
@@ -188,8 +194,9 @@ func (s *Server) handleGetHTTP(w http.ResponseWriter, r *http.Request) {
 	s.writeJSON(w, http.StatusOK, s.httpProxyIn(r, h).view(dp))
 }
 
-// handlePutHTTP serves PUT /api/devpods/{name}/http: {"publicPorts":[…]} and
-// {"userPorts":[…]} (ports open to every signed-in user)
+// handlePutHTTP serves PUT /api/devpods/{name}/http: {"publicPorts":[…]},
+// {"userPorts":[…]} (ports open to every signed-in user) and
+// {"httpsPorts":[…]} (ports whose program speaks HTTPS)
 // replaces the public ports; {"reset":true} draws a new id, which kills
 // every link handed out so far.
 func (s *Server) handlePutHTTP(w http.ResponseWriter, r *http.Request) {
@@ -208,6 +215,7 @@ func (s *Server) handlePutHTTP(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		PublicPorts *[]int `json:"publicPorts"`
 		UserPorts   *[]int `json:"userPorts"`
+		HTTPSPorts  *[]int `json:"httpsPorts"`
 		Reset       bool   `json:"reset"`
 	}
 	dec := json.NewDecoder(r.Body)
@@ -216,7 +224,7 @@ func (s *Server) handlePutHTTP(w http.ResponseWriter, r *http.Request) {
 		s.writeErr(w, http.StatusBadRequest, "BAD_REQUEST", "malformed request body: "+err.Error(), nil)
 		return
 	}
-	for _, list := range []*[]int{req.PublicPorts, req.UserPorts} {
+	for _, list := range []*[]int{req.PublicPorts, req.UserPorts, req.HTTPSPorts} {
 		if list == nil {
 			continue
 		}
@@ -247,6 +255,9 @@ func (s *Server) handlePutHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 		if req.UserPorts != nil {
 			set(httpauth.UserPortsAnnotation, *req.UserPorts)
+		}
+		if req.HTTPSPorts != nil {
+			set(httpauth.HTTPSPortsAnnotation, *req.HTTPSPorts)
 		}
 	})
 	if err != nil {

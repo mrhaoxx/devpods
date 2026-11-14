@@ -33,6 +33,10 @@ const (
 	// UserPortsAnnotation lists the ports open to anyone signed in to the
 	// console (not only the owner and collaborators).
 	UserPortsAnnotation = "devpod.io/http-user-ports"
+	// HTTPSPortsAnnotation lists the ports whose program speaks HTTPS: the
+	// gateway reaches them over TLS (any certificate: inside a container
+	// it is the program's own, self-signed as a rule).
+	HTTPSPortsAnnotation = "devpod.io/http-https-ports"
 
 	// AuthPath on a proxy hostname takes the webui's ticket and sets the cookie.
 	AuthPath = "/__devpod/auth"
@@ -86,6 +90,17 @@ func PublicPorts(dp *devpodv1alpha1.DevPod) []int { return portsOf(dp, PublicPor
 
 // UserPorts parses the ports open to every signed-in user.
 func UserPorts(dp *devpodv1alpha1.DevPod) []int { return portsOf(dp, UserPortsAnnotation) }
+
+// HTTPSPorts parses the ports reached over TLS.
+func HTTPSPorts(dp *devpodv1alpha1.DevPod) []int { return portsOf(dp, HTTPSPortsAnnotation) }
+
+// Scheme is how the gateway speaks to the program on port: "https" or "http".
+func Scheme(dp *devpodv1alpha1.DevPod, port int) string {
+	if slices.Contains(HTTPSPorts(dp), port) {
+		return "https"
+	}
+	return "http"
+}
 
 // Access is the port's level; public wins when a port is listed twice.
 func Access(dp *devpodv1alpha1.DevPod, port int) string {

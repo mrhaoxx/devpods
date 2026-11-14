@@ -387,7 +387,7 @@ func forGateway(dp *devpodv1alpha1.DevPod) *devpodv1alpha1.DevPod {
 		Spec:       devpodv1alpha1.DevPodSpec{Owner: dp.Spec.Owner, Collaborators: slices.Clone(dp.Spec.Collaborators), Running: dp.Spec.Running},
 		Status:     devpodv1alpha1.DevPodStatus{Phase: dp.Status.Phase, Endpoint: dp.Status.Endpoint},
 	}
-	for _, k := range []string{httpauth.IDAnnotation, httpauth.PublicPortsAnnotation, httpauth.UserPortsAnnotation} {
+	for _, k := range []string{httpauth.IDAnnotation, httpauth.PublicPortsAnnotation, httpauth.UserPortsAnnotation, httpauth.HTTPSPortsAnnotation} {
 		if v, ok := dp.Annotations[k]; ok {
 			if out.Annotations == nil {
 				out.Annotations = map[string]string{}

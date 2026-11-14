@@ -481,3 +481,44 @@ func TestHTTPProxy_AuditWebSocket(t *testing.T) {
 		t.Fatalf("websocket row: %+v", r)
 	}
 }
+
+// A port marked HTTPS is reached over TLS, whatever its certificate; the
+// others still over plain HTTP.
+func TestHTTPProxy_HTTPSPort(t *testing.T) {
+	backend := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = io.WriteString(w, "tls "+r.Host)
+	}))
+	defer backend.Close()
+	real := strings.TrimPrefix(backend.URL, "https://")
+	dp := &devpodv1alpha1.DevPod{
+		ObjectMeta: metav1.ObjectMeta{Name: "alice-dev", Namespace: "devpods", UID: "uid-alice-dev", Annotations: map[string]string{
+			httpauth.IDAnnotation: idA, httpauth.PublicPortsAnnotation: "8443,8080", httpauth.HTTPSPortsAnnotation: "8443"}},
+		Spec:   devpodv1alpha1.DevPodSpec{Owner: "alice", Running: true},
+		Status: devpodv1alpha1.DevPodStatus{Phase: devpodv1alpha1.DevPodRunning, Endpoint: "10.9.9.9:22"},
+	}
+	p := NewHTTPProxyWith(oneDevPod{cluster: "c", dp: dp}, "apps.test", "")
+	p.Net = func(ctx context.Context, _ Target) (net.Conn, error) {
+		return (&net.Dialer{}).DialContext(ctx, "tcp", real)
+	}
+	srv := httptest.NewServer(p)
+	defer srv.Close()
+	get := func(port string) (int, string) {
+		t.Helper()
+		req, _ := http.NewRequest("GET", srv.URL+"/", nil)
+		req.Host = idA + "-" + port + ".apps.test"
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer resp.Body.Close()
+		b, _ := io.ReadAll(resp.Body)
+		return resp.StatusCode, string(b)
+	}
+	if code, body := get("8443"); code != http.StatusOK || body != "tls "+idA+"-8443.apps.test" {
+		t.Fatalf("https port: %d %q", code, body)
+	}
+	// plain HTTP to a TLS server: it says so (400), the request did not get through
+	if code, body := get("8080"); code == http.StatusOK {
+		t.Fatalf("an http port was reached over TLS: %q", body)
+	}
+}

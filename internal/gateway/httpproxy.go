@@ -6,6 +6,7 @@ package gateway
 
 import (
 	"context"
+	"crypto/tls"
 	"fmt"
 	"log/slog"
 	"net"
@@ -111,6 +112,10 @@ func (p *HTTPProxy) transport(cluster, uid string) http.RoundTripper {
 			return p.Net(ctx, Target{Cluster: cluster, Addr: addr, Purpose: PurposeHTTP, DevPodUID: uid})
 		},
 		MaxIdleConnsPerHost: 8, IdleConnTimeout: 60 * time.Second,
+		// a port marked HTTPS: the program's own certificate, self-signed as
+		// a rule and never for the pod's address — what is checked is who
+		// may reach the port, not the certificate
+		TLSClientConfig: &tls.Config{InsecureSkipVerify: true}, //nolint:gosec // see above
 	}
 	p.transports[key] = t
 	return t
@@ -239,11 +244,12 @@ func (p *HTTPProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	target := net.JoinHostPort(podIP, strconv.Itoa(port))
-	slog.Info("http_proxy", "devpod", dp.Name, "port", port, "user", user, "access", httpauth.Access(dp, port), "method", r.Method, "path", r.URL.Path)
+	scheme := httpauth.Scheme(dp, port)
+	slog.Info("http_proxy", "devpod", dp.Name, "port", port, "scheme", scheme, "user", user, "access", httpauth.Access(dp, port), "method", r.Method, "path", r.URL.Path)
 	stripCookie(r)
 	proxy := &httputil.ReverseProxy{
 		Director: func(req *http.Request) {
-			req.URL.Scheme = "http"
+			req.URL.Scheme = scheme
 			req.URL.Host = target
 		},
 		Transport:     p.transport(cluster, string(dp.UID)),

@@ -72,15 +72,18 @@ export function PortsPanel({ r, sshPort }: { r: Ref; /** the container's sshd po
   const [otherAccess, setOtherAccess] = useState<PortAccess>("private");
   const [reset, setReset] = useState(false);
   const save = useMutation({
-    mutationFn: (body: { publicPorts?: number[]; userPorts?: number[]; reset?: boolean }) => putHttp(r, body),
+    mutationFn: (body: { publicPorts?: number[]; userPorts?: number[]; httpsPorts?: number[]; reset?: boolean }) => putHttp(r, body),
     onSuccess: (v: HttpView) => qc.setQueryData(key, v),
   });
   if (!http.data) return null;
   const v = http.data;
   const url = (port: number) => v.urlTemplate.replace("{port}", String(port));
   const lists = { publicPorts: v.publicPorts, userPorts: v.userPorts ?? [] };
-  const rows = portRows(info.data?.snapshot?.listen ?? [], [...lists.publicPorts, ...lists.userPorts], sshPort);
+  const rows = portRows(info.data?.snapshot?.listen ?? [], [...lists.publicPorts, ...lists.userPorts, ...(v.httpsPorts ?? [])], sshPort);
   const setAccess = (port: number, access: PortAccess) => save.mutate(withAccess(lists, port, access));
+  // the program on the port speaks HTTPS: the gateway reaches it over TLS
+  const tls = v.httpsPorts ?? [];
+  const setTLS = (port: number, on: boolean) => save.mutate({ httpsPorts: on ? [...tls.filter((p) => p !== port), port] : tls.filter((p) => p !== port) });
   const otherPort = Number(other);
   // any port, listening or not yet — but never the container's sshd
   const otherOK = Number.isInteger(otherPort) && otherPort >= 1 && otherPort <= 65535 && otherPort !== (sshPort ?? 22);
@@ -105,6 +108,7 @@ export function PortsPanel({ r, sshPort }: { r: Ref; /** the container's sshd po
               <tr className="h-6 border-b border-line text-left text-[11px] text-muted">
                 <th className="font-normal">端口</th>
                 <th className="font-normal">访问</th>
+                <th className="font-normal" title="容器里的程序说 HTTPS（自签证书也行）：网关用 TLS 连它">HTTPS</th>
                 <th className="font-normal">链接</th>
               </tr>
             </thead>
@@ -128,6 +132,16 @@ export function PortsPanel({ r, sshPort }: { r: Ref; /** the container's sshd po
                         </Select>
                         {access === "public" && <Badge tone="warm">公开</Badge>}
                       </span>
+                    </td>
+                    <td className="w-16">
+                      <input
+                        type="checkbox"
+                        aria-label={`端口 ${r.port} 是 HTTPS`}
+                        title="容器里的程序说 HTTPS（自签证书也行）：网关用 TLS 连它"
+                        checked={tls.includes(r.port)}
+                        disabled={save.isPending}
+                        onChange={(e) => setTLS(r.port, e.target.checked)}
+                      />
                     </td>
                     <td>
                       {r.local ? (

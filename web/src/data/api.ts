@@ -451,7 +451,7 @@ export const probeShell = (r: Ref) => req<void>("GET", apiIn(r.cluster, `/api/de
 
 /* api_http.go: DevPod ports published through the gateway's HTTP proxy */
 /** publicPorts: anyone with the link; userPorts: anyone signed in to the console; the rest: owner, collaborators, admins. */
-export type HttpView = { id: string; urlTemplate: string; publicPorts: number[]; userPorts: number[] };
+export type HttpView = { id: string; urlTemplate: string; publicPorts: number[]; userPorts: number[]; /** reached over TLS */ httpsPorts?: number[] };
 export const getHttp = (r: Ref) => req<HttpView>("GET", apiIn(r.cluster, `/api/devpods/${r.name}/http`));
 
 /** The Pod behind a DevPod, as `kubectl describe pod` tells it. */
@@ -497,7 +497,7 @@ export const getDevPodPod = (r: Ref) => req<{ pod: PodDetail | null }>("GET", ap
 /** A DevPod's manifest as YAML, and saving it back (the spec is replaced). */
 export const getDevPodYaml = (r: Ref) => req<{ yaml: string; running: boolean }>("GET", apiIn(r.cluster, `/api/devpods/${r.name}/yaml`));
 export const putDevPodYaml = (r: Ref, yaml: string) => req<{ devpod: DevPod; rebuild: boolean }>("PUT", apiIn(r.cluster, `/api/devpods/${r.name}/yaml`), { yaml });
-export const putHttp = (r: Ref, body: { publicPorts?: number[]; userPorts?: number[]; reset?: boolean }) => req<HttpView>("PUT", apiIn(r.cluster, `/api/devpods/${r.name}/http`), body);
+export const putHttp = (r: Ref, body: { publicPorts?: number[]; userPorts?: number[]; httpsPorts?: number[]; reset?: boolean }) => req<HttpView>("PUT", apiIn(r.cluster, `/api/devpods/${r.name}/http`), body);
 /** httpTicket: the URL that signs this browser in on a private port's hostname. */
 export const httpTicket = (host: string, rd: string) => req<{ url: string }>("POST", "/api/http/ticket", { host, rd });
 
