@@ -18,6 +18,7 @@ import { AccessLogPage, AlertsPage, PolicyPage } from "../features/audit/AdminPa
 import { NodesPage } from "../features/nodes/NodesPage";
 import { HttpAuthPage } from "../features/devpods/HttpAuthPage";
 import { ReservationsPage } from "../features/reservations/ReservationsPage";
+import { AdminReservationsPage } from "../features/reservations/AdminReservationsPage";
 import { ImagesPage } from "../features/images/ImagesPage";
 import { ShellPage } from "../features/shell/ShellPage";
 import { ConfigsPage } from "../features/configs/ConfigsPage";
@@ -70,6 +71,7 @@ export function AppRoutes() {
           <Route path="admin/clusters" element={<ClustersPage />} />
           <Route path="admin/images" element={<ImagesPage everyone />} />
           <Route path="admin/configs" element={<ConfigsPage everyone />} />
+          <Route path="admin/reservations" element={<AdminReservationsPage />} />
         </Route>
         <Route path="*" element={<Navigate to="/" replace />} />
       </Route>

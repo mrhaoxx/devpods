@@ -82,6 +82,7 @@ export function Sidebar({ me, onNavigate }: { me: Me; onNavigate?: () => void })
     // every user's snapshots (saving, failed, done) and configs, private ones too
     ...(me.features.snapshots ? [{ to: "/admin/images", label: "全部镜像", icon: "◫" }] : []),
     { to: "/admin/configs", label: "全部配置", icon: "▧" },
+    ...(me.features.reservations ? [{ to: "/admin/reservations", label: "预约管理", icon: "◷" }] : []),
   ];
   const auditItems: Item[] = [
     { to: "/audit/sessions", label: "会话 / 回放", icon: "▶" },
