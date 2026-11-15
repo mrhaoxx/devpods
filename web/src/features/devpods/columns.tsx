@@ -9,7 +9,7 @@ import { Link } from "react-router-dom";
 import type { ColumnDef } from "@tanstack/react-table";
 import type { DevPod, LiveItem, Me, PodInfo, RecentFrame } from "../../data/api";
 import { devpodsStream } from "../../data/live/streams";
-import { useLiveRow } from "../../data/live/hooks";
+import { useLiveRows } from "../../data/live/hooks";
 import { MetricCell } from "../../design/MetricCell";
 import { StatusDot, phaseLabel } from "../../design/StatusDot";
 import { Badge } from "../../design/Badge";
@@ -33,7 +33,9 @@ export type Row = {
   cpuLimit: number;
   memLimit: number;
   /** a group of DevPods launched together, shown as this one row (groups.ts) */
-  group?: { id: string; members: Row[] };
+  group?: { id: string; key: string; members: Row[] };
+  /** a member shown under its group's row */
+  inGroup?: boolean;
 };
 
 export function toRow(dp: DevPod, pod?: PodInfo): Row {
@@ -97,18 +99,27 @@ function PhaseNote({ r }: { r: Row }) {
   return r.phase !== "Running" ? <span className="text-[11px] text-muted">{phaseLabel(r.phase)}</span> : null;
 }
 
-/** useLive: a row's live values — keyed <cluster>/<name> (keyOf), as the stream keys them. */
-function useLive(name: string) {
-  const { scope } = useContext(TableCtx);
-  return useLiveRow<LiveItem>(devpodsStream(scope), name).row;
-}
-
 const running = (r: Row) => r.phase === "Running";
+
+/** useUp: the running DevPods a row's metrics are of — its own, or a
+ *  group's members (their totals) — with their live values, keyed
+ *  <cluster>/<name> (keyOf) as the stream keys them. */
+function useUp(r: Row) {
+  const { scope } = useContext(TableCtx);
+  const rs = r.group?.members ?? [r];
+  const lives = useLiveRows<LiveItem>(devpodsStream(scope), rs.map(keyOf));
+  return rs.map((m, i) => ({ m, live: lives[i] })).filter((x) => running(x.m));
+}
+/** total: the sum of what is known (null: nothing is) */
+const total = (xs: (number | null | undefined)[]) => {
+  const known = xs.filter((x): x is number => x != null);
+  return known.length ? known.reduce((a, b) => a + b, 0) : null;
+};
 
 function CpuCell({ r }: { r: Row }) {
   const { now, recent } = useContext(TableCtx);
-  const live = useLive(keyOf(r));
-  if (!running(r)) {
+  const up = useUp(r);
+  if (!r.group && !running(r)) {
     const s = phaseSummary(r.dp, r.pod, now) ?? "";
     return (
       <span className={r.phase === "Failed" ? "text-fail" : "text-muted"} title={s}>
@@ -116,27 +127,33 @@ function CpuCell({ r }: { r: Row }) {
       </span>
     );
   }
-  const v = live?.value.cpu ?? null;
-  const limit = live?.value.cpuLimit || r.cpuLimit;
+  if (up.length === 0) return null;
+  const v = total(up.map((x) => x.live?.value.cpu));
+  const limit = up.reduce((a, x) => a + (x.live?.value.cpuLimit || x.m.cpuLimit), 0);
+  const t = Date.now();
+  // the members' curves added bucket by bucket (each is bucketed over the same window)
+  const curves = up.map((x) =>
+    sparkSeries(
+      recent?.items[keyOf(x.m)] && { ts: recent.ts, v: recent.items[keyOf(x.m)].cpu },
+      (x.live?.history ?? []).map((h) => ({ ts: h.ts, v: h.value.cpu })),
+      t,
+    ),
+  );
   return (
     <MetricCell
       value={v}
       text={v == null ? undefined : `${fmtCores(v)}/${fmtCores(limit)}`}
-      spark={sparkSeries(
-        recent?.items[keyOf(r)] && { ts: recent.ts, v: recent.items[keyOf(r)].cpu },
-        (live?.history ?? []).map((h) => ({ ts: h.ts, v: h.value.cpu })),
-        Date.now(),
-      )}
+      spark={curves[0].map((_, i) => total(curves.map((c) => c[i])))}
       sparkMax={limit || undefined}
     />
   );
 }
 
 function MemCell({ r }: { r: Row }) {
-  const live = useLive(keyOf(r));
-  if (!running(r)) return null;
-  const v = live?.value.mem ?? null;
-  const limit = live?.value.memLimit || r.memLimit;
+  const up = useUp(r);
+  if (up.length === 0) return null;
+  const v = total(up.map((x) => x.live?.value.mem));
+  const limit = up.reduce((a, x) => a + (x.live?.value.memLimit || x.m.memLimit), 0);
   return <MetricCell value={v} meter={v == null ? undefined : { used: v, limit }} text={v == null ? undefined : `${fmtBytes(v)}/${fmtBytes(limit)}`} />;
 }
 
@@ -144,26 +161,26 @@ const MiB = 1024 * 1024;
 
 /** GpuMemCell: GPU memory in use over every card, of their total. */
 function GpuMemCell({ r }: { r: Row }) {
-  const live = useLive(keyOf(r));
-  if (!running(r)) return null;
-  const cards = live?.value.gpu ?? [];
-  if (cards.length === 0) return r.gpu > 0 ? <MetricCell value={null} /> : null;
+  const up = useUp(r);
+  if (up.length === 0) return null;
+  const cards = up.flatMap((x) => x.live?.value.gpu ?? []);
+  if (cards.length === 0) return up.some((x) => x.m.gpu > 0) ? <MetricCell value={null} /> : null;
   const used = cards.reduce((a, c) => a + c.memUsed, 0) * MiB;
-  const total = cards.reduce((a, c) => a + c.memTotal, 0) * MiB;
-  return <MetricCell value={used} meter={{ used, limit: total }} text={`${fmtBytes(used)}/${fmtBytes(total)}`} />;
+  const all = cards.reduce((a, c) => a + c.memTotal, 0) * MiB;
+  return <MetricCell value={used} meter={{ used, limit: all }} text={`${fmtBytes(used)}/${fmtBytes(all)}`} />;
 }
 
 function GpuCell({ r }: { r: Row }) {
-  const live = useLive(keyOf(r));
-  if (!running(r)) return null;
-  const cards = live?.value.gpu ?? [];
-  if (cards.length === 0) return r.gpu > 0 ? <MetricCell value={null} /> : null;
+  const up = useUp(r);
+  if (up.length === 0) return null;
+  const cards = up.flatMap((x) => x.live?.value.gpu ?? []);
+  if (cards.length === 0) return up.some((x) => x.m.gpu > 0) ? <MetricCell value={null} /> : null;
   const avg = cards.reduce((a, c) => a + c.util, 0) / cards.length;
   return (
     <span className="inline-flex items-center gap-1">
-      {cards.map((c) => (
+      {cards.map((c, i) => (
         <span
-          key={c.uuid || c.index}
+          key={`${i}:${c.uuid || c.index}`}
           title={`GPU${c.index} ${Math.round(c.util)}% · ${Math.round(c.memUsed)}/${Math.round(c.memTotal)} MiB${c.power != null ? ` · ${Math.round(c.power)} W` : ""}`}
           className="inline-block h-2.5 w-2.5 rounded-sm border border-line"
           style={{ background: `color-mix(in srgb, var(--color-run) ${Math.round(c.util)}%, transparent)` }}
@@ -175,37 +192,38 @@ function GpuCell({ r }: { r: Row }) {
 }
 
 function SessionsCell({ r }: { r: Row }) {
-  const live = useLive(keyOf(r));
-  const users = [...new Set((live?.value.sessions ?? []).map((s) => s.user).filter(Boolean))];
-  if (!running(r) || users.length === 0) return null;
+  const up = useUp(r);
+  const sessions = up.flatMap((x) => x.live?.value.sessions ?? []);
+  const users = [...new Set(sessions.map((s) => s.user).filter(Boolean))];
+  if (users.length === 0) return null;
   return (
     <span title={users.join(", ")}>
-      <span className="mono">{live!.value.sessions.length}</span> <span className="text-muted">{users.join(", ")}</span>
+      <span className="mono">{sessions.length}</span> <span className="text-muted">{users.join(", ")}</span>
     </span>
   );
 }
 
 function NetCell({ r }: { r: Row }) {
-  const live = useLive(keyOf(r));
-  if (!running(r)) return null;
-  const rx = live?.value.netRx ?? null;
+  const up = useUp(r);
+  if (up.length === 0) return null;
+  const rx = total(up.map((x) => x.live?.value.netRx));
   return (
     <span className="inline-flex items-center gap-1">
-      <MetricCell value={rx} text={rx == null ? undefined : `↓${fmtRate(rx)} ↑${fmtRate(live!.value.netTx ?? 0)}`} />
-      {live?.value.netKind === "tcp-only" && <Badge title="hostNetwork：只统计 TCP">TCP only</Badge>}
+      <MetricCell value={rx} text={rx == null ? undefined : `↓${fmtRate(rx)} ↑${fmtRate(total(up.map((x) => x.live?.value.netTx)) ?? 0)}`} />
+      {up.some((x) => x.live?.value.netKind === "tcp-only") && <Badge title="hostNetwork：只统计 TCP">TCP only</Badge>}
     </span>
   );
 }
 
 function RdmaCell({ r }: { r: Row }) {
-  const live = useLive(keyOf(r));
-  if (!running(r)) return null;
-  const kind = live?.value.rdmaKind;
-  if (!kind && live) return null; // no RDMA device
-  const rx = live?.value.rdmaRx ?? null;
+  const up = useUp(r);
+  if (up.length === 0) return null;
+  const kind = up.map((x) => x.live?.value.rdmaKind).find(Boolean);
+  if (!kind && up.every((x) => x.live)) return null; // no RDMA device
+  const rx = total(up.map((x) => x.live?.value.rdmaRx));
   return (
     <span className="inline-flex items-center gap-1">
-      <MetricCell value={rx} text={rx == null ? undefined : `↓${fmtRate(rx)} ↑${fmtRate(live!.value.rdmaTx ?? 0)}`} />
+      <MetricCell value={rx} text={rx == null ? undefined : `↓${fmtRate(rx)} ↑${fmtRate(total(up.map((x) => x.live?.value.rdmaTx)) ?? 0)}`} />
       {kind && <Badge>{kind === "vf" ? "VF" : "shared"}</Badge>}
     </span>
   );
@@ -217,7 +235,7 @@ function UptimeCell({ r }: { r: Row }) {
   return <span className="mono">{fmtAge(r.pod.startedAt, now)}</span>;
 }
 
-function GroupName({ r, open, onToggle }: { r: Row; open: boolean; onToggle: (id: string) => void }) {
+function GroupName({ r, open, onToggle }: { r: Row; open: boolean; onToggle: (key: string) => void }) {
   const ms = r.group!.members;
   const up = ms.filter((m) => m.phase === "Running").length;
   const pending = useContext(TableCtx).pending;
@@ -227,7 +245,7 @@ function GroupName({ r, open, onToggle }: { r: Row; open: boolean; onToggle: (id
   }).length;
   return (
     <span className="inline-flex min-w-0 items-center gap-1.5">
-      <button type="button" aria-label={`${open ? "收起" : "展开"} ${r.name}`} aria-expanded={open} onClick={() => onToggle(r.name)} className="w-3 text-muted hover:text-ink">
+      <button type="button" aria-label={`${open ? "收起" : "展开"} ${r.name}`} aria-expanded={open} onClick={() => onToggle(r.group!.key)} className="w-3 text-muted hover:text-ink">
         {open ? "▾" : "▸"}
       </button>
       <span title={phaseLabel(r.phase)}>
@@ -247,7 +265,8 @@ export function devpodColumns(opts: {
   admin: boolean;
   me?: Me;
   actions: (r: Row) => React.ReactNode;
-  groups?: { open: ReadonlySet<string>; toggle: (id: string) => void };
+  /** groups: those folded (by key), and how to fold or open one */
+  groups?: { folded: ReadonlySet<string>; toggle: (key: string) => void };
   /** usage: what a row uses now (undefined: not known), to sort by */
   usage?: (r: Row, key: UsageKey) => number | undefined;
   /** the clusters, in a console of several: a 集群 column */
@@ -255,6 +274,10 @@ export function devpodColumns(opts: {
 }): ColumnDef<Row, unknown>[] {
   // a usage column: most first on the first click, rows with nothing known last
   const by = (key: UsageKey) => ({ accessorFn: (r: Row) => opts.usage?.(r, key), sortDescFirst: true, sortUndefined: "last" as const });
+  // a metric: a DevPod's own, or a folded group's totals (open, its members show theirs)
+  const folded = (r: Row) => !!r.group && !!opts.groups?.folded.has(r.group.key);
+  const metric = (cell: (r: Row) => React.ReactNode) => ({ row }: { row: { original: Row } }) =>
+    row.original.group && !folded(row.original) ? null : cell(row.original);
   const cols: ColumnDef<Row, unknown>[] = [
     {
       id: "name",
@@ -263,9 +286,9 @@ export function devpodColumns(opts: {
       meta: { priority: 1, width: 190, pin: "left" },
       cell: ({ row: { original: r } }) =>
         r.group ? (
-          <GroupName r={r} open={!!opts.groups?.open.has(r.name)} onToggle={(id) => opts.groups?.toggle(id)} />
+          <GroupName r={r} open={!folded(r)} onToggle={(key) => opts.groups?.toggle(key)} />
         ) : (
-        <span className={`inline-flex min-w-0 items-center gap-1.5 ${provenance(r.dp).group && opts.groups?.open.has(provenance(r.dp).group!) ? "pl-4" : ""}`}>
+        <span className={`inline-flex min-w-0 items-center gap-1.5 ${r.inGroup ? "pl-4" : ""}`}>
           <span title={phaseLabel(r.phase)}>
             <StatusDot phase={r.phase} showLabel={false} />
           </span>
@@ -298,17 +321,17 @@ export function devpodColumns(opts: {
   }
   if (opts.admin) cols.push({ id: "owner", header: "Owner", accessorFn: (r) => r.owner, meta: { priority: 2, width: 90, mono: true } });
   cols.push(
-    { id: "cpu", header: "CPU", ...by("cpu"), meta: { priority: 2, width: 140 }, cell: own((r) => <CpuCell r={r} />) },
-    { id: "mem", header: "内存", ...by("mem"), meta: { priority: 3, width: 140 }, cell: own((r) => <MemCell r={r} />) },
+    { id: "cpu", header: "CPU", ...by("cpu"), meta: { priority: 2, width: 140 }, cell: metric((r) => <CpuCell r={r} />) },
+    { id: "mem", header: "内存", ...by("mem"), meta: { priority: 3, width: 140 }, cell: metric((r) => <MemCell r={r} />) },
     {
       id: "gpu",
       header: "GPU",
       ...by("gpu"),
       meta: { priority: 4, width: 110 },
-      cell: ({ row }) => (row.original.group ? row.original.gpu > 0 ? <span className="mono">{row.original.gpu}</span> : null : <GpuCell r={row.original} />),
+      cell: ({ row: { original: r } }) => (r.group && !folded(r) ? r.gpu > 0 ? <span className="mono">{r.gpu}</span> : null : <GpuCell r={r} />),
     },
-    { id: "gpumem", header: "显存", ...by("gpumem"), meta: { priority: 4, width: 130 }, cell: own((r) => <GpuMemCell r={r} />) },
-    { id: "sessions", header: "会话", enableSorting: false, meta: { priority: 5, width: 120 }, cell: own((r) => <SessionsCell r={r} />) },
+    { id: "gpumem", header: "显存", ...by("gpumem"), meta: { priority: 4, width: 130 }, cell: metric((r) => <GpuMemCell r={r} />) },
+    { id: "sessions", header: "会话", enableSorting: false, meta: { priority: 5, width: 120 }, cell: metric((r) => <SessionsCell r={r} />) },
     {
       id: "uptime",
       header: "运行时长",
@@ -317,8 +340,8 @@ export function devpodColumns(opts: {
       meta: { priority: 6, width: 80 },
       cell: own((r) => <UptimeCell r={r} />),
     },
-    { id: "net", header: "网络 ↓/↑", ...by("net"), meta: { priority: 7, width: 150 }, cell: own((r) => <NetCell r={r} />) },
-    { id: "rdma", header: "RDMA ↓/↑", ...by("rdma"), meta: { priority: 8, width: 150 }, cell: own((r) => <RdmaCell r={r} />) },
+    { id: "net", header: "网络 ↓/↑", ...by("net"), meta: { priority: 7, width: 150 }, cell: metric((r) => <NetCell r={r} />) },
+    { id: "rdma", header: "RDMA ↓/↑", ...by("rdma"), meta: { priority: 8, width: 150 }, cell: metric((r) => <RdmaCell r={r} />) },
     { id: "node", header: "节点", accessorFn: (r) => r.node, meta: { priority: 9, width: 90, mono: true } },
     { id: "image", header: "镜像", accessorFn: (r) => r.image, meta: { priority: 10, width: 170, mono: true }, cell: ({ getValue }) => <span title={String(getValue())}>{String(getValue())}</span> },
     { id: "actions", header: "", enableSorting: false, meta: { priority: 1, width: 48, align: "right", pin: "right" }, cell: ({ row }) => opts.actions(row.original) },

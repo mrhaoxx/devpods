@@ -39,6 +39,42 @@ export function useLiveRow<T>(spec: StreamSpec | null, key: string): { row?: Liv
   return { row, status };
 }
 
+/** useLiveRows is useLiveRow for several keys at once (a group's rows):
+ *  it re-renders when any of them changes. */
+export function useLiveRows<T>(spec: StreamSpec | null, keys: string[]): (LiveRow<T> | undefined)[] {
+  const { hub, enabled } = useContext(HubContext);
+  const active = !!(hub && enabled && spec);
+  const id = spec?.id ?? "";
+  const specRef = useRef(spec);
+  specRef.current = spec;
+  useEffect(() => {
+    if (!active || !specRef.current) return;
+    return hub!.acquire(specRef.current);
+  }, [hub, active, id]);
+  const keysRef = useRef(keys);
+  keysRef.current = keys;
+  const sig = keys.join("\n");
+  const sub = useCallback(
+    (fn: () => void) => {
+      if (!active) return () => {};
+      const offs = keysRef.current.map((k) => hub!.subscribeRow(id, k, fn));
+      return () => offs.forEach((off) => off());
+    },
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [hub, active, id, sig],
+  );
+  // the same array while none of the rows changed (useSyncExternalStore asks often)
+  const last = useRef<(LiveRow<T> | undefined)[]>([]);
+  const snapshot = () => {
+    const next = active ? keysRef.current.map((k) => hub!.row<T>(id, k)) : keysRef.current.map(() => undefined);
+    const prev = last.current;
+    if (prev.length === next.length && prev.every((r, i) => r === next[i])) return prev;
+    last.current = next;
+    return next;
+  };
+  return useSyncExternalStore(sub, snapshot);
+}
+
 /** useLiveStatus: whether any open stream is reconnecting (for the
  *  `实时数据重连中…` bar). */
 export function useLiveStatus(): { reconnecting: boolean } {

@@ -6,7 +6,7 @@ afterEach(() => {
   cleanup();
   // a list page's remembered choices (lib/urlState) do not reach the next test
   try {
-    for (const k of Object.keys(localStorage)) if (k.startsWith("devpod.view.")) localStorage.removeItem(k);
+    for (const k of Object.keys(localStorage)) if (k.startsWith("devpod.view.") || k.startsWith("devpod.groups.")) localStorage.removeItem(k);
   } catch {
     // no storage
   }

@@ -176,7 +176,7 @@ describe("DevPodTable", () => {
     await waitFor(() => expect(row.querySelector("polyline")).toBeTruthy());
   });
 
-  it("DevPods launched together are one row; stopping it stops each of them", async () => {
+  it("DevPods launched together are one row, open; stopping it stops each of them; folded it stays folded", async () => {
     const member = (i: number): DevPod => ({
       ...mk(`alice-t-${i}`, "alice", "Running"),
       metadata: { name: `alice-t-${i}`, uid: `t${i}`, labels: { "devpod.io/group": "alice-t" }, annotations: { "devpod.io/group-index": String(i), "devpod.io/group-size": "3" } },
@@ -187,17 +187,21 @@ describe("DevPodTable", () => {
       "PATCH /api/devpods/alice-t-1": { devpod: member(1) },
       "PATCH /api/devpods/alice-t-2": { devpod: member(2) },
     });
-    renderWithProviders(<DevPodTable scope="mine" />);
+    const first = renderWithProviders(<DevPodTable scope="mine" />);
     const row = (await screen.findByText(/alice-t ×3/)).closest("tr")!;
     expect(row.textContent).toContain("3/3 运行中");
-    expect(screen.queryByRole("link", { name: "alice-t-0" })).toBeNull(); // folded
+    expect(await screen.findByRole("link", { name: "alice-t-0" })).toBeTruthy(); // open: its members are rows of their own
     fireEvent.keyDown(within(row).getByRole("button", { name: "alice-t 操作" }), { key: "Enter" });
     fireEvent.click(await screen.findByRole("menuitem", { name: "整组休眠" }));
     await waitFor(() => expect(calls.filter((c) => c.method === "PATCH").map((c) => c.url)).toHaveLength(3));
     expect(calls.filter((c) => c.method === "PATCH").every((c) => c.body === '{"running":false}')).toBe(true);
-    // unfolded, its members are rows of their own
-    fireEvent.click(within(row).getByRole("button", { name: "展开 alice-t" }));
-    expect(await screen.findByRole("link", { name: "alice-t-0" })).toBeTruthy();
+    fireEvent.click(within(row).getByRole("button", { name: "收起 alice-t" }));
+    await waitFor(() => expect(screen.queryByRole("link", { name: "alice-t-0" })).toBeNull());
+    // the next visit finds it folded
+    first.unmount();
+    renderWithProviders(<DevPodTable scope="mine" />);
+    expect(await screen.findByRole("button", { name: "展开 alice-t" })).toBeTruthy();
+    expect(screen.queryByRole("link", { name: "alice-t-0" })).toBeNull();
   });
 
   it("starting a DevPod: its row says 启动中 until it runs, and it cannot be started twice", async () => {

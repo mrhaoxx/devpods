@@ -55,6 +55,36 @@ const DELETE = { label: "删除", want: "gone" as const };
 
 const running = (r: Row) => r.phase === "Running";
 
+// the groups folded in this browser (by key, <cluster>/<group>)
+const FOLDED = "devpod.groups.folded";
+function readFolded(): Set<string> {
+  try {
+    const v: unknown = JSON.parse(localStorage.getItem(FOLDED) ?? "[]");
+    return new Set(Array.isArray(v) ? v.filter((x): x is string => typeof x === "string") : []);
+  } catch {
+    return new Set();
+  }
+}
+function writeFolded(s: ReadonlySet<string>) {
+  try {
+    localStorage.setItem(FOLDED, JSON.stringify([...s].slice(-500)));
+  } catch {
+    // not kept: no matter
+  }
+}
+
+/** compareBy: rows by a value, most first when desc — nothing known last either way. */
+function compareBy(get: (r: Row) => unknown, desc: boolean) {
+  return (a: Row, b: Row) => {
+    const x = get(a);
+    const y = get(b);
+    if (x == null || y == null) return x == null && y == null ? 0 : x == null ? 1 : -1;
+    const c =
+      typeof x === "number" && typeof y === "number" ? (x < y ? -1 : x > y ? 1 : 0) : String(x).localeCompare(String(y), undefined, { numeric: true, sensitivity: "base" });
+    return desc ? -c : c;
+  };
+}
+
 /** flat: a selection with each group row standing for its members */
 const flat = (rows: Row[]): Row[] => {
   const seen = new Set<string>();
@@ -91,11 +121,18 @@ export function DevPodTable({ scope }: { scope: "mine" | "all" }) {
   const reservations = useReservationsNow();
   const [confirm, setConfirm] = useState<{ rows: Row[]; bulk: boolean } | null>(null);
   const [rebuildAsk, setRebuildAsk] = useState<Row | null>(null);
-  const [open, setOpen] = useState<ReadonlySet<string>>(() => new Set(url.group ? [url.group] : []));
-  const toggle = (id: string) =>
-    setOpen((cur) => {
+  // groups are open unless folded; what is folded is kept in this browser —
+  // and a link to a group (?group=, where a launch of several lands) opens it
+  const [folded, setFolded] = useState<ReadonlySet<string>>(() => {
+    const s = readFolded();
+    if (url.group) for (const k of [...s]) if (k === url.group || k.endsWith(`/${url.group}`)) s.delete(k);
+    return s;
+  });
+  const toggle = (key: string) =>
+    setFolded((cur) => {
       const next = new Set(cur);
-      if (!next.delete(id)) next.add(id);
+      if (!next.delete(key)) next.add(key);
+      writeFolded(next);
       return next;
     });
   const [outcome, setOutcome] = useState<BulkOutcome | null>(null);
@@ -124,7 +161,6 @@ export function DevPodTable({ scope }: { scope: "mine" | "all" }) {
   );
   const counts = useMemo(() => Object.fromEntries(PHASES.map((p) => [p, byQuery.filter((r) => r.phase === p).length])), [byQuery]);
   const filtered = useMemo(() => (url.phase.length ? byQuery.filter((r) => url.phase.includes(r.phase)) : byQuery), [byQuery, url.phase]);
-  const shown = useMemo(() => groupRows(filtered, open), [filtered, open]);
 
   // every action on DevPods — one or many — goes here: their rows say
   // what is being done until it is, the bar how far it has got
@@ -227,14 +263,22 @@ export function DevPodTable({ scope }: { scope: "mine" | "all" }) {
         clusters: several ? clusters : undefined,
         admin,
         me,
-        groups: { open, toggle },
+        groups: { folded, toggle },
         usage: (r, key) =>
           r.group ? groupUsage(r.group.members.map((m) => (running(m) ? used.get(keyOf(m)) : undefined)), key) : running(r) ? usage(used.get(keyOf(r)), key) : undefined,
         actions: (r) => <ActionMenu label={`${r.name} 操作`} actions={() => rowActionsNow.current(r)} />,
       }),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [admin, me, open, used, several, clusters],
+    [admin, me, folded, used, several, clusters],
   );
+  // sorted here, not by the table: a group goes where its totals put it,
+  // its members with it (in that order among themselves)
+  const order = useMemo(() => {
+    const s = toSorting(url.sort)[0];
+    const col = s && (columns.find((c) => c.id === s.id) as { accessorFn?: (r: Row, i: number) => unknown } | undefined);
+    return col?.accessorFn ? compareBy((r) => col.accessorFn!(r, 0), s.desc) : undefined;
+  }, [url.sort, columns]);
+  const shown = useMemo(() => groupRows(filtered, folded, order), [filtered, folded, order]);
 
   return (
     <TableCtx.Provider value={{ scope, now, recent: recent.data, pending, reservations }}>
@@ -280,6 +324,7 @@ export function DevPodTable({ scope }: { scope: "mine" | "all" }) {
             getRowId={(r) => (r.group ? `group:${keyOf(r)}` : keyOf(r))}
             sorting={toSorting(url.sort)}
             onSortingChange={(s) => setUrl({ sort: fromSorting(s) })}
+            sorted
             selectable
             dim={status === "reconnecting"}
             empty={<EmptyState title={list.isLoading ? "加载中…" : rows.length ? "没有符合条件的 DevPod" : "还没有 DevPod"} />}
