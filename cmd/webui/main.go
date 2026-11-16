@@ -280,6 +280,11 @@ func main() {
 	if srv.GatewayLinks, err = clf.gatewayLinks(ctx, mgr.GetAPIReader()); err != nil {
 		fatal(err)
 	}
+	if srv.Clusters != nil { // the gateways of several clusters hand the CLI to the console
+		if srv.CLI, srv.CLILoopbackKey, err = consoleCLI(listen); err != nil {
+			fatal(err)
+		}
+	}
 	if srv.GatewayLinks != nil && srv.LiveSessions != nil {
 		srv.LiveSessions.Via(srv.GatewayLinks) // a gateway that is elsewhere is reached over its own connection
 	}

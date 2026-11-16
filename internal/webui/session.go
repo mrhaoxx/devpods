@@ -23,6 +23,9 @@ type Session struct {
 	User   string `json:"u"`
 	Admin  bool   `json:"a"`
 	Expiry int64  `json:"e"` // unix seconds
+	// Src is how they signed in (SignedInWith…; "" in a cookie from
+	// before it was kept).
+	Src string `json:"s,omitempty"`
 
 	// Token is set when the request came with a personal access token
 	// (never part of the cookie): its scopes and DevPod limits apply.
@@ -51,9 +54,21 @@ func (m *SessionManager) sign(payload string) string {
 	return base64.RawURLEncoding.EncodeToString(mac.Sum(nil))
 }
 
+// How a session was signed in to (Session.Src).
+const (
+	SignedInWithPassword = "password" // the console's own password
+	SignedInWithLDAP     = "ldap"
+	SignedInWithOAuth    = "oauth"
+)
+
 // Mint returns "<b64url(json)>.<b64url(hmac)>".
 func (m *SessionManager) Mint(user string, admin bool, now time.Time) string {
-	raw, err := json.Marshal(Session{User: user, Admin: admin, Expiry: now.Add(m.ttl).Unix()})
+	return m.MintFrom(user, admin, "", now)
+}
+
+// MintFrom is Mint for a sign-in by way of src (SignedInWith…).
+func (m *SessionManager) MintFrom(user string, admin bool, src string, now time.Time) string {
+	raw, err := json.Marshal(Session{User: user, Admin: admin, Expiry: now.Add(m.ttl).Unix(), Src: src})
 	if err != nil {
 		panic(err) // marshal of a plain struct cannot fail
 	}

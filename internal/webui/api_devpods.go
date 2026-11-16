@@ -5,6 +5,7 @@
 package webui
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -13,6 +14,7 @@ import (
 	"slices"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
@@ -26,8 +28,10 @@ import (
 	"sigs.k8s.io/yaml"
 
 	devpodv1alpha1 "github.com/mrhaoxx/devpod/api/v1alpha1"
+	"github.com/mrhaoxx/devpod/internal/gatewaycli"
 	"github.com/mrhaoxx/devpod/internal/gpures"
 	"github.com/mrhaoxx/devpod/internal/webui/clusters"
+	"golang.org/x/crypto/ssh"
 )
 
 // Server carries the webui backend's dependencies. Handlers run the
@@ -55,6 +59,15 @@ type Server struct {
 	// CLIKey lets the SSH gateway act for a user it authenticated (the
 	// CLI over SSH); empty = off.
 	CLIKey []byte
+	// CLI is the DevPod CLI, run here for the gateways (cli_ssh.go); nil
+	// leaves it to gateways that still run it themselves.
+	CLI *gatewaycli.Server
+	// CLILoopbackKey is what the console's own CLI calls its API with,
+	// heard from loopback only; made at start, never kept.
+	CLILoopbackKey []byte
+	cliHostOnce    sync.Once
+	cliHostKey     ssh.Signer
+	cliHostErr     error
 	// Reservations: node reservation rules; nil = off.
 	Reservations *ReservationRules
 	// Snapshots: saving a DevPod as an image; nil = off.
@@ -105,6 +118,9 @@ type Server struct {
 	// Webshell bridges browser terminals to the SSH gateway; nil turns
 	// the web terminal off.
 	Webshell *Webshell
+
+	// logins slows down the guessing of passwords (login_guard.go).
+	logins loginGuard
 }
 
 type apiBody struct {
@@ -139,7 +155,33 @@ func (s *Server) sessionFrom(w http.ResponseWriter, r *http.Request) (Session, b
 		s.writeErr(w, http.StatusUnauthorized, "UNAUTHORIZED", err.Error(), nil)
 		return Session{}, false
 	}
+	if sess, err = s.refreshSession(r.Context(), sess); err != nil {
+		s.writeErr(w, http.StatusUnauthorized, "UNAUTHORIZED", err.Error(), nil)
+		return Session{}, false
+	}
 	return sess, true
+}
+
+// refreshSession brings a signed-in session up to date with the User
+// object, on every request. Whether they are an admin is its say (and
+// --admins'), not what it was at sign-in — unless there is no object to
+// say so (one of the directory who never got one), when the sign-in's
+// stands. A password user whose object is gone has been deleted: their
+// password went with it, and so does the session.
+func (s *Server) refreshSession(ctx context.Context, sess Session) (Session, error) {
+	var u devpodv1alpha1.User
+	err := s.Client.Get(ctx, types.NamespacedName{Name: sess.User}, &u)
+	switch {
+	case apierrors.IsNotFound(err):
+		if sess.Src == SignedInWithPassword {
+			return Session{}, errors.New("this account no longer exists")
+		}
+		return sess, nil
+	case err != nil:
+		return sess, nil // cannot tell now: as at sign-in
+	}
+	sess.Admin = s.adminFor(sess.User, &u)
+	return sess, nil
 }
 
 // devPods lists DevPods of the request's clusters — its one cluster, or

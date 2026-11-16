@@ -153,12 +153,7 @@ func (p *HTTPProxy) user(r *http.Request, id string, port int, dp *devpodv1alpha
 }
 
 // safeReturn keeps a redirect target on this host.
-func safeReturn(rd string) string {
-	if !strings.HasPrefix(rd, "/") || strings.HasPrefix(rd, "//") || strings.HasPrefix(rd, "/\\") {
-		return "/"
-	}
-	return rd
-}
+func safeReturn(rd string) string { return httpauth.SafeReturn(rd) }
 
 // handleAuth turns the webui's ticket into this hostname's cookie.
 // It returns the user signed in ("" when the ticket is refused).

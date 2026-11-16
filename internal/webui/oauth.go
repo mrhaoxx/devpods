@@ -168,7 +168,7 @@ func (o *OAuth) HandleCallback(w http.ResponseWriter, r *http.Request) {
 			admin = true
 		}
 	}
-	tok := o.sessions.Mint(mapped, admin, time.Now())
+	tok := o.sessions.MintFrom(mapped, admin, SignedInWithOAuth, time.Now())
 	http.SetCookie(w, &http.Cookie{
 		Name: SessionCookie, Value: tok, Path: "/",
 		MaxAge: int(o.sessions.TTL().Seconds()), HttpOnly: true, Secure: o.secure,

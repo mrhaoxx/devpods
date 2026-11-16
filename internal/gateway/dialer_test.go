@@ -97,3 +97,45 @@ func TestDialer_TimeoutOnNoListener(t *testing.T) {
 		t.Fatal("expected error dialing dead port")
 	}
 }
+
+// Handshake logs in on a connection made elsewhere (the console's CLI,
+// over a WebSocket): as the user named, with the gateway's internal key.
+func TestDialer_Handshake(t *testing.T) {
+	_, gwPriv, _ := ed25519.GenerateKey(rand.Reader)
+	gwSigner, _ := ssh.NewSignerFromKey(gwPriv)
+	_, hostPriv, _ := ed25519.GenerateKey(rand.Reader)
+	hostSigner, _ := ssh.NewSignerFromKey(hostPriv)
+	who := make(chan string, 1)
+	cfg := &ssh.ServerConfig{PublicKeyCallback: func(meta ssh.ConnMetadata, key ssh.PublicKey) (*ssh.Permissions, error) {
+		if string(key.Marshal()) != string(gwSigner.PublicKey().Marshal()) {
+			return nil, ssh.ErrNoAuth
+		}
+		who <- meta.User()
+		return &ssh.Permissions{}, nil
+	}}
+	cfg.AddHostKey(hostSigner)
+	// a real connection: both ends of an SSH handshake speak first
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+	go func() {
+		if c, err := ln.Accept(); err == nil {
+			_, _, _, _ = ssh.NewServerConn(c, cfg)
+		}
+	}()
+	b, err := net.DialTimeout("tcp", ln.Addr().String(), 3*time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	conn, _, reqs, err := gateway.NewDialer(gwSigner).Handshake(b, "console", "alice")
+	if err != nil {
+		t.Fatalf("Handshake: %v", err)
+	}
+	defer conn.Close()
+	go ssh.DiscardRequests(reqs)
+	if got := <-who; got != "alice" {
+		t.Fatalf("logged in as %q", got)
+	}
+}

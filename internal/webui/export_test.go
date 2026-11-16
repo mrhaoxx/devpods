@@ -164,3 +164,6 @@ func (s *Server) RunLaunchForTest(r *http.Request, plan *LaunchPlan) ([]LaunchIt
 func (s *Server) DecideForTest(ctx context.Context, owner, cluster, node string, labels map[string]string) (access.Decision, bool, error) {
 	return s.decide(ctx, owner, cluster, access.Node{Name: node, Labels: labels})
 }
+
+// LoginWaitForTest is how long a sign-in waits after n failures in a row.
+func LoginWaitForTest(n int) time.Duration { return loginWait(n) }

@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/mrhaoxx/devpod/internal/gwlink"
 	"github.com/mrhaoxx/devpod/web"
 )
 
@@ -61,6 +62,7 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("GET /api/admin/access/match", s.handleAccessMatch)
 	mux.HandleFunc("POST /api/admin/access/check", s.handleAccessCheck)
 	mux.HandleFunc("GET /api/groups", s.handleShareGroups)
+	mux.HandleFunc("GET "+gwlink.CLIPath, s.handleGatewayCLI)
 	mux.HandleFunc("GET /api/admin/groups", s.handleListGroups)
 	mux.HandleFunc("POST /api/admin/groups", s.handleCreateGroup)
 	mux.HandleFunc("PUT /api/admin/groups/{name}", s.handleUpdateGroup)

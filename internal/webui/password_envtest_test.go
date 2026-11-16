@@ -306,3 +306,57 @@ func TestLDAPLogin(t *testing.T) {
 		t.Fatalf("directory password of a user with a built-in one: %d", rec.Code)
 	}
 }
+
+// Guessing a password gets slower: five failures in a row cost nothing
+// more than the usual delay; each one after makes the next try wait twice
+// as long (from a second, up to ten minutes) — refused unheard meanwhile,
+// even with the right password. Signing in clears it.
+func TestPasswordLoginBackoff(t *testing.T) {
+	setupSuite(t)
+	s, _ := newServer(t)
+	s.PasswordAuth = true
+	ctx := context.Background()
+	hash, err := webui.HashPassword("right-password", 8)
+	if err != nil {
+		t.Fatal(err)
+	}
+	u := &devpodv1alpha1.User{ObjectMeta: metav1.ObjectMeta{Name: "bo-frank"}, Spec: devpodv1alpha1.UserSpec{PasswordHash: hash}}
+	if err := k8sClient.Create(ctx, u); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = k8sClient.Delete(context.Background(), u) })
+	waitLogin(t, s, "bo-frank", "right-password", http.StatusOK)
+	login := func(pass string) *httptest.ResponseRecorder {
+		return doJSON(t, s.HandlePasswordLoginForTest(), "POST", "/api/auth/password", nil, nil, `{"username":"bo-frank","password":"`+pass+`"}`)
+	}
+	for i := 1; i <= 6; i++ {
+		if rec := login("wrong"); rec.Code != http.StatusUnauthorized {
+			t.Fatalf("failure %d: %d %s", i, rec.Code, rec.Body)
+		}
+	}
+	if rec := login("right-password"); rec.Code != http.StatusTooManyRequests || rec.Header().Get("Retry-After") != "1" {
+		t.Fatalf("during the wait: %d Retry-After=%q %s", rec.Code, rec.Header().Get("Retry-After"), rec.Body)
+	}
+	time.Sleep(1100 * time.Millisecond)
+	if rec := login("right-password"); rec.Code != http.StatusOK {
+		t.Fatalf("after the wait: %d %s", rec.Code, rec.Body)
+	}
+	for i := 1; i <= 5; i++ { // cleared: five failures are free again
+		if rec := login("wrong"); rec.Code != http.StatusUnauthorized {
+			t.Fatalf("failure %d after signing in: %d", i, rec.Code)
+		}
+	}
+	if rec := login("right-password"); rec.Code != http.StatusOK {
+		t.Fatalf("within the free failures: %d", rec.Code)
+	}
+}
+
+// The wait after n failures in a row: none for five, then doubling from a
+// second, never more than ten minutes.
+func TestLoginWait(t *testing.T) {
+	for n, want := range map[int]time.Duration{0: 0, 5: 0, 6: time.Second, 7: 2 * time.Second, 15: 512 * time.Second, 16: 10 * time.Minute, 60: 10 * time.Minute} {
+		if got := webui.LoginWaitForTest(n); got != want {
+			t.Errorf("after %d failures: %v, want %v", n, got, want)
+		}
+	}
+}

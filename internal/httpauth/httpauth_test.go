@@ -85,3 +85,27 @@ func TestPortAccess(t *testing.T) {
 		}
 	}
 }
+
+// Where a port's sign-in returns to: a path of the port's own host, never
+// one a browser would read as another host.
+func TestSafeReturn(t *testing.T) {
+	for in, want := range map[string]string{
+		"":                      "/",
+		"/":                     "/",
+		"/app?x=1#top":          "/app?x=1#top",
+		"/a/%2F%2Fb":            "/a/%2F%2Fb",
+		"//evil.example":        "/",
+		"/\\evil.example":       "/",
+		"/a\\b":                 "/",
+		"/\t/evil.example":      "/",
+		"/\n/evil.example":      "/",
+		"/\x00x":                "/",
+		"https://evil.example/": "/",
+		"evil.example":          "/",
+		"/\u00a0x":              "/\u00a0x",
+	} {
+		if got := SafeReturn(in); got != want {
+			t.Errorf("SafeReturn(%q) = %q, want %q", in, got, want)
+		}
+	}
+}

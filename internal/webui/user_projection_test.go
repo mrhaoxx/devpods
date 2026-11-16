@@ -133,7 +133,20 @@ func TestUsersAcrossClusters(t *testing.T) {
 		var u devpodv1alpha1.User
 		return k8sClient.Get(ctx, types.NamespacedName{Name: "gl-alice"}, &u) == nil && u.Spec.Quotas["b"].MaxDevPods != nil
 	})
-	// alice is an admin by her record; bob-like checks need a plain session
+	// alice is an admin by her record, and a session is what her record
+	// says it is: quotas bind her only once she is no longer one
+	var rec devpodv1alpha1.User
+	if err := w.a.Get(ctx, types.NamespacedName{Name: "gl-alice"}, &rec); err != nil {
+		t.Fatal(err)
+	}
+	rec.Spec.Admin = false
+	if err := w.a.Update(ctx, &rec); err != nil {
+		t.Fatal(err)
+	}
+	w.until("the console sees she is no admin", func() bool {
+		var u devpodv1alpha1.User
+		return k8sClient.Get(ctx, types.NamespacedName{Name: "gl-alice"}, &u) == nil && !u.Spec.Admin
+	})
 	plain := func(method, path, body string) (int, map[string]any) {
 		req := httptest.NewRequest(method, path, strings.NewReader(body))
 		req.AddCookie(forge(w.sm, "gl-alice", false))

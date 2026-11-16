@@ -131,6 +131,20 @@ describe("audit pages", () => {
     expect(screen.getByTestId("player").textContent).toBe("s1/0|ended|30000");
   });
 
+  it("a CLI session, which reaches no DevPod, says so and links nowhere", async () => {
+    const cli = { ...session([]).session, session_id: "c1", devpod: "", devpod_uid: "", commands: 1, files: 0, policy_hits: 0, alerts: 0, cluster: "", gateway: "st" };
+    stubFetch({ "/api/audit/sessions": { items: [cli], next: "" } });
+    renderWithProviders(<SessionsPage />, { route: "/sessions" });
+    const cell = await screen.findByText("控制台 CLI");
+    expect(cell.closest("a")).toBeNull();
+  });
+
+  it("one CLI session's page says what it reached", async () => {
+    renderSession(session([], { session: { ...session([]).session, devpod: "", devpod_uid: "" } }));
+    const what = await screen.findByText("控制台 CLI");
+    expect(what.closest("a")).toBeNull();
+  });
+
   it("non-admin sessions page has no user filter", async () => {
     stubFetch({ "/api/audit/sessions": { items: [], next: "" } });
     renderWithProviders(<SessionsPage />, { route: "/sessions" });

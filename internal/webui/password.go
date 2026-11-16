@@ -16,6 +16,7 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 
 	devpodv1alpha1 "github.com/mrhaoxx/devpod/api/v1alpha1"
+	"strconv"
 )
 
 // failFloor is the minimum time a failed password login takes, so the
@@ -49,9 +50,9 @@ func (s *Server) adminFor(username string, u *devpodv1alpha1.User) bool {
 }
 
 // setSession mints the session cookie shared by every login path.
-func (s *Server) setSession(w http.ResponseWriter, username string, admin bool) {
+func (s *Server) setSession(w http.ResponseWriter, username string, admin bool, src string) {
 	http.SetCookie(w, &http.Cookie{
-		Name: SessionCookie, Value: s.Sessions.Mint(username, admin, time.Now()), Path: "/",
+		Name: SessionCookie, Value: s.Sessions.MintFrom(username, admin, src, time.Now()), Path: "/",
 		MaxAge: int(s.Sessions.TTL().Seconds()), HttpOnly: true, Secure: s.SecureCookies,
 		SameSite: http.SameSiteLaxMode,
 	})
@@ -93,9 +94,17 @@ func (s *Server) handlePasswordLogin(w http.ResponseWriter, r *http.Request) {
 	}
 
 	start := time.Now()
+	// a name being guessed at is heard again only after its wait
+	if wait := s.logins.wait(req.Username, start); wait > 0 {
+		secs := int((wait + time.Second - 1) / time.Second)
+		w.Header().Set("Retry-After", strconv.Itoa(secs))
+		s.writeErr(w, http.StatusTooManyRequests, "TOO_MANY_ATTEMPTS", fmt.Sprintf("too many failed sign-ins: try again in %d s", secs), map[string]int{"retryAfter": secs})
+		return
+	}
 	// Generic failure with a timing floor — never reveal whether the
 	// username exists or the password was wrong.
 	fail := func() {
+		s.logins.failed(req.Username, time.Now())
 		if d := failFloor - time.Since(start); d > 0 {
 			time.Sleep(d)
 		}
@@ -110,8 +119,10 @@ func (s *Server) handlePasswordLogin(w http.ResponseWriter, r *http.Request) {
 		userPtr = nil
 	}
 	ok := s.PasswordAuth && userPtr != nil && u.Spec.PasswordHash != "" && VerifyPassword(u.Spec.PasswordHash, req.Password)
+	src := SignedInWithPassword
 	// not a built-in password: the directory's, when there is one
 	if !ok && s.LDAPAuth != nil {
+		src = SignedInWithLDAP
 		var err error
 		if ok, err = s.LDAPAuth.Authenticate(r.Context(), req.Username, req.Password); err != nil {
 			slog.Error("ldap login", "user", req.Username, "err", err)
@@ -131,7 +142,8 @@ func (s *Server) handlePasswordLogin(w http.ResponseWriter, r *http.Request) {
 			slog.Warn("user object after ldap login", "user", req.Username, "err", err)
 		}
 	}
-	s.setSession(w, req.Username, s.adminFor(req.Username, userPtr))
+	s.logins.succeeded(req.Username)
+	s.setSession(w, req.Username, s.adminFor(req.Username, userPtr), src)
 	s.writeJSON(w, http.StatusOK, map[string]any{"user": req.Username})
 }
 

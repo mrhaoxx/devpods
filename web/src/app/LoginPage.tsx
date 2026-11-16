@@ -3,6 +3,17 @@ import { authConfig, passwordLogin, ApiFailure, type AuthConfig } from "../data/
 import { Button } from "../design/Button";
 import { Field, Input, Notice } from "../design/Form";
 
+/** loginError: a failed sign-in said plainly. */
+function loginError(e: unknown): string {
+  if (!(e instanceof ApiFailure)) return String(e);
+  if (e.body.code === "UNAUTHORIZED") return "用户名或密码不对";
+  if (e.body.code === "TOO_MANY_ATTEMPTS") {
+    const secs = (e.body.detail as { retryAfter?: number } | undefined)?.retryAfter ?? 0;
+    return `登录失败次数过多，请 ${secs >= 60 ? `${Math.ceil(secs / 60)} 分钟` : `${Math.max(secs, 1)} 秒`}后再试`;
+  }
+  return e.body.message;
+}
+
 /** Login (UI spec §5.11): password, GitLab or both, per /api/auth/config. */
 export function LoginPage() {
   const [cfg, setCfg] = useState<AuthConfig | null>(null);
@@ -25,7 +36,7 @@ export function LoginPage() {
       await passwordLogin(username, password);
       window.location.href = "/";
     } catch (e) {
-      setErr(e instanceof ApiFailure ? e.body.message : String(e));
+      setErr(loginError(e));
       setBusy(false);
     }
   };

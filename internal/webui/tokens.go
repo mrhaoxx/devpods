@@ -258,7 +258,11 @@ func (s *Server) bearerSession(w http.ResponseWriter, r *http.Request, bearer st
 		return Session{}, false
 	}
 	if key, ok := strings.CutPrefix(bearer, gatewayPrefix); ok {
-		if len(s.CLIKey) == 0 || subtle.ConstantTimeCompare([]byte(key), s.CLIKey) != 1 {
+		// the console's own CLI, from this machine; or a gateway that
+		// still runs the CLI itself, with the key shared with it
+		own := len(s.CLILoopbackKey) > 0 && fromLoopback(r) && subtle.ConstantTimeCompare([]byte(key), s.CLILoopbackKey) == 1
+		shared := len(s.CLIKey) > 0 && subtle.ConstantTimeCompare([]byte(key), s.CLIKey) == 1
+		if !own && !shared {
 			return deny("invalid gateway key")
 		}
 		name := r.Header.Get("X-DevPod-User")

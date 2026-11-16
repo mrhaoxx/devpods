@@ -50,12 +50,16 @@ export function SessionsPage({ mine }: { mine?: boolean }) {
       header: "DevPod",
       accessorKey: "devpod",
       meta: { priority: 2, width: 150, mono: true },
-      cell: ({ row: { original: s } }) => (
-        <Link to={devpodHref({ cluster: s.cluster, name: s.devpod })} className="hover:text-accent">
-          {s.devpod}
-          {s.cluster && <span className="ml-1.5 text-faint">· {s.cluster}</span>}
-        </Link>
-      ),
+      cell: ({ row: { original: s } }) =>
+        // the CLI, which the gateway proxies to the console, reaches no DevPod
+        !s.devpod ? (
+          <span className="text-muted">控制台 CLI</span>
+        ) : (
+          <Link to={devpodHref({ cluster: s.cluster, name: s.devpod })} className="hover:text-accent">
+            {s.devpod}
+            {s.cluster && <span className="ml-1.5 text-faint">· {s.cluster}</span>}
+          </Link>
+        ),
     },
     {
       id: "from",

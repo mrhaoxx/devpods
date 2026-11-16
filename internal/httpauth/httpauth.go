@@ -22,6 +22,7 @@ import (
 	"time"
 
 	devpodv1alpha1 "github.com/mrhaoxx/devpod/api/v1alpha1"
+	"net/url"
 )
 
 const (
@@ -198,4 +199,23 @@ func Verify(key []byte, tok, kind string, now time.Time) (Claims, error) {
 		return c, ErrExpired
 	}
 	return c, nil
+}
+
+// SafeReturn is rd when it is a path of the host it is used on — one "/"
+// first, no scheme or host, and no backslash or ASCII control character
+// (a browser drops tabs and newlines from an address and reads "\" as
+// "/", so "/\t/x" or "/\\x" would leave for host x); "/" otherwise.
+func SafeReturn(rd string) string {
+	if !strings.HasPrefix(rd, "/") || strings.HasPrefix(rd, "//") {
+		return "/"
+	}
+	for _, c := range rd {
+		if c == '\\' || c < 0x20 || c == 0x7f {
+			return "/"
+		}
+	}
+	if u, err := url.Parse(rd); err != nil || u.Scheme != "" || u.Host != "" {
+		return "/"
+	}
+	return rd
 }

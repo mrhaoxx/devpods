@@ -73,17 +73,26 @@ func (d *Dialer) DialIn(ctx context.Context, t Target) (ssh.Conn, <-chan ssh.New
 	if err != nil {
 		return nil, nil, nil, fmt.Errorf("dial %s: %w", addr, err)
 	}
+	return d.Handshake(tcp, addr, "root")
+}
+
+// Handshake completes the SSH client handshake on conn, made elsewhere,
+// as user, with the gateway's internal key: a DevPod's sshd (as root), or
+// the console's CLI (as the user the gateway signed in). The host key is
+// not checked: how conn was reached is the trust anchor. conn is closed
+// when the handshake fails.
+func (d *Dialer) Handshake(conn net.Conn, addr, user string) (ssh.Conn, <-chan ssh.NewChannel, <-chan *ssh.Request, error) {
 	cfg := &ssh.ClientConfig{
-		User:            "root",
+		User:            user,
 		Auth:            []ssh.AuthMethod{ssh.PublicKeys(d.signer)},
 		HostKeyCallback: ssh.InsecureIgnoreHostKey(),
 		Timeout:         DialTimeout,
 		ClientVersion:   "SSH-2.0-devpod-gateway",
 	}
-	conn, chans, reqs, err := ssh.NewClientConn(tcp, addr, cfg)
+	c, chans, reqs, err := ssh.NewClientConn(conn, addr, cfg)
 	if err != nil {
-		_ = tcp.Close()
+		_ = conn.Close()
 		return nil, nil, nil, fmt.Errorf("ssh handshake to %s: %w", addr, err)
 	}
-	return conn, chans, reqs, nil
+	return c, chans, reqs, nil
 }

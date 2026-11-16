@@ -320,10 +320,7 @@ func (s *Server) handleHTTPTicket(w http.ResponseWriter, r *http.Request) {
 		s.writeErr(w, http.StatusForbidden, "FORBIDDEN", "this address does not exist or you have no access to it", nil)
 		return
 	}
-	rd := req.RD
-	if !strings.HasPrefix(rd, "/") || strings.HasPrefix(rd, "//") {
-		rd = "/"
-	}
+	rd := httpauth.SafeReturn(req.RD) // the port's own host, never another
 	t := httpauth.Sign(h.Key, httpauth.Claims{Kind: httpauth.KindTicket, ID: id, User: sess.User, Admin: sess.Admin, Exp: time.Now().Add(httpauth.TicketTTL).Unix()})
 	u := url.URL{Scheme: h.Scheme, Host: h.authority(bareHost(req.Host)), Path: httpauth.AuthPath, RawQuery: url.Values{"t": {t}, "rd": {rd}}.Encode()}
 	s.writeJSON(w, http.StatusOK, map[string]string{"url": u.String()})

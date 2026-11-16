@@ -19,12 +19,15 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/coder/websocket"
 
 	devpodv1alpha1 "github.com/mrhaoxx/devpod/api/v1alpha1"
 	"github.com/mrhaoxx/devpod/internal/agent"
@@ -401,4 +404,42 @@ func Join(ctx context.Context, hc *http.Client, console, gateway, token string, 
 	}
 	msg, _ := io.ReadAll(io.LimitReader(resp.Body, 1024))
 	return fmt.Errorf("the console answered %d: %s", resp.StatusCode, strings.TrimSpace(string(msg)))
+}
+
+// CLIPath is where a gateway opens a CLI session at the console.
+const CLIPath = "/gateway/v1/cli"
+
+// CLIRequest is whose CLI session a gateway opens: the user it signed in,
+// from where (the client's address) and how (AuthKind, the trusted
+// proxy's Alias).
+type CLIRequest struct {
+	User, Remote, AuthKind, Alias string
+}
+
+// DialCLI opens a CLI session's connection to the console: a WebSocket
+// on its HTTP port, the request signed as this gateway's (so what it says
+// of the user cannot be changed on the way). The gateway speaks SSH on
+// it, logging in as q.User with the key it signs into DevPods with. The
+// connection lasts as long as ctx.
+func (c *Client) DialCLI(ctx context.Context, q CLIRequest) (net.Conn, error) {
+	v := url.Values{"user": {q.User}, "remote": {q.Remote}, "auth": {q.AuthKind}, "alias": {q.Alias}}
+	u := c.o.Console + CLIPath + "?" + v.Encode()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
+	if err != nil {
+		return nil, err
+	}
+	Sign(req, nil, c.o.Gateway, c.o.Identity, c.o.Now())
+	dctx, cancel := context.WithTimeout(ctx, 20*time.Second)
+	defer cancel()
+	// the WebSocket outlives any timeout of the client's own
+	hc := &http.Client{Transport: c.o.HTTP.Transport}
+	ws, resp, err := websocket.Dial(dctx, "ws"+strings.TrimPrefix(u, "http"), &websocket.DialOptions{HTTPClient: hc, HTTPHeader: req.Header})
+	if err != nil {
+		if resp != nil {
+			return nil, fmt.Errorf("the console refused the CLI session: %s", resp.Status)
+		}
+		return nil, fmt.Errorf("%w: %v", ErrConsoleAway, err)
+	}
+	ws.SetReadLimit(-1)
+	return websocket.NetConn(ctx, ws, websocket.MessageBinary), nil
 }

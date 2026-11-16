@@ -246,12 +246,12 @@ func main() {
 
 	recorder := gateway.NewEventRecorder(c, clientset, devpodNamespace)
 
-	if cli, err = cf.build(); err != nil {
+	if cli, err = cf.build(theHub); err != nil {
 		slog.Error("cli", "err", err)
 		os.Exit(1)
 	}
 	if cli != nil {
-		slog.Info("cli_enabled", "user", cli.user, "api", cf.apiURL)
+		slog.Info("cli_enabled", "user", cli.user, "api", cf.apiURL, "in_console", cli.hub != nil)
 	}
 
 	auditRec, err := buildRecorder(ctx, af)
@@ -550,7 +550,7 @@ func handle(parent context.Context, id uint64, conn net.Conn, hostSigner ssh.Sig
 		return
 	}
 	defer srvConn.Close()
-	if serveCLI(parent, srvConn, srvChans, srvReqs) {
+	if serveCLI(parent, srvConn, srvChans, srvReqs, dialer, ad) {
 		return
 	}
 

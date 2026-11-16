@@ -127,12 +127,16 @@ export function SessionPage() {
     <div className="space-y-3 p-3">
       <header className="flex flex-wrap items-baseline gap-x-4 gap-y-1 text-xs text-muted">
         <h2 className="mono text-base font-semibold text-ink">{s.user}</h2>
-        <span>
-          DevPod{" "}
-          <Link to={devpodHref({ cluster: q.data.cluster || undefined, name: s.devpod })} className="mono text-ink hover:text-accent">
-            {s.devpod}
-          </Link>
-        </span>
+        {s.devpod ? (
+          <span>
+            DevPod{" "}
+            <Link to={devpodHref({ cluster: q.data.cluster || undefined, name: s.devpod })} className="mono text-ink hover:text-accent">
+              {s.devpod}
+            </Link>
+          </span>
+        ) : (
+          <span className="text-ink">控制台 CLI</span>
+        )}
         {(q.data.cluster || q.data.gateway) && (
           <span>
             集群 <span className="mono text-ink">{q.data.cluster || "—"}</span> · 经网关 <span className="mono text-ink">{q.data.gateway || "—"}</span>
@@ -169,7 +173,7 @@ export function SessionPage() {
           cut.mutate();
         }}
       >
-        <span className="mono">{s.user}</span> 到 <span className="mono">{s.devpod}</span> 的 SSH 连接会立刻被切断，其中正在运行的前台程序会收到挂断信号。DevPod 本身不受影响，用户可以重新连接。此操作会写入访问记录。
+        <span className="mono">{s.user}</span> 到 <span className="mono">{s.devpod || "控制台 CLI"}</span> 的 SSH 连接会立刻被切断，其中正在运行的前台程序会收到挂断信号。DevPod 本身不受影响，用户可以重新连接。此操作会写入访问记录。
       </ConfirmDialog>
       {s.pubkey_fp && (
         <section aria-label="登录公钥" className="space-y-1 text-xs">
