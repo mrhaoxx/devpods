@@ -5,6 +5,8 @@
 package webui
 
 import (
+	"context"
+
 	"net/http"
 	"time"
 
@@ -13,6 +15,7 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 
 	devpodv1alpha1 "github.com/mrhaoxx/devpod/api/v1alpha1"
+	"github.com/mrhaoxx/devpod/internal/access"
 )
 
 // Handler accessors for the external test package. Test-only file.
@@ -155,4 +158,9 @@ func (s *Server) PlanLaunchForTest(r *http.Request, user, config string, req Lau
 // RunLaunchForTest writes a checked plan.
 func (s *Server) RunLaunchForTest(r *http.Request, plan *LaunchPlan) ([]LaunchItem, int) {
 	return s.runLaunch(r, plan)
+}
+
+// DecideForTest is decide for a node of the given name and labels.
+func (s *Server) DecideForTest(ctx context.Context, owner, cluster, node string, labels map[string]string) (access.Decision, bool, error) {
+	return s.decide(ctx, owner, cluster, access.Node{Name: node, Labels: labels})
 }
