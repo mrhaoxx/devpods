@@ -231,7 +231,7 @@ export function DetailPage() {
         <Meta k="节点">{pod?.node || pinnedNode(dp)}</Meta>
         <Meta k="镜像">{image}</Meta>
         <Meta k="IP">{pod?.ip}</Meta>
-        <Meta k="home">{dp.spec.persistence ? `PVC ${dp.spec.persistence.size}` : "无持久化"}</Meta>
+        <Meta k="home">{dp.spec.persistence && `PVC ${dp.spec.persistence.size}`}</Meta>
         <Meta k="协作者">{dp.spec.collaborators?.join(", ")}</Meta>
         <Meta k="Kore">{kore}</Meta>
       </div>

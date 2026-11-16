@@ -18,8 +18,7 @@ export function phaseSummary(dp: DevPod, _pod: PodInfo | undefined, now: Date): 
   }
   if (phase === "Stopped" || !dp.spec.running) {
     const age = st.hibernatedAt ? ` ${fmtAge(st.hibernatedAt, now)}` : "";
-    const pvc = dp.spec.persistence ? `PVC ${dp.spec.persistence.size}` : "无持久化";
-    return `已休眠${age} · ${pvc}`;
+    return dp.spec.persistence ? `已休眠${age} · PVC ${dp.spec.persistence.size}` : `已休眠${age}`;
   }
   return st.message || "启动中";
 }

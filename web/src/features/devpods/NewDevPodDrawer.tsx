@@ -1,10 +1,9 @@
 // 新建 DevPod (config-centric create spec §5.1): pick a config and fill
 // in its variables — or write a YAML by hand. ?config= opens on a
 // config, ?image= on a blank YAML with that image.
-import { devpodHref, launchCluster, rememberLaunchCluster } from "../../data/cluster";
+import { launchCluster, rememberLaunchCluster } from "../../data/cluster";
 import { useClusterFilter, useClusterList } from "../../data/clusterFilter";
 import { useState } from "react";
-import { useNavigate } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import { useMe } from "../../data/queries";
 import { Drawer } from "../../design/Drawer";
@@ -17,8 +16,7 @@ import { rememberConfig } from "./recentConfigs";
 
 type Step = { kind: "pick" } | { kind: "launch"; name: string } | { kind: "yaml"; text: string; from: "blank" | "launch" };
 
-function Launch({ cluster, name, onBack, onEditOnce }: { cluster?: string; name: string; onBack: () => void; onEditOnce: (yaml: string) => void }) {
-  const nav = useNavigate();
+function Launch({ cluster, name, onBack, onEditOnce, onClose }: { cluster?: string; name: string; onBack: () => void; onEditOnce: (yaml: string) => void; onClose: () => void }) {
   const user = useMe().data?.user ?? "";
   const q = useQuery({ queryKey: ["config", name], queryFn: () => getConfig(name), retry: false });
   if (q.isError) return <Notice>配置 {name} 不可用：它被删除，或不再分享给你。</Notice>;
@@ -33,11 +31,10 @@ function Launch({ cluster, name, onBack, onEditOnce }: { cluster?: string; name:
         // something was made from it: it was used
         if (r.items.some((i) => i.ok) && user) rememberConfig(user, name);
         if (r.items.some((i) => i.ok)) rememberLaunchCluster(cluster);
-        // all made: go to what was made (leaving ?new=1 closes the
-        // drawer); otherwise stay on the results
+        // all made: back to the list, where they now are (the drawer
+        // closes); otherwise stay on the results
         if (r.items.length === 0 || !r.items.every((i) => i.ok)) return;
-        if (r.group) nav(`/?group=${encodeURIComponent(r.group)}${cluster ? `&cluster=${encodeURIComponent(cluster)}` : ""}`);
-        else nav(devpodHref({ cluster, name: r.items[0].name }));
+        onClose();
       }}
     />
   );
@@ -45,7 +42,6 @@ function Launch({ cluster, name, onBack, onEditOnce }: { cluster?: string; name:
 
 export function NewDevPodDrawer({ config, image, in: asked, onClose }: { config?: string; image?: string; in?: string; onClose: () => void }) {
   const user = useMe().data?.user ?? "me";
-  const nav = useNavigate();
   const clusters = useClusterList().data?.items ?? [];
   const { filter } = useClusterFilter();
   const [picked, setPicked] = useState<string>();
@@ -90,6 +86,7 @@ export function NewDevPodDrawer({ config, image, in: asked, onClose }: { config?
           name={step.name}
           onBack={() => setStep({ kind: "pick" })}
           onEditOnce={(text) => setStep({ kind: "yaml", text, from: "launch" })}
+          onClose={onClose}
         />
       )}
       {step.kind === "yaml" && (
@@ -99,7 +96,7 @@ export function NewDevPodDrawer({ config, image, in: asked, onClose }: { config?
           onBack={() => setStep({ kind: "pick" })}
           onCreated={(r) => {
             rememberLaunchCluster(r.cluster);
-            nav(devpodHref(r));
+            onClose(); // back to the list, where it now is
           }}
         />
       )}

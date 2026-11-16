@@ -21,8 +21,8 @@ describe("phaseSummary", () => {
     const s = phaseSummary(dp({ running: false, persistence: { size: "50Gi" } }, { phase: "Stopped", hibernatedAt: "2026-11-07T12:00:00Z" }), undefined, now);
     expect(s).toBe("已休眠 3d · PVC 50Gi");
   });
-  it("Stopped without persistence says 无持久化", () => {
-    expect(phaseSummary(dp({ running: false }, { phase: "Stopped" }), undefined, now)).toBe("已休眠 · 无持久化");
+  it("Stopped without persistence says just 已休眠", () => {
+    expect(phaseSummary(dp({ running: false }, { phase: "Stopped" }), undefined, now)).toBe("已休眠");
   });
   it("Failed shows the reason and the retry countdown", () => {
     const s = phaseSummary(dp({}, { phase: "Failed", message: "ImagePullBackOff", retryCount: 2, lastFailureAt: "2026-11-10T11:59:50Z" }), undefined, now);

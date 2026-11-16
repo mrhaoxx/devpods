@@ -74,7 +74,7 @@ describe("new DevPod drawer", () => {
     expect(screen.getByText("GPU 训练")).toBeTruthy();
   });
 
-  it("a group launched goes to the list with the group open; one goes to its page", async () => {
+  it("all launched, the drawer closes on the list", async () => {
     stubFetch({
       ...base,
       "GET /api/configs/alice-mine": { ...configs[0], content: "" },
@@ -84,7 +84,8 @@ describe("new DevPod drawer", () => {
     fireEvent.change(await screen.findByLabelText("短名"), { target: { value: "t" } });
     fireEvent.change(screen.getByLabelText("数量"), { target: { value: "2" } });
     fireEvent.click(screen.getByRole("button", { name: "创建" }));
-    await waitFor(() => expect(screen.getByTestId("where").textContent).toBe("/?group=alice-t"));
+    await waitFor(() => expect(screen.getByTestId("where").textContent).toBe("/"));
+    expect(screen.queryByRole("dialog", { name: "新建 DevPod" })).toBeNull();
   });
 
   it("a blank YAML starts from a small DevPod, and creates from it", async () => {
@@ -95,7 +96,7 @@ describe("new DevPod drawer", () => {
     expect(box.value).toContain("name: alice-dev");
     expect(box.value).toContain("image: ubuntu:24.04");
     fireEvent.click(screen.getByRole("button", { name: "创建" }));
-    await waitFor(() => expect(screen.getByTestId("where").textContent).toBe("/devpods/-/alice-dev"));
+    await waitFor(() => expect(screen.getByTestId("where").textContent).toBe("/"));
     expect(JSON.parse(calls.find((c) => c.method === "POST")!.body!)).toEqual({ yaml: box.value });
   });
 
@@ -172,7 +173,7 @@ describe("new DevPod drawer", () => {
     fireEvent.click(screen.getByLabelText("m602"));
     fireEvent.click(screen.getByRole("button", { name: "创建" }));
     await waitFor(() => expect(calls.some((c) => c.method === "POST" && c.url.pathname === "/api/clusters/b/configs/bob-sg/launch")).toBe(true));
-    await waitFor(() => expect(screen.getByTestId("where").textContent).toBe("/devpods/b/alice-s"));
+    await waitFor(() => expect(screen.getByTestId("where").textContent).toBe("/"));
     expect(localStorage.getItem("devpod.lastLaunchCluster")).toBe("b");
     localStorage.clear();
   });
