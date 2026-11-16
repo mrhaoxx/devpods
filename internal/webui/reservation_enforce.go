@@ -10,6 +10,7 @@ import (
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/util/retry"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -94,12 +95,26 @@ func (s *Server) EnforceReservations(ctx context.Context) {
 		}
 	}
 	for cluster, rs := range ended {
-		s.endIn(ctx, cluster, rs, now)
+		s.endIn(ctx, cluster, rs, all, now)
 	}
 }
 
-// endIn carries out the end of cluster's reservations rs.
-func (s *Server) endIn(ctx context.Context, cluster string, rs []*devpodv1alpha1.NodeReservation, now time.Time) {
+// covered: does user hold a reservation of cluster's node covering t?
+func covered(all []devpodv1alpha1.NodeReservation, cluster, node, user string, t time.Time) bool {
+	for i := range all {
+		nr := &all[i]
+		if nr.Spec.Cluster == cluster && nr.Spec.Node == node && nr.Spec.User == user && !t.Before(nr.Spec.Start.Time) && t.Before(overAt(nr)) {
+			return true
+		}
+	}
+	return false
+}
+
+// endIn carries out the end of cluster's reservations rs (all: every
+// reservation, for the others that still cover their holder). An end not
+// carried out in full — the machine, the rules or a hibernation could not
+// be had — is not marked done: the next round tries it again.
+func (s *Server) endIn(ctx context.Context, cluster string, rs []*devpodv1alpha1.NodeReservation, all []devpodv1alpha1.NodeReservation, now time.Time) {
 	cc := s.clientsOf(cluster)
 	if cc == nil {
 		return // away: done when it is back
@@ -111,24 +126,33 @@ func (s *Server) endIn(ctx context.Context, cluster string, rs []*devpodv1alpha1
 	}
 	for _, nr := range rs {
 		var names []string
-		if nr.Spec.Start.Time.Before(overAt(nr)) { // it was in force at all
+		done := true
+		if nr.Spec.Start.Time.Before(overAt(nr)) && len(on[nr.Spec.Node]) > 0 { // it was in force, and someone is there
 			var node corev1.Node
-			_ = cc.Client.Get(ctx, types.NamespacedName{Name: nr.Spec.Node}, &node)
+			if err := cc.Client.Get(ctx, types.NamespacedName{Name: nr.Spec.Node}, &node); err != nil && !apierrors.IsNotFound(err) {
+				slog.Warn("reservation_end", "reservation", nr.Name, "err", err)
+				continue
+			}
 			for _, dp := range on[nr.Spec.Node] {
-				if dp.Spec.Owner != nr.Spec.User || s.activeReservation(ctx, cluster, nr.Spec.Node, nr.Spec.User, now) != nil {
+				if dp.Spec.Owner != nr.Spec.User || covered(all, cluster, nr.Spec.Node, nr.Spec.User, now) {
 					continue
 				}
 				d, admin, err := s.decide(ctx, dp.Spec.Owner, cluster, access.Node{Name: nr.Spec.Node, Labels: node.Labels})
-				if err != nil || admin || !d.NeedsReservation {
-					continue // the rules let them in without one
-				}
-				if s.hibernateFor(ctx, cc, dp, "reservation-end/"+nr.Name) {
+				switch {
+				case err != nil:
+					slog.Warn("reservation_end", "reservation", nr.Name, "devpod", dp.Name, "err", err)
+					done = false
+				case admin || !d.NeedsReservation:
+					// the rules let them in without one
+				case s.hibernateFor(ctx, cc, dp, "reservation-end/"+nr.Name):
 					names = append(names, dp.Name)
+				default:
+					done = false
 				}
 			}
 		}
-		s.setReservationStatus(ctx, nr.Name, names, func(st *devpodv1alpha1.NodeReservationStatus) {
-			st.Ended = true
+		s.setReservationStatus(ctx, nr.Name, names, done, func(st *devpodv1alpha1.NodeReservationStatus) {
+			st.Ended = done
 			st.HibernatedAtEnd = append(st.HibernatedAtEnd, names...)
 		})
 	}
@@ -185,7 +209,10 @@ func (s *Server) hibernateFor(ctx context.Context, cc *clusters.ClusterClients, 
 
 // setReservationStatus changes a reservation's status and records its end
 // (and the DevPods hibernated) in its history.
-func (s *Server) setReservationStatus(ctx context.Context, name string, names []string, fn func(*devpodv1alpha1.NodeReservationStatus)) {
+func (s *Server) setReservationStatus(ctx context.Context, name string, names []string, ended bool, fn func(*devpodv1alpha1.NodeReservationStatus)) {
+	if !ended && len(names) == 0 {
+		return // nothing to record yet
+	}
 	var done *devpodv1alpha1.NodeReservation
 	err := retry.RetryOnConflict(retry.DefaultRetry, func() error {
 		var nr devpodv1alpha1.NodeReservation
@@ -203,7 +230,9 @@ func (s *Server) setReservationStatus(ctx context.Context, name string, names []
 		slog.Warn("reservation_status", "reservation", name, "err", err)
 		return
 	}
-	s.reservationHistory(ctx, done, "ended")
+	if ended {
+		s.reservationHistory(ctx, done, "ended")
+	}
 	if len(names) > 0 {
 		s.reservationHistory(ctx, done, "hibernated", names...)
 	}

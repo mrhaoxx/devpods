@@ -108,7 +108,11 @@ func (s *Server) nodeErr(ctx context.Context, owner, node string, forRun bool) *
 
 // placeDevPod is for a DevPod about to run with its Pod (re)created:
 // pinned, it must fit its machine; not pinned, the machines it does not
-// fit go into its exclusion, and it needs at least one it fits.
+// fit go into its exclusion, and it needs at least one it fits. A machine
+// the rules open to the owner only under a reservation is used by pinning
+// to it, never by the scheduler's choice, reservation held or not: an
+// unpinned DevPod may still be pending when the reservation ends, or have
+// its Pod remade later, and would then land there with nothing to end it.
 func (s *Server) placeDevPod(ctx context.Context, dp *devpodv1alpha1.DevPod) *serverErr {
 	if dp.Spec.Pod == nil {
 		return nil
@@ -136,16 +140,28 @@ func (s *Server) placeDevPod(ctx context.Context, dp *devpodv1alpha1.DevPod) *se
 	}
 	var out []string
 	fits := 0
+	var why *serverErr // the refusal of a machine the owner may use at all
 	for i := range nodes.Items {
-		if j.refusal(&nodes.Items[i], &needs, true) == nil {
+		n := &nodes.Items[i]
+		e := j.refusal(n, &needs, true)
+		if d := j.on(n); e == nil && d.NeedsReservation {
+			e = &serverErr{http.StatusConflict, "RESERVATION_REQUIRED", fmt.Sprintf("node %s may be used under a reservation only by pinning the DevPod to it", n.Name), map[string]any{"node": n.Name, "rule": d.Rule}}
+		}
+		if e == nil {
 			fits++
-		} else {
-			out = append(out, nodes.Items[i].Name)
+			continue
+		}
+		out = append(out, n.Name)
+		if why == nil && e.Code != "ACL_DENIED" {
+			why = e
 		}
 	}
 	// no machine known at all (a cluster just joined, its cache still
 	// filling) is no reason to refuse: there is nothing to keep it off
 	if fits == 0 && len(nodes.Items) > 0 {
+		if why != nil {
+			return &serverErr{why.status, why.Code, fmt.Sprintf("no machine in this cluster takes this DevPod of %s's: %s", dp.Spec.Owner, why.Message), why.Detail}
+		}
 		return &serverErr{http.StatusForbidden, "ACL_DENIED", fmt.Sprintf("there is no machine in this cluster %s may use for this DevPod", dp.Spec.Owner), nil}
 	}
 	access.SetExclusion(dp, out)

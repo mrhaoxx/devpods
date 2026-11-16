@@ -15,8 +15,11 @@ import (
 	"testing"
 	"time"
 
+	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/equality"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
+	"sigs.k8s.io/yaml"
 
 	devpodv1alpha1 "github.com/mrhaoxx/devpod/api/v1alpha1"
 	"github.com/mrhaoxx/devpod/internal/access"
@@ -217,5 +220,111 @@ func TestLaunchConfigChecks(t *testing.T) {
 	}
 	if devpodExists(t, "lc-bob-x") {
 		t.Fatal("a DevPod was made")
+	}
+}
+
+var everyoneAllowed = devpodv1alpha1.AccessRule{Subject: devpodv1alpha1.AccessSubject{Kind: "everyone"}, Effect: devpodv1alpha1.AccessEffect{Allow: true}}
+
+// A machine that needs a reservation is used by pinning to it: an
+// unpinned DevPod never goes there, reservation held or not — nothing
+// would end it there when the reservation does (it may still be pending
+// then, or have its Pod remade later). Refused for lack of any machine,
+// it is told why.
+func TestPlacementReservedMachineByPinOnly(t *testing.T) {
+	p := newPlaceRig(t, "pk")
+	setRules(t, onNode(p.n1, needsReservation))
+	reserveAs(t, p.s, p.as("pk-alice"), p.n1, p.slot, p.slot.Add(time.Hour))
+	dp := p.create("pk-alice", http.StatusCreated)
+	if ex := excludedOf(p.get(dp)); !slices.Contains(ex, p.n1) || slices.Contains(ex, p.n2) {
+		t.Fatalf("excluded %v", ex)
+	}
+	p.patch("pk-alice", dp, fmt.Sprintf(`{"node":%q}`, p.n1), http.StatusOK) // pinned, it may
+	p.patch("pk-alice", dp, `{"node":""}`, http.StatusOK)
+	p.patch("pk-alice", dp, `{"running":false}`, http.StatusOK)
+	setRules(t, onNode(p.n1, needsReservation), devpodv1alpha1.AccessRule{Subject: devpodv1alpha1.AccessSubject{Kind: "everyone"}, Effect: denied})
+	if code := p.patch("pk-alice", dp, `{"running":true}`, http.StatusConflict); code != "RESERVATION_REQUIRED" {
+		t.Fatalf("only a reserved machine left: %q", code)
+	}
+}
+
+// putYAML sends a DevPod's spec through the YAML editor until the answer
+// is want (the cache catches up), and returns the error code.
+func (p *placeRig) putYAML(user, name string, spec devpodv1alpha1.DevPodSpec, want int) string {
+	p.t.Helper()
+	text, err := yaml.Marshal(map[string]any{"apiVersion": "devpod.io/v1alpha1", "kind": "DevPod", "metadata": map[string]any{"name": name}, "spec": spec})
+	if err != nil {
+		p.t.Fatal(err)
+	}
+	body, _ := json.Marshal(map[string]string{"yaml": string(text)})
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		rec := doJSON(p.t, p.s.Routes().ServeHTTP, "PUT", "/api/devpods/"+name+"/yaml", nil, p.as(user), string(body))
+		if rec.Code == want {
+			var e struct{ Code string }
+			_ = json.Unmarshal(rec.Body.Bytes(), &e)
+			return e.Code
+		}
+		if time.Now().After(deadline) {
+			p.t.Fatalf("PUT yaml %s: %d (want %d) %s", name, rec.Code, want, rec.Body)
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+}
+
+// The YAML editor (and the rebuild from a config, which shares its
+// replaceDevPodSpec) is a way in like any other: a running DevPod given
+// privileges no machine allows is refused, saying so; one whose Pod's spec
+// changed carries the exclusion the rules ask for now.
+func TestPlacementYAML(t *testing.T) {
+	p := newPlaceRig(t, "py")
+	dp := p.create("py-carol", http.StatusCreated)
+	setRules(t, onNode(p.n1, denied), everyoneAllowed) // n2: allowed, not privileged
+	spec := p.get(dp).Spec
+	priv := spec.DeepCopy()
+	yes := true
+	priv.Pod.Spec.Containers[0].SecurityContext = &corev1.SecurityContext{Privileged: &yes}
+	if code := p.putYAML("py-carol", dp, *priv, http.StatusForbidden); code != "PRIVILEGE_DENIED" {
+		t.Fatalf("privileged through YAML: %q", code)
+	}
+	if got := p.get(dp); got.Spec.Pod.Spec.Containers[0].SecurityContext != nil {
+		t.Fatalf("written: %+v", got.Spec.Pod.Spec.Containers[0].SecurityContext)
+	}
+	edited := spec.DeepCopy()
+	edited.Pod.Spec.Containers[0].Env = append(edited.Pod.Spec.Containers[0].Env, corev1.EnvVar{Name: "X", Value: "1"})
+	p.putYAML("py-carol", dp, *edited, http.StatusOK)
+	if ex := excludedOf(p.get(dp)); !slices.Contains(ex, p.n1) {
+		t.Fatalf("a running spec edit kept the old exclusion: %v", ex)
+	}
+}
+
+// A redeploy remakes the Pod: where it may go is decided again.
+func TestPlacementRedeploy(t *testing.T) {
+	p := newPlaceRig(t, "pd")
+	ctx := context.Background()
+	dp := p.create("pd-carol", http.StatusCreated)
+	setRules(t, onNode(p.n1, denied))
+	pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: dp, Namespace: "devpods"}, Spec: corev1.PodSpec{Containers: []corev1.Container{{Name: "dev", Image: "ubuntu:24.04"}}}}
+	if err := k8sClient.Create(ctx, pod); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = k8sClient.Delete(ctx, pod) })
+	got := p.get(dp)
+	got.Status.WorkloadRef = &devpodv1alpha1.WorkloadRef{APIVersion: "v1", Kind: "Pod", Name: dp}
+	if err := k8sClient.Status().Update(ctx, &got); err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		rec := doJSON(t, p.s.HandleRedeployDevPodForTest(), "POST", "/api/devpods/"+dp+"/redeploy", map[string]string{"name": dp}, p.as("pd-carol"), "")
+		if rec.Code == http.StatusNoContent {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("redeploy: %d %s", rec.Code, rec.Body)
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	if ex := excludedOf(p.get(dp)); !slices.Contains(ex, p.n1) {
+		t.Fatalf("redeployed with the old exclusion: %v", ex)
 	}
 }

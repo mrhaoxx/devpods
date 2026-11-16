@@ -9,13 +9,16 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"errors"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	devpodv1alpha1 "github.com/mrhaoxx/devpod/api/v1alpha1"
 	"github.com/mrhaoxx/devpod/internal/webui"
@@ -254,3 +257,81 @@ func TestReservationEnd(t *testing.T) {
 }
 
 func client_key_cluster(name string) types.NamespacedName { return types.NamespacedName{Name: name} }
+
+// failingPatches: a client whose next n Patches of a DevPod fail, as when
+// a cluster's agent link drops for a moment.
+type failingPatches struct {
+	client.Client
+	n *atomic.Int32
+}
+
+func (f failingPatches) Patch(ctx context.Context, obj client.Object, p client.Patch, opts ...client.PatchOption) error {
+	if _, ok := obj.(*devpodv1alpha1.DevPod); ok && f.n.Add(-1) >= 0 {
+		return errors.New("agent link down")
+	}
+	return f.Client.Patch(ctx, obj, p, opts...)
+}
+
+// The end of a reservation that could not be carried out (the hibernation
+// failed) is not marked done: the next round tries again.
+func TestReservationEndRetries(t *testing.T) {
+	s, sm, _, node := rsvRig(t, "rr")
+	setRules(t, onNode(node, needsReservation))
+	slot := time.Date(2026, 11, 12, 2, 0, 0, 0, time.UTC)
+	now := slot.Add(10 * time.Minute)
+	s.Reservations.Now = func() time.Time { return now }
+	alice := forge(sm, "rr-alice", false)
+	_, v := reserveAs(t, s, alice, node, slot, slot.Add(time.Hour))
+	if rec := doJSON(t, s.HandleCreateDevPodForTest(), "POST", "/api/devpods", nil, alice, createBody); rec.Code != http.StatusCreated {
+		t.Fatalf("create: %d %s", rec.Code, rec.Body)
+	}
+	waitDevPod(t, "rr-alice-dev1")
+	if rec := doJSON(t, s.HandlePatchDevPodForTest(), "PATCH", "/api/devpods/rr-alice-dev1", map[string]string{"name": "rr-alice-dev1"}, alice, fmt.Sprintf(`{"node":%q}`, node)); rec.Code != http.StatusOK {
+		t.Fatalf("pin: %d %s", rec.Code, rec.Body)
+	}
+	ctx := context.Background()
+	for deadline := time.Now().Add(10 * time.Second); ; time.Sleep(100 * time.Millisecond) { // the pin reaches the cache
+		var dp devpodv1alpha1.DevPod
+		if s.Client.Get(ctx, types.NamespacedName{Namespace: "devpods", Name: "rr-alice-dev1"}, &dp) == nil && dp.Spec.Pod != nil && dp.Spec.Pod.Spec.NodeSelector["kubernetes.io/hostname"] == node {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("the pin never reached the cache")
+		}
+	}
+	ended := func() bool {
+		var nr devpodv1alpha1.NodeReservation
+		if err := k8sClient.Get(ctx, types.NamespacedName{Name: v.ID}, &nr); err != nil {
+			t.Fatal(err)
+		}
+		return nr.Status.Ended
+	}
+	now = slot.Add(time.Hour)
+	real := s.Client
+	fail := &atomic.Int32{}
+	fail.Store(1)
+	s.Client = failingPatches{Client: real, n: fail}
+	s.EnforceReservations(ctx)
+	s.Client = real
+	if fail.Load() == 1 {
+		t.Fatalf("the hibernation was not tried")
+	}
+	if ended() {
+		t.Fatalf("marked ended though alice's DevPod still runs")
+	}
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		s.EnforceReservations(ctx)
+		var dp devpodv1alpha1.DevPod
+		if err := s.Reader.Get(ctx, types.NamespacedName{Namespace: "devpods", Name: "rr-alice-dev1"}, &dp); err != nil {
+			t.Fatal(err)
+		}
+		if !dp.Spec.Running && ended() {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("not carried out on the next round: running %v, ended %v", dp.Spec.Running, ended())
+		}
+		time.Sleep(200 * time.Millisecond)
+	}
+}

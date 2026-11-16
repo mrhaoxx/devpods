@@ -118,21 +118,6 @@ func overAt(nr *devpodv1alpha1.NodeReservation) time.Time {
 	return nr.Spec.End.Time
 }
 
-// activeReservation: user's reservation of node in cluster that covers t.
-func (s *Server) activeReservation(ctx context.Context, cluster, node, user string, t time.Time) *devpodv1alpha1.NodeReservation {
-	all, err := s.nodeReservations(ctx)
-	if err != nil {
-		return nil
-	}
-	for i := range all {
-		nr := &all[i]
-		if nr.Spec.Cluster == cluster && nr.Spec.Node == node && nr.Spec.User == user && !t.Before(nr.Spec.Start.Time) && t.Before(overAt(nr)) {
-			return nr
-		}
-	}
-	return nil
-}
-
 /* ---- views ---- */
 
 // reservationView is one reservation as the API shows it.
