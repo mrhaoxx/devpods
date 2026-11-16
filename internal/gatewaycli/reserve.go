@@ -15,14 +15,14 @@ import (
 	"time"
 )
 
-// Node reservations: a period on a node held for one user (the console's
-// 节点预约). Reservations are a cluster's, like its nodes.
+// Node reservations: one user's permit to use a node for a period (the
+// console's 节点预约), where the access rules ask for one. Not exclusive;
+// they may overlap. Reservations are a cluster's, like its nodes.
 
 const reserveLong = `reserve [list]             reservations from now on (--days N ahead, default 14)
 reserve rules              the steps, the longest period and how far ahead one may reserve
-reserve add <node> --start T (--end T | --for D) [--dry-run]
-                           hold a node for yourself; --dry-run says how many DevPods
-                           of others it would stop, and holds nothing
+reserve add <node> --start T (--end T | --for D)
+                           reserve a node for yourself (where the rules ask for it)
 reserve change <id> [--start T] [--end T]
 reserve cancel <id>
 
@@ -33,11 +33,11 @@ rules), an RFC 3339 time, now, or +2h / +30m from now. --for 4h instead of
 func reserveCommands() []*command {
 	return []*command{
 		{name: "reserve", aliases: []string{"reservations"},
-			args:  "[list [--days N] | rules | add <node> --start T (--end T | --for D) [--dry-run] | change <id> [--start T] [--end T] | cancel <id>] [--cluster C]",
+			args:  "[list [--days N] | rules | add <node> --start T (--end T | --for D) | change <id> [--start T] [--end T] | cancel <id>] [--cluster C]",
 			brief: "[list|rules|add|change|cancel …]",
 			short: "node reservations: list, the rules, reserve a node, change or cancel one",
 			long:  reserveLong,
-			vals:  []string{"start", "end", "for", "days"}, bools: []string{"dry-run"}, run: runReserve},
+			vals:  []string{"start", "end", "for", "days"}, run: runReserve},
 	}
 }
 
@@ -111,25 +111,7 @@ func runReserve(e *Env, a *parsed) int {
 			return usage(e, c, err.Error())
 		}
 		path := scoped(e, cluster, "/api/reservations")
-		if a.has["dry-run"] {
-			path += "?dryRun=true"
-		}
 		body := map[string]any{"node": node, "start": start.UTC().Format(time.RFC3339), "end": end.UTC().Format(time.RFC3339)}
-		if a.has["dry-run"] {
-			var p struct {
-				WillHibernate int `json:"willHibernate"`
-			}
-			raw, err := call(e, "POST", path, body, &p)
-			if err != nil {
-				return fail(e, err)
-			}
-			if a.json {
-				printJSON(e, raw)
-				return ExitOK
-			}
-			fmt.Fprintf(e.Out, "%s is free then; %d DevPods of others would be stopped when it starts\n", node, p.WillHibernate)
-			return ExitOK
-		}
 		var v reservation
 		raw, err := call(e, "POST", path, body, &v)
 		if err != nil {

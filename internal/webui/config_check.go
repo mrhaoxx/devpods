@@ -136,10 +136,8 @@ func (s *Server) exampleNode(r *http.Request, sess Session) string {
 			names = append(names, n.Name)
 		}
 		sort.Strings(names)
-		for _, n := range names {
-			if s.pinErr(r.Context(), sess.User, n) == nil {
-				return n
-			}
+		if len(names) > 0 {
+			return names[0]
 		}
 	}
 	return "node"

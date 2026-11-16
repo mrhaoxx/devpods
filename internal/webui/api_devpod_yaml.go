@@ -150,15 +150,11 @@ func (s *Server) replaceDevPodSpec(r *http.Request, sess Session, dp *devpodv1al
 	if equality.Semantic.DeepEqual(before.Spec, dp.Spec) && maps.Equal(before.Annotations, dp.Annotations) {
 		return PatchResponse{DevPod: dp}, nil // nothing changed
 	}
-	// a new node, or starting on the one it has: it has to be there, and
-	// not held by someone else now
+	// a new node, or starting on the one it has: it has to be there
 	if node := pinnedNode(dp); node != "" && (node != pinnedNode(before) || (dp.Spec.Running && !before.Spec.Running)) {
 		var n corev1.Node
 		if err := s.k(r).Client.Get(r.Context(), types.NamespacedName{Name: node}, &n); err != nil {
 			return PatchResponse{}, badRequest("node %q not found", node)
-		}
-		if apiErr := s.pinErr(r.Context(), dp.Spec.Owner, node); apiErr != nil {
-			return PatchResponse{}, apiErr
 		}
 	}
 	if dp.Spec.Running {

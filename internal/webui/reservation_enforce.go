@@ -7,26 +7,25 @@ package webui
 import (
 	"context"
 	"log/slog"
-	"slices"
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/util/retry"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	devpodv1alpha1 "github.com/mrhaoxx/devpod/api/v1alpha1"
+	"github.com/mrhaoxx/devpod/internal/access"
 	"github.com/mrhaoxx/devpod/internal/render"
 	"github.com/mrhaoxx/devpod/internal/webui/clusters"
 )
 
 // The console carries the reservations out itself, on whichever replica
-// leads: while a node is held, every DevPod of another user found on it
-// (its Pod there, or pinned there) is hibernated — at the start, and any
-// that comes later; the API already refuses to start or move one there
-// (pinErr). The notices (the node is about to be held, the hold is about
-// to end) are worked out when a DevPod is shown, from the reservations.
+// leads: when a reservation ends (its time is up, or it is released), its
+// holder's DevPods on the machine that only it let run are hibernated —
+// those whose owner the access rules ask for a reservation there and who
+// holds no other reservation covering now. Nothing is done when one
+// starts: reservations are permits, not holds.
 
 // reservationTick: how often the reservations are carried out.
 const reservationTick = 15 * time.Second
@@ -69,7 +68,7 @@ func (s *Server) clientsOf(cluster string) *clusters.ClusterClients {
 }
 
 // EnforceReservations is one round: reservations over for keptFor go;
-// in each cluster, other users' DevPods on a held node are hibernated.
+// the end of every reservation that ended is carried out.
 func (s *Server) EnforceReservations(ctx context.Context) {
 	all, err := s.nodeReservations(ctx)
 	if err != nil {
@@ -77,112 +76,62 @@ func (s *Server) EnforceReservations(ctx context.Context) {
 		return
 	}
 	now := s.Reservations.now()
-	byCluster := map[string]bool{}
+	ended := map[string][]*devpodv1alpha1.NodeReservation{} // by cluster
 	for i := range all {
 		nr := &all[i]
-		over := nr.Spec.Cancelled != nil && nr.Spec.Cancelled.At.Time.Before(nr.Spec.End.Time) || !now.Before(nr.Spec.End.Time)
-		end := nr.Spec.End.Time
-		if nr.Spec.Cancelled != nil && nr.Spec.Cancelled.At.Time.Before(end) {
-			end = nr.Spec.Cancelled.At.Time
+		over := overAt(nr)
+		if now.Before(over) {
+			continue
 		}
-		if over && now.Sub(end) > keptFor {
+		if now.Sub(over) > keptFor {
 			if err := s.deleteReservation(ctx, nr.Name); err != nil {
 				slog.Warn("reservation_prune", "reservation", nr.Name, "err", err)
 			}
 			continue
 		}
-		byCluster[nr.Spec.Cluster] = true
+		if !nr.Status.Ended {
+			ended[nr.Spec.Cluster] = append(ended[nr.Spec.Cluster], nr)
+		}
 	}
-	for cluster := range byCluster {
-		s.enforceIn(ctx, cluster, all, now)
+	for cluster, rs := range ended {
+		s.endIn(ctx, cluster, rs, now)
 	}
 }
 
-// enforceIn carries out cluster's reservations: on a node held now,
-// other users' DevPods are hibernated; when a hold ends (its time is up,
-// or it is cancelled once started) the holder's own DevPods on the node
-// are — unless the same user's next reservation follows on at once.
-func (s *Server) enforceIn(ctx context.Context, cluster string, all []devpodv1alpha1.NodeReservation, now time.Time) {
+// endIn carries out the end of cluster's reservations rs.
+func (s *Server) endIn(ctx context.Context, cluster string, rs []*devpodv1alpha1.NodeReservation, now time.Time) {
 	cc := s.clientsOf(cluster)
 	if cc == nil {
 		return // away: done when it is back
-	}
-	rs := reservationsOf(all, cluster)
-	eff := effectiveReservations(rs)
-	at := metav1.NewTime(now)
-	held := map[string]*devpodv1alpha1.Reservation{}
-	var ended []*devpodv1alpha1.Reservation
-	for i := range eff {
-		r := &eff[i]
-		switch {
-		case r.HeldAt(at):
-			held[r.Spec.Node] = r
-		case r.Status.Phase == devpodv1alpha1.ReservationEnded || r.Status.Phase == devpodv1alpha1.ReservationCancelled:
-		case r.Spec.Cancelled != nil || !now.Before(r.Spec.End.Time):
-			ended = append(ended, r)
-		}
-	}
-	if len(held) == 0 && len(ended) == 0 {
-		return
 	}
 	on, err := s.devPodsByNode(ctx, cc)
 	if err != nil {
 		slog.Warn("reservations", "cluster", cluster, "err", err)
 		return
 	}
-	for node, h := range held {
+	for _, nr := range rs {
 		var names []string
-		for _, dp := range on[node] {
-			if dp.Spec.Owner != h.Spec.User && s.hibernateFor(ctx, cc, dp, "reservation/"+h.Name) {
-				names = append(names, dp.Name)
-			}
-		}
-		if len(names) > 0 || h.Status.Phase != devpodv1alpha1.ReservationActive {
-			s.setReservationStatus(ctx, h.Name, "hibernated", names, func(st *devpodv1alpha1.ReservationStatus) {
-				st.Phase = devpodv1alpha1.ReservationActive
-				for _, n := range names {
-					if !slices.Contains(st.ClearedDevPods, n) {
-						st.ClearedDevPods = append(st.ClearedDevPods, n)
-					}
+		if nr.Spec.Start.Time.Before(overAt(nr)) { // it was in force at all
+			var node corev1.Node
+			_ = cc.Client.Get(ctx, types.NamespacedName{Name: nr.Spec.Node}, &node)
+			for _, dp := range on[nr.Spec.Node] {
+				if dp.Spec.Owner != nr.Spec.User || s.activeReservation(ctx, cluster, nr.Spec.Node, nr.Spec.User, now) != nil {
+					continue
 				}
-			})
-		}
-	}
-	for _, r := range ended {
-		over := r.Spec.End.Time
-		if r.Spec.Cancelled != nil && r.Spec.Cancelled.At.Time.Before(over) {
-			over = r.Spec.Cancelled.At.Time
-		}
-		var names []string
-		// it held the node only if it started before it was over; its
-		// holder's time goes on when their next reservation follows
-		if r.Spec.Start.Time.Before(over) && !(r.Spec.Cancelled == nil && followedOn(r, rs)) && held[r.Spec.Node] == nil {
-			for _, dp := range on[r.Spec.Node] {
-				if dp.Spec.Owner == r.Spec.User && s.hibernateFor(ctx, cc, dp, "reservation-end/"+r.Name) {
+				d, admin, err := s.decide(ctx, dp.Spec.Owner, cluster, access.Node{Name: nr.Spec.Node, Labels: node.Labels})
+				if err != nil || admin || !d.NeedsReservation {
+					continue // the rules let them in without one
+				}
+				if s.hibernateFor(ctx, cc, dp, "reservation-end/"+nr.Name) {
 					names = append(names, dp.Name)
 				}
 			}
 		}
-		phase := devpodv1alpha1.ReservationEnded
-		if r.Spec.Cancelled != nil {
-			phase = devpodv1alpha1.ReservationCancelled
-		}
-		s.setReservationStatus(ctx, r.Name, "ended", names, func(st *devpodv1alpha1.ReservationStatus) {
-			st.Phase = phase
+		s.setReservationStatus(ctx, nr.Name, names, func(st *devpodv1alpha1.NodeReservationStatus) {
+			st.Ended = true
 			st.HibernatedAtEnd = append(st.HibernatedAtEnd, names...)
 		})
 	}
-}
-
-// followedOn reports whether the same user holds the node from r's end on.
-func followedOn(r *devpodv1alpha1.Reservation, all []devpodv1alpha1.Reservation) bool {
-	for i := range all {
-		o := &all[i]
-		if o.Name != r.Name && o.Spec.Node == r.Spec.Node && o.Spec.User == r.Spec.User && o.Spec.Cancelled == nil && o.Spec.Start.Time.Equal(r.Spec.End.Time) {
-			return true
-		}
-	}
-	return false
 }
 
 // devPodsByNode: a cluster's running DevPods by the node they are on —
@@ -234,9 +183,9 @@ func (s *Server) hibernateFor(ctx context.Context, cc *clusters.ClusterClients, 
 	return true
 }
 
-// setReservationStatus changes a reservation's status; when it hibernated
-// DevPods (names) that goes into its history as event.
-func (s *Server) setReservationStatus(ctx context.Context, name, event string, names []string, fn func(*devpodv1alpha1.ReservationStatus)) {
+// setReservationStatus changes a reservation's status and records its end
+// (and the DevPods hibernated) in its history.
+func (s *Server) setReservationStatus(ctx context.Context, name string, names []string, fn func(*devpodv1alpha1.NodeReservationStatus)) {
 	var done *devpodv1alpha1.NodeReservation
 	err := retry.RetryOnConflict(retry.DefaultRetry, func() error {
 		var nr devpodv1alpha1.NodeReservation
@@ -254,7 +203,8 @@ func (s *Server) setReservationStatus(ctx context.Context, name, event string, n
 		slog.Warn("reservation_status", "reservation", name, "err", err)
 		return
 	}
+	s.reservationHistory(ctx, done, "ended")
 	if len(names) > 0 {
-		s.reservationHistory(ctx, done, event, names...)
+		s.reservationHistory(ctx, done, "hibernated", names...)
 	}
 }

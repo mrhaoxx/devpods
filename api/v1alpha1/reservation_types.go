@@ -11,10 +11,6 @@ import (
 const (
 	// ReservableNodeLabel marks a node users may reserve.
 	ReservableNodeLabel = "devpod.io/reservable"
-	// ReservationRequiredNodeLabel marks a reservable node only its
-	// reservation's holder may put DevPods on: nobody may pick it without
-	// holding it at the time.
-	ReservationRequiredNodeLabel = "devpod.io/reservation-required"
 	// HibernatedByAnnotation on a DevPod names what hibernated it,
 	// e.g. "reservation/<name>".
 	HibernatedByAnnotation = "devpod.io/hibernated-by"

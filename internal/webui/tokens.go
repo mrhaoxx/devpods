@@ -123,9 +123,9 @@ var apiRoutes = []apiRoute{
 
 	{"GET /api/reservations", "reservations:read", "Node reservation timeline (?from=&to=&node=)"},
 	{"GET /api/reservations/rules", scopeAny, "Reservation rules: granularity, limits, timezone"},
-	{"POST /api/reservations", "reservations:write", "Reserve a node: {node, start, end}; ?dryRun=true answers {willHibernate}"},
-	{"PATCH /api/reservations/{id}", "reservations:write", "Move a reservation that has not started, or extend one that has: {start?, end?}"},
-	{"DELETE /api/reservations/{id}", "reservations:write", "Cancel, or release early"},
+	{"POST /api/reservations", "reservations:write", "Reserve a node where the access rules ask for it: {node, start, end, user? (admins)}"},
+	{"PATCH /api/reservations/{id}", "reservations:write", "Move a reservation that has not started, or move the end of one that has: {start?, end?}"},
+	{"DELETE /api/reservations/{id}", "reservations:write", "Delete one that has not started, or end one now"},
 	{"PUT /api/admin/nodes/{name}/reservable", "admin:write", "Open or close a node for reservation: {reservable}"},
 
 	{"GET /api/live/devpods", "metrics:read", "Server-sent events: live CPU / memory / GPU / network of my DevPods"},

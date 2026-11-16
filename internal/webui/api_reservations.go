@@ -20,19 +20,22 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	devpodv1alpha1 "github.com/mrhaoxx/devpod/api/v1alpha1"
+	"github.com/mrhaoxx/devpod/internal/access"
 )
 
-// Node reservations (reservation spec §3, §7) and the node choice rule
-// built on them: a DevPod may be pinned to a node unless someone other
-// than its owner holds the node right now.
+// Node reservations (access control design §12): a reservation is one
+// user's permit to use one reservable machine for a while — what the
+// access rules ask of some users on some machines. Not exclusive, and
+// reservations may overlap; when one ends, its holder's DevPods there that
+// only it let run are hibernated (reservation_enforce.go).
 
-// ReservationRules are the cluster-wide rule parameters (spec §3.1);
-// nil on Server turns reservations off.
+// ReservationRules are the rule parameters (spec §3.1); nil on Server
+// turns reservations off.
 type ReservationRules struct {
 	Granularity time.Duration // starts and ends align to it
 	MaxDuration time.Duration // per reservation; 0 = unlimited
 	MaxAdvance  time.Duration // how far ahead a start may be; 0 = unlimited
-	ClearNotice time.Duration // how long before a start others are warned
+	ClearNotice time.Duration // how long before its end a holder is warned
 	Now         func() time.Time
 }
 
@@ -60,8 +63,7 @@ func (ru *ReservationRules) slotStart(t time.Time) time.Time {
 	return time.Unix(u-u%g-int64(off), 0).UTC()
 }
 
-// validate checks a new period against the rules (not against other
-// reservations).
+// validate checks a period that has not started against the rules.
 func (ru *ReservationRules) validate(start, end time.Time) error {
 	now := ru.now()
 	switch {
@@ -79,74 +81,25 @@ func (ru *ReservationRules) validate(start, end time.Time) error {
 	return nil
 }
 
+// validateEnd checks a new end for a reservation that has started.
+func (ru *ReservationRules) validateEnd(start, end time.Time) error {
+	switch {
+	case !ru.aligned(end):
+		return fmt.Errorf("the end must fall on a %s boundary", ru.Granularity)
+	case !end.After(ru.now()):
+		return fmt.Errorf("the end must be in the future (release it to end it now)")
+	case ru.MaxDuration > 0 && end.Sub(start) > ru.MaxDuration:
+		return fmt.Errorf("a reservation lasts at most %s", ru.MaxDuration)
+	}
+	return nil
+}
+
 func (s *Server) reservationRules(w http.ResponseWriter) (*ReservationRules, bool) {
 	if s.Reservations == nil {
 		s.writeErr(w, http.StatusNotFound, "RESERVATIONS_DISABLED", "node reservations are not enabled", nil)
 		return nil, false
 	}
 	return s.Reservations, true
-}
-
-// allReservations reads from the API server: conflict resolution and
-// the node rule must not act on a stale cache.
-func (s *Server) allReservations(ctx context.Context) ([]devpodv1alpha1.Reservation, error) {
-	// the console's own (reservation_store.go), of the request's cluster
-	all, err := s.nodeReservations(ctx)
-	if err != nil {
-		return nil, err
-	}
-	return reservationsOf(all, s.resCluster(ctx)), nil
-}
-
-// effectiveReservations drops conflict losers: a live reservation that
-// overlaps an earlier-created live one on the same node counts for
-// nothing — the controller ignores it too, so both agree on who holds
-// a node.
-func effectiveReservations(all []devpodv1alpha1.Reservation) []devpodv1alpha1.Reservation {
-	out := make([]devpodv1alpha1.Reservation, 0, len(all))
-	for i := range all {
-		r := &all[i]
-		loser := false
-		if r.Spec.Cancelled == nil {
-			for j := range all {
-				o := &all[j]
-				if i != j && o.Spec.Node == r.Spec.Node && o.Overlaps(r.Spec.Start, r.Spec.End) && reservationBefore(o, r) {
-					loser = true
-					break
-				}
-			}
-		}
-		if !loser {
-			out = append(out, *r)
-		}
-	}
-	return out
-}
-
-// holderOf returns the reservation holding node at t, if any.
-func holderOf(all []devpodv1alpha1.Reservation, node string, t time.Time) *devpodv1alpha1.Reservation {
-	mt := metav1.NewTime(t)
-	for i := range all {
-		if all[i].Spec.Node == node && all[i].HeldAt(mt) {
-			return &all[i]
-		}
-	}
-	return nil
-}
-
-// heldUntil follows the holder's extensions: when the node is really free.
-func heldUntil(all []devpodv1alpha1.Reservation, h *devpodv1alpha1.Reservation) time.Time {
-	end := h.Spec.End.Time
-	for moved := true; moved; {
-		moved = false
-		for i := range all {
-			r := &all[i]
-			if r.Spec.Cancelled == nil && r.Spec.Node == h.Spec.Node && r.Spec.User == h.Spec.User && r.Spec.Start.Time.Equal(end) {
-				end, moved = r.Spec.End.Time, true
-			}
-		}
-	}
-	return end
 }
 
 // pinnedNode is the node a DevPod is pinned to ("" = scheduler's choice).
@@ -157,52 +110,36 @@ func pinnedNode(dp *devpodv1alpha1.DevPod) string {
 	return dp.Spec.Pod.Spec.NodeSelector[hostnameLabel]
 }
 
-// pinErr is the node choice rule: a DevPod owned by owner may sit on
-// node unless someone else holds the node now — or, on a node that
-// requires a reservation, unless owner holds it now. It is judged by the
-// DevPod's owner, whoever performs the action (admins included).
-func (s *Server) pinErr(ctx context.Context, owner, node string) *serverErr {
-	if s.Reservations == nil || node == "" {
-		return nil
+// overAt: when a reservation stops counting — its end, or its cancel.
+func overAt(nr *devpodv1alpha1.NodeReservation) time.Time {
+	if c := nr.Spec.Cancelled; c != nil && c.At.Time.Before(nr.Spec.End.Time) {
+		return c.At.Time
 	}
-	all, err := s.allReservations(ctx)
+	return nr.Spec.End.Time
+}
+
+// activeReservation: user's reservation of node in cluster that covers t.
+func (s *Server) activeReservation(ctx context.Context, cluster, node, user string, t time.Time) *devpodv1alpha1.NodeReservation {
+	all, err := s.nodeReservations(ctx)
 	if err != nil {
-		return &serverErr{http.StatusInternalServerError, "INTERNAL", err.Error(), nil}
-	}
-	all = effectiveReservations(all)
-	h := holderOf(all, node, s.Reservations.now())
-	if h != nil && h.Spec.User == owner {
 		return nil
 	}
-	if h == nil {
-		var n corev1.Node
-		if err := s.kc(ctx).Client.Get(ctx, types.NamespacedName{Name: node}, &n); err != nil {
-			if apierrors.IsNotFound(err) {
-				return nil // the caller says so, where it matters
-			}
-			return &serverErr{http.StatusInternalServerError, "INTERNAL", err.Error(), nil}
+	for i := range all {
+		nr := &all[i]
+		if nr.Spec.Cluster == cluster && nr.Spec.Node == node && nr.Spec.User == user && !t.Before(nr.Spec.Start.Time) && t.Before(overAt(nr)) {
+			return nr
 		}
-		if !reservationRequired(&n) {
-			return nil
-		}
-		return &serverErr{http.StatusConflict, "RESERVATION_REQUIRED",
-			fmt.Sprintf("node %s may be used only by whoever has reserved it, while the reservation lasts", node), map[string]any{"node": node}}
 	}
-	until := heldUntil(all, h)
-	return &serverErr{http.StatusConflict, "NODE_RESERVED",
-		fmt.Sprintf("node %s is reserved by %s until %s", node, h.Spec.User, until.In(reservationTZ).Format("01-02 15:04")),
-		map[string]any{"node": node, "user": h.Spec.User, "until": until.UTC()}}
+	return nil
 }
 
 /* ---- views ---- */
 
-// reservationView is one block on the timeline: consecutive segments of
-// one user (an original plus its extensions) merged.
+// reservationView is one reservation as the API shows it.
 type reservationView struct {
 	// Cluster: the cluster it is in, in a console of several.
 	Cluster     string    `json:"cluster,omitempty"`
-	ID          string    `json:"id"` // the first segment
-	Segments    []string  `json:"segments"`
+	ID          string    `json:"id"`
 	Node        string    `json:"node"`
 	User        string    `json:"user"`
 	Start       time.Time `json:"start"`
@@ -212,65 +149,19 @@ type reservationView struct {
 	CancelledBy string    `json:"cancelledBy,omitempty"`
 }
 
-// mergeReservations builds the blocks: live segments of the same node
-// and user that touch end to start become one; cancelled ones stay apart.
-func mergeReservations(all []devpodv1alpha1.Reservation, me string, now time.Time) []reservationView {
-	sorted := append([]devpodv1alpha1.Reservation(nil), all...)
-	sort.Slice(sorted, func(i, j int) bool {
-		a, b := &sorted[i], &sorted[j]
-		if !a.Spec.Start.Time.Equal(b.Spec.Start.Time) {
-			return a.Spec.Start.Time.Before(b.Spec.Start.Time)
-		}
-		return a.Name < b.Name
-	})
-	var out []reservationView
-	open := map[string]int{} // node/user → index of the block still growing
-	for i := range sorted {
-		r := &sorted[i]
-		if r.Spec.Cancelled != nil {
-			out = append(out, reservationView{ID: r.Name, Segments: []string{r.Name}, Node: r.Spec.Node, User: r.Spec.User,
-				Start: r.Spec.Start.Time.UTC(), End: r.Spec.End.Time.UTC(), Phase: "Cancelled", Mine: r.Spec.User == me, CancelledBy: r.Spec.Cancelled.By})
-			continue
-		}
-		key := r.Spec.Node + "/" + r.Spec.User
-		if k, ok := open[key]; ok && out[k].End.Equal(r.Spec.Start.Time) {
-			out[k].Segments = append(out[k].Segments, r.Name)
-			out[k].End = r.Spec.End.Time.UTC()
-			continue
-		}
-		open[key] = len(out)
-		out = append(out, reservationView{ID: r.Name, Segments: []string{r.Name}, Node: r.Spec.Node, User: r.Spec.User,
-			Start: r.Spec.Start.Time.UTC(), End: r.Spec.End.Time.UTC(), Mine: r.Spec.User == me})
+func viewOfReservation(nr *devpodv1alpha1.NodeReservation, me string, now time.Time) reservationView {
+	v := reservationView{ID: nr.Name, Node: nr.Spec.Node, User: nr.Spec.User, Start: nr.Spec.Start.Time.UTC(), End: overAt(nr).UTC(), Mine: nr.Spec.User == me}
+	switch {
+	case nr.Spec.Cancelled != nil:
+		v.Phase, v.CancelledBy = "Cancelled", nr.Spec.Cancelled.By
+	case now.Before(nr.Spec.Start.Time):
+		v.Phase = "Upcoming"
+	case now.Before(nr.Spec.End.Time):
+		v.Phase = "Active"
+	default:
+		v.Phase = "Ended"
 	}
-	for i := range out {
-		if out[i].Phase == "Cancelled" {
-			continue
-		}
-		switch {
-		case now.Before(out[i].Start):
-			out[i].Phase = "Upcoming"
-		case now.Before(out[i].End):
-			out[i].Phase = "Active"
-		default:
-			out[i].Phase = "Ended"
-		}
-	}
-	if out == nil {
-		out = []reservationView{}
-	}
-	return out
-}
-
-// blockOf finds the block containing segment id.
-func blockOf(views []reservationView, id string) *reservationView {
-	for i := range views {
-		for _, seg := range views[i].Segments {
-			if seg == id {
-				return &views[i]
-			}
-		}
-	}
-	return nil
+	return v
 }
 
 /* ---- handlers ---- */
@@ -318,68 +209,40 @@ func (s *Server) handleListReservations(w http.ResponseWriter, r *http.Request) 
 			*dst = t
 		}
 	}
+	all, err := s.nodeReservations(r.Context())
+	if err != nil {
+		s.writeErr(w, http.StatusInternalServerError, "INTERNAL", err.Error(), nil)
+		return
+	}
 	items := []reservationView{}
 	for _, cc := range s.ks(r) {
-		all, err := s.allReservations(s.in(r.Context(), cc))
-		if away(err) {
-			continue
-		}
-		if err != nil {
-			s.writeErr(w, http.StatusInternalServerError, "INTERNAL", err.Error(), nil)
-			return
-		}
-		for _, v := range mergeReservations(effectiveReservations(all), sess.User, now) {
-			if v.Start.Before(to) && from.Before(v.End) && (q.Get("node") == "" || q.Get("node") == v.Node) {
+		cluster := s.resCluster(s.in(r.Context(), cc))
+		for i := range all {
+			nr := &all[i]
+			if nr.Spec.Cluster != cluster || (q.Get("node") != "" && q.Get("node") != nr.Spec.Node) {
+				continue
+			}
+			v := viewOfReservation(nr, sess.User, now)
+			if v.Start.Before(to) && from.Before(v.End) {
 				v.Cluster = s.clusterLabel(cc)
 				items = append(items, v)
 			}
 		}
 	}
+	sort.SliceStable(items, func(i, j int) bool { return items[i].Start.Before(items[j].Start) })
 	s.writeJSON(w, http.StatusOK, map[string]any{"items": items})
 }
 
-func (s *Server) reservableNode(ctx context.Context, name string) *serverErr {
+// reservableNode: the node, which must exist and be marked reservable.
+func (s *Server) reservableNode(ctx context.Context, name string) (*corev1.Node, *serverErr) {
 	var n corev1.Node
 	if err := s.kc(ctx).Client.Get(ctx, types.NamespacedName{Name: name}, &n); err != nil {
-		return &serverErr{http.StatusBadRequest, "BAD_REQUEST", fmt.Sprintf("node %q not found", name), nil}
+		return nil, &serverErr{http.StatusBadRequest, "BAD_REQUEST", fmt.Sprintf("node %q not found", name), nil}
 	}
 	if n.Labels[devpodv1alpha1.ReservableNodeLabel] != "true" {
-		return &serverErr{http.StatusBadRequest, "NOT_RESERVABLE", fmt.Sprintf("node %q is not open for reservation", name), nil}
+		return nil, &serverErr{http.StatusBadRequest, "NOT_RESERVABLE", fmt.Sprintf("node %s is not open for reservation", name), nil}
 	}
-	return nil
-}
-
-// conflictWith returns the first live reservation on node overlapping
-// [start, end), ignoring the names in skip.
-func conflictWith(all []devpodv1alpha1.Reservation, node string, start, end time.Time, skip map[string]bool) *devpodv1alpha1.Reservation {
-	var hits []*devpodv1alpha1.Reservation
-	for i := range all {
-		r := &all[i]
-		if r.Spec.Node == node && !skip[r.Name] && r.Overlaps(metav1.NewTime(start), metav1.NewTime(end)) {
-			hits = append(hits, r)
-		}
-	}
-	if len(hits) == 0 {
-		return nil
-	}
-	sort.Slice(hits, func(i, j int) bool { return reservationBefore(hits[i], hits[j]) })
-	return hits[0]
-}
-
-// reservationBefore orders by (creationTimestamp, name): the earlier
-// reservation wins a conflict (spec §3.3).
-func reservationBefore(a, b *devpodv1alpha1.Reservation) bool {
-	if !a.CreationTimestamp.Time.Equal(b.CreationTimestamp.Time) {
-		return a.CreationTimestamp.Time.Before(b.CreationTimestamp.Time)
-	}
-	return a.Name < b.Name
-}
-
-func conflictErr(c *devpodv1alpha1.Reservation) *serverErr {
-	return &serverErr{http.StatusConflict, "RESERVATION_CONFLICT",
-		fmt.Sprintf("%s already holds %s from %s to %s", c.Spec.User, c.Spec.Node,
-			c.Spec.Start.Time.In(reservationTZ).Format("01-02 15:04"), c.Spec.End.Time.In(reservationTZ).Format("01-02 15:04")),
-		map[string]any{"id": c.Name, "node": c.Spec.Node, "user": c.Spec.User, "start": c.Spec.Start.Time.UTC(), "end": c.Spec.End.Time.UTC()}}
+	return &n, nil
 }
 
 func randSuffix(n int) string {
@@ -392,71 +255,9 @@ func randSuffix(n int) string {
 	return string(b)
 }
 
-// reserve creates a segment and settles conflicts by creation order:
-// every writer reads everything back from the API server, and only the
-// earliest overlapping reservation stays (spec §3.3). skip names the
-// caller's own segments being replaced.
-func (s *Server) reserve(ctx context.Context, user, node string, start, end time.Time, extends string, skip map[string]bool) (*devpodv1alpha1.Reservation, *serverErr) {
-	internal := func(err error) *serverErr {
-		return &serverErr{http.StatusInternalServerError, "INTERNAL", err.Error(), nil}
-	}
-	all, err := s.allReservations(ctx)
-	if err != nil {
-		return nil, internal(err)
-	}
-	if c := conflictWith(all, node, start, end, skip); c != nil {
-		return nil, conflictErr(c)
-	}
-	res := &devpodv1alpha1.Reservation{
-		ObjectMeta: metav1.ObjectMeta{Name: fmt.Sprintf("%s-%s-%s", node, user, randSuffix(6))},
-		Spec:       devpodv1alpha1.ReservationSpec{Node: node, User: user, Start: metav1.NewTime(start.UTC()), End: metav1.NewTime(end.UTC()), Extends: extends},
-	}
-	if err := s.createReservation(ctx, res); err != nil {
-		return nil, &serverErr{http.StatusBadRequest, "BAD_REQUEST", "reservation rejected", err.Error()}
-	}
-	if all, err = s.allReservations(ctx); err != nil {
-		return nil, internal(err)
-	}
-	skipSelf := map[string]bool{}
-	for k := range skip {
-		skipSelf[k] = true
-	}
-	var self *devpodv1alpha1.Reservation
-	for i := range all {
-		if all[i].Name == res.Name {
-			self = &all[i]
-		}
-	}
-	if self == nil {
-		return nil, internal(fmt.Errorf("reservation %s vanished", res.Name))
-	}
-	skipSelf[res.Name] = true
-	if c := conflictWith(all, node, start, end, skipSelf); c != nil && reservationBefore(c, self) {
-		if err := s.deleteReservation(ctx, res.Name); err != nil {
-			return nil, internal(err)
-		}
-		return nil, conflictErr(c)
-	}
-	s.reservationHistory(ctx, &devpodv1alpha1.NodeReservation{ObjectMeta: self.ObjectMeta, Spec: devpodv1alpha1.NodeReservationSpec{Cluster: s.resCluster(ctx), ReservationSpec: self.Spec}}, "created")
-	return self, nil
-}
-
-// willHibernate counts other users' running DevPods on node: they are
-// hibernated when a reservation by user starts.
-func (s *Server) willHibernate(ctx context.Context, node, user string) int {
-	n := 0
-	for _, ref := range (&LiveInputs{S: s}).Build(ctx).DevPods {
-		if ref.Node == node && ref.Owner != user && ref.Phase == string(devpodv1alpha1.DevPodRunning) {
-			n++
-		}
-	}
-	return n
-}
-
-// handleCreateReservation serves POST /api/reservations {node, start,
-// end}. With ?dryRun=true nothing is created: the answer is
-// {willHibernate} (how many other users' DevPods the start will
-// hibernate), or the same 400 / 409 the real call would give.
+// handleCreateReservation serves POST /api/reservations {node, start, end,
+// user?} (user: an admin reserving for someone). Only where the rules ask
+// that user for a reservation.
 func (s *Server) handleCreateReservation(w http.ResponseWriter, r *http.Request) {
 	sess, ok := s.sessionFrom(w, r)
 	if !ok {
@@ -470,6 +271,7 @@ func (s *Server) handleCreateReservation(w http.ResponseWriter, r *http.Request)
 		Node  string    `json:"node"`
 		Start time.Time `json:"start"`
 		End   time.Time `json:"end"`
+		User  string    `json:"user"`
 	}
 	dec := json.NewDecoder(r.Body)
 	dec.DisallowUnknownFields()
@@ -477,104 +279,70 @@ func (s *Server) handleCreateReservation(w http.ResponseWriter, r *http.Request)
 		s.writeErr(w, http.StatusBadRequest, "BAD_REQUEST", "malformed request body: "+err.Error(), nil)
 		return
 	}
-	fail := func(e *serverErr) { s.writeErr(w, e.status, e.Code, e.Message, e.Detail) }
-	if e := s.reservableNode(r.Context(), req.Node); e != nil {
-		fail(e)
+	user := sess.User
+	if req.User != "" && req.User != sess.User {
+		if !sess.Admin {
+			s.writeErr(w, http.StatusForbidden, "FORBIDDEN", "only an admin reserves for someone else", nil)
+			return
+		}
+		user = req.User
+	}
+	n, apiErr := s.reservableNode(r.Context(), req.Node)
+	if apiErr != nil {
+		s.writeServerErr(w, apiErr)
 		return
 	}
 	if err := ru.validate(req.Start, req.End); err != nil {
 		s.writeErr(w, http.StatusBadRequest, "BAD_REQUEST", err.Error(), nil)
 		return
 	}
-	if r.URL.Query().Get("dryRun") == "true" {
-		all, err := s.allReservations(r.Context())
-		if err != nil {
-			s.writeErr(w, http.StatusInternalServerError, "INTERNAL", err.Error(), nil)
-			return
-		}
-		if c := conflictWith(all, req.Node, req.Start, req.End, nil); c != nil {
-			fail(conflictErr(c))
-			return
-		}
-		s.writeJSON(w, http.StatusOK, map[string]any{"willHibernate": s.willHibernate(r.Context(), req.Node, sess.User)})
-		return
-	}
-	res, e := s.reserve(r.Context(), sess.User, req.Node, req.Start, req.End, "", nil)
-	if e != nil {
-		fail(e)
-		return
-	}
-	s.writeJSON(w, http.StatusCreated, mergeReservations([]devpodv1alpha1.Reservation{*res}, sess.User, ru.now())[0])
-}
-
-// cancelSegments writes spec.cancelled on the named segments.
-func (s *Server) cancelSegments(ctx context.Context, names []string, by string, at time.Time) error {
-	for _, name := range names {
-		err := s.changeReservation(ctx, name, func(spec *devpodv1alpha1.ReservationSpec) bool {
-			if spec.Cancelled != nil || !at.Before(spec.End.Time) {
-				return false // already over
-			}
-			spec.Cancelled = &devpodv1alpha1.ReservationCancel{By: by, At: metav1.NewTime(at.UTC().Truncate(time.Second))}
-			return true
-		})
-		if err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-// ownBlock loads the block holding segment id and checks the caller may
-// change it.
-func (s *Server) ownBlock(w http.ResponseWriter, r *http.Request, sess Session, ru *ReservationRules) (*reservationView, []devpodv1alpha1.Reservation, bool) {
-	all, err := s.allReservations(r.Context())
-	if err != nil {
+	cluster := s.resCluster(r.Context())
+	d, admin, err := s.decide(r.Context(), user, cluster, access.Node{Name: n.Name, Labels: n.Labels})
+	switch {
+	case err != nil:
 		s.writeErr(w, http.StatusInternalServerError, "INTERNAL", err.Error(), nil)
-		return nil, nil, false
+		return
+	case !d.Allow:
+		s.writeErr(w, http.StatusForbidden, "ACL_DENIED", fmt.Sprintf("%s may not use node %s", user, n.Name), nil)
+		return
+	case admin || !d.NeedsReservation:
+		s.writeErr(w, http.StatusBadRequest, "NO_NEED", fmt.Sprintf("%s may use node %s without a reservation", user, n.Name), nil)
+		return
 	}
-	b := blockOf(mergeReservations(all, sess.User, ru.now()), r.PathValue("id"))
-	if b == nil {
+	nr := &devpodv1alpha1.NodeReservation{
+		ObjectMeta: metav1.ObjectMeta{Name: fmt.Sprintf("%s-%s-%s", n.Name, user, randSuffix(6))},
+		Spec:       devpodv1alpha1.NodeReservationSpec{Cluster: cluster, Node: n.Name, User: user, Start: metav1.NewTime(req.Start.UTC()), End: metav1.NewTime(req.End.UTC())},
+	}
+	if err := s.createReservation(r.Context(), nr); err != nil {
+		s.writeErr(w, http.StatusBadRequest, "BAD_REQUEST", rejected("reserve", err), nil)
+		return
+	}
+	s.reservationHistory(r.Context(), nr, "created")
+	s.writeJSON(w, http.StatusCreated, viewOfReservation(nr, sess.User, ru.now()))
+}
+
+// ownReservation loads reservation id of the request's cluster for a change
+// by its holder or an admin; not one that is over.
+func (s *Server) ownReservation(w http.ResponseWriter, r *http.Request, sess Session, now time.Time) (*devpodv1alpha1.NodeReservation, bool) {
+	var nr devpodv1alpha1.NodeReservation
+	err := s.Reader.Get(r.Context(), types.NamespacedName{Name: r.PathValue("id")}, &nr)
+	if err != nil || nr.Spec.Cluster != s.resCluster(r.Context()) {
 		s.writeErr(w, http.StatusNotFound, "NOT_FOUND", "no such reservation", nil)
-		return nil, nil, false
+		return nil, false
 	}
-	if b.User != sess.User && !sess.Admin {
+	if nr.Spec.User != sess.User && !sess.Admin {
 		s.writeErr(w, http.StatusForbidden, "FORBIDDEN", "this is someone else's reservation", nil)
-		return nil, nil, false
+		return nil, false
 	}
-	if b.Phase == "Cancelled" || b.Phase == "Ended" {
+	if !now.Before(overAt(&nr)) {
 		s.writeErr(w, http.StatusConflict, "RESERVATION_OVER", "this reservation is already over", nil)
-		return nil, nil, false
+		return nil, false
 	}
-	return b, all, true
-}
-
-// handleDeleteReservation serves DELETE /api/reservations/{id}: cancel
-// (not started) or release early (started). Owners and admins.
-func (s *Server) handleDeleteReservation(w http.ResponseWriter, r *http.Request) {
-	sess, ok := s.sessionFrom(w, r)
-	if !ok {
-		return
-	}
-	ru, ok := s.reservationRules(w)
-	if !ok {
-		return
-	}
-	b, _, ok := s.ownBlock(w, r, sess, ru)
-	if !ok {
-		return
-	}
-	if err := s.cancelSegments(r.Context(), b.Segments, sess.User, ru.now()); err != nil {
-		s.writeErr(w, http.StatusInternalServerError, "INTERNAL", err.Error(), nil)
-		return
-	}
-	w.WriteHeader(http.StatusNoContent)
+	return &nr, true
 }
 
 // handlePatchReservation serves PATCH /api/reservations/{id} {start?,
-// end?}. Not started: the block is cancelled and reserved anew for the
-// new period (it queues as a new reservation). Started: only a later
-// end is accepted, which adds an extension segment; the original is
-// untouched if the extension loses a conflict.
+// end?}: one that has started can only have its end moved.
 func (s *Server) handlePatchReservation(w http.ResponseWriter, r *http.Request) {
 	sess, ok := s.sessionFrom(w, r)
 	if !ok {
@@ -588,83 +356,84 @@ func (s *Server) handlePatchReservation(w http.ResponseWriter, r *http.Request) 
 		Start *time.Time `json:"start"`
 		End   *time.Time `json:"end"`
 	}
-	dec := json.NewDecoder(r.Body)
-	dec.DisallowUnknownFields()
-	if err := dec.Decode(&req); err != nil || (req.Start == nil && req.End == nil) {
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || (req.Start == nil && req.End == nil) {
 		s.writeErr(w, http.StatusBadRequest, "BAD_REQUEST", "send start and / or end", nil)
 		return
 	}
-	b, all, ok := s.ownBlock(w, r, sess, ru)
+	now := ru.now()
+	nr, ok := s.ownReservation(w, r, sess, now)
 	if !ok {
 		return
 	}
-	fail := func(e *serverErr) { s.writeErr(w, e.status, e.Code, e.Message, e.Detail) }
-	bad := func(msg string) { s.writeErr(w, http.StatusBadRequest, "BAD_REQUEST", msg, nil) }
-	now := ru.now()
-	start, end := b.Start, b.End
+	start, end := nr.Spec.Start.Time, nr.Spec.End.Time
 	if req.Start != nil {
-		start = *req.Start
+		start = req.Start.UTC()
 	}
 	if req.End != nil {
-		end = *req.End
+		end = req.End.UTC()
 	}
-	if e := s.reservableNode(r.Context(), b.Node); e != nil {
-		fail(e)
+	started := !now.Before(nr.Spec.Start.Time)
+	var err error
+	switch {
+	case started && !start.Equal(nr.Spec.Start.Time):
+		err = fmt.Errorf("a reservation that has started can only have its end moved")
+	case started:
+		err = ru.validateEnd(start, end)
+	default:
+		err = ru.validate(start, end)
+	}
+	if err != nil {
+		s.writeErr(w, http.StatusBadRequest, "BAD_REQUEST", err.Error(), nil)
 		return
 	}
-	if b.Phase == "Active" {
-		if !start.Equal(b.Start) || !end.After(b.End) {
-			bad("a reservation that has started can only be extended; release it early to end it sooner")
-			return
-		}
-		if !ru.aligned(end) || (ru.MaxDuration > 0 && end.Sub(b.End) > ru.MaxDuration) {
-			bad(fmt.Sprintf("the new end must fall on a %s boundary, at most %s later", ru.Granularity, ru.MaxDuration))
-			return
-		}
-		if _, e := s.reserve(r.Context(), b.User, b.Node, b.End, end, b.Segments[len(b.Segments)-1], nil); e != nil {
-			fail(e)
-			return
-		}
-	} else {
-		if err := ru.validate(start, end); err != nil {
-			bad(err.Error())
-			return
-		}
-		skip := map[string]bool{}
-		for _, seg := range b.Segments {
-			skip[seg] = true
-		}
-		// someone else in the new period: refuse before giving up the old one
-		if c := conflictWith(all, b.Node, start, end, skip); c != nil {
-			fail(conflictErr(c))
-			return
-		}
-		if err := s.cancelSegments(r.Context(), b.Segments, sess.User, now); err != nil {
-			s.writeErr(w, http.StatusInternalServerError, "INTERNAL", err.Error(), nil)
-			return
-		}
-		if _, e := s.reserve(r.Context(), b.User, b.Node, start, end, "", nil); e != nil {
-			fail(e)
-			return
-		}
-	}
-	fresh, err := s.allReservations(r.Context())
+	changed, err := s.changeReservation(r.Context(), nr.Name, func(spec *devpodv1alpha1.NodeReservationSpec) bool {
+		spec.Start, spec.End = metav1.NewTime(start), metav1.NewTime(end)
+		return true
+	})
 	if err != nil {
 		s.writeErr(w, http.StatusInternalServerError, "INTERNAL", err.Error(), nil)
 		return
 	}
-	for _, v := range mergeReservations(fresh, sess.User, now) {
-		if v.Node == b.Node && v.User == b.User && v.Phase != "Cancelled" && v.End.Equal(end) {
-			s.writeJSON(w, http.StatusOK, v)
-			return
-		}
+	s.writeJSON(w, http.StatusOK, viewOfReservation(changed, sess.User, now))
+}
+
+// handleDeleteReservation serves DELETE /api/reservations/{id}: one that
+// has not started goes; one that has ends now. Holders and admins.
+func (s *Server) handleDeleteReservation(w http.ResponseWriter, r *http.Request) {
+	sess, ok := s.sessionFrom(w, r)
+	if !ok {
+		return
 	}
-	s.writeErr(w, http.StatusInternalServerError, "INTERNAL", "the changed reservation was not found", nil)
+	ru, ok := s.reservationRules(w)
+	if !ok {
+		return
+	}
+	now := ru.now()
+	nr, ok := s.ownReservation(w, r, sess, now)
+	if !ok {
+		return
+	}
+	var err error
+	if now.Before(nr.Spec.Start.Time) {
+		if err = s.deleteReservation(r.Context(), nr.Name); err == nil {
+			s.reservationHistory(r.Context(), nr, "deleted")
+		}
+	} else {
+		_, err = s.changeReservation(r.Context(), nr.Name, func(spec *devpodv1alpha1.NodeReservationSpec) bool {
+			spec.Cancelled = &devpodv1alpha1.ReservationCancel{By: sess.User, At: metav1.NewTime(now.UTC().Truncate(time.Second))}
+			return true
+		})
+	}
+	if err != nil {
+		s.writeErr(w, http.StatusInternalServerError, "INTERNAL", err.Error(), nil)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
 }
 
 // handleSetReservable serves PUT /api/admin/nodes/{name}/reservable
-// {reservable}: the node label. Reservations already made run on;
-// `pending` says how many are not over yet.
+// {reservable}: the node label that opens a node for reservation.
+// Turning it off leaves reservations already made to run their course.
 func (s *Server) handleSetReservable(w http.ResponseWriter, r *http.Request) {
 	if _, ok := s.requireAdmin(w, r); !ok {
 		return
@@ -675,25 +444,17 @@ func (s *Server) handleSetReservable(w http.ResponseWriter, r *http.Request) {
 	}
 	var req struct {
 		Reservable *bool `json:"reservable"`
-		// Required (with reservable): only a holder may pick the node;
-		// left out, it stays as it is
-		Required *bool `json:"required"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.Reservable == nil {
-		s.writeErr(w, http.StatusBadRequest, "BAD_REQUEST", "send {reservable: true|false, required?: true|false}", nil)
+		s.writeErr(w, http.StatusBadRequest, "BAD_REQUEST", "send {reservable: true|false}", nil)
 		return
 	}
 	name := r.PathValue("name")
-	labels := map[string]any{devpodv1alpha1.ReservableNodeLabel: nil, devpodv1alpha1.ReservationRequiredNodeLabel: nil} // null removes a label
+	var value any // null removes the label
 	if *req.Reservable {
-		labels[devpodv1alpha1.ReservableNodeLabel] = "true"
-		if req.Required == nil {
-			delete(labels, devpodv1alpha1.ReservationRequiredNodeLabel)
-		} else if *req.Required {
-			labels[devpodv1alpha1.ReservationRequiredNodeLabel] = "true"
-		}
+		value = "true"
 	}
-	patch, _ := json.Marshal(map[string]any{"metadata": map[string]any{"labels": labels}})
+	patch, _ := json.Marshal(map[string]any{"metadata": map[string]any{"labels": map[string]any{devpodv1alpha1.ReservableNodeLabel: value}}})
 	node := &corev1.Node{ObjectMeta: metav1.ObjectMeta{Name: name}}
 	if err := s.k(r).Client.Patch(r.Context(), node, client.RawPatch(types.MergePatchType, patch)); err != nil {
 		if apierrors.IsNotFound(err) {
@@ -703,39 +464,31 @@ func (s *Server) handleSetReservable(w http.ResponseWriter, r *http.Request) {
 		s.writeErr(w, http.StatusInternalServerError, "INTERNAL", err.Error(), nil)
 		return
 	}
-	all, err := s.allReservations(r.Context())
+	all, err := s.nodeReservations(r.Context())
 	if err != nil {
 		s.writeErr(w, http.StatusInternalServerError, "INTERNAL", err.Error(), nil)
 		return
 	}
-	s.writeJSON(w, http.StatusOK, map[string]any{"reservable": *req.Reservable, "required": reservationRequired(node), "pending": pendingOn(all, name, ru.now())})
-}
-
-// reservationRequired: only whoever holds the node may pick it.
-func reservationRequired(n *corev1.Node) bool {
-	return n.Labels[devpodv1alpha1.ReservableNodeLabel] == "true" && n.Labels[devpodv1alpha1.ReservationRequiredNodeLabel] == "true"
+	s.writeJSON(w, http.StatusOK, map[string]any{"reservable": *req.Reservable, "pending": pendingOn(all, s.resCluster(r.Context()), name, ru.now())})
 }
 
 // pendingOn counts the node's reservations that are not over.
-func pendingOn(all []devpodv1alpha1.Reservation, node string, now time.Time) int {
+func pendingOn(all []devpodv1alpha1.NodeReservation, cluster, node string, now time.Time) int {
 	n := 0
 	for i := range all {
-		if all[i].Spec.Node == node && all[i].Spec.Cancelled == nil && now.Before(all[i].Spec.End.Time) {
+		if all[i].Spec.Cluster == cluster && all[i].Spec.Node == node && now.Before(overAt(&all[i])) {
 			n++
 		}
 	}
 	return n
 }
 
-/* ---- the node list a user picks from ---- */
+/* ---- node choices ---- */
 
+// nodeHold: a reservation of the caller's that covers now, until when.
 type nodeHold struct {
 	User  string    `json:"user"`
 	Until time.Time `json:"until"`
-}
-type nodeNext struct {
-	User  string    `json:"user"`
-	Start time.Time `json:"start"`
 }
 
 // nodeChoice is one node in GET /api/nodes.
@@ -750,11 +503,10 @@ type nodeChoice struct {
 	GPUTotal   int     `json:"gpuTotal"`
 	GPUUsed    int     `json:"gpuUsed"`
 	Reservable bool    `json:"reservable"`
-	// ReservationRequired: only whoever holds it may pick it.
+	// ReservationRequired: the caller may use it only under a reservation.
 	ReservationRequired bool      `json:"reservationRequired"`
 	Pending             int       `json:"pending"` // reservations not over yet
-	Held                *nodeHold `json:"held"`    // who holds it now
-	Next                *nodeNext `json:"next"`    // the next reservation by someone else
+	Mine                *nodeHold `json:"mine"`    // the caller's reservation covering now
 	// Selectable: the caller's own DevPods may be pinned here now.
 	Selectable bool   `json:"selectable"`
 	Reason     string `json:"reason,omitempty"`
@@ -792,40 +544,28 @@ func (s *Server) handleNodes(w http.ResponseWriter, r *http.Request) {
 	s.writeJSON(w, http.StatusOK, map[string]any{"items": items})
 }
 
-// nodeChoicesIn: the nodes of ctx's cluster a user may pick.
+// nodeChoicesIn: the nodes of ctx's cluster, as the caller may use them.
 func (s *Server) nodeChoicesIn(ctx context.Context, sess Session) ([]nodeChoice, error) {
 	views, _, _, _ := s.nodeViews(ctx)
-	var all []devpodv1alpha1.Reservation
+	var all []devpodv1alpha1.NodeReservation
 	now := time.Now()
 	if s.Reservations != nil {
 		var err error
-		if all, err = s.allReservations(ctx); err != nil {
+		if all, err = s.nodeReservations(ctx); err != nil {
 			return nil, err
 		}
-		all = effectiveReservations(all)
 		now = s.Reservations.now()
 	}
+	cluster := s.resCluster(ctx)
 	items := make([]nodeChoice, 0, len(views))
 	for _, v := range views {
 		c := nodeChoice{Name: v.Name, Ready: v.Ready, GPUModel: v.GPU.Model, GPUTotal: v.GPU.Total, GPUUsed: v.GPU.Used,
 			CPU: resView{Allocatable: v.CPU.Allocatable, Allocated: v.CPU.Allocated}, Mem: resView{Allocatable: v.Mem.Allocatable, Allocated: v.Mem.Allocated},
-			Reservable: v.Labels[devpodv1alpha1.ReservableNodeLabel] == "true", Pending: pendingOn(all, v.Name, now), Selectable: true}
-		c.ReservationRequired = c.Reservable && v.Labels[devpodv1alpha1.ReservationRequiredNodeLabel] == "true"
-		if h := holderOf(all, v.Name, now); h != nil {
-			c.Held = &nodeHold{User: h.Spec.User, Until: heldUntil(all, h).UTC()}
-			if h.Spec.User != sess.User {
-				c.Selectable, c.Reason = false, fmt.Sprintf("reserved by %s", h.Spec.User)
-			}
-		} else if c.ReservationRequired && s.Reservations != nil {
-			c.Selectable, c.Reason = false, "reservation required"
-		}
+			Reservable: v.Labels[devpodv1alpha1.ReservableNodeLabel] == "true", Pending: pendingOn(all, cluster, v.Name, now), Selectable: true}
 		for i := range all {
-			x := &all[i]
-			if x.Spec.Node != v.Name || x.Spec.Cancelled != nil || x.Spec.User == sess.User || !x.Spec.Start.Time.After(now) {
-				continue
-			}
-			if c.Next == nil || x.Spec.Start.Time.Before(c.Next.Start) {
-				c.Next = &nodeNext{User: x.Spec.User, Start: x.Spec.Start.Time.UTC()}
+			nr := &all[i]
+			if nr.Spec.Cluster == cluster && nr.Spec.Node == v.Name && nr.Spec.User == sess.User && !now.Before(nr.Spec.Start.Time) && now.Before(overAt(nr)) {
+				c.Mine = &nodeHold{User: sess.User, Until: overAt(nr).UTC()}
 			}
 		}
 		items = append(items, c)

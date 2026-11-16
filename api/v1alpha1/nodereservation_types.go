@@ -8,22 +8,41 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
-// NodeReservationSpec is a reservation as the console keeps it: of a
-// node of one of its clusters.
+// NodeReservationSpec is one user's permit to use one machine (of one of
+// the console's clusters) for a while: needed where the access rules say
+// so. Not exclusive; reservations may overlap.
 type NodeReservationSpec struct {
 	// Cluster: the node's cluster ("" in a console of one cluster).
 	//
 	// +optional
 	Cluster string `json:"cluster,omitempty"`
-
-	ReservationSpec `json:",inline"`
+	// +kubebuilder:validation:MinLength=1
+	Node string `json:"node"`
+	// +kubebuilder:validation:MinLength=1
+	User  string      `json:"user"`
+	Start metav1.Time `json:"start"`
+	End   metav1.Time `json:"end"`
+	// Cancelled: ended early (or never started) — by whom, when.
+	//
+	// +optional
+	Cancelled *ReservationCancel `json:"cancelled,omitempty"`
 }
 
-// NodeReservation is one user's hold on one whole node for a period,
-// kept by the console in its own cluster — not in the node's — and
-// carried out by the console: it hibernates other users' DevPods on the
-// node when the period starts and keeps them off it until it ends. Its
-// status is the console's record of what it did.
+// NodeReservationStatus is the console's record of a reservation's end.
+type NodeReservationStatus struct {
+	// Ended: its end was carried out.
+	//
+	// +optional
+	Ended bool `json:"ended,omitempty"`
+	// HibernatedAtEnd: the holder's DevPods hibernated then.
+	//
+	// +optional
+	HibernatedAtEnd []string `json:"hibernatedAtEnd,omitempty"`
+}
+
+// NodeReservation is one user's permit to use one machine for a period,
+// kept by the console in its own cluster; when it ends the console
+// hibernates the holder's DevPods there that only it let run.
 //
 // +kubebuilder:object:root=true
 // +kubebuilder:subresource:status
@@ -37,8 +56,8 @@ type NodeReservation struct {
 	metav1.TypeMeta   `json:",inline"`
 	metav1.ObjectMeta `json:"metadata,omitempty"`
 
-	Spec   NodeReservationSpec `json:"spec,omitempty"`
-	Status ReservationStatus   `json:"status,omitempty"`
+	Spec   NodeReservationSpec   `json:"spec,omitempty"`
+	Status NodeReservationStatus `json:"status,omitempty"`
 }
 
 // NodeReservationList is a list of NodeReservation.
@@ -48,12 +67,6 @@ type NodeReservationList struct {
 	metav1.TypeMeta `json:",inline"`
 	metav1.ListMeta `json:"metadata,omitempty"`
 	Items           []NodeReservation `json:"items"`
-}
-
-// Reservation is it as a Reservation: what the reservation rules (which
-// take Reservations) work on.
-func (n *NodeReservation) Reservation() Reservation {
-	return Reservation{ObjectMeta: n.ObjectMeta, Spec: n.Spec.ReservationSpec, Status: n.Status}
 }
 
 func init() {

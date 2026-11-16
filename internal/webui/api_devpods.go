@@ -444,9 +444,6 @@ func (s *Server) prepareDevPod(r *http.Request, sess Session, req CreateRequest,
 		if err := s.k(r).Client.Get(r.Context(), types.NamespacedName{Name: node}, &n); err != nil {
 			return nil, &serverErr{http.StatusBadRequest, "BAD_REQUEST", fmt.Sprintf("node %q not found", node), nil}
 		}
-		if apiErr := s.pinErr(r.Context(), dp.Spec.Owner, node); apiErr != nil {
-			return nil, apiErr
-		}
 	}
 	return dp, nil
 }
@@ -789,12 +786,6 @@ func (s *Server) patchDevPod(r *http.Request, sess Session, dp *devpodv1alpha1.D
 	if equality.Semantic.DeepEqual(before.Spec, dp.Spec) {
 		return PatchResponse{DevPod: dp}, nil // no-op
 	}
-	// starting a DevPod pinned to a node someone else holds now
-	if dp.Spec.Running && !before.Spec.Running {
-		if apiErr := s.pinErr(r.Context(), dp.Spec.Owner, pinnedNode(dp)); apiErr != nil {
-			return PatchResponse{}, apiErr
-		}
-	}
 	// waking, or resizing a running DevPod, re-enters the compute quota
 	if dp.Spec.Running && (!before.Spec.Running || req.editsSpec()) {
 		if apiErr := s.quotaErrFor(r, sess, dp, dp.Name); apiErr != nil {
@@ -837,8 +828,7 @@ func (s *Server) applyNode(r *http.Request, sess Session, dp *devpodv1alpha1.Dev
 		dp.Spec.Pod.Spec.NodeSelector = sel
 	}
 	sel[hostnameLabel] = node
-	// the node rule is judged by the DevPod's owner, whoever asks
-	return s.pinErr(r.Context(), dp.Spec.Owner, node)
+	return nil
 }
 
 // handleRedeployDevPod serves POST /api/devpods/{name}/redeploy: it

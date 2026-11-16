@@ -22,8 +22,8 @@ import (
 
 // Reservations are the console's: NodeReservation objects in its own
 // cluster (where users and configs are too), each naming the cluster of
-// its node. The reservation rules keep working on Reservations (the
-// type they were written for); these convert.
+// its node. Read afresh (not from a cache): a reservation just made
+// counts at once.
 
 // resCluster: the cluster the request is about, as reservations name it.
 func (s *Server) resCluster(ctx context.Context) string { return s.kc(ctx).Name }
@@ -44,21 +44,7 @@ func (s *Server) nodeReservations(ctx context.Context) ([]devpodv1alpha1.NodeRes
 	return out, nil
 }
 
-// reservationsOf: one cluster's reservations, as Reservations.
-func reservationsOf(all []devpodv1alpha1.NodeReservation, cluster string) []devpodv1alpha1.Reservation {
-	var out []devpodv1alpha1.Reservation
-	for i := range all {
-		if all[i].Spec.Cluster == cluster {
-			out = append(out, all[i].Reservation())
-		}
-	}
-	return out
-}
-
-// createReservation keeps res as the request's cluster's (its history
-// starts once it has won against those made at the same time: reserve).
-func (s *Server) createReservation(ctx context.Context, res *devpodv1alpha1.Reservation) error {
-	nr := &devpodv1alpha1.NodeReservation{ObjectMeta: metav1.ObjectMeta{Name: res.Name}, Spec: devpodv1alpha1.NodeReservationSpec{Cluster: s.resCluster(ctx), ReservationSpec: res.Spec}}
+func (s *Server) createReservation(ctx context.Context, nr *devpodv1alpha1.NodeReservation) error {
 	return s.Client.Create(ctx, nr)
 }
 
@@ -71,34 +57,30 @@ func (s *Server) deleteReservation(ctx context.Context, name string) error {
 }
 
 // changeReservation applies fn to the request's cluster's reservation
-// name (read afresh on each conflict); fn returns false to leave it.
-func (s *Server) changeReservation(ctx context.Context, name string, fn func(*devpodv1alpha1.ReservationSpec) bool) error {
+// name (read afresh on each conflict) and records it in its history.
+func (s *Server) changeReservation(ctx context.Context, name string, fn func(*devpodv1alpha1.NodeReservationSpec) bool) (*devpodv1alpha1.NodeReservation, error) {
 	cluster := s.resCluster(ctx)
-	var done *devpodv1alpha1.NodeReservation
+	var nr devpodv1alpha1.NodeReservation
+	changed := false
 	err := retry.RetryOnConflict(retry.DefaultRetry, func() error {
-		var nr devpodv1alpha1.NodeReservation
 		if err := s.Reader.Get(ctx, types.NamespacedName{Name: name}, &nr); err != nil {
-			if apierrors.IsNotFound(err) {
-				return nil
-			}
 			return err
 		}
 		if nr.Spec.Cluster != cluster {
 			return fmt.Errorf("reservation %s is of cluster %q", name, nr.Spec.Cluster)
 		}
-		if !fn(&nr.Spec.ReservationSpec) {
+		if changed = fn(&nr.Spec); !changed {
 			return nil
 		}
-		if err := s.Client.Update(ctx, &nr); err != nil {
-			return err
-		}
-		done = &nr
-		return nil
+		return s.Client.Update(ctx, &nr)
 	})
-	if err == nil && done != nil {
-		s.reservationHistory(ctx, done, "changed")
+	if err != nil {
+		return nil, err
 	}
-	return err
+	if changed {
+		s.reservationHistory(ctx, &nr, "changed")
+	}
+	return &nr, nil
 }
 
 // keptFor: how long an ended or cancelled reservation is kept as an
@@ -115,7 +97,7 @@ func (s *Server) reservationHistory(ctx context.Context, nr *devpodv1alpha1.Node
 	}
 	row := store.ReservationEventRow{
 		TS: time.Now().UTC(), Cluster: nr.Spec.Cluster, ID: nr.Name, Node: nr.Spec.Node, User: nr.Spec.User,
-		Start: nr.Spec.Start.Time.UTC(), End: nr.Spec.End.Time.UTC(), Extends: nr.Spec.Extends, Event: event, Detail: strings.Join(detail, " "),
+		Start: nr.Spec.Start.Time.UTC(), End: nr.Spec.End.Time.UTC(), Event: event, Detail: strings.Join(detail, " "),
 	}
 	if nr.Spec.Cancelled != nil {
 		row.CancelledBy = nr.Spec.Cancelled.By
