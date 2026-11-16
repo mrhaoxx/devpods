@@ -55,6 +55,11 @@ rules:
 - apiGroups: ["devpod.io"]
   resources: ["users"]
   verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+# Access control: the ordered rules (AccessPolicy "default") and the user
+# groups they name, kept by the console in its own cluster.
+- apiGroups: ["devpod.io"]
+  resources: ["accesspolicies", "usergroups"]
+  verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
 # Read-only: the admin nodes page (capacity, readiness, GPU model).
 - apiGroups: [""]
   resources: ["nodes"]

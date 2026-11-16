@@ -1,0 +1,165 @@
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.16.5
+  name: accesspolicies.devpod.io
+spec:
+  group: devpod.io
+  names:
+    kind: AccessPolicy
+    listKind: AccessPolicyList
+    plural: accesspolicies
+    shortNames:
+    - acl
+    singular: accesspolicy
+  scope: Cluster
+  versions:
+  - name: v1alpha1
+    schema:
+      openAPIV3Schema:
+        description: |-
+          AccessPolicy is the console's access control: one, named "default", in
+          the console's cluster.
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: |-
+              AccessPolicySpec is who may use which clusters and machines, and how:
+              rules in order, the first whose resource and subject match deciding;
+              Default when none does.
+            properties:
+              default:
+                description: 'Default: the effect when no rule matches (the last rule,
+                  always there).'
+                properties:
+                  allow:
+                    type: boolean
+                  hostPaths:
+                    description: |-
+                      HostPaths: the host directories a DevPod may mount (its home, put
+                      there by the controller, aside).
+                    items:
+                      description: |-
+                        HostPathGrant: a host directory and what is below it; read-only unless
+                        Writable. A writable one is no security boundary (a symlink in it can
+                        lead anywhere on the host): granting it is trusting the user.
+                      properties:
+                        path:
+                          type: string
+                        writable:
+                          type: boolean
+                      required:
+                      - path
+                      type: object
+                    type: array
+                  needsReservation:
+                    description: |-
+                      NeedsReservation: only while the DevPod's owner holds a
+                      reservation of the machine.
+                    type: boolean
+                  privileged:
+                    description: |-
+                      Privileged: privileged containers, added capabilities, the host's
+                      PID, IPC or network.
+                    type: boolean
+                required:
+                - allow
+                type: object
+              rules:
+                items:
+                  description: |-
+                    AccessRule: a resource (a cluster, machines anywhere, or machines of a
+                    cluster), who it is about, and what they get.
+                  properties:
+                    cluster:
+                      description: 'Cluster: a cluster''s name; empty = any cluster.'
+                      type: string
+                    effect:
+                      description: 'AccessEffect: deny (Allow false), or allow with
+                        what comes with it.'
+                      properties:
+                        allow:
+                          type: boolean
+                        hostPaths:
+                          description: |-
+                            HostPaths: the host directories a DevPod may mount (its home, put
+                            there by the controller, aside).
+                          items:
+                            description: |-
+                              HostPathGrant: a host directory and what is below it; read-only unless
+                              Writable. A writable one is no security boundary (a symlink in it can
+                              lead anywhere on the host): granting it is trusting the user.
+                            properties:
+                              path:
+                                type: string
+                              writable:
+                                type: boolean
+                            required:
+                            - path
+                            type: object
+                          type: array
+                        needsReservation:
+                          description: |-
+                            NeedsReservation: only while the DevPod's owner holds a
+                            reservation of the machine.
+                          type: boolean
+                        privileged:
+                          description: |-
+                            Privileged: privileged containers, added capabilities, the host's
+                            PID, IPC or network.
+                          type: boolean
+                      required:
+                      - allow
+                      type: object
+                    machines:
+                      description: |-
+                        Machines: empty = every machine (of Cluster); else any of these
+                        matches — a node name, "*" globs allowed, or a label "key=value".
+                      items:
+                        type: string
+                      type: array
+                    subject:
+                      description: 'AccessSubject: everyone, one user or one UserGroup.'
+                      properties:
+                        kind:
+                          enum:
+                          - everyone
+                          - user
+                          - group
+                          type: string
+                        name:
+                          description: 'Name: the user''s or the group''s name (not
+                            for everyone).'
+                          type: string
+                      required:
+                      - kind
+                      type: object
+                  required:
+                  - effect
+                  - subject
+                  type: object
+                type: array
+            required:
+            - default
+            type: object
+        type: object
+    served: true
+    storage: true
