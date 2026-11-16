@@ -38,6 +38,31 @@ func Decide(p *v1.AccessPolicySpec, user string, groups map[string]bool, cluster
 	return Decision{AccessEffect: p.Default, Rule: -1}
 }
 
+// Unrestricted: would every machine of cluster — those there now and any
+// that join later — take a DevPod of user's with needs, no reservation
+// asked? Judged from the rules alone, since machines to come cannot be
+// listed: any rule for user in cluster that would not take it says no,
+// unless an earlier rule for every machine has already decided. The
+// console leaves an unrestricted DevPod without its allow-list.
+func Unrestricted(p *v1.AccessPolicySpec, user string, groups map[string]bool, cluster string, needs Needs) bool {
+	takes := func(e v1.AccessEffect) bool {
+		return e.Allow && !e.NeedsReservation && (Decision{AccessEffect: e}).Admits(needs) == nil
+	}
+	for i := range p.Rules {
+		r := &p.Rules[i]
+		if (r.Cluster != "" && r.Cluster != cluster) || !subjectMatches(r.Subject, user, groups) {
+			continue
+		}
+		if !takes(r.Effect) {
+			return false
+		}
+		if len(r.Machines) == 0 {
+			return true // every machine is decided here
+		}
+	}
+	return takes(p.Default)
+}
+
 func subjectMatches(s v1.AccessSubject, user string, groups map[string]bool) bool {
 	switch s.Kind {
 	case "everyone":

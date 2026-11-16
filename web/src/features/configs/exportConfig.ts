@@ -79,19 +79,19 @@ function dropStamped(pod: PodPart | undefined) {
   if (Object.keys(meta).length === 0) delete pod.metadata;
 }
 
-// The console's "not on these machines" (access control): written into
+// The console's "only on these machines" (access control): written into
 // the DevPod each time it starts, recognised by the annotation naming its
 // machines; a config made from the DevPod must not carry it.
-const EXCLUDED = "devpod.io/access-excluded";
+const ALLOWED = "devpod.io/access-allowed";
 type Term = { matchExpressions?: { key?: string; operator?: string; values?: string[] }[] } & Record<string, Json>;
 type Affinity = { nodeAffinity?: { requiredDuringSchedulingIgnoredDuringExecution?: { nodeSelectorTerms?: Term[] } } & Record<string, Json> } & Record<string, Json>;
-function dropExclusion(pod: { spec?: { affinity?: Affinity } } | undefined, names: string | undefined) {
+function dropAllowList(pod: { spec?: { affinity?: Affinity } } | undefined, names: string | undefined) {
   const spec = pod?.spec;
   const sel = spec?.affinity?.nodeAffinity?.requiredDuringSchedulingIgnoredDuringExecution;
   if (!spec || !names || !sel?.nodeSelectorTerms) return;
   const ex = names.split(",");
   const ours = (r: { key?: string; operator?: string; values?: string[] }) =>
-    r.key === HOSTNAME && r.operator === "NotIn" && r.values?.length === ex.length && r.values.every((v, i) => v === ex[i]);
+    r.key === HOSTNAME && r.operator === "In" && r.values?.length === ex.length && r.values.every((v, i) => v === ex[i]);
   sel.nodeSelectorTerms = sel.nodeSelectorTerms
     .map((t) => ({ ...t, matchExpressions: (t.matchExpressions ?? []).filter((r) => !ours(r)) }))
     .filter((t) => t.matchExpressions.length > 0 || Object.keys(t).some((k) => k !== "matchExpressions"));
@@ -105,7 +105,7 @@ export function devpodToConfig(dp: DevPod): string {
   const { owner: _owner, ...rest } = escapeVars(src.spec as Json) as Record<string, Json>;
   void _owner;
   dropStamped(rest.pod as PodPart | undefined);
-  dropExclusion(rest.pod as { spec?: { affinity?: Affinity } } | undefined, dp.metadata.annotations?.[EXCLUDED]);
+  dropAllowList(rest.pod as { spec?: { affinity?: Affinity } } | undefined, dp.metadata.annotations?.[ALLOWED]);
   const sel = ((rest.pod as { spec?: { nodeSelector?: Record<string, Json> } } | undefined)?.spec ?? {}).nodeSelector;
   if (sel && HOSTNAME in sel) sel[HOSTNAME] = "${NODE}";
   const doc: Json = {

@@ -83,18 +83,20 @@ describe("a DevPod saved as a config", () => {
     expect(parseVars(devpodToConfig(dp())).map((v) => v.name)).toEqual(["NAME", "OWNER", "NODE"]);
   });
 
-  it("leaves out the console's \"not on these machines\", keeping the user's own affinity", () => {
+  it("leaves out the console's \"only on these machines\", keeping the user's own affinity", () => {
     const d = dp();
-    d.metadata.annotations = { ...d.metadata.annotations, "devpod.io/access-excluded": "a,b" };
+    d.metadata.annotations = { ...d.metadata.annotations, "devpod.io/access-allowed": "a,b" };
     const gpu = { key: "gpu", operator: "In", values: ["B300"] };
-    const excluded = { key: "kubernetes.io/hostname", operator: "NotIn", values: ["a", "b"] };
+    const mine = { key: "kubernetes.io/hostname", operator: "In", values: ["c"] };
+    const allowed = { key: "kubernetes.io/hostname", operator: "In", values: ["a", "b"] };
     (d.spec.pod!.spec as Record<string, unknown>).affinity = {
-      nodeAffinity: { requiredDuringSchedulingIgnoredDuringExecution: { nodeSelectorTerms: [{ matchExpressions: [gpu, excluded] }] } },
+      nodeAffinity: { requiredDuringSchedulingIgnoredDuringExecution: { nodeSelectorTerms: [{ matchExpressions: [gpu, allowed] }, { matchExpressions: [mine, allowed] }] } },
     };
     const text = devpodToConfig(d);
-    expect(text).not.toContain("NotIn");
-    expect(text).not.toContain("access-excluded");
+    expect(text).not.toContain("- a\n");
+    expect(text).not.toContain("access-allowed");
     expect(text).toContain("B300");
+    expect(text).toContain("- c\n"); // the user's own hostname In stays
   });
 
   it("without a pinned node there is no ${NODE}", () => {

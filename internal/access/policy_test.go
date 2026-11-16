@@ -65,3 +65,34 @@ func TestMachineMatches(t *testing.T) {
 		}
 	}
 }
+
+func TestUnrestricted(t *testing.T) {
+	everyone := v1.AccessSubject{Kind: "everyone"}
+	allow := v1.AccessEffect{Allow: true}
+	open := v1.DefaultAccessEffect()
+	priv := Needs{Privileged: true}
+	none := Needs{}
+	cases := []struct {
+		name  string
+		p     v1.AccessPolicySpec
+		needs Needs
+		want  bool
+	}{
+		{"no rules, default open", v1.AccessPolicySpec{Default: open}, priv, true},
+		{"default deny", v1.AccessPolicySpec{Default: v1.AccessEffect{}}, none, false},
+		{"a deny for some machines, even none there yet", v1.AccessPolicySpec{Rules: []v1.AccessRule{{Machines: []string{"c500-*"}, Subject: everyone}}, Default: open}, none, false},
+		{"a deny for another user", v1.AccessPolicySpec{Rules: []v1.AccessRule{{Subject: v1.AccessSubject{Kind: "user", Name: "bob"}}}, Default: open}, none, true},
+		{"a deny for a group not mine", v1.AccessPolicySpec{Rules: []v1.AccessRule{{Subject: v1.AccessSubject{Kind: "group", Name: "ops"}}}, Default: open}, none, true},
+		{"a deny for my group", v1.AccessPolicySpec{Rules: []v1.AccessRule{{Subject: v1.AccessSubject{Kind: "group", Name: "lab"}}}, Default: open}, none, false},
+		{"a deny in another cluster", v1.AccessPolicySpec{Rules: []v1.AccessRule{{Cluster: "yc", Subject: everyone}}, Default: open}, none, true},
+		{"an allow of every machine decides before a deny", v1.AccessPolicySpec{Rules: []v1.AccessRule{{Subject: everyone, Effect: open}, {Machines: []string{"m1"}, Subject: everyone}}, Default: open}, none, true},
+		{"allowed without privileges, wanting them", v1.AccessPolicySpec{Rules: []v1.AccessRule{{Machines: []string{"m*"}, Subject: everyone, Effect: allow}}, Default: open}, priv, false},
+		{"allowed without privileges, not wanting them", v1.AccessPolicySpec{Rules: []v1.AccessRule{{Machines: []string{"m*"}, Subject: everyone, Effect: allow}}, Default: open}, none, true},
+		{"needs a reservation somewhere", v1.AccessPolicySpec{Rules: []v1.AccessRule{{Machines: []string{"g1"}, Subject: everyone, Effect: v1.AccessEffect{Allow: true, NeedsReservation: true}}}, Default: open}, none, false},
+	}
+	for _, c := range cases {
+		if got := Unrestricted(&c.p, "alice", map[string]bool{"lab": true}, "zjusct", c.needs); got != c.want {
+			t.Errorf("%s: %v", c.name, got)
+		}
+	}
+}

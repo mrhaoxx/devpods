@@ -32,39 +32,45 @@ func terms(dp *v1.DevPod) []corev1.NodeSelectorTerm {
 	return a.NodeAffinity.RequiredDuringSchedulingIgnoredDuringExecution.NodeSelectorTerms
 }
 
-func notIn(names ...string) corev1.NodeSelectorRequirement {
-	return corev1.NodeSelectorRequirement{Key: hostname, Operator: corev1.NodeSelectorOpNotIn, Values: names}
+func in(names ...string) corev1.NodeSelectorRequirement {
+	return corev1.NodeSelectorRequirement{Key: hostname, Operator: corev1.NodeSelectorOpIn, Values: names}
 }
 
-func TestSetExclusion(t *testing.T) {
+func TestSetAllowed(t *testing.T) {
 	dp := devpod()
-	SetExclusion(dp, []string{"b", "a"})
-	if got := terms(dp); len(got) != 1 || !reflect.DeepEqual(got[0].MatchExpressions, []corev1.NodeSelectorRequirement{notIn("a", "b")}) {
+	SetAllowed(dp, []string{"b", "a"})
+	if got := terms(dp); len(got) != 1 || !reflect.DeepEqual(got[0].MatchExpressions, []corev1.NodeSelectorRequirement{in("a", "b")}) {
 		t.Fatalf("added: %+v", got)
 	}
-	if dp.Annotations[AnnExcluded] != "a,b" {
-		t.Fatalf("annotation %q", dp.Annotations[AnnExcluded])
+	if dp.Annotations[AnnAllowed] != "a,b" {
+		t.Fatalf("annotation %q", dp.Annotations[AnnAllowed])
 	}
-	SetExclusion(dp, nil)
-	if dp.Spec.Pod.Spec.Affinity != nil || dp.Annotations[AnnExcluded] != "" {
+	SetAllowed(dp, nil)
+	if dp.Spec.Pod.Spec.Affinity != nil || dp.Annotations[AnnAllowed] != "" {
 		t.Fatalf("removed: %+v %v", dp.Spec.Pod.Spec.Affinity, dp.Annotations)
 	}
 
 	gpu := corev1.NodeSelectorRequirement{Key: "gpu", Operator: corev1.NodeSelectorOpIn, Values: []string{"B300"}}
 	zone := corev1.NodeSelectorRequirement{Key: "zone", Operator: corev1.NodeSelectorOpIn, Values: []string{"a"}}
 	own := devpod(corev1.NodeSelectorTerm{MatchExpressions: []corev1.NodeSelectorRequirement{gpu}}, corev1.NodeSelectorTerm{MatchExpressions: []corev1.NodeSelectorRequirement{zone}})
-	SetExclusion(own, []string{"a", "b"})
-	SetExclusion(own, []string{"c"}) // replaces the console's, keeps the user's
+	SetAllowed(own, []string{"a", "b"})
+	SetAllowed(own, []string{"c"}) // replaces the console's, keeps the user's
 	want := []corev1.NodeSelectorTerm{
-		{MatchExpressions: []corev1.NodeSelectorRequirement{gpu, notIn("c")}},
-		{MatchExpressions: []corev1.NodeSelectorRequirement{zone, notIn("c")}},
+		{MatchExpressions: []corev1.NodeSelectorRequirement{gpu, in("c")}},
+		{MatchExpressions: []corev1.NodeSelectorRequirement{zone, in("c")}},
 	}
 	if got := terms(own); !reflect.DeepEqual(got, want) {
 		t.Fatalf("replaced: %+v", got)
 	}
-	SetExclusion(own, nil)
+	SetAllowed(own, nil)
 	want = []corev1.NodeSelectorTerm{{MatchExpressions: []corev1.NodeSelectorRequirement{gpu}}, {MatchExpressions: []corev1.NodeSelectorRequirement{zone}}}
-	if got := terms(own); !reflect.DeepEqual(got, want) || own.Annotations[AnnExcluded] != "" {
+	if got := terms(own); !reflect.DeepEqual(got, want) || own.Annotations[AnnAllowed] != "" {
 		t.Fatalf("the user's kept: %+v", got)
+	}
+	// the user's own hostname In with the same names is theirs: not taken
+	mine := devpod(corev1.NodeSelectorTerm{MatchExpressions: []corev1.NodeSelectorRequirement{in("a")}})
+	SetAllowed(mine, nil)
+	if got := terms(mine); len(got) != 1 || !reflect.DeepEqual(got[0].MatchExpressions, []corev1.NodeSelectorRequirement{in("a")}) {
+		t.Fatalf("the user's hostname In taken: %+v", got)
 	}
 }

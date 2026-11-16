@@ -88,8 +88,9 @@ func (p *placeRig) get(name string) devpodv1alpha1.DevPod {
 	return dp
 }
 
-func excludedOf(dp devpodv1alpha1.DevPod) []string {
-	if s := dp.Annotations[access.AnnExcluded]; s != "" {
+// allowedOf: the console's "only on these machines" of dp (nil: none).
+func allowedOf(dp devpodv1alpha1.DevPod) []string {
+	if s := dp.Annotations[access.AnnAllowed]; s != "" {
 		return strings.Split(s, ",")
 	}
 	return nil
@@ -130,8 +131,8 @@ func TestPlacementUnpinned(t *testing.T) {
 	p := newPlaceRig(t, "pu")
 	setRules(t, onNode(p.n1, denied))
 	dp := p.create("pu-carol", http.StatusCreated)
-	if ex := excludedOf(p.get(dp)); !slices.Contains(ex, p.n1) || slices.Contains(ex, p.n2) {
-		t.Fatalf("excluded %v", ex)
+	if in := allowedOf(p.get(dp)); slices.Contains(in, p.n1) || !slices.Contains(in, p.n2) {
+		t.Fatalf("allowed %v", in)
 	}
 	p.patch("pu-carol", dp, `{"running":false}`, http.StatusOK)
 	setRules(t, devpodv1alpha1.AccessRule{Subject: devpodv1alpha1.AccessSubject{Kind: "everyone"}, Effect: denied}) // every machine
@@ -141,8 +142,8 @@ func TestPlacementUnpinned(t *testing.T) {
 	setRules(t)
 	p.patch("pu-carol", dp, `{"running":true}`, http.StatusOK)
 	got := p.get(dp)
-	if excludedOf(got) != nil || got.Spec.Pod.Spec.Affinity != nil {
-		t.Fatalf("exclusion left: %v %+v", excludedOf(got), got.Spec.Pod.Spec.Affinity)
+	if allowedOf(got) != nil || got.Spec.Pod.Spec.Affinity != nil {
+		t.Fatalf("allow-list left: %v %+v", allowedOf(got), got.Spec.Pod.Spec.Affinity)
 	}
 }
 
@@ -151,8 +152,8 @@ func TestPlacementAdminOwner(t *testing.T) {
 	p.s.Admins = map[string]bool{"pa-root": true}
 	setRules(t, devpodv1alpha1.AccessRule{Subject: devpodv1alpha1.AccessSubject{Kind: "everyone"}, Effect: denied})
 	dp := p.create("pa-root", http.StatusCreated)
-	if ex := excludedOf(p.get(dp)); ex != nil {
-		t.Fatalf("an admin's DevPod got an exclusion: %v", ex)
+	if in := allowedOf(p.get(dp)); in != nil {
+		t.Fatalf("an admin's DevPod got an allow-list: %v", in)
 	}
 }
 
@@ -166,7 +167,7 @@ func TestPlacementLeavesRunningAlone(t *testing.T) {
 	setRules(t)
 	p.patch("pr-dave", dp, `{"collaborators":["pr-erin"]}`, http.StatusOK)
 	after := p.get(dp)
-	if !equality.Semantic.DeepEqual(before.Spec.Pod, after.Spec.Pod) || before.Annotations[access.AnnExcluded] != after.Annotations[access.AnnExcluded] {
+	if !equality.Semantic.DeepEqual(before.Spec.Pod, after.Spec.Pod) || before.Annotations[access.AnnAllowed] != after.Annotations[access.AnnAllowed] {
 		t.Fatalf("the Pod's spec changed: %+v -> %+v", before.Spec.Pod.Spec.Affinity, after.Spec.Pod.Spec.Affinity)
 	}
 }
@@ -235,8 +236,8 @@ func TestPlacementReservedMachineByPinOnly(t *testing.T) {
 	setRules(t, onNode(p.n1, needsReservation))
 	reserveAs(t, p.s, p.as("pk-alice"), p.n1, p.slot, p.slot.Add(time.Hour))
 	dp := p.create("pk-alice", http.StatusCreated)
-	if ex := excludedOf(p.get(dp)); !slices.Contains(ex, p.n1) || slices.Contains(ex, p.n2) {
-		t.Fatalf("excluded %v", ex)
+	if in := allowedOf(p.get(dp)); slices.Contains(in, p.n1) || !slices.Contains(in, p.n2) {
+		t.Fatalf("allowed %v", in)
 	}
 	p.patch("pk-alice", dp, fmt.Sprintf(`{"node":%q}`, p.n1), http.StatusOK) // pinned, it may
 	p.patch("pk-alice", dp, `{"node":""}`, http.StatusOK)
@@ -292,8 +293,8 @@ func TestPlacementYAML(t *testing.T) {
 	edited := spec.DeepCopy()
 	edited.Pod.Spec.Containers[0].Env = append(edited.Pod.Spec.Containers[0].Env, corev1.EnvVar{Name: "X", Value: "1"})
 	p.putYAML("py-carol", dp, *edited, http.StatusOK)
-	if ex := excludedOf(p.get(dp)); !slices.Contains(ex, p.n1) {
-		t.Fatalf("a running spec edit kept the old exclusion: %v", ex)
+	if in := allowedOf(p.get(dp)); slices.Contains(in, p.n1) || !slices.Contains(in, p.n2) {
+		t.Fatalf("a running spec edit kept the old allow-list: %v", in)
 	}
 }
 
@@ -324,7 +325,28 @@ func TestPlacementRedeploy(t *testing.T) {
 		}
 		time.Sleep(100 * time.Millisecond)
 	}
-	if ex := excludedOf(p.get(dp)); !slices.Contains(ex, p.n1) {
-		t.Fatalf("redeployed with the old exclusion: %v", ex)
+	if in := allowedOf(p.get(dp)); slices.Contains(in, p.n1) || !slices.Contains(in, p.n2) {
+		t.Fatalf("redeployed with the old allow-list: %v", in)
+	}
+}
+
+// The console writes "only on these machines", not "not on those": a
+// machine that joins later is closed to a DevPod the rules restrict until
+// it is started again — even when no machine the rules forbid is there now.
+func TestPlacementAllowListClosesLaterMachines(t *testing.T) {
+	p := newPlaceRig(t, "pj")
+	later := "pj-n3"
+	setRules(t, onNode(later, denied))
+	dp := p.create("pj-carol", http.StatusCreated)
+	if in := allowedOf(p.get(dp)); !slices.Contains(in, p.n1) || !slices.Contains(in, p.n2) || slices.Contains(in, later) {
+		t.Fatalf("allowed %v", in)
+	}
+	terms := p.get(dp).Spec.Pod.Spec.Affinity.NodeAffinity.RequiredDuringSchedulingIgnoredDuringExecution.NodeSelectorTerms
+	for _, term := range terms {
+		if !slices.ContainsFunc(term.MatchExpressions, func(r corev1.NodeSelectorRequirement) bool {
+			return r.Key == "kubernetes.io/hostname" && r.Operator == corev1.NodeSelectorOpIn
+		}) {
+			t.Fatalf("a term without the allow-list: %+v", term)
+		}
 	}
 }

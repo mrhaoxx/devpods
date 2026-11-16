@@ -19,8 +19,10 @@ import (
 
 // Where a DevPod may run (access control design §5–§7), judged for its
 // owner — never the one acting: a DevPod pinned to a machine must fit
-// there; one that is not carries the console's "not on these machines"
-// for every machine of its cluster it does not fit (access.SetExclusion).
+// there; one that is not, and that the rules restrict at all, carries the
+// console's "only on these machines" — those of its cluster it fits now
+// (access.SetAllowed). A machine that joins later is closed to it until it
+// is placed again (a start, a redeploy, an edit that remakes its Pod).
 
 // judge is the access rules as they apply to one owner in ctx's cluster,
 // read once for the many machines of a cluster.
@@ -107,8 +109,9 @@ func (s *Server) nodeErr(ctx context.Context, owner, node string, forRun bool) *
 }
 
 // placeDevPod is for a DevPod about to run with its Pod (re)created:
-// pinned, it must fit its machine; not pinned, the machines it does not
-// fit go into its exclusion, and it needs at least one it fits. A machine
+// pinned, it must fit its machine; not pinned, it is unrestricted (no
+// allow-list) or gets the machines it fits as its allow-list, and needs
+// at least one. A machine
 // the rules open to the owner only under a reservation is used by pinning
 // to it, never by the scheduler's choice, reservation held or not: an
 // unpinned DevPod may still be pending when the reservation ends, or have
@@ -122,24 +125,27 @@ func (s *Server) placeDevPod(ctx context.Context, dp *devpodv1alpha1.DevPod) *se
 		return &serverErr{http.StatusInternalServerError, "INTERNAL", err.Error(), nil}
 	}
 	if j.admin {
-		access.SetExclusion(dp, nil)
+		access.SetAllowed(dp, nil)
 		return nil
 	}
 	needs := access.NeedsOf(&dp.Spec.Pod.Spec)
 	if node := pinnedNode(dp); node != "" {
-		access.SetExclusion(dp, nil)
+		access.SetAllowed(dp, nil)
 		var n corev1.Node
 		if err := s.kc(ctx).Client.Get(ctx, types.NamespacedName{Name: node}, &n); err != nil {
 			return badRequest("node %q not found", node)
 		}
 		return j.refusal(&n, &needs, true)
 	}
+	if access.Unrestricted(j.policy, j.owner, j.groups, j.cluster, needs) {
+		access.SetAllowed(dp, nil)
+		return nil
+	}
 	var nodes corev1.NodeList
 	if err := s.kc(ctx).Client.List(ctx, &nodes); err != nil {
 		return &serverErr{http.StatusServiceUnavailable, "CLUSTER_UNAVAILABLE", err.Error(), nil}
 	}
-	var out []string
-	fits := 0
+	var in []string
 	var why *serverErr // the refusal of a machine the owner may use at all
 	for i := range nodes.Items {
 		n := &nodes.Items[i]
@@ -148,23 +154,21 @@ func (s *Server) placeDevPod(ctx context.Context, dp *devpodv1alpha1.DevPod) *se
 			e = &serverErr{http.StatusConflict, "RESERVATION_REQUIRED", fmt.Sprintf("node %s may be used under a reservation only by pinning the DevPod to it", n.Name), map[string]any{"node": n.Name, "rule": d.Rule}}
 		}
 		if e == nil {
-			fits++
+			in = append(in, n.Name)
 			continue
 		}
-		out = append(out, n.Name)
 		if why == nil && e.Code != "ACL_DENIED" {
 			why = e
 		}
 	}
-	// no machine known at all (a cluster just joined, its cache still
-	// filling) is no reason to refuse: there is nothing to keep it off
-	if fits == 0 && len(nodes.Items) > 0 {
+	// restricted, it runs only where it fits: none, not at all
+	if len(in) == 0 {
 		if why != nil {
 			return &serverErr{why.status, why.Code, fmt.Sprintf("no machine in this cluster takes this DevPod of %s's: %s", dp.Spec.Owner, why.Message), why.Detail}
 		}
 		return &serverErr{http.StatusForbidden, "ACL_DENIED", fmt.Sprintf("there is no machine in this cluster %s may use for this DevPod", dp.Spec.Owner), nil}
 	}
-	access.SetExclusion(dp, out)
+	access.SetAllowed(dp, in)
 	return nil
 }
 

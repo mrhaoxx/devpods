@@ -13,25 +13,26 @@ import (
 	v1 "github.com/mrhaoxx/devpod/api/v1alpha1"
 )
 
-// AnnExcluded names the machines of the console's own requirement in a
+// AnnAllowed names the machines of the console's own requirement in a
 // DevPod's node affinity (comma-separated, sorted): how it is told apart
 // from the user's.
-const AnnExcluded = "devpod.io/access-excluded"
+const AnnAllowed = "devpod.io/access-allowed"
 
 const hostnameLabel = "kubernetes.io/hostname"
 
-// SetExclusion makes the console's "not on these machines" requirement
-// say nodes: the one written before (AnnExcluded) is taken out of every
+// SetAllowed makes the console's "only on these machines" requirement say
+// nodes: the one written before (AnnAllowed) is taken out of every
 // required term, the new one put into each (terms are ORed). No nodes
 // removes it, and whatever it alone had made; the user's own terms and
-// expressions stay as they are.
-func SetExclusion(dp *v1.DevPod, nodes []string) {
+// expressions stay as they are. An allow-list, not "not on those": a
+// machine that joins later is closed until the DevPod is placed again.
+func SetAllowed(dp *v1.DevPod, nodes []string) {
 	var prev []string
-	if s := dp.Annotations[AnnExcluded]; s != "" {
+	if s := dp.Annotations[AnnAllowed]; s != "" {
 		prev = strings.Split(s, ",")
 	}
 	if dp.Spec.Pod == nil {
-		delete(dp.Annotations, AnnExcluded)
+		delete(dp.Annotations, AnnAllowed)
 		return
 	}
 	spec := &dp.Spec.Pod.Spec
@@ -40,7 +41,7 @@ func SetExclusion(dp *v1.DevPod, nodes []string) {
 		var kept []corev1.NodeSelectorTerm
 		for _, t := range sel.NodeSelectorTerms {
 			t.MatchExpressions = slices.DeleteFunc(slices.Clone(t.MatchExpressions), func(r corev1.NodeSelectorRequirement) bool {
-				return r.Key == hostnameLabel && r.Operator == corev1.NodeSelectorOpNotIn && slices.Equal(r.Values, prev)
+				return r.Key == hostnameLabel && r.Operator == corev1.NodeSelectorOpIn && slices.Equal(r.Values, prev)
 			})
 			if len(t.MatchExpressions) > 0 || len(t.MatchFields) > 0 {
 				kept = append(kept, t)
@@ -50,11 +51,11 @@ func SetExclusion(dp *v1.DevPod, nodes []string) {
 		tidy(spec)
 	}
 	if len(nodes) == 0 {
-		delete(dp.Annotations, AnnExcluded)
+		delete(dp.Annotations, AnnAllowed)
 		return
 	}
 	names := slices.Sorted(slices.Values(nodes))
-	req := corev1.NodeSelectorRequirement{Key: hostnameLabel, Operator: corev1.NodeSelectorOpNotIn, Values: names}
+	req := corev1.NodeSelectorRequirement{Key: hostnameLabel, Operator: corev1.NodeSelectorOpIn, Values: names}
 	if spec.Affinity == nil {
 		spec.Affinity = &corev1.Affinity{}
 	}
@@ -75,7 +76,7 @@ func SetExclusion(dp *v1.DevPod, nodes []string) {
 	if dp.Annotations == nil {
 		dp.Annotations = map[string]string{}
 	}
-	dp.Annotations[AnnExcluded] = strings.Join(names, ",")
+	dp.Annotations[AnnAllowed] = strings.Join(names, ",")
 }
 
 // tidy drops the node selector, node affinity and affinity left empty.
