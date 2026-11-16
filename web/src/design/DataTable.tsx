@@ -114,6 +114,8 @@ export type DataTableProps<T> = {
   /** fill: a list page's table — it takes the rest of its flex column and
    *  scrolls itself, the header staying, drawing only the rows in sight */
   fill?: boolean;
+  /** label: the table's accessible name */
+  label?: string;
 };
 
 const MIN_COL = 48;
@@ -504,7 +506,7 @@ export function DataTable<T>(p: DataTableProps<T>) {
         className={p.fill ? "min-h-0 flex-1 overflow-auto" : "overflow-x-auto"}
         style={selected.length > 0 && p.fill ? { paddingBottom: BAR_ROOM } : undefined}
       >
-        <table className={`border-collapse text-xs ${dragging ? "select-none" : ""}`} style={{ tableLayout: "fixed", width: "100%" }}>
+        <table aria-label={p.label} className={`border-collapse text-xs ${dragging ? "select-none" : ""}`} style={{ tableLayout: "fixed", width: "100%" }}>
           <thead ref={head} className="bg-surface">
             {table.getHeaderGroups().map((hg) => (
               <tr key={hg.id} className="h-7 border-b border-line text-left text-[11px] text-muted">

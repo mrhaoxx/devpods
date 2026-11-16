@@ -83,6 +83,8 @@ export function Sidebar({ me, onNavigate }: { me: Me; onNavigate?: () => void })
     ...(me.features.snapshots ? [{ to: "/admin/images", label: "全部镜像", icon: "◫" }] : []),
     { to: "/admin/configs", label: "全部配置", icon: "▧" },
     ...(me.features.reservations ? [{ to: "/admin/reservations", label: "预约管理", icon: "◷" }] : []),
+    { to: "/admin/access", label: "访问控制", icon: "⚿" },
+    { to: "/admin/groups", label: "用户组", icon: "☷" },
   ];
   const auditItems: Item[] = [
     { to: "/audit/sessions", label: "会话 / 回放", icon: "▶" },

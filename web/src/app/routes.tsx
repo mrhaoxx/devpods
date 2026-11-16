@@ -18,6 +18,8 @@ import { AccessLogPage, AlertsPage, PolicyPage } from "../features/audit/AdminPa
 import { NodesPage } from "../features/nodes/NodesPage";
 import { HttpAuthPage } from "../features/devpods/HttpAuthPage";
 import { ReservationsPage } from "../features/reservations/ReservationsPage";
+import { AccessPage } from "../features/access/AccessPage";
+import { GroupsPage } from "../features/access/GroupsPage";
 import { AdminReservationsPage } from "../features/reservations/AdminReservationsPage";
 import { ImagesPage } from "../features/images/ImagesPage";
 import { ShellPage } from "../features/shell/ShellPage";
@@ -72,6 +74,8 @@ export function AppRoutes() {
           <Route path="admin/images" element={<ImagesPage everyone />} />
           <Route path="admin/configs" element={<ConfigsPage everyone />} />
           <Route path="admin/reservations" element={<AdminReservationsPage />} />
+          <Route path="admin/access" element={<AccessPage />} />
+          <Route path="admin/groups" element={<GroupsPage />} />
         </Route>
         <Route path="*" element={<Navigate to="/" replace />} />
       </Route>
