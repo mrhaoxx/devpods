@@ -230,6 +230,9 @@ func (s *Server) checkVarValue(r *http.Request, sess Session, d VarDecl, v strin
 		if err := s.k(r).Reader.Get(r.Context(), types.NamespacedName{Name: v}, &n); err != nil {
 			return fmt.Errorf("%s: %q is not a node", d.Name, v)
 		}
+		if apiErr := s.nodeErr(r.Context(), sess.User, v, true); apiErr != nil {
+			return fmt.Errorf("%s: %s", d.Name, apiErr.Message)
+		}
 	}
 	return nil
 }

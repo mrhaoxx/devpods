@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"net/http"
 	"slices"
 	"sort"
@@ -445,6 +446,16 @@ func (s *Server) prepareDevPod(r *http.Request, sess Session, req CreateRequest,
 			return nil, &serverErr{http.StatusBadRequest, "BAD_REQUEST", fmt.Sprintf("node %q not found", node), nil}
 		}
 	}
+	// where it may run (the access rules)
+	if dp.Spec.Running {
+		if apiErr := s.placeDevPod(r.Context(), dp); apiErr != nil {
+			return nil, apiErr
+		}
+	} else if node := pinnedNode(dp); node != "" {
+		if apiErr := s.nodeErr(r.Context(), dp.Spec.Owner, node, false); apiErr != nil {
+			return nil, apiErr
+		}
+	}
 	return dp, nil
 }
 
@@ -786,6 +797,11 @@ func (s *Server) patchDevPod(r *http.Request, sess Session, dp *devpodv1alpha1.D
 	if equality.Semantic.DeepEqual(before.Spec, dp.Spec) {
 		return PatchResponse{DevPod: dp}, nil // no-op
 	}
+	// where it may run (the access rules): when it starts, moves, or its
+	// Pod is made anew; a stopped one moved only needs leave to be there
+	if apiErr := s.placeOnChange(r.Context(), before, dp); apiErr != nil {
+		return PatchResponse{}, apiErr
+	}
 	// waking, or resizing a running DevPod, re-enters the compute quota
 	if dp.Spec.Running && (!before.Spec.Running || req.editsSpec()) {
 		if apiErr := s.quotaErrFor(r, sess, dp, dp.Name); apiErr != nil {
@@ -847,6 +863,22 @@ func (s *Server) handleRedeployDevPod(w http.ResponseWriter, r *http.Request) {
 	if !dp.Spec.Running || ref == nil || ref.Kind != "Pod" {
 		s.writeErr(w, http.StatusConflict, "NOT_RUNNING", "the DevPod has no Pod to redeploy; start it instead", nil)
 		return
+	}
+	// made anew: where it may run is decided again, as for a start
+	placed := dp.DeepCopy()
+	if apiErr := s.placeDevPod(r.Context(), placed); apiErr != nil {
+		s.writeServerErr(w, apiErr)
+		return
+	}
+	if !equality.Semantic.DeepEqual(placed.Spec, dp.Spec) || !maps.Equal(placed.Annotations, dp.Annotations) {
+		if err := s.k(r).Client.Update(r.Context(), placed); err != nil {
+			if apierrors.IsConflict(err) {
+				s.writeErr(w, http.StatusConflict, "CONFLICT", "the DevPod changed meanwhile: reload and try again", nil)
+				return
+			}
+			s.writeErr(w, http.StatusInternalServerError, "INTERNAL", err.Error(), nil)
+			return
+		}
 	}
 	pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: ref.Name, Namespace: s.NS}}
 	if err := s.k(r).Client.Delete(r.Context(), pod); err != nil && !apierrors.IsNotFound(err) {

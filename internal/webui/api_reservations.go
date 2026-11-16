@@ -503,6 +503,9 @@ type nodeChoice struct {
 	GPUTotal   int     `json:"gpuTotal"`
 	GPUUsed    int     `json:"gpuUsed"`
 	Reservable bool    `json:"reservable"`
+	// Access: what it is to the caller — "ok", "reservation" (the rules
+	// ask for one they do not hold now) or "denied".
+	Access string `json:"access"`
 	// ReservationRequired: the caller may use it only under a reservation.
 	ReservationRequired bool      `json:"reservationRequired"`
 	Pending             int       `json:"pending"` // reservations not over yet
@@ -557,6 +560,10 @@ func (s *Server) nodeChoicesIn(ctx context.Context, sess Session) ([]nodeChoice,
 		now = s.Reservations.now()
 	}
 	cluster := s.resCluster(ctx)
+	j, err := s.judgeFor(ctx, sess.User)
+	if err != nil {
+		return nil, err
+	}
 	items := make([]nodeChoice, 0, len(views))
 	for _, v := range views {
 		c := nodeChoice{Name: v.Name, Ready: v.Ready, GPUModel: v.GPU.Model, GPUTotal: v.GPU.Total, GPUUsed: v.GPU.Used,
@@ -567,6 +574,15 @@ func (s *Server) nodeChoicesIn(ctx context.Context, sess Session) ([]nodeChoice,
 			if nr.Spec.Cluster == cluster && nr.Spec.Node == v.Name && nr.Spec.User == sess.User && !now.Before(nr.Spec.Start.Time) && now.Before(overAt(nr)) {
 				c.Mine = &nodeHold{User: sess.User, Until: overAt(nr).UTC()}
 			}
+		}
+		var d access.Decision
+		c.Access, d = j.accessOf(&corev1.Node{ObjectMeta: metav1.ObjectMeta{Name: v.Name, Labels: v.Labels}})
+		c.ReservationRequired = d.NeedsReservation && !j.admin
+		switch c.Access {
+		case "denied":
+			c.Selectable, c.Reason = false, "no access"
+		case "reservation":
+			c.Selectable, c.Reason = false, "reservation required"
 		}
 		items = append(items, c)
 	}

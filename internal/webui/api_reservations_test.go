@@ -214,6 +214,12 @@ func TestReservationEnd(t *testing.T) {
 	users := map[string]*http.Cookie{}
 	for _, u := range []string{"re-alice", "re-bob", "re-carol"} {
 		users[u] = forge(sm, u, false)
+	}
+	// reserved first: without one, alice and bob may not run there at all
+	reserveAs(t, s, users["re-alice"], node, slot, slot.Add(time.Hour))
+	reserveAs(t, s, users["re-bob"], node, slot, slot.Add(time.Hour))
+	reserveAs(t, s, users["re-bob"], node, slot.Add(30*time.Minute), slot.Add(2*time.Hour)) // still covers bob after 11:00
+	for _, u := range []string{"re-alice", "re-bob", "re-carol"} {
 		if rec := doJSON(t, s.HandleCreateDevPodForTest(), "POST", "/api/devpods", nil, users[u], createBody); rec.Code != http.StatusCreated {
 			t.Fatalf("create %s: %d %s", u, rec.Code, rec.Body)
 		}
@@ -223,9 +229,6 @@ func TestReservationEnd(t *testing.T) {
 			t.Fatalf("pin %s: %d %s", name, rec.Code, rec.Body)
 		}
 	}
-	reserveAs(t, s, users["re-alice"], node, slot, slot.Add(time.Hour))
-	reserveAs(t, s, users["re-bob"], node, slot, slot.Add(time.Hour))
-	reserveAs(t, s, users["re-bob"], node, slot.Add(30*time.Minute), slot.Add(2*time.Hour)) // still covers bob after 11:00
 	now = slot.Add(time.Hour)
 	ctx := context.Background()
 	deadline := time.Now().Add(10 * time.Second)

@@ -157,6 +157,11 @@ func (s *Server) replaceDevPodSpec(r *http.Request, sess Session, dp *devpodv1al
 			return PatchResponse{}, badRequest("node %q not found", node)
 		}
 	}
+	// where it may run (the access rules): when it starts, moves, or its
+	// Pod is made anew; a stopped one moved only needs leave to be there
+	if apiErr := s.placeOnChange(r.Context(), before, dp); apiErr != nil {
+		return PatchResponse{}, apiErr
+	}
 	if dp.Spec.Running {
 		if apiErr := s.quotaErrFor(r, sess, dp, dp.Name); apiErr != nil {
 			return PatchResponse{}, apiErr
