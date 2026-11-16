@@ -5,7 +5,8 @@ import { apiIn } from "../../data/cluster";
 
 export type HostPathGrant = { path: string; writable?: boolean };
 export type AccessEffect = { allow: boolean; privileged?: boolean; hostPaths?: HostPathGrant[]; needsReservation?: boolean };
-export type AccessSubject = { kind: "everyone" | "user" | "group"; name?: string };
+/** who a rule is about: everyone, or the users and the members of the groups listed */
+export type AccessSubject = { kind: "everyone" | "some"; users?: string[]; groups?: string[] };
 export type AccessRule = { cluster?: string; machines?: string[]; subject: AccessSubject; effect: AccessEffect };
 /** The whole ordered list, with the version it was read at (sent back on save). */
 export type AccessPolicy = { rules: AccessRule[]; default: AccessEffect; resourceVersion: string };
@@ -35,9 +36,18 @@ export const resourceText = (r: AccessRule) =>
 
 export const subjectText = (s: AccessSubject, groups: Group[] = []) => {
   if (s.kind === "everyone") return "所有人";
-  if (s.kind === "user") return `用户 ${s.name}`;
-  const g = groups.find((x) => x.name === s.name);
-  return `组 ${s.name}${g?.displayName ? `（${g.displayName}）` : ""}`;
+  const parts: string[] = [];
+  if (s.users?.length) parts.push(`用户 ${s.users.join(", ")}`);
+  if (s.groups?.length)
+    parts.push(
+      `组 ${s.groups
+        .map((n) => {
+          const g = groups.find((x) => x.name === n);
+          return g?.displayName ? `${n}（${g.displayName}）` : n;
+        })
+        .join(", ")}`,
+    );
+  return parts.join("；");
 };
 
 export const effectText = (e: AccessEffect) =>

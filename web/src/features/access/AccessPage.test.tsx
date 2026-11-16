@@ -8,7 +8,7 @@ const json = (status: number, body: unknown) => new Response(JSON.stringify(body
 
 const policy: AccessPolicy = {
   rules: [
-    { cluster: "yc", machines: ["c500-8-65-*"], subject: { kind: "group", name: "infer" }, effect: { allow: true, privileged: true } },
+    { cluster: "yc", machines: ["c500-8-65-*"], subject: { kind: "some", groups: ["infer"] }, effect: { allow: true, privileged: true } },
     { cluster: "yc", subject: { kind: "everyone" }, effect: { allow: true, needsReservation: true, hostPaths: [{ path: "/data" }] } },
   ],
   default: { allow: true, privileged: true, hostPaths: [{ path: "/", writable: true }] },
@@ -39,7 +39,7 @@ describe("AccessPage", () => {
     await waitFor(() => expect(calls.some((c) => c.method === "PUT")).toBe(true));
     const sent = JSON.parse(calls.find((c) => c.method === "PUT")!.body!);
     expect(sent.rules[0].subject).toEqual({ kind: "everyone" });
-    expect(sent.rules[1].subject).toEqual({ kind: "group", name: "infer" });
+    expect(sent.rules[1].subject).toEqual({ kind: "some", groups: ["infer"] });
     expect(sent.resourceVersion).toBe("7");
   });
 
@@ -72,6 +72,30 @@ describe("AccessPage", () => {
     fireEvent.click(screen.getByRole("button", { name: "停止所选" }));
     await waitFor(() => expect(calls.filter((c) => c.method === "PATCH")).toHaveLength(2));
     expect(calls.filter((c) => c.method === "PATCH").every((c) => c.body === '{"running":false}')).toBe(true);
+  });
+
+  it("a rule names any number of users and groups; naming none cannot be saved", async () => {
+    const calls = stubFetch({
+      "GET /api/admin/access": policy,
+      "/api/admin/groups": { items: [{ name: "infer", displayName: "推理", members: [] }, { name: "ops", members: [] }] },
+      "/api/admin/access/match": { items: [{ count: 0, names: [], unreservable: 0 }] },
+      "PUT /api/admin/access": { ...policy, resourceVersion: "8" },
+    });
+    page();
+    fireEvent.click(await screen.findByRole("button", { name: "新增规则" }));
+    const drawer = within(await screen.findByRole("dialog"));
+    fireEvent.change(drawer.getByLabelText("主体"), { target: { value: "some" } });
+    expect((drawer.getByRole("button", { name: "确定" }) as HTMLButtonElement).disabled).toBe(true);
+    fireEvent.change(drawer.getByLabelText("用户"), { target: { value: "alice, bob" } });
+    fireEvent.click(drawer.getByLabelText("组 infer"));
+    fireEvent.click(drawer.getByRole("button", { name: "确定" }));
+    const rows = await screen.findAllByTestId("access-rule");
+    expect(rows[2].textContent).toContain("用户 alice, bob");
+    expect(rows[2].textContent).toContain("组 infer（推理）");
+    fireEvent.click(screen.getByRole("button", { name: "保存" }));
+    await waitFor(() => expect(calls.some((c) => c.method === "PUT")).toBe(true));
+    const sent = JSON.parse(calls.find((c) => c.method === "PUT")!.body!);
+    expect(sent.rules[2].subject).toEqual({ kind: "some", users: ["alice", "bob"], groups: ["infer"] });
   });
 
   it("warns that a writable host path is no boundary, and when some machines a reservation rule names are not reservable", async () => {

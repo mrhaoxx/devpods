@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"testing"
 	"time"
 
@@ -89,13 +90,13 @@ func TestAccessDefaultWhenAbsent(t *testing.T) {
 
 func TestAccessPutAndGet(t *testing.T) {
 	_, call := accessRig(t)
-	second := devpodv1alpha1.AccessRule{Cluster: "", Subject: devpodv1alpha1.AccessSubject{Kind: "user", Name: "ac-bob"}, Effect: devpodv1alpha1.AccessEffect{Allow: true, NeedsReservation: true}}
+	second := devpodv1alpha1.AccessRule{Cluster: "", Subject: devpodv1alpha1.AccessSubject{Kind: "some", Users: []string{"ac-bob", "ac-carol"}}, Effect: devpodv1alpha1.AccessEffect{Allow: true, NeedsReservation: true}}
 	rec := call("ac-root", true, "PUT", "/api/admin/access", putBody(t, accessBody{Rules: []devpodv1alpha1.AccessRule{everyoneDenied, second}, Default: devpodv1alpha1.DefaultAccessEffect()}))
 	if put := readAccess(t, rec); put.ResourceVersion == "" {
 		t.Fatalf("no resourceVersion: %+v", put)
 	}
 	got := readAccess(t, call("ac-root", true, "GET", "/api/admin/access", ""))
-	if len(got.Rules) != 2 || got.Rules[0].Machines[0] != "x-*" || got.Rules[1].Subject.Name != "ac-bob" || !got.Rules[1].Effect.NeedsReservation {
+	if len(got.Rules) != 2 || got.Rules[0].Machines[0] != "x-*" || !slices.Equal(got.Rules[1].Subject.Users, []string{"ac-bob", "ac-carol"}) || !got.Rules[1].Effect.NeedsReservation {
 		t.Fatalf("order: %+v", got.Rules)
 	}
 }
@@ -119,11 +120,13 @@ func TestAccessPutConflict(t *testing.T) {
 func TestAccessValidation(t *testing.T) {
 	_, call := accessRig(t)
 	for name, r := range map[string]devpodv1alpha1.AccessRule{
-		"unknown group":     {Subject: devpodv1alpha1.AccessSubject{Kind: "group", Name: "ac-nogroup"}},
-		"relative hostPath": {Subject: devpodv1alpha1.AccessSubject{Kind: "everyone"}, Effect: devpodv1alpha1.AccessEffect{Allow: true, HostPaths: []devpodv1alpha1.HostPathGrant{{Path: "data"}}}},
-		"empty machine":     {Machines: []string{""}, Subject: devpodv1alpha1.AccessSubject{Kind: "everyone"}},
-		"unknown kind":      {Subject: devpodv1alpha1.AccessSubject{Kind: "someone"}},
-		"user without name": {Subject: devpodv1alpha1.AccessSubject{Kind: "user"}},
+		"unknown group":       {Subject: devpodv1alpha1.AccessSubject{Kind: "some", Users: []string{"ac-bob"}, Groups: []string{"ac-nogroup"}}},
+		"nobody named":        {Subject: devpodv1alpha1.AccessSubject{Kind: "some"}},
+		"a blank user":        {Subject: devpodv1alpha1.AccessSubject{Kind: "some", Users: []string{" "}}},
+		"relative hostPath":   {Subject: devpodv1alpha1.AccessSubject{Kind: "everyone"}, Effect: devpodv1alpha1.AccessEffect{Allow: true, HostPaths: []devpodv1alpha1.HostPathGrant{{Path: "data"}}}},
+		"empty machine":       {Machines: []string{""}, Subject: devpodv1alpha1.AccessSubject{Kind: "everyone"}},
+		"unknown kind":        {Subject: devpodv1alpha1.AccessSubject{Kind: "someone"}},
+		"the old single kind": {Subject: devpodv1alpha1.AccessSubject{Kind: "user", Users: []string{"ac-bob"}}},
 	} {
 		if rec := call("ac-root", true, "PUT", "/api/admin/access", putBody(t, accessBody{Rules: []devpodv1alpha1.AccessRule{r}, Default: devpodv1alpha1.DefaultAccessEffect()})); rec.Code != http.StatusBadRequest {
 			t.Errorf("%s: %d %s", name, rec.Code, rec.Body)
@@ -149,10 +152,15 @@ func TestGroupsCRUD(t *testing.T) {
 	if json.Unmarshal(rec.Body.Bytes(), &list) != nil || len(list.Items) != 1 || len(list.Items[0].Members) != 2 {
 		t.Fatalf("list: %s", rec.Body)
 	}
-	byGroup := devpodv1alpha1.AccessRule{Subject: devpodv1alpha1.AccessSubject{Kind: "group", Name: "ac-infer"}, Effect: devpodv1alpha1.AccessEffect{Allow: true}}
+	if rec := call("ac-root", true, "POST", "/api/admin/groups", `{"name":"ac-other","members":["ac-x"]}`); rec.Code != http.StatusCreated {
+		t.Fatalf("create ac-other: %d %s", rec.Code, rec.Body)
+	}
+	byGroup := devpodv1alpha1.AccessRule{Subject: devpodv1alpha1.AccessSubject{Kind: "some", Users: []string{"ac-bob"}, Groups: []string{"ac-other", "ac-infer"}}, Effect: devpodv1alpha1.AccessEffect{Allow: true}}
 	saved := readAccess(t, call("ac-root", true, "PUT", "/api/admin/access", putBody(t, accessBody{Rules: []devpodv1alpha1.AccessRule{byGroup}, Default: devpodv1alpha1.DefaultAccessEffect()})))
-	if rec := call("ac-root", true, "DELETE", "/api/admin/groups/ac-infer", ""); rec.Code != http.StatusConflict {
-		t.Fatalf("delete while a rule names it: %d %s", rec.Code, rec.Body)
+	for _, g := range []string{"ac-infer", "ac-other"} {
+		if rec := call("ac-root", true, "DELETE", "/api/admin/groups/"+g, ""); rec.Code != http.StatusConflict {
+			t.Fatalf("delete %s while a rule names it among others: %d %s", g, rec.Code, rec.Body)
+		}
 	}
 	readAccess(t, call("ac-root", true, "PUT", "/api/admin/access", putBody(t, accessBody{Default: devpodv1alpha1.DefaultAccessEffect(), ResourceVersion: saved.ResourceVersion})))
 	if rec := call("ac-root", true, "DELETE", "/api/admin/groups/ac-infer", ""); rec.Code != http.StatusNoContent {

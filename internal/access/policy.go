@@ -9,6 +9,7 @@ package access
 
 import (
 	"path"
+	"slices"
 	"strings"
 
 	v1 "github.com/mrhaoxx/devpod/api/v1alpha1"
@@ -64,13 +65,16 @@ func Unrestricted(p *v1.AccessPolicySpec, user string, groups map[string]bool, c
 }
 
 func subjectMatches(s v1.AccessSubject, user string, groups map[string]bool) bool {
-	switch s.Kind {
-	case "everyone":
+	if s.Kind == "everyone" {
 		return true
-	case "user":
-		return s.Name == user
-	case "group":
-		return groups[s.Name]
+	}
+	if slices.Contains(s.Users, user) {
+		return true
+	}
+	for _, g := range s.Groups {
+		if groups[g] {
+			return true
+		}
 	}
 	return false
 }

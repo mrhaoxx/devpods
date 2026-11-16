@@ -37,14 +37,17 @@ type AccessRule struct {
 	Effect   AccessEffect  `json:"effect"`
 }
 
-// AccessSubject: everyone, one user or one UserGroup.
+// AccessSubject: everyone, or some users and UserGroups.
 type AccessSubject struct {
-	// +kubebuilder:validation:Enum=everyone;user;group
-	Kind string `json:"kind"`
-	// Name: the user's or the group's name (not for everyone).
+	// Kind: "everyone", or "some" — the users named in Users and the
+	// members of the groups named in Groups, any of them.
 	//
+	// +kubebuilder:validation:Enum=everyone;some
+	Kind string `json:"kind"`
 	// +optional
-	Name string `json:"name,omitempty"`
+	Users []string `json:"users,omitempty"`
+	// +optional
+	Groups []string `json:"groups,omitempty"`
 }
 
 // AccessEffect: deny (Allow false), or allow with what comes with it.

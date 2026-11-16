@@ -137,18 +137,24 @@ spec:
                         type: string
                       type: array
                     subject:
-                      description: 'AccessSubject: everyone, one user or one UserGroup.'
+                      description: 'AccessSubject: everyone, or some users and UserGroups.'
                       properties:
+                        groups:
+                          items:
+                            type: string
+                          type: array
                         kind:
+                          description: |-
+                            Kind: "everyone", or "some" — the users named in Users and the
+                            members of the groups named in Groups, any of them.
                           enum:
                           - everyone
-                          - user
-                          - group
+                          - some
                           type: string
-                        name:
-                          description: 'Name: the user''s or the group''s name (not
-                            for everyone).'
-                          type: string
+                        users:
+                          items:
+                            type: string
+                          type: array
                       required:
                       - kind
                       type: object

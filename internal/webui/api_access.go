@@ -139,19 +139,26 @@ func (s *Server) validateAccess(ctx context.Context, v *accessView) *serverErr {
 	for i := range v.Rules {
 		rule := &v.Rules[i]
 		where := "rule " + strconv.Itoa(i+1)
-		switch rule.Subject.Kind {
+		sub := &rule.Subject
+		switch sub.Kind {
 		case "everyone":
-			rule.Subject.Name = ""
-		case "user":
-			if rule.Subject.Name == "" {
-				return badRequest("%s: which user?", where)
+			sub.Users, sub.Groups = nil, nil
+		case "some":
+			for j, u := range sub.Users {
+				if sub.Users[j] = strings.TrimSpace(u); sub.Users[j] == "" {
+					return badRequest("%s: a blank user name", where)
+				}
 			}
-		case "group":
-			if !group[rule.Subject.Name] {
-				return badRequest("%s: no group %q", where, rule.Subject.Name)
+			for _, g := range sub.Groups {
+				if !group[g] {
+					return badRequest("%s: no group %q", where, g)
+				}
+			}
+			if len(sub.Users) == 0 && len(sub.Groups) == 0 {
+				return badRequest("%s: name at least one user or group", where)
 			}
 		default:
-			return badRequest("%s: the subject is everyone, a user or a group", where)
+			return badRequest("%s: the subject is everyone, or some users and groups", where)
 		}
 		if rule.Cluster != "" && !clusterKnown[rule.Cluster] {
 			return badRequest("%s: no cluster %q", where, rule.Cluster)
@@ -386,7 +393,7 @@ func (s *Server) handleDeleteGroup(w http.ResponseWriter, r *http.Request) {
 	}
 	if p != nil {
 		for i, rule := range p.Spec.Rules {
-			if rule.Subject.Kind == "group" && rule.Subject.Name == name {
+			if rule.Subject.Kind == "some" && slices.Contains(rule.Subject.Groups, name) {
 				s.writeErr(w, http.StatusConflict, "IN_USE", "rule "+strconv.Itoa(i+1)+" names this group", nil)
 				return
 			}

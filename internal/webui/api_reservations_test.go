@@ -7,9 +7,9 @@ package webui_test
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
-	"errors"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -209,7 +209,7 @@ func TestReservationPatchCancel(t *testing.T) {
 func TestReservationEnd(t *testing.T) {
 	s, sm, _, node := rsvRig(t, "re")
 	setRules(t,
-		devpodv1alpha1.AccessRule{Machines: []string{node}, Subject: devpodv1alpha1.AccessSubject{Kind: "user", Name: "re-carol"}, Effect: devpodv1alpha1.AccessEffect{Allow: true}},
+		devpodv1alpha1.AccessRule{Machines: []string{node}, Subject: devpodv1alpha1.AccessSubject{Kind: "some", Users: []string{"re-carol"}}, Effect: devpodv1alpha1.AccessEffect{Allow: true}},
 		onNode(node, needsReservation))
 	slot := time.Date(2026, 11, 12, 2, 0, 0, 0, time.UTC)
 	now := slot.Add(10 * time.Minute)

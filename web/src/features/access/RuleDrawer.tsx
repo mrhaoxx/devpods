@@ -26,6 +26,9 @@ export function RuleDrawer({
   // the text as typed; the selector previewed once typing pauses
   const [machines, setMachines] = useState((rule.machines ?? []).join(" "));
   const [machinesText, setMachinesText] = useDebounced(machines, setMachines);
+  const [usersText, setUsersText] = useState((rule.subject.users ?? []).join(", "));
+  const picked = r.subject.groups ?? [];
+  const nobody = r.subject.kind === "some" && splitList(usersText).length === 0 && picked.length === 0;
   const e = r.effect;
   const setEffect = (p: Partial<AccessEffect>) => setR({ ...r, effect: { ...e, ...p } });
   const match = useQuery({
@@ -38,7 +41,10 @@ export function RuleDrawer({
   const paths = e.hostPaths ?? [];
   const setPath = (i: number, p: Partial<{ path: string; writable: boolean }>) => setEffect({ hostPaths: paths.map((h, j) => (j === i ? { ...h, ...p } : h)) });
   const save = () => {
-    const out: AccessRule = { ...r, machines: splitList(machinesText) };
+    const users = splitList(usersText);
+    const subject: AccessRule["subject"] =
+      r.subject.kind === "everyone" ? { kind: "everyone" } : { kind: "some", ...(users.length ? { users } : {}), ...(picked.length ? { groups: picked } : {}) };
+    const out: AccessRule = { ...r, subject, machines: splitList(machinesText) };
     if (!out.cluster) delete out.cluster;
     if (!out.machines?.length) delete out.machines;
     const eff: AccessEffect = out.effect.allow
@@ -54,7 +60,7 @@ export function RuleDrawer({
       actions={
         <>
           <Button onClick={onClose}>取消</Button>
-          <Button variant="primary" onClick={save}>
+          <Button variant="primary" disabled={nobody} title={nobody ? "至少写一个用户或选一个组" : undefined} onClick={save}>
             确定
           </Button>
         </>
@@ -93,25 +99,41 @@ export function RuleDrawer({
               <Select
                 aria-label="主体"
                 value={r.subject.kind}
-                onChange={(ev) => setR({ ...r, subject: { kind: ev.target.value as AccessRule["subject"]["kind"], name: ev.target.value === "everyone" ? undefined : r.subject.name } })}
+                onChange={(ev) => setR({ ...r, subject: ev.target.value === "everyone" ? { kind: "everyone" } : { kind: "some", groups: picked } })}
               >
                 <option value="everyone">所有人</option>
-                <option value="user">用户</option>
-                <option value="group">组</option>
+                <option value="some">指定用户和组</option>
               </Select>
             </Field>
-            {r.subject.kind === "user" && (
-              <Input aria-label="用户名" placeholder="用户名" value={r.subject.name ?? ""} onChange={(ev) => setR({ ...r, subject: { kind: "user", name: ev.target.value.trim() } })} />
-            )}
-            {r.subject.kind === "group" && (
-              <Select aria-label="组" value={r.subject.name ?? ""} onChange={(ev) => setR({ ...r, subject: { kind: "group", name: ev.target.value } })}>
-                <option value="">选择组…</option>
-                {groups.map((g) => (
-                  <option key={g.name} value={g.name}>
-                    {g.displayName ? `${g.name}（${g.displayName}）` : g.name}
-                  </option>
-                ))}
-              </Select>
+            {r.subject.kind === "some" && (
+              <>
+                <Field label="用户" hint="用户名，逗号或空格分开；与下面的组任一命中即算">
+                  <Input aria-label="用户" className="mono" placeholder="alice, bob" value={usersText} onChange={(ev) => setUsersText(ev.target.value)} />
+                </Field>
+                <fieldset className="space-y-1">
+                  <legend className="mb-1 text-muted">组</legend>
+                  {groups.length === 0 ? (
+                    <p className="text-muted">还没有用户组（在「用户组」页新建）</p>
+                  ) : (
+                    <div className="flex flex-wrap gap-x-4 gap-y-1">
+                      {groups.map((g) => (
+                        <label key={g.name} className="inline-flex items-center gap-1.5">
+                          <input
+                            type="checkbox"
+                            aria-label={`组 ${g.name}`}
+                            checked={picked.includes(g.name)}
+                            onChange={(ev) =>
+                              setR({ ...r, subject: { ...r.subject, groups: ev.target.checked ? [...picked, g.name] : picked.filter((x) => x !== g.name) } })
+                            }
+                          />
+                          {g.displayName ? `${g.name}（${g.displayName}）` : g.name}
+                        </label>
+                      ))}
+                    </div>
+                  )}
+                </fieldset>
+                {nobody && <p className="text-[11px] text-warm">至少写一个用户或选一个组</p>}
+              </>
             )}
           </>
         )}
