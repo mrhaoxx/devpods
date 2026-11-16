@@ -74,8 +74,8 @@ function matchesLabel(labels: Record<string, string>, f: string): boolean {
   return Object.entries(labels).some(([lk, lv]) => (lk === k || lk.endsWith(`/${k}`)) && lv === v);
 }
 
-/** NodeFlags: a node's reservation switches, as an action sets them. */
-type NodeFlags = { on: boolean; required?: boolean };
+/** NodeFlags: a node's reservation switch, as an action sets it. */
+type NodeFlags = { on: boolean };
 type NodePending = { label: string; flags?: NodeFlags; error?: string; since: number };
 
 /** NodeOps: the page's actions on nodes and what they are doing, for the
@@ -85,10 +85,10 @@ const NodeOps = createContext<{ pending: ReadonlyMap<string, NodePending>; setFl
   setFlags: () => {},
 });
 
-/** 可预约: admins open a node for reservation (the node label). Turning it
- *  off leaves reservations already made to run their course. 必须预约:
- *  only whoever holds the node now may put DevPods there. While a change
- *  is being saved the switches show it, turning. */
+/** 可预约: admins open a node for reservation (the node label); whether
+ *  someone needs one is the access rules' to say. Turning it off leaves
+ *  reservations already made to run their course. While a change is being
+ *  saved the switch shows it, turning. */
 function ReservableSwitch({ r }: { r: Ref }) {
   const me = useMe().data;
   const node = useNodeChoices(!!me?.features.reservations).data?.items.find((n) => n.name === r.name && n.cluster === r.cluster);
@@ -97,7 +97,6 @@ function ReservableSwitch({ r }: { r: Ref }) {
   const p = ops.pending.get(keyOf(r));
   const busy = !!p && !p.error;
   const on = busy && p.flags ? p.flags.on : !!node?.reservable;
-  const required = busy && p.flags ? on && (p.flags.required ?? !!node?.reservationRequired) : !!node?.reservationRequired;
   return (
     <span className="inline-flex items-center gap-1.5">
       <input
@@ -111,21 +110,6 @@ function ReservableSwitch({ r }: { r: Ref }) {
           ops.setFlags([r], v ? "开启可预约" : "关闭可预约", () => ({ on: v }));
         }}
       />
-      {on && (
-        <label className="inline-flex items-center gap-1 text-[11px] text-muted" title="开启后，只有正在预约这台节点的人能把 DevPod 放到这里">
-          <input
-            type="checkbox"
-            aria-label={`${r.name} 必须预约`}
-            checked={required}
-            disabled={busy || !node}
-            onChange={(e) => {
-              const v = e.target.checked;
-              ops.setFlags([r], v ? "开启必须预约" : "关闭必须预约", () => ({ on: true, required: v }));
-            }}
-          />
-          必须预约
-        </label>
-      )}
       {busy && (
         <span className="inline-flex items-center gap-1 text-[11px] text-accent" role="status">
           <Spinner />
@@ -138,7 +122,7 @@ function ReservableSwitch({ r }: { r: Ref }) {
         </span>
       )}
       {!busy && !p?.error && !on && !!node?.pending && <span className="text-[11px] text-warm">还有 {node.pending} 个未结束的预约</span>}
-      {!busy && !p?.error && on && node?.held && <span className="text-[11px] text-muted">{node.held.user} 使用中</span>}
+      {!busy && !p?.error && on && !!node?.pending && <span className="text-[11px] text-muted">{node.pending} 个未结束的预约</span>}
     </span>
   );
 }
@@ -415,7 +399,7 @@ export function NodesPage() {
     return () => clearTimeout(t);
   }, [pending]);
   const setFlags = (rows: Ref[], action: string, flags: (r: Ref) => NodeFlags) =>
-    void run(action, rows, (r) => setReservable(r, flags(r).on, flags(r).required), flags);
+    void run(action, rows, (r) => setReservable(r, flags(r).on), flags);
 
   // what can be done to a node, a selection: said once, offered by the ⋯
   // menu, the right-click menu and the bulk bar alike
@@ -430,16 +414,8 @@ export function NodesPage() {
     const flags: RowAction[] = !reservations
       ? []
       : c?.reservable
-        ? [
-            { label: "关闭可预约", disabled: busy(n), onSelect: () => setFlags([n], "关闭可预约", () => ({ on: false })) },
-            c.reservationRequired
-              ? { label: "关闭必须预约", disabled: busy(n), onSelect: () => setFlags([n], "关闭必须预约", () => ({ on: true, required: false })) }
-              : { label: "开启必须预约", disabled: busy(n), onSelect: () => setFlags([n], "开启必须预约", () => ({ on: true, required: true })) },
-          ]
-        : [
-            { label: "开启可预约", disabled: busy(n) || !c, onSelect: () => setFlags([n], "开启可预约", () => ({ on: true })) },
-            { label: "开启必须预约", title: "同时开启可预约", disabled: busy(n) || !c, onSelect: () => setFlags([n], "开启必须预约", () => ({ on: true, required: true })) },
-          ];
+        ? [{ label: "关闭可预约", disabled: busy(n), onSelect: () => setFlags([n], "关闭可预约", () => ({ on: false })) }]
+        : [{ label: "开启可预约", disabled: busy(n) || !c, onSelect: () => setFlags([n], "开启可预约", () => ({ on: true })) }];
     return [
       { label: "查看详情", onSelect: () => open(n) },
       { label: "在新标签页打开", onSelect: () => window.open(`/admin/nodes?node=${encodeURIComponent(keyOf(n))}`, "_blank", "noopener") },
@@ -452,18 +428,6 @@ export function NodesPage() {
       ? [
           { label: "开启可预约", onSelect: () => void run("开启可预约", picked, (r) => setReservable(r, true), () => ({ on: true })).then(clear) },
           { label: "关闭可预约", onSelect: () => void run("关闭可预约", picked, (r) => setReservable(r, false), () => ({ on: false })).then(clear) },
-          {
-            label: "开启必须预约",
-            title: "同时开启可预约",
-            onSelect: () => void run("开启必须预约", picked, (r) => setReservable(r, true, true), () => ({ on: true, required: true })).then(clear),
-          },
-          {
-            label: "关闭必须预约",
-            onSelect: () => {
-              const on = (r: Ref) => !!choiceOf.get(keyOf(r))?.reservable;
-              void run("关闭必须预约", picked, (r) => setReservable(r, on(r), false), (r) => ({ on: on(r), required: false })).then(clear);
-            },
-          },
         ]
       : []),
     { label: "复制名称", onSelect: () => void copyText(picked.map((n) => n.name).join("\n")) },

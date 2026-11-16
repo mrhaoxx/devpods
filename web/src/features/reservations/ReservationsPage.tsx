@@ -1,7 +1,8 @@
-// 节点预约 (UI spec §5.7): a timeline of the reservable nodes — drag on
-// free time to reserve, click a block of your own to extend, move or
-// release it — plus the list of my reservations and a plain form (the
-// keyboard path; same checks as the drag).
+// 节点预约 (UI spec §5.7; access control design §12): a timeline of the
+// reservable machines the access rules ask me a reservation for — drag to
+// reserve, click a block of your own to change or release it — plus the
+// list of my reservations and a plain form (the keyboard path). A
+// reservation is a permit, not a hold: they may overlap, drawn in lanes.
 import { keyOf, refOfKey } from "../../data/cluster";
 import { useClusterFilter } from "../../data/clusterFilter";
 import { useMemo, useRef, useState } from "react";
@@ -13,7 +14,6 @@ import {
   getReservationRules,
   listReservations,
   patchReservation,
-  previewReservation,
   type NodeChoice,
   type Reservation,
   type ReservationRules,
@@ -26,7 +26,7 @@ import { EmptyState } from "../../design/EmptyState";
 import { Field, Input, Notice, Select } from "../../design/Form";
 import { Panel } from "../../design/Panel";
 import { useNow } from "../../lib/useNow";
-import { dayStart, fmtClock, fmtDay, fmtSpan, fmtTime, fromInput, overlapping, periodError, selection, slotStart, toInput } from "../../lib/reservations";
+import { dayStart, fmtClock, fmtDay, fmtSpan, fmtTime, fromInput, periodError, selection, slotStart, toInput } from "../../lib/reservations";
 import * as Dialog from "@radix-ui/react-dialog";
 
 const DAY = 86_400_000;
@@ -36,9 +36,9 @@ const phaseLabel: Record<Reservation["phase"], string> = { Upcoming: "即将开�
 /** apiMessage turns a reservation API failure into a sentence. */
 function apiMessage(e: unknown): string {
   if (e instanceof ApiFailure) {
-    const d = e.body.detail as { user?: string; start?: string; end?: string } | undefined;
-    if (e.code === "RESERVATION_CONFLICT" && d?.start && d.end) return `这段时间和 ${d.user} 的预约（${fmtTime(d.start)} – ${fmtTime(d.end)}）冲突。`;
-    if (e.code === "NOT_RESERVABLE") return "这台节点没有开放预约。";
+    if (e.code === "NOT_RESERVABLE") return "这台机器没有开放预约。";
+    if (e.code === "NO_NEED") return "你可以直接使用这台机器，不需要预约。";
+    if (e.code === "ACL_DENIED") return "你没有使用这台机器的权限。";
     return e.body.message;
   }
   return String(e);
@@ -48,8 +48,8 @@ function apiMessage(e: unknown): string {
 type Draft = { node: string; start: number; end: number; edit?: Reservation };
 const nodeKey = (b: Reservation) => keyOf({ cluster: b.cluster, name: b.node });
 
-/** The form: new reservation, move (not started) or extend (started). */
-function ReserveDialog({ draft, nodes, rules, blocks, now, onClose }: { draft: Draft; nodes: NodeChoice[]; rules: ReservationRules; blocks: Reservation[]; now: number; onClose: () => void }) {
+/** The form: new reservation, move (not started) or move the end of one that has started. */
+function ReserveDialog({ draft, nodes, rules, now, onClose }: { draft: Draft; nodes: NodeChoice[]; rules: ReservationRules; now: number; onClose: () => void }) {
   const qc = useQueryClient();
   const edit = draft.edit;
   const active = edit?.phase === "Active";
@@ -58,50 +58,44 @@ function ReserveDialog({ draft, nodes, rules, blocks, now, onClose }: { draft: D
   const several = nodes.some((n) => n.cluster);
   const [start, setStart] = useState(toInput(draft.start));
   const [end, setEnd] = useState(toInput(draft.end));
-  const [preview, setPreview] = useState<number | null>(null);
   const [error, setError] = useState<string | null>(null);
   const s = fromInput(start);
   const e = fromInput(end);
   const g = rules.granularitySeconds * 1000;
-  const ruleErr = active
-    ? e <= Date.parse(edit!.end)
-      ? "延长：新的结束时间要晚于现在的结束时间"
+  const problem = active
+    ? e <= now
+      ? "结束时间要在现在之后（要立刻结束请提前释放）"
       : slotStart(e, g) !== e
         ? `结束时间要对齐到 ${fmtSpan(g)} 一档`
-        : null
+        : rules.maxDurationSeconds > 0 && e - Date.parse(edit!.start) > rules.maxDurationSeconds * 1000
+          ? `单次最长 ${fmtSpan(rules.maxDurationSeconds * 1000)}`
+          : null
     : periodError(s, e, rules, now);
-  const clash = !ruleErr ? overlapping(blocks.filter((b) => b.cluster === ref.cluster), ref.name, active ? Date.parse(edit!.end) : s, e, edit?.id) : undefined;
-  const problem = ruleErr ?? (clash ? `和 ${clash.user} 的预约（${fmtTime(clash.start)} – ${fmtTime(clash.end)}）冲突` : null);
   const period = { node: ref.name, start: new Date(s).toISOString(), end: new Date(e).toISOString() };
   const done = () => {
     void qc.invalidateQueries({ queryKey: ["reservations"] });
     void qc.invalidateQueries({ queryKey: ["node-choices"] });
     onClose();
   };
-  const check = useMutation({ mutationFn: () => previewReservation(ref.cluster, period), onSuccess: (r) => setPreview(r.willHibernate), onError: (err) => setError(apiMessage(err)) });
   const save = useMutation({
     mutationFn: () => (edit ? patchReservation(edit, active ? { end: period.end } : { start: period.start, end: period.end }) : createReservation(ref.cluster, period)),
     onSuccess: done,
     onError: (err) => setError(apiMessage(err)),
   });
-  const touch = () => {
-    setPreview(null);
-    setError(null);
-  };
+  const touch = () => setError(null);
   const step = rules.granularitySeconds;
   return (
     <Dialog.Root open onOpenChange={(o) => !o && onClose()}>
       <Dialog.Portal>
         <Dialog.Overlay className="fixed inset-0 z-40 bg-black/30" />
         <Dialog.Content aria-describedby={undefined} className="fixed left-1/2 top-1/4 z-50 w-[min(92vw,440px)] -translate-x-1/2 space-y-3 rounded-lg border border-line bg-surface p-4 shadow-xl">
-          <Dialog.Title className="text-sm font-semibold">{edit ? (active ? "延长预约" : "修改预约") : "预约节点"}</Dialog.Title>
+          <Dialog.Title className="text-sm font-semibold">{edit ? "修改预约" : "预约节点"}</Dialog.Title>
           <form
             className="space-y-3"
             onSubmit={(ev) => {
               ev.preventDefault();
               if (problem) return;
-              if (edit || preview !== null) save.mutate();
-              else check.mutate();
+              save.mutate();
             }}
           >
             <Field label="节点">
@@ -111,7 +105,6 @@ function ReserveDialog({ draft, nodes, rules, blocks, now, onClose }: { draft: D
                     {several && n.cluster ? `${n.cluster} · ` : ""}
                     {n.name}
                     {n.gpuTotal > 0 ? ` · ${n.gpuModel ?? "GPU"} ×${n.gpuTotal}` : ""}
-                    {n.reservationRequired ? " · 必须预约" : ""}
                   </option>
                 ))}
               </Select>
@@ -131,21 +124,17 @@ function ReserveDialog({ draft, nodes, rules, blocks, now, onClose }: { draft: D
             </p>
             {problem && <Notice>{problem}</Notice>}
             {error && <Notice>{error}</Notice>}
-            {!edit && preview !== null && (
-              <Notice tone={preview > 0 ? "warm" : "idle"}>
-                {preview > 0
-                  ? `预约开始时，这台节点上其他用户的 ${preview} 个 DevPod 会被自动休眠（开始前 ${fmtSpan(rules.clearNoticeSeconds * 1000)} 会提醒他们）。`
-                  : "这台节点上现在没有其他用户的 DevPod。"}
-                预约期间只有你的 DevPod 能在这台节点上运行；到期后你在这台节点上的 DevPod 会被自动休眠。
-              </Notice>
+            {!edit && (
+              <p className="text-[11px] text-muted">
+                预约是使用许可，不独占：预约期间你可以在这台机器上运行 DevPod，别人（不需要预约的人、同时段的其他预约人）照样可以用。到期后，你在这台机器上只靠这份预约运行的 DevPod 会被自动休眠。
+              </p>
             )}
-            {edit && !active && <p className="text-[11px] text-muted">修改等于取消后重新预约：新的时段按现在的时间重新排队。</p>}
             <div className="flex justify-end gap-2">
               <Dialog.Close asChild>
                 <Button type="button">取消</Button>
               </Dialog.Close>
-              <Button type="submit" variant="primary" disabled={!!problem || check.isPending || save.isPending}>
-                {edit ? (active ? "延长" : "保存") : preview !== null ? "确认预约" : "下一步"}
+              <Button type="submit" variant="primary" disabled={!!problem || save.isPending}>
+                {edit ? "保存" : "预约"}
               </Button>
             </div>
           </form>
@@ -185,7 +174,20 @@ function Row({
     return from + (r.width > 0 ? Math.min(1, Math.max(0, (clientX - r.left) / r.width)) : 0) * (to - from);
   };
   const sel = drag ? selection(drag.a, drag.b, gran) : null;
-  const bad = !!sel && (sel[0] < slotStart(now, gran) || !!overlapping(blocks, node.name, sel[0], sel[1]));
+  const bad = !!sel && sel[0] < slotStart(now, gran);
+  // reservations may overlap: each in the first lane free at its start
+  const { lane, lanes } = useMemo(() => {
+    const ends: number[] = [];
+    const lane = new Map<string, number>();
+    for (const b of [...blocks].sort((x, y) => Date.parse(x.start) - Date.parse(y.start))) {
+      let i = ends.findIndex((e) => e <= Date.parse(b.start));
+      if (i < 0) i = ends.push(0) - 1;
+      ends[i] = Date.parse(b.end);
+      lane.set(b.id, i);
+    }
+    return { lane, lanes: Math.max(1, ends.length) };
+  }, [blocks]);
+  const laneH = lanes === 1 ? 36 : 22;
   return (
     <div className="flex items-stretch border-b border-line last:border-0">
       <div className="w-40 shrink-0 border-r border-line px-2 py-1.5">
@@ -199,7 +201,8 @@ function Row({
         ref={track}
         role="group"
         aria-label={`${node.name} 的预约`}
-        className="relative h-11 min-w-0 flex-1 cursor-crosshair touch-none select-none"
+        className="relative min-w-0 flex-1 cursor-crosshair touch-none select-none"
+        style={{ height: 8 + lanes * laneH + (lanes - 1) * 4 }}
         onPointerDown={(e) => {
           if ((e.target as HTMLElement).closest("button")) return;
           e.currentTarget.setPointerCapture?.(e.pointerId);
@@ -222,14 +225,14 @@ function Row({
           const canOpen = b.mine || admin;
           const cls = b.mine ? "border-accent bg-accent-soft text-accent" : "border-line-strong bg-sunk text-muted";
           const text = `${b.mine ? "我" : b.user} · ${fmtClock(b.start)}–${fmtClock(b.end)}`;
-          const style = { left: pct(Date.parse(b.start)), width: `calc(${pct(Date.parse(b.end))} - ${pct(Date.parse(b.start))})` };
+          const style = { left: pct(Date.parse(b.start)), width: `calc(${pct(Date.parse(b.end))} - ${pct(Date.parse(b.start))})`, top: 4 + (lane.get(b.id) ?? 0) * (laneH + 4), height: laneH, lineHeight: `${laneH - 2}px` };
           const title = `${b.user}：${fmtTime(b.start)} – ${fmtTime(b.end)}（${phaseLabel[b.phase]}）`;
           return canOpen ? (
-            <button key={b.id} type="button" title={title} onClick={() => onPick(b)} style={style} className={`absolute inset-y-1 overflow-hidden rounded border px-1 text-left text-[11px] whitespace-nowrap hover:brightness-95 ${cls}`}>
+            <button key={b.id} type="button" title={title} onClick={() => onPick(b)} style={style} className={`absolute overflow-hidden rounded border px-1 text-left text-[11px] whitespace-nowrap hover:brightness-95 ${cls}`}>
               {text}
             </button>
           ) : (
-            <div key={b.id} title={title} style={style} className={`absolute inset-y-1 overflow-hidden rounded border px-1 text-[11px] leading-8 whitespace-nowrap ${cls}`}>
+            <div key={b.id} title={title} style={style} className={`absolute overflow-hidden rounded border px-1 text-[11px] whitespace-nowrap ${cls}`}>
               {text}
             </div>
           );
@@ -287,7 +290,8 @@ export function ReservationsPage() {
   const g = rules.data.granularitySeconds * 1000;
   const all = (q.data?.items ?? []).filter(matches);
   const live = all.filter((b) => b.phase !== "Cancelled");
-  const nodes = (nodesQ.data?.items ?? []).filter((n) => n.reservable && matches(n));
+  // the machines I need a reservation for (an admin sees every reservable one)
+  const nodes = (nodesQ.data?.items ?? []).filter((n) => n.reservable && (n.reservationRequired || me.admin) && matches(n));
   const mine = all.filter((b) => b.mine).sort((a, b) => Date.parse(b.start) - Date.parse(a.start));
   const open = (b: Reservation) => setDraft({ node: nodeKey(b), start: Date.parse(b.start), end: Date.parse(b.end) + (b.phase === "Active" ? g : 0), edit: b });
   const first = slotStart(now, g) + g;
@@ -302,7 +306,7 @@ export function ReservationsPage() {
             </button>
           ))}
         </div>
-        <span className="text-[11px] text-muted">在空闲时段上拖动来预约；整台节点在预约期间只给你的 DevPod 用。北京时间。</span>
+        <span className="text-[11px] text-muted">在时间轴上拖动来预约。预约是使用许可，不独占，同一时段可以有多份。北京时间。</span>
         <span className="flex-1" />
         <Button variant="primary" disabled={nodes.length === 0} onClick={() => setDraft({ node: keyOf(nodes[0]), start: first, end: first + 2 * g })}>
           预约节点
@@ -310,7 +314,7 @@ export function ReservationsPage() {
       </div>
       <Panel title="时间轴">
         {nodes.length === 0 ? (
-          <EmptyState title="还没有开放预约的节点" hint={me.admin ? "在「节点」页把节点设为可预约。" : "需要管理员把节点设为可预约。"} />
+          <EmptyState title="没有需要你预约的机器" hint={me.admin ? "在「节点」页把节点设为可预约；谁需要预约由「访问控制」的规则决定。" : "你能用的机器都不需要预约。"} />
         ) : (
           <div>
             <div className="flex border-b border-line text-[11px] text-muted">
@@ -370,7 +374,7 @@ export function ReservationsPage() {
                     {(b.phase === "Upcoming" || b.phase === "Active") && (
                       <>
                         <button type="button" className="text-accent hover:underline" onClick={() => open(b)}>
-                          {b.phase === "Active" ? "延长" : "修改"}
+                          修改
                         </button>
                         <button type="button" className="text-muted hover:text-fail" onClick={() => setCancel(b)}>
                           {b.phase === "Active" ? "提前释放" : "取消"}
@@ -384,12 +388,12 @@ export function ReservationsPage() {
           </table>
         )}
       </Panel>
-      {draft && <ReserveDialog key={`${draft.node}-${draft.start}-${draft.edit?.id ?? ""}`} draft={draft} nodes={nodes} rules={rules.data} blocks={live} now={now} onClose={() => setDraft(null)} />}
+      {draft && <ReserveDialog key={`${draft.node}-${draft.start}-${draft.edit?.id ?? ""}`} draft={draft} nodes={nodes} rules={rules.data} now={now} onClose={() => setDraft(null)} />}
       <ConfirmDialog
         open={!!picked}
         onOpenChange={(o) => !o && setPicked(null)}
         title={picked ? `${picked.node} · ${picked.mine ? "我的预约" : `${picked.user} 的预约`}` : ""}
-        confirmLabel={picked?.mine ? (picked.phase === "Active" ? "延长…" : "修改…") : "取消这个预约"}
+        confirmLabel={picked?.mine ? "修改…" : "取消这个预约"}
         danger={!picked?.mine}
         onConfirm={() => {
           const b = picked!;
@@ -412,7 +416,7 @@ export function ReservationsPage() {
       <ConfirmDialog
         open={!!cancel}
         onOpenChange={(o) => !o && setCancel(null)}
-        title={cancel?.phase === "Active" ? "提前释放这台节点？" : "取消这个预约？"}
+        title={cancel?.phase === "Active" ? "提前释放这台机器？" : "取消这个预约？"}
         confirmLabel={cancel?.phase === "Active" ? "提前释放" : "取消预约"}
         danger
         onConfirm={() => {
@@ -424,7 +428,7 @@ export function ReservationsPage() {
           <>
             {cancel.node}，{fmtTime(cancel.start)} – {fmtTime(cancel.end)}
             {!cancel.mine && `，预约人 ${cancel.user}`}。
-            {cancel.phase === "Active" && "释放后，预约人在这台节点上的 DevPod 会被自动休眠，节点重新对所有人开放。"}
+            {cancel.phase === "Active" && "释放后，预约人在这台机器上只靠这份预约运行的 DevPod 会被自动休眠。"}
           </>
         )}
       </ConfirmDialog>

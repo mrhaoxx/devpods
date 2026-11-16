@@ -178,6 +178,15 @@ describe("new DevPod drawer", () => {
     localStorage.clear();
   });
 
+  it("a cluster with no machine the user may use is greyed out", async () => {
+    const n = (cluster: string, name: string, selectable: boolean) => ({ cluster, name, ready: true, cpu: { allocatable: 8, allocated: 0 }, mem: { allocatable: 1, allocated: 0 }, gpuTotal: 0, gpuUsed: 0, reservable: false, pending: 0, access: selectable ? "ok" : "denied", mine: null, selectable });
+    stubFetch({ ...base, "/api/nodes": { items: [n("a", "na1", false), n("b", "nb1", true)] } });
+    renderWithProviders(<MyDevPodsPage />, { route: "/?new=1", clusters: [{ name: "a", connected: true }, { name: "b", connected: true }] });
+    const a = (await screen.findByRole("option", { name: /^a（没有可用的机器）/ })) as HTMLOptionElement;
+    expect(a.disabled).toBe(true);
+    expect((screen.getByRole("option", { name: "b" }) as HTMLOptionElement).disabled).toBe(false);
+  });
+
   it("switching the cluster lists the other cluster's nodes", async () => {
     const n = (cluster: string, name: string) => ({ cluster, name, ready: true, cpu: { allocatable: 8, allocated: 0 }, mem: { allocatable: 1, allocated: 0 }, gpuTotal: 0, gpuUsed: 0, reservable: false, pending: 0, held: null, next: null, selectable: true });
     const pinned = summary({ name: "bob-sg", title: "SG", sharedWith: ["alice"], variables: [v("NAME"), v("NODE")] });

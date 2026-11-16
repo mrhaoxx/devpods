@@ -32,26 +32,31 @@ export type ReservationNote = { type: string; label: string; tone: "fail" | "war
 export const pinnedNode = (dp: DevPod) => dp.spec.pod?.spec?.nodeSelector?.["kubernetes.io/hostname"] ?? "";
 const lossWarning = (dp: DevPod) => (dp.spec.persistence ? "" : "；休眠后容器内数据丢失");
 
-/** reservationNotes: what node reservations mean for a DevPod now — it is
- *  on (node: where its Pod is) or pinned to a node someone holds, soon
- *  will, or whose hold of the owner's is running out — and why one was
- *  hibernated. Most pressing first. */
+/** reservationNotes: what node reservations mean for a DevPod now — the
+ *  owner's reservation of the machine it is on (node: where its Pod is)
+ *  running out — and why one was hibernated. Reservations are permits:
+ *  other people's keep nobody off, so they are not mentioned. */
 export function reservationNotes(dp: DevPod, where: { node?: string; cluster?: string } = {}, rs?: ReservationsNow): ReservationNote[] {
   const notes: ReservationNote[] = [];
   const owner = dp.spec.owner;
-  const pinned = pinnedNode(dp);
-  const node = where.node || pinned;
-  if (rs && node) {
-    const on = rs.items.filter((r) => r.node === node && (r.cluster ?? "") === (where.cluster ?? "") && r.phase !== "Cancelled");
-    const held = on.find((r) => Date.parse(r.start) <= rs.now && rs.now < Date.parse(r.end));
-    if (held && held.user !== owner) {
-      if (!dp.spec.running && pinned === node)
-        notes.push({ type: "NodeReserved", label: "节点被预约", tone: "fail", message: `${node} 被 ${held.user} 预约至 ${fmtClock(held.end)}，期间不能在这台节点启动；可以改到其他节点` });
-    } else if (dp.spec.running) {
-      const next = on.find((r) => r.user !== owner && Date.parse(r.start) > rs.now && Date.parse(r.start) - rs.now <= rs.noticeMs);
-      if (next) notes.push({ type: "ReservationClearing", label: "即将清场", tone: "warm", message: `${node} 将于 ${fmtClock(next.start)} 被 ${next.user} 预约，届时自动休眠${lossWarning(dp)}` });
-      else if (held && Date.parse(held.end) - rs.now <= rs.noticeMs)
-        notes.push({ type: "ReservationEnding", label: "预约将到期", tone: "warm", message: `预约将于 ${fmtClock(held.end)} 结束，届时自动休眠${lossWarning(dp)}` });
+  const node = where.node || pinnedNode(dp);
+  if (rs && node && dp.spec.running) {
+    const own = rs.items.filter((r) => r.node === node && (r.cluster ?? "") === (where.cluster ?? "") && r.user === owner && r.phase !== "Cancelled");
+    const covering = own.filter((r) => Date.parse(r.start) <= rs.now && rs.now < Date.parse(r.end));
+    if (covering.length > 0) {
+      // the end of the stretch they cover, one following on from another
+      let end = Math.max(...covering.map((r) => Date.parse(r.end)));
+      for (let more = true; more; ) {
+        more = false;
+        for (const r of own) {
+          if (Date.parse(r.start) <= end && Date.parse(r.end) > end) {
+            end = Date.parse(r.end);
+            more = true;
+          }
+        }
+      }
+      if (end - rs.now <= rs.noticeMs)
+        notes.push({ type: "ReservationEnding", label: "预约将到期", tone: "warm", message: `你对 ${node} 的预约将于 ${fmtClock(end)} 结束；如果这个 DevPod 只能靠预约在这台机器上运行，届时会被自动休眠${lossWarning(dp)}` });
     }
   }
   // the annotation outlives a restart: it only says something while stopped

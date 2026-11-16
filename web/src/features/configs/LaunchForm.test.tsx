@@ -15,14 +15,14 @@ const node = (name: string, o: Partial<NodeChoice> = {}): NodeChoice => ({
   gpuUsed: 0,
   reservable: false,
   pending: 0,
-  held: null,
-  next: null,
+  access: "ok",
+  mine: null,
   selectable: true,
   ...o,
 });
 const pinned = { name: "bob-sg", owner: "bob", title: "SGLang", variables: [v("NAME"), v("OWNER"), v("NODE"), v("IMAGE", { required: false, default: "x" })] };
 const plain = { name: "bob-w", owner: "bob", title: "Worker", variables: [v("NAME"), v("GPU")] };
-const nodes = { items: [node("m601"), node("m602", { gpuModel: "A100", gpuTotal: 2, gpuUsed: 1 }), node("m603", { selectable: false, held: { user: "carol", until: new Date().toISOString() } })] };
+const nodes = { items: [node("m601"), node("m602", { gpuModel: "A100", gpuTotal: 2, gpuUsed: 1 }), node("m603", { selectable: false, access: "denied" })] };
 const json = (status: number, body: unknown) => new Response(JSON.stringify(body), { status, headers: { "Content-Type": "application/json" } });
 const type = (label: string, value: string) => fireEvent.change(screen.getByLabelText(label), { target: { value } });
 const button = (name: string) => screen.getByRole("button", { name }) as HTMLButtonElement;

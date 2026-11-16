@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { dayStart, fmtDay, fmtSpan, fmtTime, fromInput, overlapping, periodError, selection, slotStart, toInput } from "./reservations";
-import type { Reservation, ReservationRules } from "../data/api";
+import { dayStart, fmtDay, fmtSpan, fmtTime, fromInput, periodError, selection, slotStart, toInput } from "./reservations";
+import type { ReservationRules } from "../data/api";
 
 const G = 30 * 60_000;
 const at = (s: string) => Date.parse(s);
@@ -22,16 +22,6 @@ describe("reservation time math", () => {
     expect(selection(a, b, G)).toEqual([at("2026-11-12T03:00:00Z"), at("2026-11-12T04:30:00Z")]);
     expect(selection(b, a, G)).toEqual(selection(a, b, G));
     expect(selection(a, a, G)).toEqual([at("2026-11-12T03:00:00Z"), at("2026-11-12T03:30:00Z")]);
-  });
-  it("finds the block a period runs into; touching ends do not overlap", () => {
-    const blocks = [
-      { id: "x", node: "n1", start: "2026-11-12T03:00:00Z", end: "2026-11-12T04:00:00Z", phase: "Upcoming" },
-      { id: "c", node: "n1", start: "2026-11-12T05:00:00Z", end: "2026-11-12T06:00:00Z", phase: "Cancelled" },
-    ] as Reservation[];
-    expect(overlapping(blocks, "n1", at("2026-11-12T03:30:00Z"), at("2026-11-12T04:30:00Z"))?.id).toBe("x");
-    expect(overlapping(blocks, "n1", at("2026-11-12T04:00:00Z"), at("2026-11-12T05:30:00Z"))).toBeUndefined();
-    expect(overlapping(blocks, "n2", at("2026-11-12T03:30:00Z"), at("2026-11-12T04:30:00Z"))).toBeUndefined();
-    expect(overlapping(blocks, "n1", at("2026-11-12T03:30:00Z"), at("2026-11-12T04:30:00Z"), "x")).toBeUndefined();
   });
   it("checks a period against the rules like the server", () => {
     const slot = at("2026-11-12T02:00:00Z");

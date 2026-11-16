@@ -14,8 +14,8 @@ const node = (name: string, o: Partial<NodeChoice> = {}): NodeChoice => ({
   gpuUsed: 0,
   reservable: false,
   pending: 0,
-  held: null,
-  next: null,
+  access: "ok",
+  mine: null,
   selectable: true,
   ...o,
 });
@@ -25,7 +25,7 @@ const nodes = {
     node("m602", { gpuModel: "NVIDIA-A100-80GB-PCIe", gpuTotal: 2, gpuUsed: 2 }),
     node("m604", { ready: false }),
     node("m800", { gpuModel: "NVIDIA-GeForce-RTX-4090", gpuTotal: 4, gpuUsed: 2 }),
-    node("zjusct-920b-1", { selectable: false, held: { user: "bob", until: new Date(Date.now() + 3600e3).toISOString() } }),
+    node("zjusct-920b-1", { selectable: false, access: "denied" }),
   ],
 };
 
@@ -44,7 +44,7 @@ const box = (name: string) => (screen.queryByRole("checkbox", { name }) ?? scree
 describe("NodeList", () => {
   afterEach(() => vi.unstubAllGlobals());
 
-  it("a row per node: its GPUs free, its state; one held by someone else cannot be picked", async () => {
+  it("a row per node: its GPUs free, its state; one the user has no access to cannot be picked", async () => {
     stubFetch({ "/api/nodes": nodes });
     renderWithProviders(<Host />);
     const m800 = (await screen.findByRole("checkbox", { name: "m800" })).closest("label")!;
@@ -52,7 +52,7 @@ describe("NodeList", () => {
     expect(m800.textContent).toContain("空闲 2/4");
     expect(box("m604").closest("label")!.textContent).toContain("未就绪");
     expect(box("zjusct-920b-1").disabled).toBe(true);
-    expect(box("zjusct-920b-1").closest("label")!.textContent).toContain("bob");
+    expect(box("zjusct-920b-1").closest("label")!.textContent).toContain("无权限");
   });
 
   it("picked in order, numbered from 0; × takes one out", async () => {

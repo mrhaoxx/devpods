@@ -1,6 +1,6 @@
 // The node a DevPod runs on (UI spec §5.6): the scheduler's choice, or
-// one node. A node someone else holds right now cannot be picked; one
-// with an upcoming reservation by someone else can, with a warning.
+// one node. One the access rules bar, or that needs a reservation the
+// user does not hold now, cannot be picked.
 import type { NodeChoice } from "../../data/api";
 import { useNodeChoices } from "../../data/queries";
 import { Field, Select } from "../../design/Form";
@@ -13,17 +13,17 @@ export function nodeLabel(n: NodeChoice): string {
   if (n.gpuTotal > 0) bits.push(`${n.gpuModel ?? "GPU"} ×${n.gpuTotal}`);
   bits.push(`CPU ${fmtCores(n.cpu.allocated)}/${fmtCores(n.cpu.allocatable)}`, `内存 ${fmtBytes(n.mem.allocated)}/${fmtBytes(n.mem.allocatable)}`);
   if (!n.ready) bits.push("未就绪");
-  if (n.held) bits.push(n.selectable ? `你的预约至 ${fmtTime(n.held.until)}` : `${n.held.user} 预约至 ${fmtTime(n.held.until)}`);
-  else if (n.reservationRequired) bits.push("需预约");
+  if (n.mine) bits.push(`你的预约至 ${fmtTime(n.mine.until)}`);
+  else if (n.access === "reservation") bits.push("需预约");
+  else if (n.access === "denied") bits.push("无权限");
   return bits.join(" · ");
 }
 
 /** nodeWarning: what to say under the picker about the picked node. */
 export function nodeWarning(n: NodeChoice | undefined): string | null {
   if (!n) return null;
-  if (!n.selectable && n.held) return `${n.name} 正被 ${n.held.user} 预约至 ${fmtTime(n.held.until)}，现在不能使用。`;
-  if (!n.selectable && n.reservationRequired) return `${n.name} 必须预约才能使用：先在「节点预约」里预约它，预约开始后再选。`;
-  if (n.next) return `${n.name} 将于 ${fmtTime(n.next.start)} 被 ${n.next.user} 预约，届时这个 DevPod 会被自动休眠。`;
+  if (n.access === "denied") return `${n.name}：你没有使用这台机器的权限。`;
+  if (n.access === "reservation") return `${n.name} 需要预约才能使用：先在「节点预约」里预约它，预约开始后再选。`;
   if (!n.ready) return `${n.name} 目前未就绪，DevPod 会一直等待。`;
   return null;
 }

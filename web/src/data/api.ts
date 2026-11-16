@@ -535,11 +535,13 @@ export type NodeChoice = {
   gpuTotal: number;
   gpuUsed: number;
   reservable: boolean;
-  /** only whoever holds it now may put DevPods here */
+  /** the access rules let me use it only under a reservation */
   reservationRequired?: boolean;
+  /** what it is to me: usable, needs a reservation I do not hold now, or barred */
+  access: "ok" | "reservation" | "denied";
   pending: number;
-  held: { user: string; until: string } | null;
-  next: { user: string; start: string } | null;
+  /** my reservation of it that covers now */
+  mine: { user: string; until: string } | null;
   /** my DevPods may be pinned here now */
   selectable: boolean;
   reason?: string;
@@ -548,7 +550,6 @@ export const listNodeChoices = () => req<{ items: NodeChoice[] }>("GET", "/api/n
 export type Reservation = {
   cluster?: string;
   id: string;
-  segments: string[];
   node: string;
   user: string;
   start: string;
@@ -563,13 +564,11 @@ export const listReservations = (from: string, to: string) => req<{ items: Reser
 type Period = { node: string; start: string; end: string };
 /** ResRef names a reservation: its id and cluster. */
 export type ResRef = { id: string; cluster?: string };
-/** previewReservation checks a period in a cluster without creating it. */
-export const previewReservation = (cluster: string | undefined, p: Period) => req<{ willHibernate: number }>("POST", apiIn(cluster, "/api/reservations?dryRun=true"), p);
 export const createReservation = (cluster: string | undefined, p: Period) => req<Reservation>("POST", apiIn(cluster, "/api/reservations"), p);
 export const patchReservation = (r: ResRef, body: { start?: string; end?: string }) => req<Reservation>("PATCH", apiIn(r.cluster, `/api/reservations/${r.id}`), body);
 export const deleteReservation = (r: ResRef) => req<void>("DELETE", apiIn(r.cluster, `/api/reservations/${r.id}`));
-export const setReservable = (r: Ref, reservable: boolean, required?: boolean) =>
-  req<{ reservable: boolean; required: boolean; pending: number }>("PUT", apiIn(r.cluster, `/api/admin/nodes/${r.name}/reservable`), { reservable, required });
+export const setReservable = (r: Ref, reservable: boolean) =>
+  req<{ reservable: boolean; pending: number }>("PUT", apiIn(r.cluster, `/api/admin/nodes/${r.name}/reservable`), { reservable });
 
 /* api_snapshots.go: saving a DevPod as an image (snapshot spec v2) */
 export type SnapshotView = {

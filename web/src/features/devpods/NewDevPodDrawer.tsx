@@ -5,7 +5,7 @@ import { launchCluster, rememberLaunchCluster } from "../../data/cluster";
 import { useClusterFilter, useClusterList } from "../../data/clusterFilter";
 import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { useMe } from "../../data/queries";
+import { useMe, useNodeChoices } from "../../data/queries";
 import { Drawer } from "../../design/Drawer";
 import { Notice } from "../../design/Form";
 import { getConfig } from "../configs/api";
@@ -43,6 +43,9 @@ function Launch({ cluster, name, onBack, onEditOnce, onClose }: { cluster?: stri
 export function NewDevPodDrawer({ config, image, in: asked, onClose }: { config?: string; image?: string; in?: string; onClose: () => void }) {
   const user = useMe().data?.user ?? "me";
   const clusters = useClusterList().data?.items ?? [];
+  // a cluster whose machines the access rules all keep me off: nothing to make there
+  const nodes = useNodeChoices(clusters.length >= 2).data?.items;
+  const barred = (c: string) => !!nodes && nodes.some((n) => n.cluster === c) && !nodes.some((n) => n.cluster === c && n.selectable);
   const { filter } = useClusterFilter();
   const [picked, setPicked] = useState<string>();
   const known = (c?: string) => !!c && clusters.some((x) => x.name === c);
@@ -63,8 +66,8 @@ export function NewDevPodDrawer({ config, image, in: asked, onClose }: { config?
             className="h-7 rounded-md border border-line bg-surface px-1 text-xs"
           >
             {clusters.map((c) => (
-              <option key={c.name} value={c.name} disabled={!c.connected}>
-                {(c.displayName || c.name) + (c.connected ? "" : "（离线）")}
+              <option key={c.name} value={c.name} disabled={!c.connected || barred(c.name)}>
+                {(c.displayName || c.name) + (!c.connected ? "（离线）" : barred(c.name) ? "（没有可用的机器）" : "")}
               </option>
             ))}
           </select>

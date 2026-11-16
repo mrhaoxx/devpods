@@ -6,7 +6,7 @@ import { AdminReservationsPage } from "./AdminReservationsPage";
 const now = Date.now();
 const iso = (h: number) => new Date(now + h * 3600e3).toISOString();
 const rules = { granularitySeconds: 1800, maxDurationSeconds: 86400, maxAdvanceSeconds: 14 * 86400, clearNoticeSeconds: 600, timezone: "Asia/Shanghai", now: new Date(now).toISOString() };
-const res = (id: string, user: string, node: string, phase: string, from: number, to: number) => ({ id, segments: [id], node, user, start: iso(from), end: iso(to), phase, mine: false });
+const res = (id: string, user: string, node: string, phase: string, from: number, to: number) => ({ id, node, user, start: iso(from), end: iso(to), phase, mine: false });
 
 describe("预约管理", () => {
   afterEach(() => vi.unstubAllGlobals());

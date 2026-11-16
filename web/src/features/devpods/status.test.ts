@@ -38,23 +38,20 @@ describe("reservationNotes", () => {
       spec: { owner: "u", running: o.running ?? true, persistence: o.persistence ? { size: "10Gi" } : undefined, pod: o.pin ? { spec: { nodeSelector: { "kubernetes.io/hostname": o.pin } } } : undefined },
     }) as DevPod;
   const rsv = (user: string, start: string, end: string, phase: Reservation["phase"] = "Active"): Reservation =>
-    ({ id: user + start, segments: [], node: "g1", user, start, end, phase, mine: user === "u" }) as Reservation;
+    ({ id: user + start, node: "g1", user, start, end, phase, mine: user === "u" }) as Reservation;
   const rs = (...items: Reservation[]) => ({ items, noticeMs: 30 * 60_000, now: at });
   const labels = (d: DevPod, where: { node?: string }, r?: ReturnType<typeof rs>) => reservationNotes(d, where, r).map((n) => n.label);
 
-  it("warns a DevPod on a node someone reserves soon, with the loss when it keeps nothing", () => {
-    const soon = rs(rsv("alice", "2026-11-12T02:30:00Z", "2026-11-12T04:00:00Z", "Upcoming"));
-    const n = reservationNotes(dp({}), { node: "g1" }, soon);
-    expect(n.map((x) => x.label)).toEqual(["即将清场"]);
-    expect(n[0].message).toBe("g1 将于 10:30 被 alice 预约，届时自动休眠；休眠后容器内数据丢失");
-    expect(labels(dp({ persistence: true }), { node: "g2" }, soon)).toEqual([]); // another node
-    expect(labels(dp({}), { node: "g1" }, rs(rsv("alice", "2026-11-12T03:00:00Z", "2026-11-12T04:00:00Z", "Upcoming")))).toEqual([]); // not yet
+  it("warns the owner that their reservation of the machine is running out, with the loss when it keeps nothing", () => {
+    const n = reservationNotes(dp({}), { node: "g1" }, rs(rsv("u", "2026-11-12T02:00:00Z", "2026-11-12T02:30:00Z")));
+    expect(n.map((x) => x.label)).toEqual(["预约将到期"]);
+    expect(n[0].message).toBe("你对 g1 的预约将于 10:30 结束；如果这个 DevPod 只能靠预约在这台机器上运行，届时会被自动休眠；休眠后容器内数据丢失");
+    expect(labels(dp({}), { node: "g1" }, rs(rsv("u", "2026-11-12T02:00:00Z", "2026-11-12T04:00:00Z")))).toEqual([]); // not yet
+    expect(labels(dp({ running: false, pin: "g1" }), {}, rs(rsv("u", "2026-11-12T02:00:00Z", "2026-11-12T02:30:00Z")))).toEqual([]); // not running
   });
-  it("says a stopped DevPod pinned to a held node cannot start there, and the holder's hold is running out", () => {
-    expect(labels(dp({ running: false, pin: "g1" }), {}, rs(rsv("alice", "2026-11-12T02:00:00Z", "2026-11-12T04:00:00Z")))).toEqual(["节点被预约"]);
-    expect(labels(dp({}), { node: "g1" }, rs(rsv("u", "2026-11-12T02:00:00Z", "2026-11-12T02:30:00Z")))).toEqual(["预约将到期"]);
-    expect(labels(dp({}), { node: "g1" }, rs(rsv("u", "2026-11-12T02:00:00Z", "2026-11-12T04:00:00Z")))).toEqual([]);
-    expect(labels(dp({ running: false, pin: "g1" }), {}, rs(rsv("alice", "2026-11-12T02:00:00Z", "2026-11-12T04:00:00Z", "Cancelled")))).toEqual([]);
+  it("says nothing of other people's reservations: they do not keep anyone off", () => {
+    expect(labels(dp({}), { node: "g1" }, rs(rsv("alice", "2026-11-12T02:30:00Z", "2026-11-12T04:00:00Z", "Upcoming")))).toEqual([]);
+    expect(labels(dp({ running: false, pin: "g1" }), {}, rs(rsv("alice", "2026-11-12T02:00:00Z", "2026-11-12T04:00:00Z")))).toEqual([]);
   });
   it("says why one was hibernated, only while it is stopped", () => {
     expect(labels(dp({ running: false, ann: { "devpod.io/hibernated-by": "reservation/r1" } }), {})).toEqual(["被预约清场休眠"]);

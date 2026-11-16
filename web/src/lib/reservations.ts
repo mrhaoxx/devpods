@@ -1,6 +1,6 @@
 // Time math for node reservations (reservation spec §3.1). Times align
 // to the granularity in Asia/Shanghai, which is also how they are shown.
-import type { Reservation, ReservationRules } from "../data/api";
+import type { ReservationRules } from "../data/api";
 
 export const TZ = "Asia/Shanghai";
 const TZ_OFFSET_MS = 8 * 3600_000; // no daylight saving
@@ -20,11 +20,6 @@ export function selection(a: number, b: number, granMs: number): [number, number
   const hi = Math.max(a, b);
   const start = slotStart(lo, granMs);
   return [start, Math.max(slotStart(hi, granMs) + granMs, start + granMs)];
-}
-
-/** overlapping: the live block on the node that [start, end) runs into. */
-export function overlapping(blocks: Reservation[], node: string, start: number, end: number, skip?: string): Reservation | undefined {
-  return blocks.find((b) => b.node === node && b.phase !== "Cancelled" && b.id !== skip && Date.parse(b.start) < end && start < Date.parse(b.end));
 }
 
 /** periodError mirrors the server's rule check; null = fine. */
