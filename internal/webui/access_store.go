@@ -6,6 +6,7 @@ package webui
 
 import (
 	"context"
+	"log/slog"
 	"slices"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -48,6 +49,29 @@ func (s *Server) groupsOf(ctx context.Context, user string) (map[string]bool, er
 }
 
 // ownerIsAdmin: the rules do not bind admins.
+// clusterGate says which clusters the session's user is shown: those the
+// rules give them some machine of (access.ClusterOpen); every one to an
+// admin. Read once per request. It hides, it does not guard: where a
+// DevPod may run is judged where one comes to run, and a user still
+// reaches the DevPods they have in a cluster no longer shown.
+func (s *Server) clusterGate(ctx context.Context, sess Session) func(cluster string) bool {
+	all := func(string) bool { return true }
+	if sess.Admin || s.ownerIsAdmin(ctx, sess.User) {
+		return all
+	}
+	p, _, err := s.accessPolicy(ctx)
+	if err != nil {
+		slog.Warn("cluster_gate", "user", sess.User, "err", err)
+		return all
+	}
+	groups, err := s.groupsOf(ctx, sess.User)
+	if err != nil {
+		slog.Warn("cluster_gate", "user", sess.User, "err", err)
+		return all
+	}
+	return func(cluster string) bool { return access.ClusterOpen(p, sess.User, groups, cluster) }
+}
+
 func (s *Server) ownerIsAdmin(ctx context.Context, owner string) bool {
 	var u devpodv1alpha1.User
 	if err := s.Client.Get(ctx, types.NamespacedName{Name: owner}, &u); err != nil {

@@ -186,9 +186,8 @@ func (s *Server) session(ctx context.Context, ch ssh.Channel, reqs <-chan *ssh.R
 				exit(ch, s.run(ctx, m, p.Command, out, errw, in, running, last))
 				return
 			}
-			if !pty { // `ssh <user>+devpod@gateway` without a terminal
-				Help(out, "")
-				exit(ch, ExitOK)
+			if !pty { // `ssh <user>+devpod@gateway` without a terminal: the help they may use
+				exit(ch, s.run(ctx, m, "help", out, errw, in, running, last))
 				return
 			}
 			exit(ch, s.interactive(ctx, ch, in, m, running, last))

@@ -112,7 +112,8 @@ func (s *Server) listClusters(r *http.Request) ([]devpodv1alpha1.Cluster, error)
 
 // handleClusters: GET /api/clusters.
 func (s *Server) handleClusters(w http.ResponseWriter, r *http.Request) {
-	if _, ok := s.sessionFrom(w, r); !ok {
+	sess, ok := s.sessionFrom(w, r)
+	if !ok {
 		return
 	}
 	items := []clusterView{}
@@ -122,8 +123,11 @@ func (s *Server) handleClusters(w http.ResponseWriter, r *http.Request) {
 			s.writeErr(w, http.StatusInternalServerError, "INTERNAL", err.Error(), nil)
 			return
 		}
+		shown := s.clusterGate(r.Context(), sess) // one the rules keep them off is not theirs to see
 		for i := range list {
-			items = append(items, s.clusterView(&list[i]))
+			if shown(list[i].Name) {
+				items = append(items, s.clusterView(&list[i]))
+			}
 		}
 	}
 	s.writeJSON(w, http.StatusOK, map[string]any{"items": items})

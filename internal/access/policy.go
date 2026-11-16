@@ -64,6 +64,27 @@ func Unrestricted(p *v1.AccessPolicySpec, user string, groups map[string]bool, c
 	return takes(p.Default)
 }
 
+// ClusterOpen: may user use some machine of cluster — one there now or
+// one that joins later — by the rules alone? The first rule for user
+// there that allows (a reservation asked or not) says yes; one that
+// denies every machine of it says no, as no rule after it is reached for
+// any machine; with neither, the default says.
+func ClusterOpen(p *v1.AccessPolicySpec, user string, groups map[string]bool, cluster string) bool {
+	for i := range p.Rules {
+		r := &p.Rules[i]
+		if (r.Cluster != "" && r.Cluster != cluster) || !subjectMatches(r.Subject, user, groups) {
+			continue
+		}
+		if r.Effect.Allow {
+			return true
+		}
+		if len(r.Machines) == 0 {
+			return false
+		}
+	}
+	return p.Default.Allow
+}
+
 func subjectMatches(s v1.AccessSubject, user string, groups map[string]bool) bool {
 	if s.Kind == "everyone" {
 		return true

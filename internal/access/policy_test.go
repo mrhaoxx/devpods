@@ -113,3 +113,34 @@ func TestSubjectSome(t *testing.T) {
 		t.Errorf("eve, in neither: %+v", d)
 	}
 }
+
+// Whether a cluster is shown to a user: some machine of it, there now or
+// to come, the rules let them use.
+func TestClusterOpen(t *testing.T) {
+	everyone := v1.AccessSubject{Kind: "everyone"}
+	deny, allow := v1.AccessEffect{}, v1.AccessEffect{Allow: true}
+	open := v1.DefaultAccessEffect()
+	cases := []struct {
+		name string
+		p    v1.AccessPolicySpec
+		want bool
+	}{
+		{"no rules, default open", v1.AccessPolicySpec{Default: open}, true},
+		{"default deny", v1.AccessPolicySpec{Default: deny}, false},
+		{"every machine of it denied", v1.AccessPolicySpec{Rules: []v1.AccessRule{{Cluster: "yc", Subject: everyone, Effect: deny}}, Default: open}, false},
+		{"some machines of it denied", v1.AccessPolicySpec{Rules: []v1.AccessRule{{Cluster: "yc", Machines: []string{"c500-*"}, Subject: everyone, Effect: deny}}, Default: open}, true},
+		{"another cluster denied", v1.AccessPolicySpec{Rules: []v1.AccessRule{{Cluster: "st", Subject: everyone, Effect: deny}}, Default: open}, true},
+		{"denied to others", v1.AccessPolicySpec{Rules: []v1.AccessRule{{Cluster: "yc", Subject: v1.AccessSubject{Kind: "some", Users: []string{"bob"}}, Effect: deny}}, Default: open}, true},
+		{"some machines allowed before all denied", v1.AccessPolicySpec{Rules: []v1.AccessRule{
+			{Cluster: "yc", Machines: []string{"c500-*"}, Subject: v1.AccessSubject{Kind: "some", Groups: []string{"lab"}}, Effect: allow},
+			{Cluster: "yc", Subject: everyone, Effect: deny},
+		}, Default: open}, true},
+		{"allowed only under a reservation", v1.AccessPolicySpec{Rules: []v1.AccessRule{{Cluster: "yc", Subject: everyone, Effect: v1.AccessEffect{Allow: true, NeedsReservation: true}}}, Default: deny}, true},
+		{"denied everywhere, opened elsewhere only", v1.AccessPolicySpec{Rules: []v1.AccessRule{{Cluster: "st", Subject: everyone, Effect: allow}}, Default: deny}, false},
+	}
+	for _, c := range cases {
+		if got := ClusterOpen(&c.p, "alice", map[string]bool{"lab": true}, "yc"); got != c.want {
+			t.Errorf("%s: %v", c.name, got)
+		}
+	}
+}

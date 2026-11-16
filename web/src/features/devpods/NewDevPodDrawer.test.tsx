@@ -187,6 +187,19 @@ describe("new DevPod drawer", () => {
     expect((screen.getByRole("option", { name: "b" }) as HTMLOptionElement).disabled).toBe(false);
   });
 
+  it("the cluster picked is remembered for next time, before anything is made", async () => {
+    localStorage.clear();
+    stubFetch({ ...base });
+    const clusters = [{ name: "a", connected: true }, { name: "b", connected: true }];
+    const first = renderWithProviders(<MyDevPodsPage />, { route: "/?new=1", clusters });
+    fireEvent.change(await screen.findByLabelText("建在"), { target: { value: "b" } });
+    expect(localStorage.getItem("devpod.lastLaunchCluster")).toBe("b");
+    first.unmount();
+    renderWithProviders(<MyDevPodsPage />, { route: "/?new=1", clusters });
+    expect(((await screen.findByLabelText("建在")) as HTMLSelectElement).value).toBe("b");
+    localStorage.clear();
+  });
+
   it("switching the cluster lists the other cluster's nodes", async () => {
     const n = (cluster: string, name: string) => ({ cluster, name, ready: true, cpu: { allocatable: 8, allocated: 0 }, mem: { allocatable: 1, allocated: 0 }, gpuTotal: 0, gpuUsed: 0, reservable: false, pending: 0, held: null, next: null, selectable: true });
     const pinned = summary({ name: "bob-sg", title: "SG", sharedWith: ["alice"], variables: [v("NAME"), v("NODE")] });

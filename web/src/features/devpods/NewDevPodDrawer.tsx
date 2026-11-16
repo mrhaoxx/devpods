@@ -62,7 +62,10 @@ export function NewDevPodDrawer({ config, image, in: asked, onClose }: { config?
           <select
             aria-label="建在"
             value={cluster ?? ""}
-            onChange={(e) => setPicked(e.target.value)}
+            onChange={(e) => {
+              setPicked(e.target.value);
+              rememberLaunchCluster(e.target.value); // the next new DevPod starts here
+            }}
             className="h-7 rounded-md border border-line bg-surface px-1 text-xs"
           >
             {clusters.map((c) => (

@@ -200,14 +200,44 @@ func (s *Server) handleListReservations(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	items := []reservationView{}
+	shown := s.clusterGate(r.Context(), sess)
 	for _, cc := range s.ks(r) {
-		cluster := s.resCluster(s.in(r.Context(), cc))
+		ctx := s.in(r.Context(), cc)
+		cluster := s.resCluster(ctx)
+		open := shown(cc.Name)
+		// others' reservations of a machine the rules keep the caller off
+		// are not shown to them, as the machine is not
+		var j *judge
+		if !sess.Admin {
+			if j, err = s.judgeFor(ctx, sess.User); err != nil {
+				s.writeErr(w, http.StatusInternalServerError, "INTERNAL", err.Error(), nil)
+				return
+			}
+		}
+		allowed := map[string]bool{}
+		usable := func(node string) bool {
+			if j == nil {
+				return true
+			}
+			if ok, seen := allowed[node]; seen {
+				return ok
+			}
+			var n corev1.Node
+			if err := cc.Client.Get(ctx, types.NamespacedName{Name: node}, &n); err != nil {
+				n.Name = node // gone, or away: judged by its name alone
+			}
+			allowed[node] = j.on(&n).Allow
+			return allowed[node]
+		}
 		for i := range all {
 			nr := &all[i]
 			if nr.Spec.Cluster != cluster || (q.Get("node") != "" && q.Get("node") != nr.Spec.Node) {
 				continue
 			}
 			v := viewOfReservation(nr, sess.User, now)
+			if !v.Mine && (!open || !usable(nr.Spec.Node)) {
+				continue // others' reservations in a cluster, or of a machine, not shown to them
+			}
 			if v.Start.Before(to) && from.Before(v.End) {
 				v.Cluster = s.clusterLabel(cc)
 				items = append(items, v)
@@ -516,7 +546,11 @@ func (s *Server) handleNodes(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	items := []nodeChoice{}
+	shown := s.clusterGate(r.Context(), sess)
 	for _, cc := range s.ks(r) {
+		if !shown(cc.Name) {
+			continue // a cluster the rules keep them off: not shown
+		}
 		part, err := s.nodeChoicesIn(s.in(r.Context(), cc), sess)
 		if away(err) {
 			continue
@@ -572,6 +606,9 @@ func (s *Server) nodeChoicesIn(ctx context.Context, sess Session) ([]nodeChoice,
 		c.ReservationRequired = d.NeedsReservation && !j.admin
 		switch c.Access {
 		case "denied":
+			if !sess.Admin {
+				continue // a machine the rules keep them off is not shown to them
+			}
 			c.Selectable, c.Reason = false, "no access"
 		case "reservation":
 			c.Selectable, c.Reason = false, "reservation required"

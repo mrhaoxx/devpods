@@ -151,13 +151,26 @@ func (c *command) synopsis() string {
 }
 
 // Help writes the command list, or one command's help.
-func Help(w io.Writer, name string) bool { return help(w, name, false) }
+func Help(w io.Writer, name string) bool { return help(w, name, false, false) }
+
+// isAdmin: whether the caller is an admin, as the console says (not one
+// when it cannot say). Admin commands are shown, and run, only for admins.
+func isAdmin(e *Env) bool {
+	var me struct {
+		Admin bool `json:"admin"`
+	}
+	if _, err := call(e, "GET", "/api/me", nil, &me); err != nil {
+		return false
+	}
+	return me.Admin
+}
 
 // help: in the devpod> shell (interactive) commands are typed as they are.
-func help(w io.Writer, name string, interactive bool) bool {
+func help(w io.Writer, name string, interactive, admin bool) bool {
+	shown := func(c *command) bool { return admin || !c.admin }
 	if name != "" {
 		c := find(name)
-		if c == nil {
+		if c == nil || !shown(c) {
 			return false
 		}
 		fmt.Fprintf(w, "usage: %s\n\n%s", c.synopsis(), c.short)
@@ -192,11 +205,21 @@ func help(w io.Writer, name string, interactive bool) bool {
 	}
 	width := 0
 	for _, c := range commands {
-		width = max(width, utf8.RuneCountInString(listed(c)))
+		if shown(c) {
+			width = max(width, utf8.RuneCountInString(listed(c)))
+		}
 	}
+	group := "" // a group's heading, printed with its first command shown
 	for _, c := range commands {
 		if c.group != "" {
-			fmt.Fprintf(w, "\n%s\n", c.group)
+			group = c.group
+		}
+		if !shown(c) {
+			continue
+		}
+		if group != "" {
+			fmt.Fprintf(w, "\n%s\n", group)
+			group = ""
 		}
 		short := c.short
 		if c.admin {
@@ -287,7 +310,7 @@ func Run(e *Env, argv []string) int {
 		e.Now = time.Now
 	}
 	if len(argv) == 0 {
-		help(e.Out, "", e.Interactive)
+		help(e.Out, "", e.Interactive, isAdmin(e))
 		return ExitOK
 	}
 	name, rest := argv[0], argv[1:]
@@ -299,19 +322,22 @@ func Run(e *Env, argv []string) int {
 		if len(rest) > 0 {
 			topic = rest[0]
 		}
-		if !help(e.Out, topic, e.Interactive) {
+		if !help(e.Out, topic, e.Interactive, isAdmin(e)) {
 			fmt.Fprintf(e.Err, "error: no such command %q; try `help`\n", topic)
 			return ExitUsage
 		}
 		return ExitOK
 	}
 	c := find(name)
+	if c != nil && c.admin && !isAdmin(e) {
+		c = nil // not shown to them, not theirs to run
+	}
 	if c == nil {
 		fmt.Fprintf(e.Err, "error: no such command %q; try `help`\n", name)
 		return ExitUsage
 	}
 	if slices.Contains(rest, "--help") || slices.Contains(rest, "-h") {
-		help(e.Out, c.name, e.Interactive)
+		help(e.Out, c.name, e.Interactive, true)
 		return ExitOK
 	}
 	a, err := parse(c, rest)

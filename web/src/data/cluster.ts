@@ -36,7 +36,8 @@ export const devpodHref = (r: Ref, tab?: string) => `/devpods/${clusterSeg(r.clu
 
 const LAUNCH = "devpod.lastLaunchCluster";
 /** launchCluster: where a new DevPod goes by default — the cluster last
- *  launched in, else the first connected one (none in a console of one). */
+ *  picked or launched in while it is still listed and connected, else the
+ *  first connected one (none in a console of one). */
 export function launchCluster(clusters: { name: string; connected: boolean }[], prefer?: string): string | undefined {
   if (clusters.length === 0) return undefined;
   let last = "";
@@ -45,7 +46,7 @@ export function launchCluster(clusters: { name: string; connected: boolean }[], 
   } catch {
     /* no storage */
   }
-  if (clusters.some((c) => c.name === last)) return last;
+  if (clusters.some((c) => c.name === last && c.connected)) return last;
   if (prefer && clusters.some((c) => c.name === prefer)) return prefer;
   return (clusters.find((c) => c.connected) ?? clusters[0]).name;
 }

@@ -230,6 +230,7 @@ func TestCommands(t *testing.T) {
 	if code, out, _ = f.run("ssh alice-a"); code != 0 || out != "ssh -p 2222 alice+a@ssh.test\n" {
 		t.Fatalf("ssh: %d %q", code, out)
 	}
+	f.routes["GET /api/me"] = map[string]any{"user": "alice", "admin": true} // the admin commands are an admin's
 	if f.run("migrate alice-a g206"); last() != `PATCH /api/devpods/alice-a {"node":"g206"}` {
 		t.Fatalf("migrate sent %s", last())
 	}
@@ -247,9 +248,10 @@ func TestCommands(t *testing.T) {
 		t.Fatalf("templates: %d", code)
 	}
 
-	// usage errors never reach the API
+	// usage errors never reach the API (an admin command first asks who
+	// is calling: it is not shown, nor its usage, to anyone else)
 	n = len(f.calls)
-	for _, line := range []string{"frobnicate", "show", "list --nope", "create x", "create", "ports", "migrate alice-a", "show a b", "list -o yaml"} {
+	for _, line := range []string{"frobnicate", "show", "list --nope", "create x", "create", "ports", "show a b", "list -o yaml"} {
 		if code, _, errs = f.run(line); code != ExitUsage || !strings.HasPrefix(errs, "error: ") {
 			t.Errorf("%q: exit %d, stderr %q", line, code, errs)
 		}
@@ -257,10 +259,21 @@ func TestCommands(t *testing.T) {
 	if len(f.calls) != n {
 		t.Fatalf("usage errors called the API: %v", f.calls[n:])
 	}
-	// help is generated from the command table
+	// help is generated from the command table; admin commands only for admins
+	f.routes["GET /api/me"] = map[string]any{"user": "alice", "admin": true}
 	if code, out, _ = f.run("help"); code != 0 || !strings.Contains(out, "migrate <name> <node|->") || !strings.Contains(out, "(admin)") || !strings.Contains(out, "--json") {
 		t.Fatalf("help: %d %s", code, out)
 	}
+	f.routes["GET /api/me"] = map[string]any{"user": "alice", "admin": false}
+	if code, out, _ = f.run("help"); code != 0 || strings.Contains(out, "migrate") || strings.Contains(out, "(admin)") || strings.Contains(out, "list users") || !strings.Contains(out, "create <name>") {
+		t.Fatalf("help for a user: %d %s", code, out)
+	}
+	for _, line := range []string{"help nodes", "nodes", "users", "migrate alice-a g1"} {
+		if code, _, errs := f.run(line); code != ExitUsage || !strings.Contains(errs, "no such command") {
+			t.Fatalf("%s for a user: %d %s", line, code, errs)
+		}
+	}
+	delete(f.routes, "GET /api/me")
 	if code, out, _ = f.run("create --help"); code != 0 || !strings.HasPrefix(out, "usage: create <name> --image IMG") {
 		t.Fatalf("create --help: %d %s", code, out)
 	}

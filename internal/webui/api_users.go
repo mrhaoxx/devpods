@@ -82,9 +82,14 @@ func (s *Server) handleMe(w http.ResponseWriter, r *http.Request) {
 	var perCluster map[string]any
 	if s.Clusters != nil {
 		perCluster = map[string]any{}
+		shown := s.clusterGate(r.Context(), sess)
 		for _, cc := range s.ks(r) {
+			mine := usageOf(cc.Name, false)
+			if !shown(cc.Name) && mine.DevPods == 0 {
+				continue // a cluster the rules keep them off, with nothing of theirs
+			}
 			of := map[string]any{
-				"usage": usageOf(cc.Name, false),
+				"usage": mine,
 				"quota": EffectiveQuota(userPtr, cc.Name, s.clusterQuota(r.Context(), cc)),
 			}
 			// where to connect for this cluster's DevPods, when a gateway says

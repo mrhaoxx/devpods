@@ -175,34 +175,36 @@ func TestPlacementLeavesRunningAlone(t *testing.T) {
 func TestNodeChoicesAccess(t *testing.T) {
 	p := newPlaceRig(t, "nca")
 	setRules(t, onNode(p.n1, denied))
-	rec := doJSON(t, p.s.HandleNodesForTest(), "GET", "/api/nodes", nil, p.as("nca-bob"), "")
-	var out struct {
-		Items []struct {
-			Name       string `json:"name"`
-			Access     string `json:"access"`
-			Selectable bool   `json:"selectable"`
-		} `json:"items"`
+	type choice struct {
+		Name       string `json:"name"`
+		Access     string `json:"access"`
+		Selectable bool   `json:"selectable"`
 	}
-	if rec.Code != http.StatusOK || json.Unmarshal(rec.Body.Bytes(), &out) != nil {
-		t.Fatalf("nodes: %d %s", rec.Code, rec.Body)
-	}
-	seen := 0
-	for _, n := range out.Items {
-		switch n.Name {
-		case p.n1:
-			seen++
-			if n.Access != "denied" || n.Selectable {
-				t.Errorf("%s: %+v", n.Name, n)
-			}
-		case p.n2:
-			seen++
-			if n.Access != "ok" || !n.Selectable {
-				t.Errorf("%s: %+v", n.Name, n)
-			}
+	list := func(c *http.Cookie) map[string]choice {
+		t.Helper()
+		rec := doJSON(t, p.s.HandleNodesForTest(), "GET", "/api/nodes", nil, c, "")
+		var out struct{ Items []choice }
+		if rec.Code != http.StatusOK || json.Unmarshal(rec.Body.Bytes(), &out) != nil {
+			t.Fatalf("nodes: %d %s", rec.Code, rec.Body)
 		}
+		got := map[string]choice{}
+		for _, n := range out.Items {
+			got[n.Name] = n
+		}
+		return got
 	}
-	if seen != 2 {
-		t.Fatalf("listed: %s", rec.Body)
+	// a machine the rules keep a user off is not shown to them at all
+	bob := list(p.as("nca-bob"))
+	if _, shown := bob[p.n1]; shown {
+		t.Errorf("%s shown to bob: %+v", p.n1, bob[p.n1])
+	}
+	if n, ok := bob[p.n2]; !ok || n.Access != "ok" || !n.Selectable {
+		t.Errorf("%s: %+v", p.n2, n)
+	}
+	// an admin sees every machine
+	root := list(forge(p.sm, "nca-root", true))
+	if _, ok := root[p.n1]; !ok {
+		t.Errorf("%s not shown to an admin", p.n1)
 	}
 }
 
@@ -348,5 +350,32 @@ func TestPlacementAllowListClosesLaterMachines(t *testing.T) {
 		}) {
 			t.Fatalf("a term without the allow-list: %+v", term)
 		}
+	}
+}
+
+// Reservations on a machine the rules keep a user off are not shown to
+// them (the 预约 page, the SSH CLI's reserve list) — but their own are.
+func TestReservationsHideDeniedMachines(t *testing.T) {
+	p := newPlaceRig(t, "rh")
+	setRules(t, onNode(p.n1, denied))
+	ctx := context.Background()
+	for _, r := range []struct{ user, node string }{{"rh-dave", p.n1}, {"rh-dave", p.n2}, {"rh-bob", p.n1}} {
+		nr := &devpodv1alpha1.NodeReservation{ObjectMeta: metav1.ObjectMeta{Name: r.user + "-" + r.node}, Spec: devpodv1alpha1.NodeReservationSpec{
+			Node: r.node, User: r.user, Start: metav1.NewTime(p.slot), End: metav1.NewTime(p.slot.Add(time.Hour))}}
+		if err := k8sClient.Create(ctx, nr); err != nil {
+			t.Fatal(err)
+		}
+	}
+	ids := func(user string) []string {
+		t.Helper()
+		var got []string
+		for _, v := range listReservations(t, p.s, p.as(user)) {
+			got = append(got, v.ID)
+		}
+		slices.Sort(got)
+		return got
+	}
+	if got := ids("rh-bob"); !slices.Equal(got, []string{"rh-bob-" + p.n1, "rh-dave-" + p.n2}) {
+		t.Fatalf("bob sees %v", got)
 	}
 }
