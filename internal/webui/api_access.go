@@ -6,6 +6,7 @@ package webui
 
 import (
 	"context"
+	"log/slog"
 	"net/http"
 	"path"
 	"slices"
@@ -408,5 +409,31 @@ func (s *Server) handleDeleteGroup(w http.ResponseWriter, r *http.Request) {
 		s.writeErr(w, http.StatusInternalServerError, "INTERNAL", err.Error(), nil)
 		return
 	}
+	if err := s.dropGroupShares(r.Context(), name); err != nil {
+		slog.Warn("group_shares", "group", name, "err", err)
+	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// handleShareGroups: GET /api/groups — the user groups anyone signed in
+// may share a config with: their names, not their members.
+func (s *Server) handleShareGroups(w http.ResponseWriter, r *http.Request) {
+	if _, ok := s.sessionFrom(w, r); !ok {
+		return
+	}
+	var list devpodv1alpha1.UserGroupList
+	if err := s.Reader.List(r.Context(), &list); err != nil {
+		s.writeErr(w, http.StatusInternalServerError, "INTERNAL", err.Error(), nil)
+		return
+	}
+	type item struct {
+		Name        string `json:"name"`
+		DisplayName string `json:"displayName,omitempty"`
+	}
+	items := []item{}
+	for i := range list.Items {
+		items = append(items, item{Name: list.Items[i].Name, DisplayName: list.Items[i].Spec.DisplayName})
+	}
+	slices.SortFunc(items, func(a, b item) int { return strings.Compare(a.Name, b.Name) })
+	s.writeJSON(w, http.StatusOK, map[string]any{"items": items})
 }

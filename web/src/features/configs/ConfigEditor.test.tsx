@@ -113,6 +113,20 @@ describe("config editor", () => {
     await waitFor(() => expect(JSON.parse(calls.find((c) => c.method === "PATCH")?.body ?? "{}")).toEqual({ title: "SGLang 8" }));
   });
 
+  it("shares with user groups: the ticked ones are saved, a change is sent", async () => {
+    const calls = stubFetch({
+      "/api/groups": { items: [{ name: "lab", displayName: "实验室" }, { name: "ops" }] },
+      "GET /api/configs/alice-sg": cfg({ sharedWithGroups: ["ops"] }),
+      "PATCH /api/configs/alice-sg": cfg({ sharedWithGroups: ["lab", "ops"] }),
+    });
+    renderWithProviders(app, { route: "/configs/alice-sg" });
+    await waitFor(() => expect((screen.getByLabelText("组 ops") as HTMLInputElement).checked).toBe(true));
+    expect(screen.getByText("lab（实验室）")).toBeTruthy();
+    fireEvent.click(screen.getByLabelText("组 lab"));
+    fireEvent.click(screen.getByRole("button", { name: "保存" }));
+    await waitFor(() => expect(JSON.parse(calls.find((c) => c.method === "PATCH")?.body ?? "{}")).toEqual({ sharedWithGroups: ["lab", "ops"] }));
+  });
+
   it("the server's refusal is shown", async () => {
     stubFetch({
       "GET /api/configs/alice-sg": cfg(),

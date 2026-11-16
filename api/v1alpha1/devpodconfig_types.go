@@ -45,6 +45,14 @@ type DevPodConfigSpec struct {
 	// +kubebuilder:validation:MaxItems=64
 	SharedWith []string `json:"sharedWith,omitempty"`
 
+	// SharedWithGroups are the UserGroups whose members may see and use
+	// the config, as if it were shared with each of them by name.
+	//
+	// +optional
+	// +listType=set
+	// +kubebuilder:validation:MaxItems=64
+	SharedWithGroups []string `json:"sharedWithGroups,omitempty"`
+
 	// Public: every signed-in user may see and use the config.
 	//
 	// +optional

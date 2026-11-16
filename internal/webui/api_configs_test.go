@@ -384,3 +384,77 @@ func TestConfigOfficial(t *testing.T) {
 		t.Fatalf("still official after unpublishing: %+v", v)
 	}
 }
+
+// A config shared with user groups: their members see and use it as if
+// it were shared with them by name; anyone signed in may list the groups
+// to share with (their names, not their members); a deleted group leaves
+// no share behind.
+func TestConfigSharedWithGroups(t *testing.T) {
+	setupSuite(t)
+	s, sm := newServer(t)
+	ctx := context.Background()
+	t.Cleanup(func() { cleanupConfigs(t); _ = k8sClient.DeleteAllOf(ctx, &devpodv1alpha1.UserGroup{}) })
+	alice, bob, carol, root := forge(sm, "cg-alice", false), forge(sm, "cg-bob", false), forge(sm, "cg-carol", false), forge(sm, "cg-root", true)
+	srv := httptest.NewServer(s.Routes())
+	t.Cleanup(srv.Close)
+	call := func(method, path string, auth any, body string, want int) map[string]any {
+		t.Helper()
+		return apiCall(t, srv, method, path, auth, body, want)
+	}
+	lab := &devpodv1alpha1.UserGroup{ObjectMeta: metav1.ObjectMeta{Name: "cg-lab"}, Spec: devpodv1alpha1.UserGroupSpec{DisplayName: "实验室", Members: []string{"cg-bob"}}}
+	if err := k8sClient.Create(ctx, lab); err != nil {
+		t.Fatal(err)
+	}
+	for deadline := time.Now().Add(10 * time.Second); ; time.Sleep(100 * time.Millisecond) { // the group reaches the cache
+		var g devpodv1alpha1.UserGroup
+		if k8sClient.Get(ctx, client.ObjectKey{Name: "cg-lab"}, &g) == nil {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("the group never reached the cache")
+		}
+	}
+
+	groups := call("GET", "/api/groups", carol, "", http.StatusOK)["items"].([]any)
+	if len(groups) != 1 {
+		t.Fatalf("groups %v", groups)
+	}
+	if g := groups[0].(map[string]any); g["name"] != "cg-lab" || g["displayName"] != "实验室" || g["members"] != nil {
+		t.Fatalf("a group as anyone sees it: %v", g)
+	}
+
+	body := func(groups ...string) string {
+		return jsonBody(map[string]any{"id": "sg", "title": "SGLang", "content": configYAML, "sharedWithGroups": groups})
+	}
+	call("POST", "/api/configs", alice, body("cg-nogroup"), http.StatusBadRequest)
+	v := call("POST", "/api/configs", alice, body("cg-lab", "cg-lab"), http.StatusCreated)
+	if sg := v["sharedWithGroups"].([]any); len(sg) != 1 || sg[0] != "cg-lab" {
+		t.Fatalf("sharedWithGroups %v", sg)
+	}
+
+	// bob, in the group: among the configs shared with him, readable, not his to change
+	if got := configNames(call("GET", "/api/configs?scope=shared", bob, "", http.StatusOK)); len(got) != 1 || got[0] != "cg-alice-sg" {
+		t.Fatalf("bob's shared list %v", got)
+	}
+	got := call("GET", "/api/configs/cg-alice-sg", bob, "", http.StatusOK)
+	if got["content"] != configYAML || len(got["sharedWithGroups"].([]any)) != 0 {
+		t.Fatalf("bob's view %+v", got)
+	}
+	call("PATCH", "/api/configs/cg-alice-sg", bob, `{"title":"x"}`, http.StatusForbidden)
+	// carol, in no group
+	call("GET", "/api/configs/cg-alice-sg", carol, "", http.StatusNotFound)
+	if got := configNames(call("GET", "/api/configs", carol, "", http.StatusOK)); slices.Contains(got, "cg-alice-sg") {
+		t.Fatalf("carol sees it: %v", got)
+	}
+
+	// taken off the share, bob loses it
+	call("PATCH", "/api/configs/cg-alice-sg", alice, `{"sharedWithGroups":[]}`, http.StatusOK)
+	call("GET", "/api/configs/cg-alice-sg", bob, "", http.StatusNotFound)
+
+	// a group that is deleted leaves the share list
+	call("PATCH", "/api/configs/cg-alice-sg", alice, `{"sharedWithGroups":["cg-lab"]}`, http.StatusOK)
+	call("DELETE", "/api/admin/groups/cg-lab", root, "", http.StatusNoContent)
+	if sg := call("GET", "/api/configs/cg-alice-sg", alice, "", http.StatusOK)["sharedWithGroups"].([]any); len(sg) != 0 {
+		t.Fatalf("a deleted group still shared with: %v", sg)
+	}
+}

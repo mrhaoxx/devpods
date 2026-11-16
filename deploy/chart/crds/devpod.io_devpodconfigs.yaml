@@ -89,6 +89,15 @@ spec:
                 maxItems: 64
                 type: array
                 x-kubernetes-list-type: set
+              sharedWithGroups:
+                description: |-
+                  SharedWithGroups are the UserGroups whose members may see and use
+                  the config, as if it were shared with each of them by name.
+                items:
+                  type: string
+                maxItems: 64
+                type: array
+                x-kubernetes-list-type: set
               title:
                 description: Title shown in lists.
                 maxLength: 80

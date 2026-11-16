@@ -247,9 +247,9 @@ export function ConfigsPage({ everyone }: { everyone?: boolean }) {
               </Link>
               {c.official && <Badge tone="accent">官方</Badge>}
               {c.public && !c.official && <Badge tone="accent">公开</Badge>}
-              {c.mine && c.sharedWith.length > 0 && (
-                <Badge title={c.sharedWith.join(", ")}>
-                  分享给 {c.sharedWith.length} 人
+              {c.mine && (c.sharedWith.length > 0 || (c.sharedWithGroups?.length ?? 0) > 0) && (
+                <Badge title={[c.sharedWith.join(", "), c.sharedWithGroups?.length ? `组 ${c.sharedWithGroups.join(", ")}` : ""].filter(Boolean).join("；")}>
+                  分享给 {[c.sharedWith.length > 0 ? `${c.sharedWith.length} 人` : "", c.sharedWithGroups?.length ? `${c.sharedWithGroups.length} 个组` : ""].filter(Boolean).join("、")}
                 </Badge>
               )}
             </div>

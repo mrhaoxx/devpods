@@ -28,6 +28,8 @@ import {
   checkConfig,
   createConfig,
   getConfig,
+  groupLabel,
+  listShareGroups,
   patchConfig,
   type CheckProblem,
   type Config,
@@ -130,6 +132,8 @@ export function ConfigEditor() {
     creating ? (handed.content ?? "") : "",
   );
   const [share, setShare] = useState("");
+  const [groupShares, setGroupShares] = useState<string[]>([]);
+  const shareGroups = useQuery({ queryKey: ["share-groups"], queryFn: listShareGroups }).data?.items ?? [];
   const [pub, setPub] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -144,6 +148,7 @@ export function ConfigEditor() {
     setDescription(loaded.description);
     setContent(loaded.content);
     setShare(loaded.sharedWith.join(", "));
+    setGroupShares(loaded.sharedWithGroups ?? []);
     setPub(loaded.public);
     setDecls(declsOf(loaded));
   }, [loaded]);
@@ -214,6 +219,7 @@ export function ConfigEditor() {
           description,
           content,
           sharedWith: list,
+          ...(groupShares.length ? { sharedWithGroups: [...groupShares].sort() } : {}),
           public: pub,
           ...(keptDecls(content, decls).length
             ? { variables: keptDecls(content, decls) }
@@ -228,6 +234,8 @@ export function ConfigEditor() {
         if (description !== was.description) body.description = description;
         if (content !== was.content) body.content = content;
         if (list.join(",") !== was.sharedWith.join(",")) body.sharedWith = list;
+        const groupsNow = [...groupShares].sort();
+        if (groupsNow.join(",") !== [...(was.sharedWithGroups ?? [])].sort().join(",")) body.sharedWithGroups = groupsNow;
         if (pub !== was.public) body.public = pub;
         const kept = keptDecls(content, decls);
         if (JSON.stringify(kept) !== JSON.stringify(savedDecls))
@@ -410,6 +418,26 @@ export function ConfigEditor() {
                   placeholder="alice, bob"
                 />
               </Field>
+              {shareGroups.length > 0 && (
+                <fieldset className="space-y-1 text-xs">
+                  <legend className="mb-1 text-muted">分享给用户组（组里的人都能看到并使用）</legend>
+                  <div className="flex flex-wrap gap-x-4 gap-y-1">
+                    {shareGroups.map((g) => (
+                      <label key={g.name} className="inline-flex items-center gap-1.5">
+                        <input
+                          type="checkbox"
+                          aria-label={`组 ${g.name}`}
+                          checked={groupShares.includes(g.name)}
+                          onChange={(e) =>
+                            setGroupShares((cur) => (e.target.checked ? [...cur, g.name] : cur.filter((x) => x !== g.name)))
+                          }
+                        />
+                        {groupLabel(g)}
+                      </label>
+                    ))}
+                  </div>
+                </fieldset>
+              )}
               <label className="flex items-start gap-1.5 text-xs">
                 <input
                   type="checkbox"

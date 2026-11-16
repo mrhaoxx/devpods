@@ -156,8 +156,9 @@ var apiRoutes = []apiRoute{
 
 	{"GET /api/configs", "configs:read", "Saved configs I may see, official first (?scope=mine|shared|public|official)"},
 	{"GET /api/configs/{name}", "configs:read", "One config: its YAML and variables"},
-	{"POST /api/configs", "configs:write", "Save a config: {id, title, description?, content, sharedWith?, public?, variables?, official? (admins)}"},
-	{"PATCH /api/configs/{name}", "configs:write", "Change a config of mine: title, description, content, sharedWith, public, variables; admins: official"},
+	{"POST /api/configs", "configs:write", "Save a config: {id, title, description?, content, sharedWith?, sharedWithGroups?, public?, variables?, official? (admins)}"},
+	{"PATCH /api/configs/{name}", "configs:write", "Change a config of mine: title, description, content, sharedWith, sharedWithGroups, public, variables; admins: official"},
+	{"GET /api/groups", "configs:read", "User groups a config can be shared with: name, displayName"},
 	{"DELETE /api/configs/{name}", "configs:write", "Delete a config"},
 	{"POST /api/configs:check", "configs:write", "Check a config before saving: {content, variables?, vars?} → {problems}"},
 	{"POST /api/configs/{name}/launch", "configs:read", "Create DevPods from a config (also needs devpods:create): {vars, nodes?, count?, dryRun?}"},

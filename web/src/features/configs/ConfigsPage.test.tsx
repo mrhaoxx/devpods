@@ -75,6 +75,13 @@ describe("配置 page", () => {
     await waitFor(() => expect(rowTitles()).toEqual(["共享的"]));
   });
 
+  it("mine shared with people and groups says how many of each", async () => {
+    const sharedOut = cfg({ name: "alice-sh", title: "分享出去的", sharedWith: ["bob", "carol"], sharedWithGroups: ["lab"] });
+    stubFetch({ "GET /api/configs": (url: URL) => ({ items: url.searchParams.get("scope") === "mine" ? [sharedOut] : [] }) });
+    renderWithProviders(<ConfigsPage />);
+    expect((await screen.findByText("分享给 2 人、1 个组")).getAttribute("title")).toBe("bob, carol；组 lab");
+  });
+
   it("sorts by title", async () => {
     lists();
     renderWithProviders(<ConfigsPage />, { route: "/configs?sort=title" });

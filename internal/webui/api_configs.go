@@ -8,6 +8,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"regexp"
 	"slices"
@@ -46,34 +47,40 @@ var shareNameRE = regexp.MustCompile(`^[a-z0-9]([-a-z0-9._]{0,61}[a-z0-9])?$`)
 
 // ConfigView is a config as the API shows it. Lists leave Content out.
 type ConfigView struct {
-	Name        string          `json:"name"`
-	Owner       string          `json:"owner"`
-	Title       string          `json:"title"`
-	Description string          `json:"description"`
-	Content     *string         `json:"content,omitempty"`
-	SharedWith  []string        `json:"sharedWith"`
-	Public      bool            `json:"public"`
-	Official    bool            `json:"official"`
-	Variables   []ConfigVarView `json:"variables"`
-	Mine        bool            `json:"mine"`
-	UpdatedAt   string          `json:"updatedAt"`
+	Name        string   `json:"name"`
+	Owner       string   `json:"owner"`
+	Title       string   `json:"title"`
+	Description string   `json:"description"`
+	Content     *string  `json:"content,omitempty"`
+	SharedWith  []string `json:"sharedWith"`
+	// SharedWithGroups: the user groups whose members may use it too.
+	SharedWithGroups []string        `json:"sharedWithGroups"`
+	Public           bool            `json:"public"`
+	Official         bool            `json:"official"`
+	Variables        []ConfigVarView `json:"variables"`
+	Mine             bool            `json:"mine"`
+	UpdatedAt        string          `json:"updatedAt"`
 }
 
 func configView(c *devpodv1alpha1.DevPodConfig, sess Session, withContent bool) ConfigView {
 	v := ConfigView{
-		Name:        c.Name,
-		Owner:       c.Spec.Owner,
-		Title:       c.Spec.Title,
-		Description: c.Spec.Description,
-		SharedWith:  c.Spec.SharedWith,
-		Public:      c.Spec.Public,
-		Official:    isOfficial(c),
-		Variables:   varViews(c),
-		Mine:        c.Spec.Owner == sess.User,
-		UpdatedAt:   c.Annotations[configUpdatedAnnotation],
+		Name:             c.Name,
+		Owner:            c.Spec.Owner,
+		Title:            c.Spec.Title,
+		Description:      c.Spec.Description,
+		SharedWith:       c.Spec.SharedWith,
+		SharedWithGroups: c.Spec.SharedWithGroups,
+		Public:           c.Spec.Public,
+		Official:         isOfficial(c),
+		Variables:        varViews(c),
+		Mine:             c.Spec.Owner == sess.User,
+		UpdatedAt:        c.Annotations[configUpdatedAnnotation],
 	}
 	if v.SharedWith == nil {
 		v.SharedWith = []string{}
+	}
+	if v.SharedWithGroups == nil {
+		v.SharedWithGroups = []string{}
 	}
 	if v.UpdatedAt == "" {
 		v.UpdatedAt = c.CreationTimestamp.UTC().Format(time.RFC3339)
@@ -81,6 +88,7 @@ func configView(c *devpodv1alpha1.DevPodConfig, sess Session, withContent bool) 
 	// who else a config is shared with is the owner's business
 	if !v.Mine && !sess.Admin {
 		v.SharedWith = []string{}
+		v.SharedWithGroups = []string{}
 	}
 	if withContent {
 		v.Content = &c.Spec.Content
@@ -88,10 +96,27 @@ func configView(c *devpodv1alpha1.DevPodConfig, sess Session, withContent bool) 
 	return v
 }
 
-// configVisible: the owner, the users it is shared with, everyone when
+// configVisible: the owner, the users it is shared with and the members
+// of the groups it is shared with (groups: the session's), everyone when
 // it is public, and admins.
-func configVisible(c *devpodv1alpha1.DevPodConfig, sess Session) bool {
-	return sess.Admin || c.Spec.Owner == sess.User || c.Spec.Public || slices.Contains(c.Spec.SharedWith, sess.User)
+func configVisible(c *devpodv1alpha1.DevPodConfig, sess Session, groups map[string]bool) bool {
+	return sess.Admin || c.Spec.Owner == sess.User || c.Spec.Public || sharedWithMe(c, sess, groups)
+}
+
+// sharedWithMe: shared with the session's user, by name or by a group.
+func sharedWithMe(c *devpodv1alpha1.DevPodConfig, sess Session, groups map[string]bool) bool {
+	return slices.Contains(c.Spec.SharedWith, sess.User) || slices.ContainsFunc(c.Spec.SharedWithGroups, func(g string) bool { return groups[g] })
+}
+
+// myGroups: the groups of the session's user; none when they cannot be
+// read (a config is then seen as if shared with no group of theirs).
+func (s *Server) myGroups(ctx context.Context, sess Session) map[string]bool {
+	groups, err := s.groupsOf(ctx, sess.User)
+	if err != nil {
+		slog.Warn("config_groups", "user", sess.User, "err", err)
+		return nil
+	}
+	return groups
 }
 
 // visibleConfig fetches a config the session may see. One it may not
@@ -108,7 +133,7 @@ func (s *Server) visibleConfig(ctx context.Context, sess Session, name string) (
 		}
 		return nil, &serverErr{http.StatusInternalServerError, "INTERNAL", err.Error(), nil}
 	}
-	if !configVisible(&c, sess) {
+	if !configVisible(&c, sess, nil) && (len(c.Spec.SharedWithGroups) == 0 || !configVisible(&c, sess, s.myGroups(ctx, sess))) {
 		return nil, notFound
 	}
 	return &c, nil
@@ -139,6 +164,51 @@ func cleanShares(owner string, in []string) ([]string, *serverErr) {
 	}
 	sort.Strings(out)
 	return out, nil
+}
+
+// cleanGroupShares validates a list of groups to share with and puts it
+// in order: no repeats, each an existing UserGroup.
+func (s *Server) cleanGroupShares(ctx context.Context, in []string) ([]string, *serverErr) {
+	var out []string
+	for _, g := range in {
+		if slices.Contains(out, g) {
+			continue
+		}
+		var ug devpodv1alpha1.UserGroup
+		if err := s.Reader.Get(ctx, types.NamespacedName{Name: g}, &ug); err != nil {
+			if apierrors.IsNotFound(err) || !dns1123Label.MatchString(g) {
+				return nil, badRequest("no user group %q", g)
+			}
+			return nil, &serverErr{http.StatusInternalServerError, "INTERNAL", err.Error(), nil}
+		}
+		out = append(out, g)
+	}
+	if len(out) > maxConfigShares {
+		return nil, badRequest("a config is shared with at most %d groups", maxConfigShares)
+	}
+	sort.Strings(out)
+	return out, nil
+}
+
+// dropGroupShares takes a deleted group out of every config's share
+// list: a later group of the same name inherits nothing.
+func (s *Server) dropGroupShares(ctx context.Context, group string) error {
+	var list devpodv1alpha1.DevPodConfigList
+	if err := s.Reader.List(ctx, &list, client.InNamespace(s.NS)); err != nil {
+		return err
+	}
+	var first error
+	for i := range list.Items {
+		c := &list.Items[i]
+		if !slices.Contains(c.Spec.SharedWithGroups, group) {
+			continue
+		}
+		c.Spec.SharedWithGroups = slices.DeleteFunc(c.Spec.SharedWithGroups, func(g string) bool { return g == group })
+		if err := s.Client.Update(ctx, c); err != nil && !apierrors.IsNotFound(err) && first == nil {
+			first = err
+		}
+	}
+	return first
 }
 
 func checkConfigText(title, desc, content *string) *serverErr {
@@ -191,11 +261,12 @@ func (s *Server) handleListConfigs(w http.ResponseWriter, r *http.Request) {
 		s.writeErr(w, http.StatusInternalServerError, "INTERNAL", err.Error(), nil)
 		return
 	}
+	groups := s.myGroups(r.Context(), sess)
 	items := []ConfigView{}
 	for i := range list.Items {
 		c := &list.Items[i]
 		mine := c.Spec.Owner == sess.User
-		shared := !mine && slices.Contains(c.Spec.SharedWith, sess.User)
+		shared := !mine && sharedWithMe(c, sess, groups)
 		var in bool
 		switch scope {
 		case "mine":
@@ -249,7 +320,9 @@ type ConfigCreateRequest struct {
 	Description string   `json:"description,omitempty"`
 	Content     string   `json:"content"`
 	SharedWith  []string `json:"sharedWith,omitempty"`
-	Public      bool     `json:"public,omitempty"`
+	// SharedWithGroups: user groups (names) whose members may use it.
+	SharedWithGroups []string `json:"sharedWithGroups,omitempty"`
+	Public           bool     `json:"public,omitempty"`
 	// Variables: what the config says of its variables (type, description).
 	Variables []VarDecl `json:"variables,omitempty"`
 	// Official: admins only, on a public config.
@@ -282,6 +355,11 @@ func (s *Server) handleCreateConfig(w http.ResponseWriter, r *http.Request) {
 		s.writeServerErr(w, apiErr)
 		return
 	}
+	groupShares, apiErr := s.cleanGroupShares(r.Context(), req.SharedWithGroups)
+	if apiErr != nil {
+		s.writeServerErr(w, apiErr)
+		return
+	}
 	if req.Official && !sess.Admin {
 		s.writeErr(w, http.StatusForbidden, "FORBIDDEN", "only an admin marks a config official", nil)
 		return
@@ -298,12 +376,13 @@ func (s *Server) handleCreateConfig(w http.ResponseWriter, r *http.Request) {
 	c := &devpodv1alpha1.DevPodConfig{
 		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: s.NS},
 		Spec: devpodv1alpha1.DevPodConfigSpec{
-			Owner:       sess.User,
-			Title:       req.Title,
-			Description: req.Description,
-			Content:     req.Content,
-			SharedWith:  shares,
-			Public:      req.Public,
+			Owner:            sess.User,
+			Title:            req.Title,
+			Description:      req.Description,
+			Content:          req.Content,
+			SharedWith:       shares,
+			SharedWithGroups: groupShares,
+			Public:           req.Public,
 		},
 	}
 	stampConfig(c)
@@ -325,13 +404,14 @@ func (s *Server) handleCreateConfig(w http.ResponseWriter, r *http.Request) {
 // ConfigPatchRequest is the PATCH /api/configs/{name} body: the fields
 // to change.
 type ConfigPatchRequest struct {
-	Title       *string    `json:"title,omitempty"`
-	Description *string    `json:"description,omitempty"`
-	Content     *string    `json:"content,omitempty"`
-	SharedWith  *[]string  `json:"sharedWith,omitempty"`
-	Public      *bool      `json:"public,omitempty"`
-	Variables   *[]VarDecl `json:"variables,omitempty"`
-	Official    *bool      `json:"official,omitempty"`
+	Title            *string    `json:"title,omitempty"`
+	Description      *string    `json:"description,omitempty"`
+	Content          *string    `json:"content,omitempty"`
+	SharedWith       *[]string  `json:"sharedWith,omitempty"`
+	SharedWithGroups *[]string  `json:"sharedWithGroups,omitempty"`
+	Public           *bool      `json:"public,omitempty"`
+	Variables        *[]VarDecl `json:"variables,omitempty"`
+	Official         *bool      `json:"official,omitempty"`
 }
 
 // handlePatchConfig: PATCH /api/configs/{name}. The owner changes
@@ -357,7 +437,7 @@ func (s *Server) handlePatchConfig(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if c.Spec.Owner != sess.User {
-		nothingElse := req.Title == nil && req.Description == nil && req.Content == nil && req.SharedWith == nil && req.Variables == nil
+		nothingElse := req.Title == nil && req.Description == nil && req.Content == nil && req.SharedWith == nil && req.SharedWithGroups == nil && req.Variables == nil
 		unpublish := req.Public != nil && !*req.Public && req.Official == nil
 		mark := req.Official != nil && req.Public == nil
 		if !sess.Admin || !nothingElse || !(unpublish || mark) {
@@ -385,6 +465,14 @@ func (s *Server) handlePatchConfig(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		c.Spec.SharedWith = shares
+	}
+	if req.SharedWithGroups != nil {
+		groupShares, apiErr := s.cleanGroupShares(r.Context(), *req.SharedWithGroups)
+		if apiErr != nil {
+			s.writeServerErr(w, apiErr)
+			return
+		}
+		c.Spec.SharedWithGroups = groupShares
 	}
 	if req.Public != nil {
 		c.Spec.Public = *req.Public

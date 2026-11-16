@@ -30,6 +30,8 @@ export interface ConfigSummary {
   description: string;
   /** empty unless the config is mine (or I am an admin) */
   sharedWith: string[];
+  /** the user groups whose members may use it too; empty unless mine (or I am an admin) */
+  sharedWithGroups?: string[];
   public: boolean;
   /** marked by an admin; listed first */
   official: boolean;
@@ -47,17 +49,22 @@ export type ConfigCreate = {
   description?: string;
   content: string;
   sharedWith?: string[];
+  sharedWithGroups?: string[];
   public?: boolean;
   variables?: VarDecl[];
   official?: boolean;
 };
-export type ConfigPatch = Partial<Pick<Config, "title" | "description" | "content" | "sharedWith" | "public" | "official">> & { variables?: VarDecl[] };
+export type ConfigPatch = Partial<Pick<Config, "title" | "description" | "content" | "sharedWith" | "sharedWithGroups" | "public" | "official">> & { variables?: VarDecl[] };
 
 const path = (name: string) => `/api/configs/${encodeURIComponent(name)}`;
 export const listConfigs = (scope?: ConfigScope) => req<{ items: ConfigSummary[] }>("GET", `/api/configs${scope ? `?scope=${scope}` : ""}`);
 export const getConfig = (name: string) => req<Config>("GET", path(name));
 export const createConfig = (body: ConfigCreate) => req<Config>("POST", "/api/configs", body);
 export const patchConfig = (name: string, body: ConfigPatch) => req<Config>("PATCH", path(name), body);
+/** the user groups a config can be shared with (anyone signed in sees their names) */
+export type ShareGroup = { name: string; displayName?: string };
+export const listShareGroups = () => req<{ items: ShareGroup[] }>("GET", "/api/groups");
+export const groupLabel = (g: ShareGroup) => (g.displayName ? `${g.name}（${g.displayName}）` : g.name);
 export const deleteConfig = (name: string) => req<void>("DELETE", path(name));
 
 /** checkConfig: what is wrong with a config's text, before it is saved (nothing: an empty list). */
