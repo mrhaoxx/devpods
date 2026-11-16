@@ -212,6 +212,68 @@ func (s *Server) handleAccessMatch(w http.ResponseWriter, r *http.Request) {
 	s.writeJSON(w, http.StatusOK, map[string]any{"items": items})
 }
 
+// violation: a running DevPod the rules (as saved now) would not let be
+// where it is.
+type violation struct {
+	Cluster string `json:"cluster,omitempty"`
+	DevPod  string `json:"devpod"`
+	Owner   string `json:"owner"`
+	Node    string `json:"node"`
+	Code    string `json:"code"`
+	Reason  string `json:"reason"`
+	Rule    int    `json:"rule"`
+}
+
+// handleAccessCheck (admin) judges every running DevPod of every cluster
+// reachable now for its owner on the machine it is on (where its Pod is;
+// not placed yet, where it is pinned), as a start there would be judged:
+// rule, reservation, privileges and host paths. Admins' are skipped. It
+// only reads: what to do about them is the admin's.
+func (s *Server) handleAccessCheck(w http.ResponseWriter, r *http.Request) {
+	if _, ok := s.requireAdmin(w, r); !ok {
+		return
+	}
+	items := []violation{}
+	for _, cc := range s.ks(r) {
+		ctx := s.in(r.Context(), cc)
+		on, err := s.devPodsByNode(ctx, cc)
+		if err != nil {
+			continue // away
+		}
+		judges := map[string]*judge{}
+		for node, dps := range on {
+			var n corev1.Node
+			if err := cc.Client.Get(ctx, types.NamespacedName{Name: node}, &n); err != nil {
+				continue // gone: nothing runs there
+			}
+			for _, dp := range dps {
+				j := judges[dp.Spec.Owner]
+				if j == nil {
+					if j, err = s.judgeFor(ctx, dp.Spec.Owner); err != nil {
+						s.writeErr(w, http.StatusInternalServerError, "INTERNAL", err.Error(), nil)
+						return
+					}
+					judges[dp.Spec.Owner] = j
+				}
+				var needs access.Needs
+				if dp.Spec.Pod != nil {
+					needs = access.NeedsOf(&dp.Spec.Pod.Spec)
+				}
+				if e := j.refusal(&n, &needs, true); e != nil {
+					items = append(items, violation{Cluster: s.clusterLabel(cc), DevPod: dp.Name, Owner: dp.Spec.Owner, Node: node, Code: e.Code, Reason: e.Message, Rule: j.on(&n).Rule})
+				}
+			}
+		}
+	}
+	slices.SortFunc(items, func(a, b violation) int {
+		if c := strings.Compare(a.Cluster, b.Cluster); c != 0 {
+			return c
+		}
+		return strings.Compare(a.DevPod, b.DevPod)
+	})
+	s.writeJSON(w, http.StatusOK, map[string]any{"items": items})
+}
+
 /* ---- user groups ---- */
 
 type groupView struct {

@@ -7,6 +7,7 @@ package webui_test
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -199,5 +200,41 @@ func TestAccessMatch(t *testing.T) {
 	}
 	if out.Items[0].Unreservable != 2 {
 		t.Fatalf("unreservable %d", out.Items[0].Unreservable)
+	}
+}
+
+// The running DevPods the rules no longer let be where they are.
+func TestAccessCheck(t *testing.T) {
+	p := newPlaceRig(t, "ck")
+	p.s.Admins = map[string]bool{"ck-root": true}
+	for _, u := range []string{"ck-bob", "ck-root"} {
+		dp := p.create(u, http.StatusCreated)
+		p.patch(u, dp, fmt.Sprintf(`{"node":%q}`, p.n1), http.StatusOK)
+	}
+	carol := p.create("ck-carol", http.StatusCreated)
+	p.patch("ck-carol", carol, fmt.Sprintf(`{"node":%q}`, p.n2), http.StatusOK)
+	setRules(t, onNode(p.n1, denied))
+	var out struct {
+		Items []struct {
+			Cluster, DevPod, Owner, Node, Code, Reason string
+			Rule                                       int
+		} `json:"items"`
+	}
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		rec := doJSON(t, p.s.Routes().ServeHTTP, "POST", "/api/admin/access/check", nil, forge(p.sm, "ck-admin", true), "")
+		if rec.Code == http.StatusOK && json.Unmarshal(rec.Body.Bytes(), &out) == nil && len(out.Items) > 0 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("check: %d %s", rec.Code, rec.Body)
+		}
+		time.Sleep(200 * time.Millisecond)
+	}
+	if len(out.Items) != 1 || out.Items[0].DevPod != "ck-bob-dev1" || out.Items[0].Code != "ACL_DENIED" || out.Items[0].Rule != 0 || out.Items[0].Node != p.n1 {
+		t.Fatalf("found: %+v", out.Items)
+	}
+	if rec := doJSON(t, p.s.Routes().ServeHTTP, "POST", "/api/admin/access/check", nil, forge(p.sm, "ck-bob", false), ""); rec.Code != http.StatusForbidden {
+		t.Fatalf("a user ran the check: %d", rec.Code)
 	}
 }
