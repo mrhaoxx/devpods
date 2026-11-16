@@ -335,3 +335,20 @@ func TestReservationEndRetries(t *testing.T) {
 		time.Sleep(200 * time.Millisecond)
 	}
 }
+
+// Gateways before this release offer "reserve add --dry-run", which asks
+// with ?dryRun=true: there is nothing to preview any more, and the ask
+// must not make a reservation for real.
+func TestReservationDryRunRefused(t *testing.T) {
+	s, sm, _, node := rsvRig(t, "dr")
+	setRules(t, onNode(node, needsReservation))
+	slot := time.Date(2026, 11, 12, 2, 0, 0, 0, time.UTC)
+	alice := forge(sm, "dr-alice", false)
+	rec := doJSON(t, s.HandleCreateReservationForTest(), "POST", "/api/reservations?dryRun=true", nil, alice, rsvBody(node, slot, slot.Add(time.Hour)))
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("dry run: %d %s", rec.Code, rec.Body)
+	}
+	if items := listReservations(t, s, alice); len(items) != 0 {
+		t.Fatalf("a dry run reserved: %+v", items)
+	}
+}

@@ -252,6 +252,13 @@ func (s *Server) handleCreateReservation(w http.ResponseWriter, r *http.Request)
 	if !ok {
 		return
 	}
+	// gateways before reservations became permits offer "--dry-run": a
+	// preview of DevPods to clear, which no longer exists. Refused, so
+	// that the ask does not reserve for real.
+	if r.URL.Query().Has("dryRun") {
+		s.writeErr(w, http.StatusBadRequest, "BAD_REQUEST", "there is no dry run: a reservation no longer hibernates anyone when it starts; leave out --dry-run", nil)
+		return
+	}
 	var req struct {
 		Node  string    `json:"node"`
 		Start time.Time `json:"start"`
