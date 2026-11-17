@@ -19,7 +19,13 @@ import {
   type ReservationRules,
 } from "../../data/api";
 import { useMe, useNodeChoices } from "../../data/queries";
+import type { ColumnDef, SortingState } from "@tanstack/react-table";
+import { ActionMenu } from "../../design/ActionMenu";
 import { Badge } from "../../design/Badge";
+import { BulkToast, type BulkOutcome, type BulkProgress } from "../../design/BulkToast";
+import { DataTable, type RowAction } from "../../design/DataTable";
+import { runBulk } from "../../lib/bulk";
+import { copyText } from "../../design/Copy";
 import { Button } from "../../design/Button";
 import { ConfirmDialog } from "../../design/ConfirmDialog";
 import { EmptyState } from "../../design/EmptyState";
@@ -49,6 +55,49 @@ type Draft = { node: string; start: number; end: number; edit?: Reservation; nod
 const MINUTE = 60_000;
 const HOUR = 60 * MINUTE;
 const nodeKey = (b: Reservation) => keyOf({ cluster: b.cluster, name: b.node });
+const resKey = (b: Reservation) => `${b.cluster ?? ""}/${b.id}`;
+const isLive = (b: Reservation) => b.phase === "Upcoming" || b.phase === "Active";
+const phaseOrder: Record<Reservation["phase"], number> = { Active: 0, Upcoming: 1, Ended: 2, Cancelled: 3 };
+
+/** the columns of my reservations: a list like the DevPod list */
+function mineColumns(user: () => string, actions: (b: Reservation) => React.ReactNode): ColumnDef<Reservation, unknown>[] {
+  return [
+    {
+      id: "node",
+      header: "节点",
+      accessorFn: (b) => `${b.cluster ?? ""} ${b.node}`,
+      meta: { priority: 1, width: 260 },
+      cell: ({ row: { original: b } }) => (
+        <span className="mono" title={b.cluster ? `${b.cluster} · ${b.node}` : b.node}>
+          {b.cluster && <span className="text-muted">{b.cluster} </span>}
+          {b.node}
+        </span>
+      ),
+    },
+    { id: "start", header: "开始", accessorFn: (b) => Date.parse(b.start), meta: { priority: 1, width: 130, mono: true }, cell: ({ row }) => fmtTime(row.original.start) },
+    { id: "end", header: "结束", accessorFn: (b) => Date.parse(b.end), meta: { priority: 2, width: 130, mono: true }, cell: ({ row }) => fmtTime(row.original.end) },
+    {
+      id: "length",
+      header: "时长",
+      accessorFn: (b) => Date.parse(b.end) - Date.parse(b.start),
+      meta: { priority: 3, width: 110 },
+      cell: ({ getValue }) => fmtSpan(getValue() as number),
+    },
+    {
+      id: "phase",
+      header: "状态",
+      accessorFn: (b) => phaseOrder[b.phase],
+      meta: { priority: 1, width: 170 },
+      cell: ({ row: { original: b } }) => (
+        <>
+          <Badge tone={b.phase === "Active" ? "run" : b.phase === "Upcoming" ? "accent" : "neutral"}>{phaseLabel[b.phase]}</Badge>
+          {b.phase === "Cancelled" && b.cancelledBy && b.cancelledBy !== user() && <span className="ml-1 text-muted">由 {b.cancelledBy} 取消</span>}
+        </>
+      ),
+    },
+    { id: "actions", header: "", enableSorting: false, meta: { priority: 1, width: 48, align: "right", pin: "right" }, cell: ({ row }) => actions(row.original) },
+  ];
+}
 
 /** The form: new reservation, move (not started) or move the end of one that has started. */
 function ReserveDialog({ draft, nodes, rules, now, onClose }: { draft: Draft; nodes: NodeChoice[]; rules: ReservationRules; now: number; onClose: () => void }) {
@@ -233,6 +282,7 @@ function Row({
   index,
   sel,
   bad,
+  label,
   onPick,
 }: {
   node: NodeChoice;
@@ -247,6 +297,8 @@ function Row({
   /** the time a drag picks, when the drag takes this row in */
   sel: [number, number] | null;
   bad: boolean;
+  /** the drag's time is said on the top row it takes in only */
+  label: boolean;
   onPick: (b: Reservation) => void;
 }) {
   void gran;
@@ -307,10 +359,12 @@ function Row({
             className={`pointer-events-none absolute inset-y-0.5 rounded border-2 border-dashed text-[11px] ${bad ? "border-fail bg-fail-soft text-fail" : "border-accent bg-accent-soft/60 text-accent"}`}
             style={{ left: pct(sel[0]), width: `calc(${pct(sel[1])} - ${pct(sel[0])})` }}
           >
-            <span className="absolute -top-4 left-0 whitespace-nowrap rounded bg-surface px-1 font-medium shadow-sm">
-              {fmtClock(sel[0])}–{fmtClock(sel[1])} · {fmtSpan(sel[1] - sel[0])}
-              {bad && " · 不可预约"}
-            </span>
+            {label && (
+              <span className="absolute -top-4 left-0 whitespace-nowrap rounded bg-surface px-1 font-medium shadow-sm">
+                {fmtClock(sel[0])}–{fmtClock(sel[1])} · {fmtSpan(sel[1] - sel[0])}
+                {bad && " · 不可预约"}
+              </span>
+            )}
           </div>
         )}
       </div>
@@ -345,6 +399,16 @@ export function ReservationsPage() {
   // between, every one, for the time between (a rectangle)
   const [drag, setDrag] = useState<{ a: number; b: number; r0: number; r1: number } | null>(null);
   const dragTrack = useRef<HTMLElement | null>(null);
+  // my reservations: a list like the DevPod list; several cancelled at once
+  const [sorting, setSorting] = useState<SortingState>([{ id: "start", desc: true }]);
+  const [bulkCancel, setBulkCancel] = useState<{ rows: Reservation[]; clear: () => void } | null>(null);
+  const [progress, setProgress] = useState<BulkProgress | null>(null);
+  const [outcome, setOutcome] = useState<BulkOutcome | null>(null);
+  // the ⋯ menu is in the (memoised) columns: it asks for what is current
+  const rowActionsNow = useRef<(b: Reservation) => RowAction[]>(() => []);
+  const userNow = useRef("");
+  userNow.current = me?.user ?? "";
+  const mineCols = useMemo(() => mineColumns(() => userNow.current, (b) => <ActionMenu label={`${b.node} ${fmtTime(b.start)} 操作`} actions={() => rowActionsNow.current(b)} />), []);
   const del = useMutation({
     mutationFn: (r: Reservation) => deleteReservation(r),
     onSettled: () => {
@@ -361,6 +425,48 @@ export function ReservationsPage() {
   // the machines I need a reservation for (an admin sees every reservable one)
   const nodes = (nodesQ.data?.items ?? []).filter((n) => n.reservable && (n.reservationRequired || me.admin) && matches(n));
   const mine = all.filter((b) => b.mine).sort((a, b) => Date.parse(b.start) - Date.parse(a.start));
+  const cancelAll = async (rows: Reservation[], clear: () => void) => {
+    setBulkCancel(null);
+    setOutcome(null);
+    setProgress({ action: "取消预约", done: 0, failed: 0, total: rows.length });
+    const results = await runBulk(rows, async (b) => {
+      try {
+        await deleteReservation(b);
+        setProgress((p) => p && { ...p, done: p.done + 1 });
+      } catch (e) {
+        setProgress((p) => p && { ...p, done: p.done + 1, failed: p.failed + 1 });
+        throw new Error(apiMessage(e));
+      }
+    });
+    setProgress(null);
+    setOutcome({ action: "取消预约", results: results.map((x) => ({ ...x, item: `${x.item.node} ${fmtTime(x.item.start)}` })) });
+    clear();
+    void qc.invalidateQueries({ queryKey: ["reservations"] });
+    void qc.invalidateQueries({ queryKey: ["node-choices"] });
+  };
+  const rowActions = (b: Reservation): RowAction[] => [
+    ...(isLive(b)
+      ? [
+          { label: "修改", onSelect: () => open(b) },
+          { label: b.phase === "Active" ? "提前释放" : "取消", danger: true, onSelect: () => setCancel(b) },
+        ]
+      : []),
+    { label: "复制节点名", onSelect: () => void copyText(b.node) },
+  ];
+  rowActionsNow.current = rowActions;
+  const bulkActions = (rows: Reservation[], clear: () => void): RowAction[] => {
+    const can = rows.filter(isLive);
+    return [
+      {
+        label: `取消所选（${can.length}）`,
+        danger: true,
+        disabled: can.length === 0,
+        title: can.length === 0 ? "所选的都已结束或已取消" : undefined,
+        onSelect: () => setBulkCancel({ rows: can, clear }),
+      },
+      { label: "复制节点名", onSelect: () => void copyText([...new Set(rows.map((b) => b.node))].join("\n")) },
+    ];
+  };
   const open = (b: Reservation) => setDraft({ node: nodeKey(b), start: Date.parse(b.start), end: Date.parse(b.end) + (b.phase === "Active" ? g : 0), edit: b });
   // from the slot now is in, so the reservation covers now: no gap
   const first = slotStart(now, g);
@@ -407,11 +513,13 @@ export function ReservationsPage() {
               </div>
             </div>
             <div
+              className={drag ? "select-none" : undefined}
               onPointerDown={(e) => {
                 const target = e.target as HTMLElement;
                 const track = target.closest<HTMLElement>("[data-track]");
                 const row = target.closest<HTMLElement>("[data-row]");
                 if (target.closest("button") || !track || !row) return;
+                e.preventDefault(); // a drag, not the start of a text selection
                 e.currentTarget.setPointerCapture?.(e.pointerId);
                 dragTrack.current = track;
                 const t = timeAt(track, e.clientX);
@@ -445,6 +553,7 @@ export function ReservationsPage() {
                   index={i}
                   sel={dragSel && i >= rowsOf[0] && i <= rowsOf[1] ? dragSel : null}
                   bad={dragBad}
+                  label={i === rowsOf[0]}
                   onPick={setPicked}
                 />
               ))}
@@ -467,46 +576,41 @@ export function ReservationsPage() {
         {mine.length === 0 ? (
           <EmptyState title="你还没有预约" />
         ) : (
-          <table className="w-full border-collapse text-xs">
-            <thead>
-              <tr className="h-7 border-b border-line text-left text-[11px] text-muted">
-                <th className="px-3 font-normal">节点</th>
-                <th className="font-normal">时段</th>
-                <th className="font-normal">时长</th>
-                <th className="font-normal">状态</th>
-                <th />
-              </tr>
-            </thead>
-            <tbody>
-              {mine.map((b) => (
-                <tr key={b.id} className="h-8 border-b border-line last:border-0">
-                  <td className="mono px-3">{b.cluster ? `${b.cluster} · ${b.node}` : b.node}</td>
-                  <td className="mono">
-                    {fmtTime(b.start)} – {fmtTime(b.end)}
-                  </td>
-                  <td>{fmtSpan(Date.parse(b.end) - Date.parse(b.start))}</td>
-                  <td>
-                    <Badge tone={b.phase === "Active" ? "run" : b.phase === "Upcoming" ? "accent" : "neutral"}>{phaseLabel[b.phase]}</Badge>
-                    {b.phase === "Cancelled" && b.cancelledBy && b.cancelledBy !== me.user && <span className="ml-1 text-muted">由 {b.cancelledBy} 取消</span>}
-                  </td>
-                  <td className="space-x-3 pr-3 text-right">
-                    {(b.phase === "Upcoming" || b.phase === "Active") && (
-                      <>
-                        <button type="button" className="text-accent hover:underline" onClick={() => open(b)}>
-                          修改
-                        </button>
-                        <button type="button" className="text-muted hover:text-fail" onClick={() => setCancel(b)}>
-                          {b.phase === "Active" ? "提前释放" : "取消"}
-                        </button>
-                      </>
-                    )}
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
+          <DataTable<Reservation>
+            label="我的预约"
+            storageKey="my-reservations"
+            data={mine}
+            columns={mineCols}
+            getRowId={resKey}
+            sorting={sorting}
+            onSortingChange={setSorting}
+            selectable
+            onRowClick={(b) => isLive(b) && open(b)}
+            bulkBar={(rows, clear) =>
+              bulkActions(rows, clear).map((a) => (
+                <Button key={a.label} variant={a.danger ? "danger" : undefined} disabled={a.disabled} title={a.title} onClick={a.onSelect}>
+                  {a.label}
+                </Button>
+              ))
+            }
+            rowMenu={(rows, isBulk, clear) => (isBulk ? bulkActions(rows, clear) : rowActions(rows[0]))}
+          />
         )}
       </Panel>
+      <ConfirmDialog
+        open={!!bulkCancel}
+        onOpenChange={(o) => !o && setBulkCancel(null)}
+        title={`取消 ${bulkCancel?.rows.length ?? 0} 份预约？`}
+        confirmLabel={`取消 ${bulkCancel?.rows.length ?? 0} 份预约`}
+        danger
+        onConfirm={() => bulkCancel && void cancelAll(bulkCancel.rows, bulkCancel.clear)}
+      >
+        {bulkCancel &&
+          (bulkCancel.rows.some((b) => b.phase === "Active")
+            ? `其中 ${bulkCancel.rows.filter((b) => b.phase === "Active").length} 份进行中的会提前释放：你在那些机器上只靠预约运行的 DevPod 会被自动休眠。其余的直接取消。`
+            : "它们都还没开始，直接取消。")}
+      </ConfirmDialog>
+      <BulkToast progress={progress} outcome={outcome} onClose={() => setOutcome(null)} />
       {draft && <ReserveDialog key={`${draft.node}-${draft.start}-${draft.edit?.id ?? ""}`} draft={draft} nodes={nodes} rules={rules.data} now={now} onClose={() => setDraft(null)} />}
       <ConfirmDialog
         open={!!picked}

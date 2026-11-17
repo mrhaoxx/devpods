@@ -78,8 +78,12 @@ describe("ReservationsPage", () => {
     Object.defineProperty(document, "elementFromPoint", { value: elementFromPoint, configurable: true });
     try {
       // 3 days from 11/12 00:00 Shanghai over 1000 px: 166.7 px ≈ 12:00, 194.4 px ≈ 13:59
-      fireEvent.pointerDown(tracks[0], { clientX: 166.7, clientY: 10, pointerId: 1 });
+      // a press there starts no text selection
+      expect(fireEvent.pointerDown(tracks[0], { clientX: 166.7, clientY: 10, pointerId: 1, cancelable: true })).toBe(false);
       fireEvent.pointerMove(tracks[0], { clientX: 194.4, clientY: 120, pointerId: 1 });
+      // while dragging: no text is selected, and the time is said once, on the top row
+      expect(tracks[0].closest("[data-row]")!.parentElement!.className).toMatch(/select-none/);
+      expect(screen.getAllByText(/12:00–14:00 ·/)).toHaveLength(1);
       fireEvent.pointerUp(tracks[0], { clientX: 194.4, clientY: 120, pointerId: 1 });
       const dialog = within(await screen.findByRole("dialog"));
       for (const n of ["g206", "g207", "g208"]) expect((dialog.getByLabelText(n) as HTMLInputElement).checked).toBe(true);
@@ -117,6 +121,33 @@ describe("ReservationsPage", () => {
     expect((dialog.getByLabelText("g206") as HTMLInputElement).checked).toBe(false);
   });
 
+  it("my reservations are cancelled together: picked, confirmed, each released or cancelled", async () => {
+    at();
+    const calls = stubFetch({
+      "/api/reservations/rules": rules,
+      "/api/nodes": { items: [node("g206"), node("g207")] },
+      "/api/reservations": {
+        items: [
+          block({ id: "act", start: "2026-11-12T01:00:00Z", end: "2026-11-12T03:00:00Z", phase: "Active" }),
+          block({ id: "up", node: "g207" }),
+          block({ id: "old", start: "2026-11-11T01:00:00Z", end: "2026-11-11T02:00:00Z", phase: "Ended" }),
+        ],
+      },
+      "DELETE /api/reservations/act": new Response(null, { status: 204 }),
+      "DELETE /api/reservations/up": new Response(null, { status: 204 }),
+    });
+    renderWithProviders(<ReservationsPage />, { me: me() });
+    // the list's own table: every row picked; an ended one is not cancelled
+    const table = within(await screen.findByRole("table", { name: "我的预约" }));
+    fireEvent.click(table.getByLabelText("全选"));
+    fireEvent.click(screen.getByRole("button", { name: "取消所选（2）" }));
+    const confirm = within(screen.getByRole("dialog"));
+    expect(confirm.getByText(/1 份进行中的会提前释放/)).toBeTruthy();
+    fireEvent.click(confirm.getByRole("button", { name: "取消 2 份预约" }));
+    await waitFor(() => expect(calls.filter((c) => c.method === "DELETE").map((c) => c.url.pathname).sort()).toEqual(["/api/reservations/act", "/api/reservations/up"]));
+    expect(await screen.findByText(/取消预约：成功 2，失败 0/)).toBeTruthy();
+  });
+
   it("my reservations: an active one has its end moved or is released, an upcoming one is cancelled", async () => {
     at();
     const calls = stubFetch({
@@ -127,8 +158,12 @@ describe("ReservationsPage", () => {
       "DELETE /api/reservations/up": new Response(null, { status: 204 }),
     });
     renderWithProviders(<ReservationsPage />, { me: me() });
-    const active = (await screen.findByText("进行中")).closest("tr")!;
-    fireEvent.click(within(active as HTMLElement).getByRole("button", { name: "修改" }));
+    const menu = async (state: string) => {
+      const row = (await screen.findByText(state)).closest("tr") as HTMLElement;
+      fireEvent.keyDown(within(row).getByRole("button", { name: /操作$/ }), { key: "Enter" });
+      return within(await screen.findByRole("menu"));
+    };
+    fireEvent.click((await menu("进行中")).getByRole("menuitem", { name: "修改" }));
     const dialog = within(screen.getByRole("dialog"));
     // it has started: its start stays; its end is offered one step later
     expect(input(dialog, "开始").disabled).toBe(true);
@@ -136,10 +171,11 @@ describe("ReservationsPage", () => {
     fireEvent.click(dialog.getByRole("button", { name: "保存" }));
     await waitFor(() => expect(calls.find((c) => c.method === "PATCH")?.body).toBe('{"end":"2026-11-12T03:10:00.000Z"}'));
 
-    const upcoming = screen.getByText("即将开始").closest("tr")!;
-    fireEvent.click(within(upcoming as HTMLElement).getByRole("button", { name: "取消" }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    fireEvent.click((await menu("即将开始")).getByRole("menuitem", { name: "取消" }));
     fireEvent.click(screen.getByRole("button", { name: "取消预约" }));
     await waitFor(() => expect(calls.some((c) => c.method === "DELETE" && c.url.pathname === "/api/reservations/up")).toBe(true));
-    expect(screen.getByRole("button", { name: "提前释放" })).toBeTruthy();
+    fireEvent.keyDown(document.activeElement ?? document.body, { key: "Escape" });
+    expect((await menu("进行中")).getByRole("menuitem", { name: "提前释放" })).toBeTruthy();
   });
 });
