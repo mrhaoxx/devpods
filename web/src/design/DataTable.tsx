@@ -487,12 +487,29 @@ export function DataTable<T>(p: DataTableProps<T>) {
     endAsked.current = rows.length;
     p.onEnd();
   });
-  // a row as tall as it is drawn (zoom, fonts): measured, not assumed
-  useLayoutEffect(() => {
+  // a row as tall as it is drawn (zoom, fonts): measured, not assumed —
+  // the shortest row drawn, when rows first come and when the window's
+  // size or zoom changes. Never on a scroll: rows of differing heights (a
+  // second line) would make it go back and forth, each height drawing the
+  // rows that measure the other (React #185)
+  const [resized, setResized] = useState(0);
+  useEffect(() => {
     if (!p.fill) return;
-    const h = scroller.current?.querySelector("tbody tr[data-row]")?.getBoundingClientRect().height ?? 0;
-    if (h > 0 && Math.abs(h - rowH) > 0.25) setRowH(h);
-  });
+    const on = () => setResized((n) => n + 1);
+    window.addEventListener("resize", on);
+    return () => window.removeEventListener("resize", on);
+  }, [p.fill]);
+  const anyRows = rows.length > 0;
+  useLayoutEffect(() => {
+    if (!p.fill || !anyRows) return;
+    let h = Infinity;
+    scroller.current?.querySelectorAll("tbody tr[data-row]").forEach((r) => {
+      const x = r.getBoundingClientRect().height;
+      if (x > 0) h = Math.min(h, x);
+    });
+    if (h !== Infinity && Math.abs(h - rowH) > 0.25) setRowH(h);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [p.fill, anyRows, resized]);
 
   const menu = choosable.length > 0 && (
     <Menu.Root modal={false}>

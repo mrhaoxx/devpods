@@ -56,6 +56,8 @@ jobs:
         context: .
         file: images/${{ matrix.image }}/Dockerfile
         platforms: linux/${{ matrix.arch }}
+        # what the binaries say they are: the tag, or the commit
+        build-args: VERSION=${{ github.ref_type == 'tag' && github.ref_name || github.sha }}
         provenance: false
         outputs: type=image,name=${{ env.REGISTRY }}/devpod-${{ matrix.image }},push-by-digest=true,name-canonical=true,push=true
         cache-from: type=gha,scope=${{ matrix.image }}-${{ matrix.arch }}

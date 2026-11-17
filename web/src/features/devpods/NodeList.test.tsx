@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { fireEvent, screen, within } from "@testing-library/react";
+import { act, fireEvent, screen, within } from "@testing-library/react";
 import { useState } from "react";
 import { NodeList } from "./NodeList";
 import { renderWithProviders, stubFetch } from "../../test/render";
@@ -43,6 +43,40 @@ const box = (name: string) => (screen.queryByRole("checkbox", { name }) ?? scree
 
 describe("NodeList", () => {
   afterEach(() => vi.unstubAllGlobals());
+
+  it("rows of differing heights: scrolling never makes the measured height go back and forth (React #185)", async () => {
+    stubFetch({ "/api/nodes": { items: Array.from({ length: 600 }, (_, i) => node(`n${i}`)) } });
+    const ownH = Object.getOwnPropertyDescriptor(HTMLElement.prototype, "clientHeight");
+    Object.defineProperty(HTMLElement.prototype, "clientHeight", {
+      configurable: true,
+      get() {
+        return (this as HTMLElement).tagName === "UL" ? 290 : 0;
+      },
+    });
+    const ownRect = HTMLElement.prototype.getBoundingClientRect;
+    HTMLElement.prototype.getBoundingClientRect = function (this: HTMLElement) {
+      const name = this.hasAttribute("data-node") ? (this.querySelector("input")?.getAttribute("aria-label") ?? "") : "";
+      const h = name ? (Number(name.slice(1)) % 2 ? 58 : 29) : 0;
+      return { x: 0, y: 0, top: 0, left: 0, width: 100, height: h, right: 100, bottom: h, toJSON: () => ({}) };
+    };
+    const errors = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      renderWithProviders(<Host />);
+      await screen.findByRole("checkbox", { name: "n0" });
+      const list = screen.getAllByRole("list").find((l) => l.tagName === "UL")!;
+      for (const top of [29 * 101, 29 * 333, 29 * 501]) {
+        list.scrollTop = top;
+        fireEvent.scroll(list);
+        await act(() => new Promise((r) => setTimeout(r, 30)));
+      }
+      expect(errors.mock.calls.some((c) => /Maximum update depth|#185/.test(String(c[0])))).toBe(false);
+    } finally {
+      errors.mockRestore();
+      HTMLElement.prototype.getBoundingClientRect = ownRect;
+      if (ownH) Object.defineProperty(HTMLElement.prototype, "clientHeight", ownH);
+      else delete (HTMLElement.prototype as { clientHeight?: number }).clientHeight;
+    }
+  });
 
   it("a row per node: its GPUs free, its state; one the user has no access to cannot be picked", async () => {
     stubFetch({ "/api/nodes": nodes });

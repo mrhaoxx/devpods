@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import type { ColumnDef, SortingState } from "@tanstack/react-table";
 import { useState } from "react";
 import { DataTable, rowWindow } from "./DataTable";
@@ -329,6 +329,42 @@ describe("a list page's table (fill)", () => {
       expect(drawn().length).toBeLessThan(40);
     } finally {
       if (own) Object.defineProperty(HTMLElement.prototype, "clientHeight", own);
+      else delete (HTMLElement.prototype as { clientHeight?: number }).clientHeight;
+    }
+  });
+
+  it("rows of differing heights: scrolling never makes the measured height go back and forth (React #185)", async () => {
+    const many = Array.from({ length: 1000 }, (_, i) => ({ name: `dev${i}`, cpu: i }));
+    const ownH = Object.getOwnPropertyDescriptor(HTMLElement.prototype, "clientHeight");
+    Object.defineProperty(HTMLElement.prototype, "clientHeight", {
+      configurable: true,
+      get() {
+        return (this as HTMLElement).hasAttribute("data-table-scroller") ? 290 : 0;
+      },
+    });
+    // every other row twice as tall (a second line: an error, a description)
+    const ownRect = HTMLElement.prototype.getBoundingClientRect;
+    HTMLElement.prototype.getBoundingClientRect = function (this: HTMLElement) {
+      const id = this.getAttribute("data-row");
+      const h = id ? (Number(id.replace("dev", "")) % 2 ? 58 : 29) : 0;
+      return { x: 0, y: 0, top: 0, left: 0, width: 100, height: h, right: 100, bottom: h, toJSON: () => ({}) };
+    };
+    const errors = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      const { container } = render(<DataTable fill data={many} columns={columns} getRowId={(r) => r.name} sorting={[]} onSortingChange={() => {}} />);
+      const drawn = () => [...container.querySelectorAll("tbody tr[data-row]")].map((r) => r.getAttribute("data-row"));
+      const scroller = container.querySelector<HTMLElement>("[data-table-scroller]")!;
+      for (const top of [29 * 101, 29 * 333, 29 * 501, 29 * 777]) {
+        scroller.scrollTop = top;
+        fireEvent.scroll(scroller);
+        await act(() => new Promise((r) => setTimeout(r, 30)));
+      }
+      expect(drawn().length).toBeGreaterThan(0);
+      expect(errors.mock.calls.some((c) => /Maximum update depth|#185/.test(String(c[0])))).toBe(false);
+    } finally {
+      errors.mockRestore();
+      HTMLElement.prototype.getBoundingClientRect = ownRect;
+      if (ownH) Object.defineProperty(HTMLElement.prototype, "clientHeight", ownH);
       else delete (HTMLElement.prototype as { clientHeight?: number }).clientHeight;
     }
   });

@@ -3,7 +3,7 @@
 // the DevPods (INDEX) or pairs them with the nodes of a migration. A
 // node someone else holds now cannot be picked. single: one node.
 import { keyOf } from "../../data/cluster";
-import { useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { rowWindow, useView } from "../../design/DataTable";
 import type { NodeChoice } from "../../data/api";
 import { useNodeChoices } from "../../data/queries";
@@ -59,10 +59,27 @@ export function NodeList({
   const view = useView(list, true);
   const [rowH, setRowH] = useState(29);
   const { first, last } = rowWindow(shown.length, view, rowH, 0);
+  // a row as tall as it is drawn: the shortest drawn, measured when rows
+  // first come and when the window's size or zoom changes — never on a
+  // scroll, where rows of differing heights would make it go back and
+  // forth (React #185), as in DataTable
+  const [resized, setResized] = useState(0);
+  useEffect(() => {
+    const on = () => setResized((n) => n + 1);
+    window.addEventListener("resize", on);
+    return () => window.removeEventListener("resize", on);
+  }, []);
+  const anyRows = shown.length > 0;
   useLayoutEffect(() => {
-    const h = list.current?.querySelector("li[data-node]")?.getBoundingClientRect().height ?? 0;
-    if (h > 0 && Math.abs(h - rowH) > 0.25) setRowH(h);
-  });
+    if (!anyRows) return;
+    let h = Infinity;
+    list.current?.querySelectorAll("li[data-node]").forEach((li) => {
+      const x = li.getBoundingClientRect().height;
+      if (x > 0) h = Math.min(h, x);
+    });
+    if (h !== Infinity && Math.abs(h - rowH) > 0.25) setRowH(h);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [anyRows, resized]);
 
   const toggle = (name: string) => {
     if (single) return setPicked([name]);

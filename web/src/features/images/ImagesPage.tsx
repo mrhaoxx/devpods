@@ -115,18 +115,14 @@ export function ImagesPage({ everyone }: { everyone?: boolean }) {
         header: "镜像",
         accessorFn: (s) => s.image,
         meta: { priority: 1, width: 380 },
+        // one line, as every row of a list is
         cell: ({ row: { original: s } }) => (
-          <div className="min-w-0">
-            <div className="mono truncate" title={s.image}>
+          <span className="flex min-w-0 items-center gap-1.5">
+            <span className="mono truncate" title={s.image}>
               {s.image}
-            </div>
-            {s.customRegistry && <div className="text-[11px] text-faint">自定义仓库</div>}
-            {s.phase === "Failed" && s.message && (
-              <div className="truncate text-[11px] text-fail" title={s.message}>
-                {s.message}
-              </div>
-            )}
-          </div>
+            </span>
+            {s.customRegistry && <span className="shrink-0 text-[11px] text-faint">自定义仓库</span>}
+          </span>
         ),
       },
       ...(several ? [{ id: "cluster", header: "集群", accessorFn: (s: SnapshotView) => s.cluster ?? "", meta: { priority: 2, width: 90, mono: true } }] : []),
@@ -155,8 +151,17 @@ export function ImagesPage({ everyone }: { everyone?: boolean }) {
         id: "phase",
         header: "状态",
         accessorFn: (s) => s.phase,
-        meta: { priority: 1, width: 80 },
-        cell: ({ row: { original: s } }) => <Badge tone={phaseBadge[s.phase].tone}>{phaseBadge[s.phase].label}</Badge>,
+        meta: { priority: 1, width: 200 },
+        cell: ({ row: { original: s } }) => (
+          <span className="flex min-w-0 items-center gap-1.5">
+            <Badge tone={phaseBadge[s.phase].tone}>{phaseBadge[s.phase].label}</Badge>
+            {s.phase === "Failed" && s.message && (
+              <span className="truncate text-[11px] text-fail" title={s.message}>
+                {s.message}
+              </span>
+            )}
+          </span>
+        ),
       },
       {
         // the one thing to do now, in sight; the rest under ⋯
