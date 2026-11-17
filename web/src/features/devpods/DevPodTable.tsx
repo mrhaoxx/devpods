@@ -25,7 +25,7 @@ import { runBulk } from "../../lib/bulk";
 import { BulkDialog, type BulkKind } from "./BulkDialog";
 import { useNow } from "../../lib/useNow";
 import { useDebounced } from "../../lib/useDebounced";
-import { TableCtx, devpodColumns, toRow, type Pending, type Row } from "./columns";
+import { TableCtx, devpodColumns, sharedWithMe, toRow, type Pending, type Row } from "./columns";
 import { useReservationsNow } from "../reservations/useReservationsNow";
 import { groupRows } from "./groups";
 import { groupUsage, usage, usageKeys, type UsageKey } from "./usage";
@@ -112,7 +112,8 @@ export function DevPodTable({ scope }: { scope: "mine" | "all" }) {
   const me = useMe().data;
   const admin = scope === "all" && !!me?.admin;
   const qc = useQueryClient();
-  const list = useDevPods(scope);
+  // mine: and those shared with me (marked, not managed here)
+  const list = useDevPods(scope === "mine" ? "shared" : "all");
   const [url, setUrl] = useUrlState(schema, { key: `devpods.${scope}`, omit: ["group"] });
   const now = useNow(10_000);
   const spec = devpodsStream(scope);
@@ -219,7 +220,15 @@ export function DevPodTable({ scope }: { scope: "mine" | "all" }) {
   };
   // what can be done to a DevPod, a group of them, a selection: said once,
   // offered by the ⋯ menu, the right-click menu and the bulk bar alike
-  const devpodActions = (r: Row): RowAction[] => [
+  const shared = (r: Row) => sharedWithMe(r, { admin, me });
+  const devpodActions = (r: Row): RowAction[] =>
+    shared(r)
+      ? [
+          { label: "复制 SSH 命令", onSelect: () => void copyText(sshCommand(me, r.owner, r.name, r.cluster)) },
+          ...(me?.features.webshell && r.phase === "Running" ? [{ label: "终端", onSelect: () => window.open(shellPath(r), "_blank", "noopener") }] : []),
+        ]
+      : ownActions(r);
+  const ownActions = (r: Row): RowAction[] => [
     { label: "在新标签页打开", onSelect: () => window.open(devpodHref(r), "_blank", "noopener") },
     { label: "复制 SSH 命令", onSelect: () => void copyText(sshCommand(me, r.owner, r.name, r.cluster)) },
     ...(me?.features.webshell && r.phase === "Running" ? [{ label: "终端", onSelect: () => window.open(shellPath(r), "_blank", "noopener") }] : []),
@@ -228,18 +237,22 @@ export function DevPodTable({ scope }: { scope: "mine" | "all" }) {
       : { label: "启动", disabled: busy(r), onSelect: () => void bulk("启动", [r], (x) => patchDevPod(x, true), START) },
     { label: "删除…", danger: true, disabled: busy(r), onSelect: () => setConfirm({ rows: [r], bulk: false }) },
   ];
-  const groupActions = (r: Row): RowAction[] => [
-    { label: "整组启动", onSelect: () => void bulk("整组启动", r.group!.members, (m) => patchDevPod(m, true), START) },
-    { label: "整组休眠", onSelect: () => void bulk("整组休眠", r.group!.members, (m) => patchDevPod(m, false), STOP) },
-    { label: "按配置重建整组…", onSelect: () => setRebuildAsk(r) },
-    { label: "删除整组…", danger: true, onSelect: () => setConfirm({ rows: r.group!.members, bulk: true }) },
-  ];
+  const groupActions = (r: Row): RowAction[] =>
+    r.group!.members.some(shared)
+      ? [] // another's group, shared with me
+      : [
+          { label: "整组启动", onSelect: () => void bulk("整组启动", r.group!.members, (m) => patchDevPod(m, true), START) },
+          { label: "整组休眠", onSelect: () => void bulk("整组休眠", r.group!.members, (m) => patchDevPod(m, false), STOP) },
+          { label: "按配置重建整组…", onSelect: () => setRebuildAsk(r) },
+          { label: "删除整组…", danger: true, onSelect: () => setConfirm({ rows: r.group!.members, bulk: true }) },
+        ];
   const rowActions = (r: Row) => (r.group ? groupActions(r) : devpodActions(r));
   // the ⋯ menu is in the (memoised) columns: it asks for what is current
   const rowActionsNow = useRef(rowActions);
   rowActionsNow.current = rowActions;
   const bulkActions = (picked: Row[], clear: () => void): RowAction[] => {
-    const sel = flat(picked);
+    // those shared with me are not mine to manage: left out
+    const sel = flat(picked).filter((r) => !shared(r));
     // nodes are a cluster's: DevPods of two clusters cannot move to the same ones
     const acrossClusters = new Set(sel.map((r) => r.cluster ?? "")).size > 1;
     return [

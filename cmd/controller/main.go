@@ -99,7 +99,7 @@ func main() {
 	flag.DurationVar(&tel.MetricsInterval, "telemetry-metrics-interval", tel.MetricsInterval, "supervisor metrics sampling interval")
 	flag.DurationVar(&tel.ProcScanInterval, "telemetry-proc-scan-interval", tel.ProcScanInterval, "supervisor /proc scan interval")
 	flag.IntVar(&tel.TopN, "telemetry-topn", tel.TopN, "processes reported per metric besides the active ones")
-	flag.BoolVar(&tel.GPU, "telemetry-gpu", tel.GPU, "collect GPU metrics (nvidia-smi)")
+	flag.BoolVar(&tel.GPU, "telemetry-gpu", tel.GPU, "collect GPU metrics (nvidia-smi, Moore Threads mthreads-gmi, MetaX mx-smi or Ascend npu-smi, whichever the container has)")
 	flag.BoolVar(&tel.RDMA, "telemetry-rdma", tel.RDMA, "collect RDMA counters")
 	flag.BoolVar(&tel.Hooks, "telemetry-hooks", tel.Hooks, "record shell commands via profile hooks")
 	flag.BoolVar(&reservations, "reservations", false, "enable node reservations (needs the Reservation CRD)")

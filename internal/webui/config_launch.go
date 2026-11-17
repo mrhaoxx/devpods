@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"net/http"
 	"strconv"
+	"strings"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/types"
@@ -306,9 +307,17 @@ func stampProvenance(dp *devpodv1alpha1.DevPod, c *devpodv1alpha1.DevPodConfig, 
 		vars[configvars.Name] = name
 	}
 	b, _ := json.Marshal(vars) // keys sorted
-	dp.Labels[lblConfig] = c.Name
-	dp.Annotations[annConfigHash] = contentHash(c.Spec.Content)
-	dp.Annotations[annConfigVars] = string(b)
+	if c.Name == "" {
+		// a text launched unsaved: there is no config to name, nor to
+		// rebuild from
+		delete(dp.Labels, lblConfig)
+		delete(dp.Annotations, annConfigHash)
+		delete(dp.Annotations, annConfigVars)
+	} else {
+		dp.Labels[lblConfig] = c.Name
+		dp.Annotations[annConfigHash] = contentHash(c.Spec.Content)
+		dp.Annotations[annConfigVars] = string(b)
+	}
 	delete(dp.Labels, lblGroup)
 	for _, k := range []string{annGroupIndex, annGroupSize, annGroupLeader} {
 		delete(dp.Annotations, k)
@@ -397,6 +406,39 @@ func (s *Server) handleLaunchConfig(w http.ResponseWriter, r *http.Request) {
 		s.writeServerErr(w, apiErr)
 		return
 	}
+	s.launch(w, r, sess, c, req)
+}
+
+// launchYAMLRequest: a config's text and how to launch it.
+type launchYAMLRequest struct {
+	Content string `json:"content"`
+	LaunchRequest
+}
+
+// handleLaunchYAML: POST /api/configs:launch — a config's text launched
+// as it is, without saving it (the SSH CLI's `config launch -`): the same
+// variables, checks and names as a saved config's launch; the DevPods
+// name no config.
+func (s *Server) handleLaunchYAML(w http.ResponseWriter, r *http.Request) {
+	sess, ok := s.sessionFrom(w, r)
+	if !ok {
+		return
+	}
+	var req launchYAMLRequest
+	if apiErr := decodeStrict(r, &req); apiErr != nil {
+		s.writeServerErr(w, apiErr)
+		return
+	}
+	if strings.TrimSpace(req.Content) == "" || len(req.Content) > maxConfigContent {
+		s.writeServerErr(w, badRequest("content is required, at most %d KiB", maxConfigContent>>10))
+		return
+	}
+	s.launch(w, r, sess, &devpodv1alpha1.DevPodConfig{Spec: devpodv1alpha1.DevPodConfigSpec{Content: req.Content}}, req.LaunchRequest)
+}
+
+// launch plans the DevPods of a config and, the plan being sound and not
+// a dry run, creates them.
+func (s *Server) launch(w http.ResponseWriter, r *http.Request, sess Session, c *devpodv1alpha1.DevPodConfig, req LaunchRequest) {
 	plan, apiErr := s.planLaunch(r, sess, c, req)
 	if apiErr != nil {
 		s.writeServerErr(w, apiErr)

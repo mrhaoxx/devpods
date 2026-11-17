@@ -100,7 +100,7 @@ export function SettingsPage() {
           <div className="text-xs text-muted">
             ~/.ssh/config 示例（每个 DevPod 的详情页有现成的片段）：
           </div>
-          <CopyBlock value={sshConfig(me, me.user, "pod")} />
+          <CopyBlock value={sshConfig(me, me.user, `${me.user}-pod`)} />
         </div>
       </Panel>
       <Panel title="访问令牌">

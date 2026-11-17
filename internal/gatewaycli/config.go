@@ -28,15 +28,26 @@ or ${VAR:-default} of your own.
 
   config [list] [--mine|--shared|--public]   the configs you may use
   config show <name>                         its details and YAML
+  config yaml <name>                         its YAML alone (to edit it in a file:
+                                             config yaml <name> > c.yaml, then config edit)
+  config edit <name> [--title T] [--description D]
+                                             put the YAML on standard input in its place
+                                             (at the devpod> prompt: shows it, then takes the
+                                             new one pasted, up to ^D on an empty line)
+  config create <id> [--title T] [--description D] [--public]
+                                             a new config <you>-<id> of the YAML on standard
+                                             input (pasted at the prompt); refused if it exists
   config save <id> [--title T] [--description D] [--public]
-                                             save the YAML on standard input as <you>-<id>;
-                                             an existing one gets the new YAML (and the flags given)
+                                             the same, but an existing one gets the new YAML
+                                             (and the flags given)
   config share <name> [user…]                who may use it besides you (no user: nobody)
   config public <name> on|off                open it to everyone signed in, or not
   config delete <name>
   config launch <name> [--set VAR=value]… [--node N]… [--count N] [--dry-run] [--cluster C]
                                              create DevPods from it (with several clusters:
                                              in --cluster C)
+  config launch - [--set VAR=value]… …       the same from the YAML on standard input, unsaved
+                                             (the DevPods name no config: rebuild does not apply)
 
 <name> is the config's full name as the list shows it; your own may be given
 without your user name. launch creates one DevPod per --node for a config with
@@ -46,9 +57,9 @@ only checks, and prints the YAML each DevPod would be created from.`
 
 func configCommands() []*command {
 	return []*command{
-		{group: "Configs", name: "config", aliases: []string{"configs"}, brief: "[list|show|save|share|public|delete|launch …]",
-			args:  "[list | show <name> | save <id> | share <name> [user…] | public <name> on|off | delete <name> | launch <name> [--set VAR=value]… [--node N]… [--count N] [--dry-run]]",
-			short: "saved DevPod configs: list, save, share, and create DevPods from one",
+		{group: "Configs", name: "config", aliases: []string{"configs"}, brief: "[list|show|yaml|edit|create|save|share|public|delete|launch …]",
+			args:  "[list | show <name> | yaml <name> | edit <name> | create <id> | save <id> | share <name> [user…] | public <name> on|off | delete <name> | launch <name>|- [--set VAR=value]… [--node N]… [--count N] [--dry-run]]",
+			short: "saved DevPod configs: list, edit, save, share, and create DevPods from one (or from YAML)",
 			long:  configLong,
 			vals:  []string{"title", "description", "set", "node", "count"},
 			bools: []string{"mine", "shared", "public", "dry-run"},
@@ -106,8 +117,14 @@ func runConfig(e *Env, a *parsed) int {
 		return configList(e, c, a)
 	case "show", "get":
 		return configShow(e, c, a, args)
+	case "yaml":
+		return configYAML(e, c, a, args)
+	case "edit":
+		return configEdit(e, c, a, args)
+	case "create":
+		return configSave(e, c, a, args, true)
 	case "save":
-		return configSave(e, c, a, args)
+		return configSave(e, c, a, args, false)
 	case "share":
 		return configShare(e, c, a, args)
 	case "public":
@@ -220,14 +237,21 @@ func configShow(e *Env, c *command, a *parsed, args []string) int {
 	return ExitOK
 }
 
-// readStdin reads standard input to its end, line by line.
+// readStdin reads standard input to its end, line by line. On a
+// terminal (the devpod> prompt) it is pasted: shown as it comes, up to ^D
+// on an empty line.
 func readStdin(e *Env) (string, error) {
-	if e.StdinLine == nil {
+	next := e.StdinLine
+	if e.TTY && e.ReadLine != nil {
+		fmt.Fprintln(e.Err, "paste the YAML, then ^D on an empty line (^C: cancel)")
+		next = func() (string, error) { return e.ReadLine("", true) }
+	}
+	if next == nil {
 		return "", nil
 	}
 	var b strings.Builder
 	for {
-		line, err := e.StdinLine()
+		line, err := next()
 		if err != nil {
 			if errors.Is(err, errInterrupted) {
 				return "", err
@@ -242,9 +266,75 @@ func readStdin(e *Env) (string, error) {
 	}
 }
 
-func configSave(e *Env, c *command, a *parsed, args []string) int {
+func configYAML(e *Env, c *command, a *parsed, args []string) int {
 	if len(args) != 1 {
-		return usage(e, c, "save takes one id: the config becomes <you>-<id>")
+		return usage(e, c, "yaml takes one config name")
+	}
+	v, raw, err := resolveConfig(e, args[0])
+	if err != nil {
+		return fail(e, err)
+	}
+	if a.json {
+		printJSON(e, raw)
+		return ExitOK
+	}
+	fmt.Fprint(e.Out, strings.TrimRight(v.Content, "\n")+"\n")
+	return ExitOK
+}
+
+// configEdit puts new YAML in a config's place: from standard input, or
+// — at the prompt — pasted after the YAML as it is is shown.
+func configEdit(e *Env, c *command, a *parsed, args []string) int {
+	if len(args) != 1 {
+		return usage(e, c, "edit takes one config name")
+	}
+	have, _, err := resolveConfig(e, args[0])
+	if err != nil {
+		return fail(e, err)
+	}
+	prompt := e.TTY && e.ReadLine != nil
+	if prompt {
+		fmt.Fprintf(e.Out, "%s now:\n---\n%s---\n", have.Name, strings.TrimRight(have.Content, "\n")+"\n")
+	}
+	content, err := readStdin(e)
+	if err != nil {
+		return usage(e, c, err.Error())
+	}
+	if strings.TrimSpace(content) == "" {
+		if prompt {
+			return usage(e, c, "nothing was pasted: "+have.Name+" is as it was")
+		}
+		return usage(e, c, "give the new YAML on standard input: ssh … config edit "+args[0]+" < config.yaml")
+	}
+	patch := map[string]any{"content": content}
+	if t, ok := a.val["title"]; ok {
+		patch["title"] = t
+	}
+	if d, ok := a.val["description"]; ok {
+		patch["description"] = d
+	}
+	var v configView
+	raw, err := call(e, http.MethodPatch, configPath(have.Name), patch, &v)
+	if err != nil {
+		return fail(e, err)
+	}
+	if a.json {
+		printJSON(e, raw)
+		return ExitOK
+	}
+	fmt.Fprintf(e.Out, "updated %s (%d variables)\n", v.Name, len(v.Variables))
+	return ExitOK
+}
+
+// configSave makes a config <you>-<id> of the YAML on standard input;
+// one of that id already is given the new YAML — unless only creating.
+func configSave(e *Env, c *command, a *parsed, args []string, createOnly bool) int {
+	sub := "save"
+	if createOnly {
+		sub = "create"
+	}
+	if len(args) != 1 {
+		return usage(e, c, sub+" takes one id: the config becomes <you>-<id>")
 	}
 	id := args[0]
 	content, err := readStdin(e)
@@ -252,7 +342,7 @@ func configSave(e *Env, c *command, a *parsed, args []string) int {
 		return usage(e, c, err.Error())
 	}
 	if strings.TrimSpace(content) == "" {
-		return usage(e, c, "give the YAML on standard input: ssh … config save "+id+" < devpod.yaml")
+		return usage(e, c, "give the YAML on standard input: ssh … config "+sub+" "+id+" < devpod.yaml")
 	}
 	_, hasTitle := a.val["title"]
 	_, hasDesc := a.val["description"]
@@ -268,8 +358,15 @@ func configSave(e *Env, c *command, a *parsed, args []string) int {
 	}
 	var v configView
 	verb := "saved"
+	if createOnly {
+		verb = "created"
+	}
 	raw, err := call(e, http.MethodPost, "/api/configs", body, &v)
 	var apiErr *APIError
+	if errors.As(err, &apiErr) && apiErr.Code == "CONFIG_EXISTS" && createOnly {
+		fmt.Fprintf(e.Err, "error: you already have a config %s-%s, left as it is: change its YAML with config edit %s, or replace it with config save %s\n", e.User, id, id, id)
+		return ExitAPI
+	}
 	if errors.As(err, &apiErr) && apiErr.Code == "CONFIG_EXISTS" {
 		// the caller's own config of that id: the new YAML, and only
 		// what was said on the command line besides
@@ -373,7 +470,7 @@ type launchItem struct {
 
 func configLaunch(e *Env, c *command, a *parsed, args []string) int {
 	if len(args) != 1 {
-		return usage(e, c, "launch takes one config name")
+		return usage(e, c, "launch takes one config name, or - for the YAML on standard input")
 	}
 	body := map[string]any{}
 	if sets := a.all["set"]; len(sets) > 0 {
@@ -408,16 +505,31 @@ func configLaunch(e *Env, c *command, a *parsed, args []string) int {
 	if dry {
 		body["dryRun"] = true
 	}
-	have, _, err := resolveConfig(e, args[0])
-	if err != nil {
-		return fail(e, err)
+	var path string
+	if args[0] == "-" {
+		// the YAML on standard input, launched as a config without saving it
+		content, err := readStdin(e)
+		if err != nil {
+			return usage(e, c, err.Error())
+		}
+		if strings.TrimSpace(content) == "" {
+			return usage(e, c, "give the YAML on standard input: ssh … config launch - --set NAME=… < devpod.yaml")
+		}
+		body["content"] = content
+		path = scoped(e, "", "/api/configs:launch")
+	} else {
+		have, _, err := resolveConfig(e, args[0])
+		if err != nil {
+			return fail(e, err)
+		}
+		path = scoped(e, "", configPath(have.Name)+"/launch")
 	}
 
 	// 200: all created (or, dry, all would be). 207: some were not.
 	// 422: the check refused the launch and nothing was created — its
 	// body lists every DevPod like the others do.
 	rejected := false
-	raw, err := call(e, http.MethodPost, scoped(e, "", configPath(have.Name)+"/launch"), body, nil)
+	raw, err := call(e, http.MethodPost, path, body, nil)
 	if err != nil {
 		var apiErr *APIError
 		if !errors.As(err, &apiErr) || apiErr.Status != http.StatusUnprocessableEntity || len(apiErr.Body) == 0 {

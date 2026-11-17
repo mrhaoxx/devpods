@@ -73,9 +73,9 @@ const quiet: Omit<SseHandlers, "onMessage"> = { onNamed() {}, onOpen() {}, onErr
 export function watchDevPods(
   onEvent: (type: string, dp: DevPod, pod?: PodInfo) => void,
   onResync: () => void,
-  scope: "mine" | "all" = "mine",
+  scope: "mine" | "all" | "shared" = "mine",
 ): () => void {
-  return openSSE(`/api/devpods?watch=true${scope === "all" ? "&scope=all" : ""}`, {
+  return openSSE(`/api/devpods?watch=true${scope === "all" ? "&scope=all" : scope === "shared" ? "&shared=1" : ""}`, {
     ...quiet,
     onOpen: onResync,
     onMessage: (d) => {

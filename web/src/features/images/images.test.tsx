@@ -254,13 +254,47 @@ describe("snapshots", () => {
     expect(within(ok).getByRole("link", { name: "新建 DevPod" }).getAttribute("href")).toContain("image=reg.test");
     const run = screen.getByText("reg.test/users/alice/b:v2").closest("tr")!;
     expect(within(run).getByRole("button", { name: "查看进度" })).toBeTruthy();
-    expect(within(run).queryByRole("button", { name: /删除/ })).toBeNull();
     expect(screen.getByText("push denied")).toBeTruthy();
     expect(screen.queryByLabelText("全部用户")).toBeNull(); // not an admin
-    fireEvent.click(within(ok).getByRole("button", { name: /删除/ }));
+    // a row's ⋯ offers what a right click does: one still saving cannot be forgotten
+    const menu = async (image: string) => {
+      fireEvent.keyDown(screen.getByRole("button", { name: `${image} 操作` }), { key: "Enter" });
+      return within(await screen.findByRole("menu"));
+    };
+    expect((await menu("reg.test/users/alice/b:v2")).queryByRole("menuitem", { name: "删除记录" })).toBeNull();
+    fireEvent.keyDown(screen.getByRole("menu"), { key: "Escape" });
+    fireEvent.click((await menu("reg.test/users/alice/a:v1")).getByRole("menuitem", { name: "删除记录" }));
     expect(await screen.findByText(/仓库里的镜像/)).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "删除记录" }));
     await waitFor(() => expect(calls.some((c) => c.method === "DELETE" && c.url.pathname === "/api/snapshots/s-ok")).toBe(true));
+  });
+
+  it("the images list is searched, narrowed by state, and forgets several at once", async () => {
+    const calls = stubFetch({
+      "/api/snapshots": {
+        items: [
+          view({ id: "s-ok", phase: "Succeeded" }),
+          view({ id: "s-run", phase: "Running", image: "reg.test/users/alice/b:v2" }),
+          view({ id: "s-bad", phase: "Failed", image: "reg.test/users/alice/c:v3" }),
+        ],
+      },
+      "DELETE /api/snapshots/s-ok": new Response(null, { status: 204 }),
+      "DELETE /api/snapshots/s-bad": new Response(null, { status: 204 }),
+    });
+    renderWithProviders(<ImagesPage />, { me: features() });
+    await screen.findByText("reg.test/users/alice/a:v1");
+    fireEvent.change(screen.getByLabelText("搜索镜像"), { target: { value: "c:v3" } });
+    await waitFor(() => expect(screen.queryByText("reg.test/users/alice/a:v1")).toBeNull());
+    fireEvent.change(screen.getByLabelText("搜索镜像"), { target: { value: "" } });
+    fireEvent.click(screen.getByRole("button", { name: /保存中/ }));
+    await waitFor(() => expect(screen.queryByText("reg.test/users/alice/a:v1")).toBeNull());
+    fireEvent.click(screen.getByRole("button", { name: /保存中/ }));
+    await screen.findByText("reg.test/users/alice/a:v1");
+    fireEvent.click(screen.getByLabelText("全选"));
+    fireEvent.click(screen.getByRole("button", { name: "删除记录（2）" })); // the one saving is left
+    fireEvent.click(within(screen.getByRole("dialog")).getByRole("button", { name: "删除 2 条记录" }));
+    expect(await screen.findByText(/删除记录：成功 2，失败 0/)).toBeTruthy();
+    expect(calls.filter((c) => c.method === "DELETE").map((c) => c.url.pathname).sort()).toEqual(["/api/snapshots/s-bad", "/api/snapshots/s-ok"]);
   });
 
   it("a failed save is tried again with 重试; the failed one stays", async () => {

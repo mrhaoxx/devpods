@@ -78,6 +78,7 @@ func (s *Server) handleLiveDevPods(w http.ResponseWriter, r *http.Request) {
 		s.writeErr(w, http.StatusBadRequest, "BAD_REQUEST", "scope must be mine or all", nil)
 		return
 	}
+	shared := !all && sharedWanted(r)
 	s.streamLive(w, r, func(ctx context.Context, snap live.Snapshot) (any, error) {
 		items := []liveItem{}
 		for _, cc := range s.ksc(r.Context()) { // the request's cluster, or every one
@@ -87,7 +88,7 @@ func (s *Server) handleLiveDevPods(w http.ResponseWriter, r *http.Request) {
 			}
 			for i := range one.Items {
 				dp := &one.Items[i]
-				if !all && dp.Spec.Owner != sess.User {
+				if !all && !mineOrShared(dp, sess.User, shared) {
 					continue
 				}
 				items = append(items, liveItem{Cluster: s.clusterLabel(cc), Name: dp.Name, Owner: dp.Spec.Owner, DevPodLive: emptyLive(snap.DevPods[string(dp.UID)])})

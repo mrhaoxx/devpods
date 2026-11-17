@@ -541,6 +541,40 @@ func (a *agent) alive(pid int) bool {
 	return err == nil
 }
 
+// pickGPUCollector: the GPU vendor's query tool the container has —
+// nvidia-smi, else Moore Threads' mthreads-gmi, MetaX's mx-smi or
+// Ascend's npu-smi — or none (GPU N/A).
+func pickGPUCollector(ctx context.Context, find func(name string) (string, bool)) GPUCollector {
+	if path, ok := find("nvidia-smi"); ok {
+		return NewNvidiaSMI(ctx, path)
+	}
+	if path, ok := find("mthreads-gmi"); ok {
+		return NewMthreadsGMI(ctx, path)
+	}
+	if path, ok := find("mx-smi"); ok {
+		return NewMetaXSMI(ctx, path)
+	}
+	if path, ok := find("npu-smi"); ok {
+		return NewAscendSMI(ctx, path)
+	}
+	return noGPUCollector{}
+}
+
+// findTool finds a program on PATH, or where the vendors put it (PID 1's
+// PATH may be bare).
+func findTool(name string) (string, bool) {
+	if path, err := exec.LookPath(name); err == nil {
+		return path, true
+	}
+	for _, dir := range []string{"/usr/bin", "/usr/local/bin", "/usr/local/sbin", "/opt/mxdriver/bin"} {
+		path := dir + "/" + name
+		if _, err := os.Stat(path); err == nil {
+			return path, true
+		}
+	}
+	return "", false
+}
+
 type noGPUCollector struct{}
 
 func (noGPUCollector) Latest() ([]wire.GPU, bool) { return nil, false }
@@ -566,11 +600,7 @@ func Run(ctx context.Context, cfg config.Config, env Env) (err error) {
 	if env.GPU == nil {
 		env.GPU = noGPUCollector{}
 		if cfg.GPU {
-			path, err := exec.LookPath("nvidia-smi")
-			if err != nil {
-				path = "/usr/bin/nvidia-smi"
-			}
-			env.GPU = NewNvidiaSMI(ctx, path)
+			env.GPU = pickGPUCollector(ctx, findTool)
 		}
 	}
 	defer env.GPU.Close()

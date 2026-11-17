@@ -6,12 +6,13 @@
 import { keyOf, refOfKey } from "../../data/cluster";
 import { useClusterFilter } from "../../data/clusterFilter";
 import { useMemo, useRef, useState } from "react";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   ApiFailure,
   createReservation,
   deleteReservation,
   getReservationRules,
+  listMyReservations,
   listReservations,
   patchReservation,
   type NodeChoice,
@@ -22,9 +23,8 @@ import { useMe, useNodeChoices } from "../../data/queries";
 import type { ColumnDef, SortingState } from "@tanstack/react-table";
 import { ActionMenu } from "../../design/ActionMenu";
 import { Badge } from "../../design/Badge";
-import { BulkToast, type BulkOutcome, type BulkProgress } from "../../design/BulkToast";
+import { useBulkRun } from "../../design/BulkToast";
 import { DataTable, type RowAction } from "../../design/DataTable";
-import { runBulk } from "../../lib/bulk";
 import { copyText } from "../../design/Copy";
 import { Button } from "../../design/Button";
 import { ConfirmDialog } from "../../design/ConfirmDialog";
@@ -32,6 +32,7 @@ import { EmptyState } from "../../design/EmptyState";
 import { Field, Input, Notice, Select } from "../../design/Form";
 import { Panel } from "../../design/Panel";
 import { useNow } from "../../lib/useNow";
+import { LoadMore } from "../audit/common";
 import { dayStart, fmtClock, fmtDay, fmtSpan, fmtTime, fromInput, periodError, selection, slotStart, toInput } from "../../lib/reservations";
 import * as Dialog from "@radix-ui/react-dialog";
 
@@ -391,6 +392,15 @@ export function ReservationsPage() {
     refetchInterval: 30_000,
     enabled: !!rules.data,
   });
+  // my reservations, of any time: a page at a time, the latest first
+  const mineQ = useInfiniteQuery({
+    queryKey: ["reservations", "mine"],
+    queryFn: ({ pageParam }) => listMyReservations(pageParam || undefined),
+    initialPageParam: "",
+    getNextPageParam: (last) => last.next || undefined,
+    refetchInterval: 30_000,
+    enabled: !!rules.data,
+  });
   const { matches } = useClusterFilter();
   const [draft, setDraft] = useState<Draft | null>(null);
   const [picked, setPicked] = useState<Reservation | null>(null);
@@ -402,8 +412,7 @@ export function ReservationsPage() {
   // my reservations: a list like the DevPod list; several cancelled at once
   const [sorting, setSorting] = useState<SortingState>([{ id: "start", desc: true }]);
   const [bulkCancel, setBulkCancel] = useState<{ rows: Reservation[]; clear: () => void } | null>(null);
-  const [progress, setProgress] = useState<BulkProgress | null>(null);
-  const [outcome, setOutcome] = useState<BulkOutcome | null>(null);
+  const bulk = useBulkRun();
   // the ⋯ menu is in the (memoised) columns: it asks for what is current
   const rowActionsNow = useRef<(b: Reservation) => RowAction[]>(() => []);
   const userNow = useRef("");
@@ -424,22 +433,10 @@ export function ReservationsPage() {
   const live = all.filter((b) => b.phase !== "Cancelled");
   // the machines I need a reservation for (an admin sees every reservable one)
   const nodes = (nodesQ.data?.items ?? []).filter((n) => n.reservable && (n.reservationRequired || me.admin) && matches(n));
-  const mine = all.filter((b) => b.mine).sort((a, b) => Date.parse(b.start) - Date.parse(a.start));
+  const mine = (mineQ.data?.pages.flatMap((p) => p.items) ?? []).filter((b) => b.mine && matches(b));
   const cancelAll = async (rows: Reservation[], clear: () => void) => {
     setBulkCancel(null);
-    setOutcome(null);
-    setProgress({ action: "取消预约", done: 0, failed: 0, total: rows.length });
-    const results = await runBulk(rows, async (b) => {
-      try {
-        await deleteReservation(b);
-        setProgress((p) => p && { ...p, done: p.done + 1 });
-      } catch (e) {
-        setProgress((p) => p && { ...p, done: p.done + 1, failed: p.failed + 1 });
-        throw new Error(apiMessage(e));
-      }
-    });
-    setProgress(null);
-    setOutcome({ action: "取消预约", results: results.map((x) => ({ ...x, item: `${x.item.node} ${fmtTime(x.item.start)}` })) });
+    await bulk.run("取消预约", rows, (b) => deleteReservation(b).catch((e) => Promise.reject(new Error(apiMessage(e)))), (b) => `${b.node} ${fmtTime(b.start)}`);
     clear();
     void qc.invalidateQueries({ queryKey: ["reservations"] });
     void qc.invalidateQueries({ queryKey: ["node-choices"] });
@@ -574,7 +571,7 @@ export function ReservationsPage() {
       </Panel>
       <Panel title="我的预约">
         {mine.length === 0 ? (
-          <EmptyState title="你还没有预约" />
+          <EmptyState title={mineQ.isLoading ? "加载中…" : mineQ.isError ? `加载失败：${apiMessage(mineQ.error)}` : "你还没有预约"} />
         ) : (
           <DataTable<Reservation>
             label="我的预约"
@@ -596,6 +593,7 @@ export function ReservationsPage() {
             rowMenu={(rows, isBulk, clear) => (isBulk ? bulkActions(rows, clear) : rowActions(rows[0]))}
           />
         )}
+        <LoadMore hasMore={mineQ.hasNextPage} busy={mineQ.isFetchingNextPage} onClick={() => void mineQ.fetchNextPage()} auto />
       </Panel>
       <ConfirmDialog
         open={!!bulkCancel}
@@ -610,7 +608,7 @@ export function ReservationsPage() {
             ? `其中 ${bulkCancel.rows.filter((b) => b.phase === "Active").length} 份进行中的会提前释放：你在那些机器上只靠预约运行的 DevPod 会被自动休眠。其余的直接取消。`
             : "它们都还没开始，直接取消。")}
       </ConfirmDialog>
-      <BulkToast progress={progress} outcome={outcome} onClose={() => setOutcome(null)} />
+      {bulk.toast}
       {draft && <ReserveDialog key={`${draft.node}-${draft.start}-${draft.edit?.id ?? ""}`} draft={draft} nodes={nodes} rules={rules.data} now={now} onClose={() => setDraft(null)} />}
       <ConfirmDialog
         open={!!picked}

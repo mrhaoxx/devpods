@@ -68,9 +68,14 @@ export const sshOf = (me: Me | undefined, cluster?: string) => (cluster && me?.c
 /** meIn: my quota and usage in a cluster (all of them without one). */
 export const meIn = (me: Me | undefined, cluster?: string) => (cluster && me?.clusters?.[cluster]) || (me ? { quota: me.quota, usage: me.usage } : undefined);
 
-export function sshUser(me: Me | undefined, owner: string, pod: string, cluster?: string): string {
+/** sshUser: the login for a DevPod, given its whole name. The owner's is
+ *  <owner>+<the rest of the name after "<owner>-">; anyone else (a
+ *  collaborator) logs in as themselves with the whole name, by which the
+ *  gateway finds it. */
+export function sshUser(me: Me | undefined, owner: string, name: string, cluster?: string): string {
   const suffix = sshOf(me, cluster)?.loginSuffix;
-  return `${owner}+${pod}${suffix ? `+${suffix}` : ""}`;
+  const login = !me || me.user === owner ? `${owner}+${name.startsWith(owner + "-") ? name.slice(owner.length + 1) : name}` : `${me.user}+${name}`;
+  return `${login}${suffix ? `+${suffix}` : ""}`;
 }
 
 export type AuthConfig = { password: boolean; oauth: boolean };
@@ -153,24 +158,24 @@ export function parseCpuList(s?: string): Set<number> {
   return set;
 }
 
-// sshCommand renders the copy-pastable login line using the
-// deployment's advertised gateway address (-p only when non-22).
-export function sshCommand(me: Me | undefined, owner: string, pod: string, cluster?: string): string {
+// sshCommand renders the copy-pastable login line for a DevPod (its whole
+// name) using the deployment's advertised gateway address (-p only when
+// non-22).
+export function sshCommand(me: Me | undefined, owner: string, name: string, cluster?: string): string {
   const ssh = sshOf(me, cluster);
   const host = ssh?.host || "<gateway>";
   const port = ssh?.port ?? 22;
   const flag = host !== "<gateway>" && port !== 22 ? `-p ${port} ` : "";
-  return `ssh ${flag}${sshUser(me, owner, pod, cluster)}@${host}`;
+  return `ssh ${flag}${sshUser(me, owner, name, cluster)}@${host}`;
 }
 
 // sshConfig renders a ~/.ssh/config block so the user can shortcut the
-// full login to `ssh <alias>`. The alias is the DevPod name.
-export function sshConfig(me: Me | undefined, owner: string, pod: string, cluster?: string): string {
+// full login to `ssh <alias>`. The alias is the DevPod's name.
+export function sshConfig(me: Me | undefined, owner: string, name: string, cluster?: string): string {
   const ssh = sshOf(me, cluster);
   const host = ssh?.host || "<gateway>";
   const port = ssh?.port ?? 22;
-  const alias = `${owner}-${pod}`;
-  return `Host ${alias}\n    HostName ${host}\n    Port ${port}\n    User ${sshUser(me, owner, pod, cluster)}`;
+  return `Host ${name}\n    HostName ${host}\n    Port ${port}\n    User ${sshUser(me, owner, name, cluster)}`;
 }
 
 export type K8sEvent = {
@@ -222,8 +227,10 @@ export type BindingInfo = {
 /** me: who I am; in a console of several clusters, per cluster too (meIn, sshOf). */
 export const me = () => req<Me>("GET", "/api/me");
 export type DevPodList = { items: DevPod[]; pods: Record<string, PodInfo> };
-export const listDevPods = (scope: "mine" | "all" = "mine") =>
-  req<DevPodList>("GET", scope === "all" ? "/api/devpods?scope=all" : "/api/devpods");
+/** listDevPods: mine, everyone's (admins), or mine and those shared with me (the 我的 DevPod list). */
+export const listDevPods = (scope: ListScope = "mine") =>
+  req<DevPodList>("GET", scope === "all" ? "/api/devpods?scope=all" : scope === "shared" ? "/api/devpods?shared=1" : "/api/devpods");
+export type ListScope = "mine" | "all" | "shared";
 export const auditPresence = (all = false) =>
   req<{ items: Record<string, Presence> }>("GET", `/api/audit/presence${all ? "?scope=all" : ""}`);
 export const getDevPod = (r: Ref) => req<DevPodDetail>("GET", apiIn(r.cluster, `/api/devpods/${r.name}`));
@@ -561,6 +568,9 @@ export type Reservation = {
 export type ReservationRules = { granularitySeconds: number; maxDurationSeconds: number; maxAdvanceSeconds: number; clearNoticeSeconds: number; timezone: string; now: string };
 export const getReservationRules = () => req<ReservationRules>("GET", "/api/reservations/rules");
 export const listReservations = (from: string, to: string) => req<{ items: Reservation[] }>("GET", `/api/reservations?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}`);
+/** listMyReservations: a page of mine, of any time, the latest start first; `next` asks for the page after. */
+export const listMyReservations = (cursor?: string, limit = 50) =>
+  req<{ items: Reservation[]; next?: string }>("GET", `/api/reservations?mine=1&limit=${limit}${cursor ? `&cursor=${encodeURIComponent(cursor)}` : ""}`);
 type Period = { node: string; start: string; end: string };
 /** ResRef names a reservation: its id and cluster. */
 export type ResRef = { id: string; cluster?: string };

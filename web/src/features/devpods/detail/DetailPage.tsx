@@ -164,7 +164,6 @@ export function DetailPage() {
 
   const dp = d.devpod;
   const owner = dp.spec.owner;
-  const suffix = dp.metadata.name.startsWith(owner + "-") ? dp.metadata.name.slice(owner.length + 1) : dp.metadata.name;
   const pod = d.pod;
   const runningPhase = dp.status?.phase === "Running";
   const image = dp.spec.pod?.spec?.containers?.[0]?.image;
@@ -185,7 +184,7 @@ export function DetailPage() {
   const clusters = clusterList.data?.items ?? [];
   const several = clusters.length >= 2;
   const clusterName = clusters.find((c) => c.name === cluster)?.displayName || cluster;
-  const ssh = me ? sshCommand(me, owner, suffix, cluster) : "";
+  const ssh = me ? sshCommand(me, owner, dp.metadata.name, cluster) : "";
 
   return (
     <div className="space-y-3 p-3">
@@ -263,7 +262,7 @@ export function DetailPage() {
           <Panel title="SSH">
             <div className="space-y-2 p-3">
               <CopyField value={ssh} />
-              {me && <CopyBlock value={sshConfig(me, owner, suffix, cluster)} />}
+              {me && <CopyBlock value={sshConfig(me, owner, dp.metadata.name, cluster)} />}
             </div>
           </Panel>
           <Panel title="在线会话">

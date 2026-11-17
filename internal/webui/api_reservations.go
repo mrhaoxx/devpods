@@ -11,6 +11,8 @@ import (
 	"fmt"
 	"net/http"
 	"sort"
+	"strconv"
+	"strings"
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
@@ -184,6 +186,31 @@ func (s *Server) handleListReservations(w http.ResponseWriter, r *http.Request) 
 	now := ru.now()
 	from, to := now.Add(-24*time.Hour), now.Add(15*24*time.Hour)
 	q := r.URL.Query()
+	// mine=1: only the caller's, of any time (unless from/to say);
+	// limit=N: a page of them, the latest start first, `next` naming the
+	// page after (cursor=)
+	mine := q.Get("mine") == "1" || q.Get("mine") == "true"
+	if mine {
+		from, to = time.Time{}, time.Date(9999, 1, 1, 0, 0, 0, 0, time.UTC)
+	}
+	limit := 0
+	if v := q.Get("limit"); v != "" {
+		n, err := strconv.Atoi(v)
+		if err != nil || n < 1 {
+			s.writeErr(w, http.StatusBadRequest, "BAD_REQUEST", "limit must be a positive number", nil)
+			return
+		}
+		limit = n
+	}
+	var after *resCursor
+	if v := q.Get("cursor"); v != "" {
+		c, err := parseResCursor(v)
+		if err != nil {
+			s.writeErr(w, http.StatusBadRequest, "BAD_REQUEST", "cursor is not one this list gave", nil)
+			return
+		}
+		after = &c
+	}
 	for name, dst := range map[string]*time.Time{"from": &from, "to": &to} {
 		if v := q.Get(name); v != "" {
 			t, err := time.Parse(time.RFC3339, v)
@@ -235,6 +262,9 @@ func (s *Server) handleListReservations(w http.ResponseWriter, r *http.Request) 
 				continue
 			}
 			v := viewOfReservation(nr, sess.User, now)
+			if mine && !v.Mine {
+				continue
+			}
 			if !v.Mine && (!open || !usable(nr.Spec.Node)) {
 				continue // others' reservations in a cluster, or of a machine, not shown to them
 			}
@@ -244,8 +274,55 @@ func (s *Server) handleListReservations(w http.ResponseWriter, r *http.Request) 
 			}
 		}
 	}
-	sort.SliceStable(items, func(i, j int) bool { return items[i].Start.Before(items[j].Start) })
-	s.writeJSON(w, http.StatusOK, map[string]any{"items": items})
+	if limit == 0 && after == nil {
+		sort.SliceStable(items, func(i, j int) bool { return items[i].Start.Before(items[j].Start) })
+		s.writeJSON(w, http.StatusOK, map[string]any{"items": items})
+		return
+	}
+	// a page: the latest start first; those starting together in a fixed
+	// order, so a page's edge between them loses or repeats none
+	sort.Slice(items, func(i, j int) bool { return cursorOf(items[i]).before(cursorOf(items[j])) })
+	if after != nil {
+		i := sort.Search(len(items), func(i int) bool { return after.before(cursorOf(items[i])) })
+		items = items[i:]
+	}
+	out := map[string]any{"items": items}
+	if limit > 0 && len(items) > limit {
+		items = items[:limit]
+		out["items"] = items
+		out["next"] = cursorOf(items[limit-1]).String()
+	}
+	s.writeJSON(w, http.StatusOK, out)
+}
+
+// resCursor: a place in a paged list of reservations — the latest start
+// first, then by cluster and name.
+type resCursor struct {
+	start int64 // UnixNano
+	key   string
+}
+
+func cursorOf(v reservationView) resCursor {
+	return resCursor{start: v.Start.UnixNano(), key: v.Cluster + "/" + v.ID}
+}
+
+// before: c comes before d in the list.
+func (c resCursor) before(d resCursor) bool {
+	if c.start != d.start {
+		return c.start > d.start
+	}
+	return c.key < d.key
+}
+
+func (c resCursor) String() string { return strconv.FormatInt(c.start, 10) + "~" + c.key }
+
+func parseResCursor(s string) (resCursor, error) {
+	at, key, ok := strings.Cut(s, "~")
+	n, err := strconv.ParseInt(at, 10, 64)
+	if !ok || err != nil || !strings.Contains(key, "/") {
+		return resCursor{}, fmt.Errorf("bad cursor %q", s)
+	}
+	return resCursor{start: n, key: key}, nil
 }
 
 // reservableNode: the node, which must exist and be marked reservable.

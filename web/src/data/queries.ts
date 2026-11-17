@@ -29,7 +29,7 @@ import {
 
 export const qk = {
   me: ["me"] as const,
-  devpods: (scope: "mine" | "all") => ["devpods", scope] as const,
+  devpods: (scope: "mine" | "all" | "shared") => ["devpods", scope] as const,
   devpod: (r: Ref) => ["devpod", r.cluster ?? "", r.name] as const,
   users: ["admin", "users"] as const,
   nodes: ["admin", "nodes"] as const,
@@ -65,7 +65,7 @@ export function applyWatchEvent(old: DevPodList | undefined, type: string, dp: D
 const WATCH_BATCH_MS = 150;
 
 /** useDevPods: the list plus its watch stream folded into the cache. */
-export function useDevPods(scope: "mine" | "all" = "mine", enabled = true) {
+export function useDevPods(scope: "mine" | "all" | "shared" = "mine", enabled = true) {
   const qc = useQueryClient();
   const q = useQuery({ queryKey: qk.devpods(scope), queryFn: () => listDevPods(scope), enabled });
   useEffect(() => {

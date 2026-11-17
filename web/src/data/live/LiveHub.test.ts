@@ -24,7 +24,7 @@ describe("LiveHub", () => {
     const r1 = hub.acquire(devpodsStream("mine"));
     const r2 = hub.acquire(devpodsStream("mine"));
     expect(conns).toHaveLength(1);
-    expect(conns[0].url).toBe("/api/live/devpods?scope=mine");
+    expect(conns[0].url).toBe("/api/live/devpods?scope=mine&shared=1");
     r1();
     expect(conns[0].closed).toBe(false);
     r2();

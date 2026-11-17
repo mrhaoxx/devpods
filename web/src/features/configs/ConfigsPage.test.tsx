@@ -129,6 +129,20 @@ describe("配置 page", () => {
     expect((await menu("公开的")).queryByRole("menuitem", { name: "设为官方" })).toBeNull();
   });
 
+  it("deletes several at once: only those I may, after a confirm", async () => {
+    const calls = lists({
+      "DELETE /api/configs/alice-a": new Response(null, { status: 204 }),
+      "DELETE /api/configs/alice-pub": new Response(null, { status: 204 }),
+    });
+    renderWithProviders(<ConfigsPage />);
+    await screen.findByText("共享的");
+    fireEvent.click(screen.getByLabelText("全选"));
+    fireEvent.click(screen.getByRole("button", { name: "删除（2）" })); // the others' are not mine to delete
+    fireEvent.click(within(screen.getByRole("dialog")).getByRole("button", { name: "删除 2 个配置" }));
+    expect(await screen.findByText(/删除配置：成功 2，失败 0/)).toBeTruthy();
+    expect(calls.filter((c) => c.method === "DELETE").map((c) => c.url.pathname).sort()).toEqual(["/api/configs/alice-a", "/api/configs/alice-pub"]);
+  });
+
   it("says so when there is nothing", async () => {
     stubFetch({ "GET /api/configs": { items: [] } });
     renderWithProviders(<ConfigsPage />);

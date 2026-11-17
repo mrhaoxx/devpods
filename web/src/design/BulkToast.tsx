@@ -1,9 +1,9 @@
 // BulkToast: what an action on rows of a list is doing and how it ended —
 // over the window's corner, moving nothing. A success says so for a few
 // seconds; a failure stays until closed.
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 import { Notice } from "./Form";
-import type { BulkResult } from "../lib/bulk";
+import { runBulk, type BulkResult } from "../lib/bulk";
 
 export type BulkProgress = { action: string; done: number; failed: number; total: number };
 export type BulkOutcome = { action: string; results: BulkResult<string>[] };
@@ -42,4 +42,30 @@ export function BulkToast({ progress, outcome, onClose }: { progress: BulkProgre
       )}
     </div>
   );
+}
+
+/** useBulkRun: an action on rows of a list, one by one (a few at a
+ *  time), its progress and how it ended said in the toast. `name` says
+ *  which row a failure was; a failure's message is what fn threw. */
+export function useBulkRun() {
+  const [progress, setProgress] = useState<BulkProgress | null>(null);
+  const [outcome, setOutcome] = useState<BulkOutcome | null>(null);
+  const run = async <T,>(action: string, items: T[], fn: (t: T) => Promise<unknown>, name: (t: T) => string) => {
+    setOutcome(null);
+    setProgress({ action, done: 0, failed: 0, total: items.length });
+    const results = await runBulk(items, async (t) => {
+      try {
+        await fn(t);
+        setProgress((p) => p && { ...p, done: p.done + 1 });
+      } catch (e) {
+        setProgress((p) => p && { ...p, done: p.done + 1, failed: p.failed + 1 });
+        throw e;
+      }
+    });
+    setProgress(null);
+    setOutcome({ action, results: results.map((x) => ({ ...x, item: name(x.item) })) });
+    return results;
+  };
+  const toast = <BulkToast progress={progress} outcome={outcome} onClose={() => setOutcome(null)} />;
+  return { run, toast };
 }

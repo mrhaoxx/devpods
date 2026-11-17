@@ -1,18 +1,22 @@
 // 预约管理 (admins): every user's node reservations as a list — filter by
-// time, state, user and node; change a reservation's period or cancel it.
+// time, state, user and node; change a reservation's period or cancel it,
+// or pick several (by box or by a drag) and cancel them together.
 // (Which nodes may be reserved is set on 节点; the rules are the
 // console's settings and are shown here as they are.)
-import { useMemo, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import type { ColumnDef, SortingState } from "@tanstack/react-table";
 import { ApiFailure, deleteReservation, getReservationRules, listReservations, patchReservation, type Reservation } from "../../data/api";
 import { useClusterFilter } from "../../data/clusterFilter";
+import { ActionMenu } from "../../design/ActionMenu";
 import { Badge } from "../../design/Badge";
+import { useBulkRun } from "../../design/BulkToast";
 import { Button } from "../../design/Button";
 import { Chip } from "../../design/Chip";
 import { ConfirmDialog } from "../../design/ConfirmDialog";
-import { DataTable } from "../../design/DataTable";
+import { copyText } from "../../design/Copy";
+import { DataTable, type RowAction } from "../../design/DataTable";
 import { EmptyState } from "../../design/EmptyState";
 import { Field, Input, Notice } from "../../design/Form";
 import { RefreshControl } from "../../design/RefreshControl";
@@ -48,6 +52,7 @@ const local = (iso: string) => {
   const p = (n: number) => String(n).padStart(2, "0");
   return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}T${p(d.getHours())}:${p(d.getMinutes())}`;
 };
+const isLive = (r: Reservation) => r.phase === "Upcoming" || r.phase === "Active";
 const said = (e: unknown) => (e instanceof ApiFailure ? e.body.message : e instanceof Error ? e.message : String(e));
 
 export function AdminReservationsPage() {
@@ -75,6 +80,10 @@ export function AdminReservationsPage() {
     void qc.invalidateQueries({ queryKey: ["node-choices"] });
   };
   const [cancel, setCancel] = useState<Reservation | null>(null);
+  const [cancelMany, setCancelMany] = useState<{ rows: Reservation[]; clear: () => void } | null>(null);
+  const bulk = useBulkRun();
+  // the ⋯ menu is in the (memoised) columns: it asks for what is current
+  const rowActionsNow = useRef<(r: Reservation) => RowAction[]>(() => []);
   const [edit, setEdit] = useState<{ r: Reservation; start: string; end: string } | null>(null);
   const [error, setError] = useState("");
   const del = useMutation({ mutationFn: deleteReservation, onError: (e) => setError(said(e)), onSuccess: () => setError(""), onSettled: refresh });
@@ -133,22 +142,46 @@ export function AdminReservationsPage() {
         id: "actions",
         header: "",
         enableSorting: false,
-        meta: { priority: 1, width: 130, pin: "right" },
-        cell: ({ row: { original: r } }) =>
-          r.phase === "Upcoming" || r.phase === "Active" ? (
-            <span className="inline-flex gap-1">
-              <Button variant="ghost" onClick={() => setEdit({ r, start: local(r.start), end: local(r.end) })}>
-                改时间
-              </Button>
-              <Button variant="ghost" onClick={() => setCancel(r)}>
-                取消
-              </Button>
-            </span>
-          ) : null,
+        meta: { priority: 1, width: 48, align: "right", pin: "right" },
+        cell: ({ row: { original: r } }) => <ActionMenu label={`${r.user} ${r.node} 操作`} actions={() => rowActionsNow.current(r)} />,
       },
     ],
     [several],
   );
+
+  // what can be done to a reservation, a selection: said once, offered by
+  // the ⋯ menu, the right-click menu and the bulk bar alike
+  const editOf = (r: Reservation) => setEdit({ r, start: local(r.start), end: local(r.end) });
+  const rowActions = (r: Reservation): RowAction[] => [
+    ...(isLive(r)
+      ? [
+          { label: "改时间", onSelect: () => editOf(r) },
+          { label: "取消", danger: true, onSelect: () => setCancel(r) },
+        ]
+      : []),
+    { label: "复制节点名", onSelect: () => void copyText(r.node) },
+    { label: "复制用户名", onSelect: () => void copyText(r.user) },
+  ];
+  rowActionsNow.current = rowActions;
+  const bulkActions = (rows: Reservation[], clear: () => void): RowAction[] => {
+    const can = rows.filter(isLive);
+    return [
+      {
+        label: `取消所选（${can.length}）`,
+        danger: true,
+        disabled: can.length === 0,
+        title: can.length === 0 ? "所选的都已结束或已取消" : undefined,
+        onSelect: () => setCancelMany({ rows: can, clear }),
+      },
+      { label: "复制节点名", onSelect: () => void copyText([...new Set(rows.map((r) => r.node))].join("\n")) },
+    ];
+  };
+  const cancelAll = async (v: { rows: Reservation[]; clear: () => void }) => {
+    setCancelMany(null);
+    await bulk.run("取消预约", v.rows, (r) => deleteReservation(r).catch((e) => Promise.reject(new Error(said(e)))), (r) => `${r.user} ${r.node}`);
+    v.clear();
+    refresh();
+  };
 
   if (rules.isError) return <EmptyState tone="error" title="节点预约不可用" hint={said(rules.error)} />;
   const ru = rules.data;
@@ -182,7 +215,7 @@ export function AdminReservationsPage() {
       </div>
       {ru && (
         <p className="border-b border-line px-3 py-1.5 text-[11px] text-muted">
-          规则：每格 {span(ru.granularitySeconds)} · 一次最长 {span(ru.maxDurationSeconds)} · 最多提前 {span(ru.maxAdvanceSeconds)} · 开始前 {span(ru.clearNoticeSeconds)}{" "}
+          规则：每格 {span(ru.granularitySeconds)} · 一次最长 {ru.maxDurationSeconds > 0 ? span(ru.maxDurationSeconds) : "不限"} · 最多提前 {span(ru.maxAdvanceSeconds)} · 开始前 {span(ru.clearNoticeSeconds)}{" "}
           提醒节点上的其他 DevPod · 时区 {ru.timezone}。哪些节点可以预约在 <Link to="/admin/nodes" className="text-accent hover:underline">节点</Link> 里设置。
         </p>
       )}
@@ -200,7 +233,32 @@ export function AdminReservationsPage() {
         sorting={sorting}
         onSortingChange={(s) => setUrl({ sort: s[0] ? `${s[0].desc ? "-" : ""}${s[0].id}` : "" })}
         empty={<EmptyState title={q.isLoading || !ru ? "加载中…" : "没有符合条件的预约"} />}
+        selectable
+        onRowClick={(r) => isLive(r) && editOf(r)}
+        bulkBar={(rows, clear) =>
+          bulkActions(rows, clear).map((a) => (
+            <Button key={a.label} variant={a.danger ? "danger" : undefined} disabled={a.disabled} title={a.title} onClick={a.onSelect}>
+              {a.label}
+            </Button>
+          ))
+        }
+        rowMenu={(rows, isBulk, clear) => (isBulk ? bulkActions(rows, clear) : rowActions(rows[0]))}
       />
+      <ConfirmDialog
+        open={!!cancelMany}
+        onOpenChange={(o) => !o && setCancelMany(null)}
+        title={`取消 ${cancelMany?.rows.length ?? 0} 份预约？`}
+        confirmLabel={`取消 ${cancelMany?.rows.length ?? 0} 份预约`}
+        danger
+        onConfirm={() => cancelMany && void cancelAll(cancelMany)}
+      >
+        {cancelMany && (() => {
+          const on = cancelMany.rows.filter((r) => r.phase === "Active").length;
+          const users = new Set(cancelMany.rows.map((r) => r.user)).size;
+          return `${users} 个用户的预约。${on > 0 ? `其中 ${on} 份正在进行，取消后那些节点立刻对其他人开放。` : ""}预约人会看到是你取消的。`;
+        })()}
+      </ConfirmDialog>
+      {bulk.toast}
       <ConfirmDialog
         open={!!cancel}
         onOpenChange={(o) => !o && setCancel(null)}

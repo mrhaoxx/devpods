@@ -1,18 +1,20 @@
 // 配置 (config center spec §6.1): saved DevPod YAML with variables — my
 // own, those shared with me, and the public ones, in one table to
 // search, scope and sort (there can be dozens). Any of them can be
-// launched or copied; only my own can be changed.
-import { useMemo, useState } from "react";
+// launched or copied; only my own can be changed. Several are picked by
+// box, a drag or Ctrl+A, and deleted together.
+import { useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, useNavigate } from "react-router-dom";
-import * as Menu from "@radix-ui/react-dropdown-menu";
 import type { ColumnDef, SortingState } from "@tanstack/react-table";
 import { ApiFailure } from "../../data/api";
 import { useMe } from "../../data/queries";
+import { ActionMenu } from "../../design/ActionMenu";
 import { Badge } from "../../design/Badge";
+import { useBulkRun } from "../../design/BulkToast";
 import { Button } from "../../design/Button";
 import { ConfirmDialog } from "../../design/ConfirmDialog";
-import { DataTable } from "../../design/DataTable";
+import { DataTable, type RowAction } from "../../design/DataTable";
 import { EmptyState } from "../../design/EmptyState";
 import { Input, Notice } from "../../design/Form";
 import { fmtAge } from "../../lib/format";
@@ -67,71 +69,6 @@ const matchesQuery = (c: ConfigSummary, q: string) => {
   ].some((x) => x.toLowerCase().includes(s));
 };
 
-const item =
-  "cursor-pointer rounded px-2 py-1 outline-none data-[highlighted]:bg-sunk";
-
-function RowMenu({
-  c,
-  admin,
-  onOpen,
-  onCopy,
-  onDelete,
-  onUnpublish,
-  onOfficial,
-}: {
-  c: Row;
-  admin: boolean;
-  onOpen: () => void;
-  onCopy: () => void;
-  onDelete: () => void;
-  onUnpublish: () => void;
-  onOfficial: (official: boolean) => void;
-}) {
-  return (
-    <Menu.Root>
-      <Menu.Trigger
-        aria-label={`${c.title} 更多操作`}
-        className="rounded px-1.5 text-muted hover:bg-sunk hover:text-ink"
-      >
-        ⋯
-      </Menu.Trigger>
-      <Menu.Portal>
-        <Menu.Content
-          align="end"
-          className="z-50 min-w-32 rounded-md border border-line bg-surface p-1 text-xs shadow-lg"
-        >
-          <Menu.Item className={item} onSelect={onOpen}>
-            {c.mine ? "编辑" : "查看"}
-          </Menu.Item>
-          <Menu.Item className={item} onSelect={onCopy}>
-            另存为副本
-          </Menu.Item>
-          {admin && c.public && (
-            <Menu.Item
-              className={item}
-              onSelect={() => onOfficial(!c.official)}
-            >
-              {c.official ? "取消官方" : "设为官方"}
-            </Menu.Item>
-          )}
-          {admin && !c.mine && c.public && (
-            <Menu.Item className={item} onSelect={onUnpublish}>
-              取消公开
-            </Menu.Item>
-          )}
-          {(c.mine || admin) && (
-            <Menu.Item
-              className="cursor-pointer rounded px-2 py-1 text-fail outline-none data-[highlighted]:bg-fail-soft"
-              onSelect={onDelete}
-            >
-              删除
-            </Menu.Item>
-          )}
-        </Menu.Content>
-      </Menu.Portal>
-    </Menu.Root>
-  );
-}
 
 /** everyone: the admins' page — every user's configs, private ones too. */
 export function ConfigsPage({ everyone }: { everyone?: boolean }) {
@@ -147,16 +84,12 @@ export function ConfigsPage({ everyone }: { everyone?: boolean }) {
     public: useConfigs("public"),
     everyone: useConfigs("everyone", !!everyone && admin),
   };
-  const [forget, setForget] = useState<ConfigSummary | null>(null);
+  const [forget, setForget] = useState<{ rows: Row[]; clear?: () => void } | null>(null);
+  const bulk = useBulkRun();
   const [error, setError] = useState<string | null>(null);
   const refresh = () => void qc.invalidateQueries({ queryKey: ["configs"] });
   const say = (e: unknown) =>
     setError(e instanceof ApiFailure ? e.body.message : String(e));
-  const del = useMutation({
-    mutationFn: (name: string) => deleteConfig(name),
-    onError: say,
-    onSettled: refresh,
-  });
   const unpublish = useMutation({
     mutationFn: (name: string) => patchConfig(name, { public: false }),
     onError: say,
@@ -181,6 +114,39 @@ export function ConfigsPage({ everyone }: { everyone?: boolean }) {
         }),
       )
       .catch(say);
+
+  // what can be done to a config, a selection: said once, offered by the ⋯
+  // menu, the right-click menu and the bulk bar alike
+  const deletable = (c: Row) => c.mine || admin;
+  const rowActions = (c: Row): RowAction[] => [
+    { label: c.mine ? "编辑" : "查看", onSelect: () => nav(`/configs/${c.name}`) },
+    { label: "用此配置创建", onSelect: () => nav(`/?new=1&config=${encodeURIComponent(c.name)}`) },
+    { label: "另存为副本", onSelect: () => void copy(c) },
+    ...(admin && c.public ? [{ label: c.official ? "取消官方" : "设为官方", onSelect: () => mark.mutate({ name: c.name, official: !c.official }) }] : []),
+    ...(admin && !c.mine && c.public ? [{ label: "取消公开", onSelect: () => unpublish.mutate(c.name) }] : []),
+    ...(deletable(c) ? [{ label: "删除", danger: true, onSelect: () => setForget({ rows: [c] }) }] : []),
+  ];
+  const rowActionsNow = useRef(rowActions);
+  rowActionsNow.current = rowActions;
+  const bulkActions = (rows: Row[], clear: () => void): RowAction[] => {
+    const mayGo = rows.filter(deletable);
+    return [
+      {
+        label: `删除（${mayGo.length}）`,
+        danger: true,
+        disabled: mayGo.length === 0,
+        title: mayGo.length === 0 ? "所选的都不是你的配置" : undefined,
+        onSelect: () => setForget({ rows: mayGo, clear }),
+      },
+    ];
+  };
+  const forgetAll = async (v: { rows: Row[]; clear?: () => void }) => {
+    setForget(null);
+    setError(null);
+    await bulk.run("删除配置", v.rows, (c) => deleteConfig(c.name).catch((e) => Promise.reject(new Error(e instanceof ApiFailure ? e.body.message : String(e)))), (c) => c.title);
+    v.clear?.();
+    refresh();
+  };
 
   const data = {
     official: lists.official.data?.items,
@@ -322,24 +288,13 @@ export function ConfigsPage({ everyone }: { everyone?: boolean }) {
         id: "actions",
         header: "",
         enableSorting: false,
-        meta: { priority: 1, width: 130, align: "right" },
+        meta: { priority: 1, width: 130, align: "right", pin: "right" },
         cell: ({ row: { original: c } }) => (
           <span className="inline-flex items-center gap-2 whitespace-nowrap">
-            <Link
-              to={`/?new=1&config=${encodeURIComponent(c.name)}`}
-              className="text-accent hover:underline"
-            >
+            <Link to={`/?new=1&config=${encodeURIComponent(c.name)}`} className="text-accent hover:underline">
               用此配置创建
             </Link>
-            <RowMenu
-              c={c}
-              admin={admin}
-              onOpen={() => nav(`/configs/${c.name}`)}
-              onCopy={() => void copy(c)}
-              onDelete={() => setForget(c)}
-              onUnpublish={() => unpublish.mutate(c.name)}
-              onOfficial={(official) => mark.mutate({ name: c.name, official })}
-            />
+            <ActionMenu label={`${c.title} 更多操作`} actions={() => rowActionsNow.current(c)} />
           </span>
         ),
       },
@@ -357,8 +312,8 @@ export function ConfigsPage({ everyone }: { everyone?: boolean }) {
     : SCOPES.find(([k]) => k === scope)![2];
 
   return (
-    <div className="space-y-3 p-3">
-      <header className="flex flex-wrap items-center gap-2">
+    <div className="flex h-full min-h-0 flex-col">
+      <header className="flex flex-wrap items-center gap-2 border-b border-line px-3 py-2">
         {everyone && admin ? (
           <h1 className="text-sm font-semibold">所有用户的配置 <span className="mono text-faint">{byScope.everyone.length}</span></h1>
         ) : (
@@ -394,7 +349,11 @@ export function ConfigsPage({ everyone }: { everyone?: boolean }) {
           + 新建配置
         </Button>
       </header>
-      {error && <Notice>{error}</Notice>}
+      {error && (
+        <div className="border-b border-line px-3 py-1.5">
+          <Notice>{error}</Notice>
+        </div>
+      )}
       {failed ? (
         <EmptyState tone="error" title="加载失败" />
       ) : none ? (
@@ -404,6 +363,8 @@ export function ConfigsPage({ everyone }: { everyone?: boolean }) {
         />
       ) : (
         <DataTable<Row>
+          fill
+          label="配置"
           storageKey="configs"
           data={shown}
           columns={columns}
@@ -414,23 +375,39 @@ export function ConfigsPage({ everyone }: { everyone?: boolean }) {
           }
           onRowClick={(c) => nav(`/configs/${c.name}`)}
           empty={<EmptyState title={loading ? "加载中…" : emptyText} />}
+          selectable
+          bulkBar={(rows, clear) =>
+            bulkActions(rows, clear).map((a) => (
+              <Button key={a.label} variant={a.danger ? "danger" : undefined} disabled={a.disabled} title={a.title} onClick={a.onSelect}>
+                {a.label}
+              </Button>
+            ))
+          }
+          rowMenu={(rows, isBulk, clear) => (isBulk ? bulkActions(rows, clear) : rowActions(rows[0]))}
         />
       )}
       <ConfirmDialog
         open={!!forget}
         onOpenChange={(o) => !o && setForget(null)}
-        title="删除这个配置？"
-        confirmLabel="删除配置"
+        title={forget && forget.rows.length > 1 ? `删除 ${forget.rows.length} 个配置？` : "删除这个配置？"}
+        confirmLabel={forget && forget.rows.length > 1 ? `删除 ${forget.rows.length} 个配置` : "删除配置"}
         danger
-        onConfirm={() => {
-          if (forget) del.mutate(forget.name);
-          setForget(null);
-        }}
+        onConfirm={() => forget && void forgetAll(forget)}
       >
-        <span className="mono text-ink">{forget?.name}</span> 会被删除
-        {forget && !forget.mine ? `（${forget.owner} 的配置）` : ""}
-        ；用它创建过的 DevPod 不受影响。
+        {forget && forget.rows.length > 1 ? (
+          <>
+            {forget.rows.length} 个配置会被删除
+            {forget.rows.some((c) => !c.mine) ? `（其中 ${forget.rows.filter((c) => !c.mine).length} 个是别人的）` : ""}；用它们创建过的 DevPod 不受影响。
+          </>
+        ) : (
+          <>
+            <span className="mono text-ink">{forget?.rows[0]?.name}</span> 会被删除
+            {forget && !forget.rows[0]?.mine ? `（${forget.rows[0]?.owner} 的配置）` : ""}
+            ；用它创建过的 DevPod 不受影响。
+          </>
+        )}
       </ConfirmDialog>
+      {bulk.toast}
     </div>
   );
 }

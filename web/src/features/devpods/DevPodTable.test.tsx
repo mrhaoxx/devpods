@@ -37,6 +37,26 @@ describe("DevPodTable", () => {
     expect(screen.getAllByLabelText("监控在 Pod 下次重建后生效").length).toBeGreaterThanOrEqual(4);
   });
 
+  it("mine shows those shared with me: marked, not a link, only SSH and the terminal offered, left out of bulk actions", async () => {
+    const calls = stubFetch({
+      "/api/devpods": { items: [mk("alice-a", "alice", "Running"), mk("bob-c", "bob", "Running")], pods: {} },
+      "PATCH /api/devpods/alice-a": mk("alice-a", "alice", "Running"),
+    });
+    renderWithProviders(<DevPodTable scope="mine" />);
+    await screen.findByRole("link", { name: "alice-a" });
+    expect(calls.find((c) => c.url.pathname === "/api/devpods")?.url.searchParams.get("shared")).toBe("1");
+    const row = screen.getByText("bob-c").closest("tr") as HTMLElement;
+    expect(within(row).getByText("共享自 bob")).toBeTruthy();
+    expect(within(row).queryByRole("link", { name: "bob-c" })).toBeNull(); // its page is the owner's
+    fireEvent.keyDown(within(row).getByRole("button", { name: "bob-c 操作" }), { key: "Enter" });
+    const menu = within(await screen.findByRole("menu"));
+    expect(menu.getAllByRole("menuitem").map((m) => m.textContent)).toEqual(["复制 SSH 命令"]); // the terminal: when running and enabled
+    fireEvent.keyDown(screen.getByRole("menu"), { key: "Escape" });
+    fireEvent.click(screen.getByLabelText("全选"));
+    fireEvent.click(await screen.findByRole("button", { name: "休眠" }));
+    await waitFor(() => expect(calls.filter((c) => c.method === "PATCH").map((c) => c.url.pathname)).toEqual(["/api/devpods/alice-a"]));
+  });
+
   it("filters by the q param user:alice phase:running", async () => {
     stubFetch({ "/api/devpods": list });
     renderWithProviders(<DevPodTable scope="all" />, { me: stubMe({ admin: true }), route: "/admin/devpods?q=user:alice%20phase:running" });

@@ -504,3 +504,54 @@ func TestConfigLaunch_Example(t *testing.T) {
 		t.Fatalf("owner %s", dp.Spec.Owner)
 	}
 }
+
+// A config's text launched without saving it (the SSH CLI's `config
+// launch -`): the same checks and names as a saved one, but nothing on the
+// DevPods says a config they came from — there is none to rebuild from —
+// whatever the text says.
+func TestLaunchUnsavedYAML(t *testing.T) {
+	setupSuite(t)
+	s, sm := newServer(t)
+	ctx := context.Background()
+	user := &devpodv1alpha1.User{ObjectMeta: metav1.ObjectMeta{Name: "ul-bob"}}
+	if err := k8sClient.Create(ctx, user); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = k8sClient.Delete(ctx, user); cleanupDevPods(t) })
+	bob := forge(sm, "ul-bob", false)
+	srv := httptest.NewServer(s.Routes())
+	t.Cleanup(srv.Close)
+	launch := func(req map[string]any, want int) []launchItem {
+		t.Helper()
+		return launchItems(t, apiCall(t, srv, "POST", "/api/configs:launch", bob, jsonBody(req), want))
+	}
+	content := launchYAML("${NAME}", "1", "")
+
+	// checked, not created
+	items := launch(map[string]any{"content": content, "vars": map[string]string{"NAME": "u"}, "count": 2, "dryRun": true}, http.StatusOK)
+	if len(items) != 2 || items[0].Name != "ul-bob-u-0" || items[1].Name != "ul-bob-u-1" || !strings.Contains(items[0].YAML, "owner: ul-bob") {
+		t.Fatalf("dry run %+v", items)
+	}
+	if devpodExists(t, "ul-bob-u-0") {
+		t.Fatal("a dry run created a DevPod")
+	}
+
+	// created; the text's own claim to a config does not stand
+	claims := strings.Replace(content, "metadata:\n", "metadata:\n  labels:\n    devpod.io/config: someone-else\n  annotations:\n    devpod.io/config-hash: x\n", 1)
+	items = launch(map[string]any{"content": claims, "vars": map[string]string{"NAME": "u"}}, http.StatusOK)
+	if len(items) != 1 || !items[0].OK || items[0].Name != "ul-bob-u" {
+		t.Fatalf("launch %+v", items)
+	}
+	dp := waitDevPod(t, "ul-bob-u")
+	if _, ok := dp.Labels["devpod.io/config"]; ok {
+		t.Fatalf("labels %v", dp.Labels)
+	}
+	if _, ok := dp.Annotations["devpod.io/config-hash"]; ok {
+		t.Fatalf("annotations %v", dp.Annotations)
+	}
+
+	// what a request must say
+	apiCall(t, srv, "POST", "/api/configs:launch", bob, jsonBody(map[string]any{"content": "", "vars": map[string]string{"NAME": "v"}}), http.StatusBadRequest)
+	apiCall(t, srv, "POST", "/api/configs:launch", bob, jsonBody(map[string]any{"content": content}), http.StatusBadRequest) // NAME
+	apiCall(t, srv, "POST", "/api/configs:launch", bob, jsonBody(map[string]any{"content": strings.Repeat("x", 257<<10), "vars": map[string]string{"NAME": "v"}}), http.StatusBadRequest)
+}

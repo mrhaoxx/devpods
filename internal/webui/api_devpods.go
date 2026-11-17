@@ -187,6 +187,20 @@ func (s *Server) refreshSession(ctx context.Context, sess Session) (Session, err
 // devPods lists DevPods of the request's clusters — its one cluster, or
 // every cluster when it named none: owner's, or everyone's when owner is
 // empty. By cluster, then name.
+// sharedWanted: the request asks for the DevPods the caller is a
+// collaborator of besides their own (?shared=1: the web's 我的 DevPod).
+// Without it a list of mine is mine alone — what scripts and the SSH CLI
+// act on.
+func sharedWanted(r *http.Request) bool {
+	v := r.URL.Query().Get("shared")
+	return v == "1" || v == "true"
+}
+
+// mineOrShared: dp is user's, or — shared counting — shared with them.
+func mineOrShared(dp *devpodv1alpha1.DevPod, user string, shared bool) bool {
+	return dp.Spec.Owner == user || (shared && slices.Contains(dp.Spec.Collaborators, user))
+}
+
 func (s *Server) devPods(r *http.Request, owner string) ([]InCluster, error) {
 	var out []InCluster
 	for _, cc := range s.ks(r) {
@@ -342,13 +356,17 @@ func (s *Server) handleListDevPods(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	owner := sess.User
-	if all {
+	shared := !all && sharedWanted(r)
+	if all || shared {
 		owner = ""
 	}
 	items, err := s.devPods(r, owner)
 	if err != nil {
 		s.writeErr(w, http.StatusInternalServerError, "INTERNAL", err.Error(), nil)
 		return
+	}
+	if shared {
+		items = slices.DeleteFunc(items, func(dp InCluster) bool { return !mineOrShared(&dp.DevPod, sess.User, true) })
 	}
 	if sess.Token != nil && len(sess.Token.DevPods) > 0 { // a token limited to some DevPods sees only those
 		items = slices.DeleteFunc(items, func(dp InCluster) bool { return !sess.AllowsDevPod(dp.Name) })

@@ -38,7 +38,8 @@ func (s *Server) handleWatchDevPods(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	visible := func(dp *devpodv1alpha1.DevPod) bool { return all || dp.Spec.Owner == sess.User }
+	shared := !all && sharedWanted(r)
+	visible := func(dp *devpodv1alpha1.DevPod) bool { return all || mineOrShared(dp, sess.User, shared) }
 	flusher, ok := w.(http.Flusher)
 	if !ok {
 		s.writeErr(w, http.StatusInternalServerError, "INTERNAL", "streaming unsupported", nil)

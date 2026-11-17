@@ -261,6 +261,9 @@ function GroupName({ r, open, onToggle }: { r: Row; open: boolean; onToggle: (ke
 /** a cell of a DevPod's own; a group row leaves it empty */
 const own = (cell: (r: Row) => React.ReactNode) => ({ row }: { row: { original: Row } }) => (row.original.group ? null : cell(row.original));
 
+/** sharedWithMe: in my list, a DevPod someone else owns (I am a collaborator). */
+export const sharedWithMe = (r: { owner: string }, o: { admin: boolean; me?: Me }) => !o.admin && !!o.me && r.owner !== o.me.user;
+
 export function devpodColumns(opts: {
   admin: boolean;
   me?: Me;
@@ -292,9 +295,16 @@ export function devpodColumns(opts: {
           <span title={phaseLabel(r.phase)}>
             <StatusDot phase={r.phase} showLabel={false} />
           </span>
-          <Link to={devpodHref(r)} className="mono truncate hover:text-accent">
-            {r.name}
-          </Link>
+          {sharedWithMe(r, opts) ? (
+            <>
+              <span className="mono truncate">{r.name}</span>
+              <Badge title="别人共享给你的 DevPod：可以 SSH 和打开终端，不能管理">共享自 {r.owner}</Badge>
+            </>
+          ) : (
+            <Link to={devpodHref(r)} className="mono truncate hover:text-accent">
+              {r.name}
+            </Link>
+          )}
           <PhaseNote r={r} />
           <ReservationBadges r={r} />
         </span>

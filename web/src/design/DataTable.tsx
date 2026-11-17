@@ -171,6 +171,19 @@ const isIds = (v: unknown): v is string[] => Array.isArray(v) && v.every((x) => 
 const pinnedBg = (selected: boolean) =>
   selected ? "bg-[color-mix(in_srgb,var(--color-accent-soft)_60%,var(--color-surface))]" : "bg-surface group-hover:bg-sunk";
 
+// Ctrl+A / ⌘A picks every row of a list — of the one a press or the focus
+// was last in, or else the first on the page — unless it is typed in a
+// field (the field's own select-all) or a dialog or menu is open.
+type ListEntry = { id: number; el: React.RefObject<HTMLDivElement | null> };
+const lists: ListEntry[] = [];
+let lastList = 0;
+let nextList = 1;
+const typingIn = (t: EventTarget | null) => {
+  if (!(t instanceof HTMLElement)) return false;
+  if (t.closest("textarea,select,[contenteditable='true'],[contenteditable='']")) return true;
+  return t instanceof HTMLInputElement && !["checkbox", "radio", "button", "submit", "reset"].includes(t.type);
+};
+
 export function DataTable<T>(p: DataTableProps<T>) {
   const wrap = useRef<HTMLDivElement>(null);
   const scroller = useRef<HTMLDivElement>(null);
@@ -300,6 +313,35 @@ export function DataTable<T>(p: DataTableProps<T>) {
     return Object.keys(liveSelection).flatMap((id) => (byId.has(id) ? [byId.get(id)!] : []));
   }, [liveSelection, p.data, p.getRowId]);
   const clear = () => setSelection({});
+  const pickAllNow = useRef(() => {});
+  pickAllNow.current = () => table.toggleAllRowsSelected(true);
+  const [listId] = useState(() => nextList++);
+  useEffect(() => {
+    if (!p.selectable) return;
+    const me: ListEntry = { id: listId, el: wrap };
+    lists.push(me);
+    const w = wrap.current;
+    const mark = () => void (lastList = listId);
+    w?.addEventListener("mousedown", mark);
+    w?.addEventListener("focusin", mark);
+    const onKey = (e: KeyboardEvent) => {
+      if (!(e.metaKey || e.ctrlKey) || e.altKey || e.shiftKey || e.key.toLowerCase() !== "a" || e.defaultPrevented) return;
+      if (typingIn(e.target) || document.querySelector('[role="dialog"],[role="menu"],[role="alertdialog"]')) return;
+      const t = e.target instanceof Node ? e.target : null;
+      const owner = lists.find((l) => t && l.el.current?.contains(t)) ?? lists.find((l) => l.id === lastList) ?? lists[0];
+      if (owner !== me) return;
+      e.preventDefault(); // the rows, not the page's text
+      window.getSelection()?.removeAllRanges();
+      pickAllNow.current();
+    };
+    document.addEventListener("keydown", onKey);
+    return () => {
+      lists.splice(lists.indexOf(me), 1);
+      w?.removeEventListener("mousedown", mark);
+      w?.removeEventListener("focusin", mark);
+      document.removeEventListener("keydown", onKey);
+    };
+  }, [p.selectable, listId]);
   // the right-click menu: worked out as it opens, for the row under the
   // pointer — or the selection, when that row is one of several chosen
   const [menuFor, setMenuFor] = useState<{ bulk: number; actions: RowAction[] } | null>(null);

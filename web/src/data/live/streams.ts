@@ -7,7 +7,8 @@ import { apiIn, keyOf, type Ref } from "../cluster";
 export function devpodsStream(scope: "mine" | "all"): StreamSpec {
   return {
     id: `devpods:${scope}`,
-    url: `/api/live/devpods?scope=${scope}`,
+    // mine: and those shared with me, as the 我的 DevPod list shows them
+    url: `/api/live/devpods?scope=${scope}${scope === "mine" ? "&shared=1" : ""}`,
     rows: (m) => ((m as LiveListFrame).items ?? []).map((it) => [keyOf(it), it] as [string, unknown]),
   };
 }

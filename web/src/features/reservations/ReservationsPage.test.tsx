@@ -121,6 +121,29 @@ describe("ReservationsPage", () => {
     expect((dialog.getByLabelText("g206") as HTMLInputElement).checked).toBe(false);
   });
 
+  it("my reservations come a page at a time: 加载更多 brings the earlier ones", async () => {
+    at();
+    const calls = stubFetch({
+      "/api/reservations/rules": rules,
+      "/api/nodes": { items: [node("g206")] },
+      "/api/reservations": (url: URL) =>
+        url.searchParams.get("mine") !== "1"
+          ? { items: [] } // the timeline's
+          : url.searchParams.get("cursor") === "c1"
+            ? { items: [block({ id: "older", start: "2026-10-01T01:00:00Z", end: "2026-10-01T02:00:00Z", phase: "Ended" })] }
+            : { items: [block({ id: "newer" })], next: "c1" },
+    });
+    renderWithProviders(<ReservationsPage />, { me: me() });
+    const table = within(await screen.findByRole("table", { name: "我的预约" }));
+    await waitFor(() => expect(table.getAllByRole("row")).toHaveLength(2)); // the header and one
+    fireEvent.click(screen.getByRole("button", { name: "加载更多" }));
+    await waitFor(() => expect(table.getAllByRole("row")).toHaveLength(3));
+    expect(table.getByText("已结束")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "加载更多" })).toBeNull(); // no page after
+    const mine = calls.filter((c) => c.url.searchParams.get("mine") === "1");
+    expect(mine[0].url.searchParams.get("limit")).toBe("50");
+  });
+
   it("my reservations are cancelled together: picked, confirmed, each released or cancelled", async () => {
     at();
     const calls = stubFetch({

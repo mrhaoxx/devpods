@@ -378,3 +378,123 @@ func TestConfigHelp(t *testing.T) {
 		t.Fatalf("the list lacks config:\n%s", b.String())
 	}
 }
+
+// config yaml prints a config's YAML alone (to edit in a file); config
+// edit puts the YAML on standard input in its place — a config of mine by
+// its short name, another by its full name.
+func TestConfigYAMLAndEdit(t *testing.T) {
+	f := newCfgFake(t)
+	f.on("GET /api/configs/alice-sg", 0, cfgMine)
+	code, out, errs := f.run("config yaml sg", "")
+	if code != ExitOK || errs != "" || out != "name: ${NAME}\nnode: ${NODE}\nimage: ${IMAGE:-ubuntu:24.04}\n" {
+		t.Fatalf("yaml: %d %q %q", code, out, errs)
+	}
+	f.taken()
+
+	f.on("PATCH /api/configs/alice-sg", 0, cfgMine)
+	code, out, errs = f.run(`config edit sg --title "SGLang 9"`, "name: ${NAME}\nimage: x\n")
+	if code != ExitOK || errs != "" || !strings.Contains(out, "updated alice-sg") {
+		t.Fatalf("edit: %d %q %q", code, out, errs)
+	}
+	if got := f.taken(); len(got) != 2 || got[1] != `PATCH /api/configs/alice-sg {"content":"name: ${NAME}\nimage: x\n","title":"SGLang 9"}` {
+		t.Fatalf("calls %v", got)
+	}
+	// nothing on standard input: nothing is changed
+	if code, _, errs := f.run("config edit sg", ""); code != ExitUsage || !strings.Contains(errs, "standard input") {
+		t.Fatalf("empty: %d %q", code, errs)
+	}
+	for _, c := range f.taken() {
+		if strings.HasPrefix(c, "PATCH") {
+			t.Fatalf("changed: %v", c)
+		}
+	}
+	if code, _, _ := f.run("config edit", "a: b\n"); code != ExitUsage {
+		t.Fatalf("no name: %d", code)
+	}
+}
+
+// At the devpod> prompt, config edit shows the YAML as it is, then takes
+// the new one pasted (echoed), up to ^D.
+func TestConfigEditAtThePrompt(t *testing.T) {
+	f := newCfgFake(t)
+	f.on("GET /api/configs/alice-sg", 0, cfgMine)
+	f.on("PATCH /api/configs/alice-sg", 0, cfgMine)
+	pasted := []string{"name: ${NAME}", "image: y"}
+	var o, e bytes.Buffer
+	env := &Env{Ctx: context.Background(), User: "alice", API: NewAPI(f.srv.URL, "k3y"), Out: &o, Err: &e, TTY: true, Interactive: true,
+		ReadLine: func(prompt string, echo bool) (string, error) {
+			if !echo {
+				t.Error("what is pasted is not shown")
+			}
+			if len(pasted) == 0 {
+				return "", io.EOF
+			}
+			l := pasted[0]
+			pasted = pasted[1:]
+			return l, nil
+		}}
+	if code := Run(env, []string{"config", "edit", "sg"}); code != ExitOK {
+		t.Fatalf("edit: %d %q", code, e.String())
+	}
+	if !strings.Contains(o.String(), "image: ${IMAGE:-ubuntu:24.04}") || !strings.Contains(o.String()+e.String(), "^D") {
+		t.Fatalf("the prompt showed %q / %q", o.String(), e.String())
+	}
+	if got := f.taken(); len(got) != 2 || got[1] != `PATCH /api/configs/alice-sg {"content":"name: ${NAME}\nimage: y\n"}` {
+		t.Fatalf("calls %v", got)
+	}
+}
+
+// config launch - launches the YAML on standard input as a config, unsaved.
+func TestConfigLaunchFromYAML(t *testing.T) {
+	f := newCfgFake(t)
+	yaml := "metadata:\n  name: ${NAME}\n"
+	f.on("POST /api/configs:launch", 0, `{"group":"alice-w","items":[{"index":0,"name":"alice-w-0","ok":true},{"index":1,"name":"alice-w-1","ok":true}]}`)
+	code, out, errs := f.run("config launch - --set NAME=w --count 2", yaml)
+	if code != ExitOK || errs != "" || !strings.Contains(out, "ok   alice-w-0") || !strings.Contains(out, "group: alice-w") {
+		t.Fatalf("launch: %d %q %q", code, out, errs)
+	}
+	if got := f.taken(); len(got) != 1 || got[0] != `POST /api/configs:launch {"content":"metadata:\n  name: ${NAME}\n","count":2,"vars":{"NAME":"w"}}` {
+		t.Fatalf("calls %v", got)
+	}
+	// in a cluster, and only checked
+	f.on("POST /api/clusters/b/configs:launch", 0, `{"items":[{"index":0,"name":"alice-w","ok":true,"yaml":"metadata:\n  name: alice-w\n"}]}`)
+	code, out, _ = f.run("config launch - --set NAME=w --dry-run --cluster b", yaml)
+	if code != ExitOK || out != "--- alice-w\nmetadata:\n  name: alice-w\n" {
+		t.Fatalf("dry run: %d %q", code, out)
+	}
+	if got := f.taken(); len(got) != 1 || !strings.Contains(got[0], `"dryRun":true`) {
+		t.Fatalf("calls %v", got)
+	}
+	// nothing on standard input
+	if code, _, errs := f.run("config launch - --set NAME=w", ""); code != ExitUsage || !strings.Contains(errs, "standard input") {
+		t.Fatalf("empty: %d %q", code, errs)
+	}
+	if got := f.taken(); len(got) != 0 {
+		t.Fatalf("sent %v", got)
+	}
+}
+
+// config create only creates: a config of mine with that id already is
+// left as it is, and the refusal says how to change it instead.
+func TestConfigCreate(t *testing.T) {
+	f := newCfgFake(t)
+	f.on("POST /api/configs", http.StatusCreated, cfgMine)
+	code, out, errs := f.run(`config create sg --title "SGLang 8" --public`, "a: b\n")
+	if code != ExitOK || errs != "" || !strings.Contains(out, "created alice-sg") {
+		t.Fatalf("create: %d %q %q", code, out, errs)
+	}
+	if got := f.taken(); len(got) != 1 || got[0] != `POST /api/configs {"content":"a: b\n","id":"sg","public":true,"title":"SGLang 8"}` {
+		t.Fatalf("calls %v", got)
+	}
+	f.on("POST /api/configs", http.StatusConflict, `{"code":"CONFIG_EXISTS","message":"you already have a config \"sg\""}`)
+	code, _, errs = f.run("config create sg", "a: c\n")
+	if code != ExitAPI || !strings.Contains(errs, "config edit sg") {
+		t.Fatalf("exists: %d %q", code, errs)
+	}
+	if got := f.taken(); len(got) != 1 {
+		t.Fatalf("it was changed: %v", got)
+	}
+	if code, _, errs := f.run("config create sg", ""); code != ExitUsage || !strings.Contains(errs, "standard input") {
+		t.Fatalf("empty: %d %q", code, errs)
+	}
+}

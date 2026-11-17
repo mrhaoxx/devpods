@@ -59,6 +59,36 @@ describe("DataTable", () => {
     expect(screen.getByText("已选 3")).toBeTruthy();
   });
 
+  it("Ctrl+A or ⌘A picks every row; not while typing, nor under a dialog", () => {
+    render(
+      <>
+        <input aria-label="搜索" />
+        <Harness />
+      </>,
+    );
+    fireEvent.keyDown(screen.getByLabelText("搜索"), { key: "a", metaKey: true });
+    expect(screen.queryByText(/已选/)).toBeNull(); // the field's own select-all
+    const ev = fireEvent.keyDown(document.body, { key: "a", metaKey: true });
+    expect(ev).toBe(false); // the page's text is not selected instead
+    expect(screen.getByText("已选 3")).toBeTruthy();
+    fireEvent.keyDown(document, { key: "Escape" });
+    fireEvent.keyDown(document.body, { key: "A", ctrlKey: true });
+    expect(screen.getByText("已选 3")).toBeTruthy();
+  });
+
+  it("with two lists, Ctrl+A picks in the one last used", () => {
+    render(
+      <>
+        <Harness />
+        <DataTable data={[{ name: "x", cpu: 0 }]} columns={columns} getRowId={(r) => `t2-${r.name}`} sorting={[]} onSortingChange={() => {}} selectable label="第二个" />
+      </>,
+    );
+    fireEvent.mouseDown(within(screen.getByRole("table", { name: "第二个" })).getByText("x"));
+    fireEvent.keyDown(document.body, { key: "a", ctrlKey: true });
+    expect(screen.getByText("已选 1")).toBeTruthy();
+    expect((screen.getByLabelText("选择 a") as HTMLInputElement).checked).toBe(false);
+  });
+
   it("clear hides the bulk bar", () => {
     render(<Harness />);
     fireEvent.click(screen.getByLabelText("选择 b"));

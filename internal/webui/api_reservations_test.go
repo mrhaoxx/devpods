@@ -352,3 +352,72 @@ func TestReservationDryRunRefused(t *testing.T) {
 		t.Fatalf("a dry run reserved: %+v", items)
 	}
 }
+
+// My reservations, paged: only mine, of any time, the latest start first;
+// those starting together (reserved at once on several machines) are
+// neither lost nor repeated across a page's edge.
+func TestMyReservationsPaged(t *testing.T) {
+	s, sm, now, node := rsvRig(t, "pg")
+	ctx := context.Background()
+	slot := now.Truncate(time.Hour)
+	mk := func(name, user string, start time.Time) {
+		t.Helper()
+		nr := &devpodv1alpha1.NodeReservation{ObjectMeta: metav1.ObjectMeta{Name: name}, Spec: devpodv1alpha1.NodeReservationSpec{
+			Node: node, User: user, Start: metav1.NewTime(start), End: metav1.NewTime(start.Add(time.Hour))}}
+		if err := k8sClient.Create(ctx, nr); err != nil {
+			t.Fatal(err)
+		}
+	}
+	mk("pg-old", "pg-alice", slot.Add(-90*24*time.Hour)) // long before any window
+	mk("pg-a", "pg-alice", slot.Add(-24*time.Hour))
+	mk("pg-b", "pg-alice", slot.Add(-24*time.Hour))
+	mk("pg-c", "pg-alice", slot.Add(-24*time.Hour))
+	mk("pg-next", "pg-alice", slot.Add(24*time.Hour))
+	mk("pg-bob", "pg-bob", slot)
+	alice := forge(sm, "pg-alice", false)
+	page := func(cursor string) ([]string, string) {
+		t.Helper()
+		url := "/api/reservations?mine=1&limit=2"
+		if cursor != "" {
+			url += "&cursor=" + cursor
+		}
+		rec := doJSON(t, s.HandleListReservationsForTest(), "GET", url, nil, alice, "")
+		var out struct {
+			Items []rsvView
+			Next  string
+		}
+		if rec.Code != http.StatusOK || json.Unmarshal(rec.Body.Bytes(), &out) != nil {
+			t.Fatalf("list: %d %s", rec.Code, rec.Body)
+		}
+		var ids []string
+		for _, v := range out.Items {
+			ids = append(ids, v.ID)
+		}
+		return ids, out.Next
+	}
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		if ids, _ := page(""); len(ids) == 2 || time.Now().After(deadline) {
+			break
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	var got []string
+	cursor := ""
+	for i := 0; i < 5; i++ {
+		ids, next := page(cursor)
+		got = append(got, ids...)
+		if next == "" {
+			break
+		}
+		cursor = next
+	}
+	if want := []string{"pg-next", "pg-a", "pg-b", "pg-c", "pg-old"}; strings.Join(got, ",") != strings.Join(want, ",") {
+		t.Fatalf("pages gave %v, want %v", got, want)
+	}
+	// a cursor that is not one
+	rec := doJSON(t, s.HandleListReservationsForTest(), "GET", "/api/reservations?mine=1&limit=2&cursor=nonsense", nil, alice, "")
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("a bad cursor: %d", rec.Code)
+	}
+}
