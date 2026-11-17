@@ -45,7 +45,9 @@ function apiMessage(e: unknown): string {
 }
 
 /** node: the node's key, <cluster>/<name> in a console of several clusters */
-type Draft = { node: string; start: number; end: number; edit?: Reservation };
+type Draft = { node: string; start: number; end: number; edit?: Reservation; nodes?: string[] };
+const MINUTE = 60_000;
+const HOUR = 60 * MINUTE;
 const nodeKey = (b: Reservation) => keyOf({ cluster: b.cluster, name: b.node });
 
 /** The form: new reservation, move (not started) or move the end of one that has started. */
@@ -56,17 +58,27 @@ function ReserveDialog({ draft, nodes, rules, now, onClose }: { draft: Draft; no
   const [node, setNode] = useState(draft.node);
   const ref = refOfKey(node);
   const several = nodes.some((n) => n.cluster);
+  // a new one may be for several machines at once: one reservation each
+  const [picked, setPicked] = useState<string[]>(draft.nodes ?? [draft.node]);
+  const [outcome, setOutcome] = useState<{ made: number; failed: { key: string; why: string }[] } | null>(null);
+  const nameOf = (key: string) => {
+    const r = refOfKey(key);
+    return several && r.cluster ? `${r.cluster} · ${r.name}` : r.name;
+  };
+  const [error, setError] = useState<string | null>(null);
+  const g = rules.granularitySeconds * 1000;
+  // the system's own pickers (no step: Safari's handles it badly); what
+  // is typed is rounded out to whole steps, and the period said below
   const [start, setStart] = useState(toInput(draft.start));
   const [end, setEnd] = useState(toInput(draft.end));
-  const [error, setError] = useState<string | null>(null);
-  const s = fromInput(start);
-  const e = fromInput(end);
-  const g = rules.granularitySeconds * 1000;
+  const s = active ? Date.parse(edit!.start) : slotStart(fromInput(start), g);
+  const rawEnd = fromInput(end);
+  const e = Number.isNaN(rawEnd) ? NaN : slotStart(rawEnd + g - 1, g);
   const problem = active
-    ? e <= now
-      ? "结束时间要在现在之后（要立刻结束请提前释放）"
-      : slotStart(e, g) !== e
-        ? `结束时间要对齐到 ${fmtSpan(g)} 一档`
+    ? Number.isNaN(e)
+      ? "请填写结束时间"
+      : e <= now
+        ? "结束时间要在现在之后（要立刻结束请提前释放）"
         : rules.maxDurationSeconds > 0 && e - Date.parse(edit!.start) > rules.maxDurationSeconds * 1000
           ? `单次最长 ${fmtSpan(rules.maxDurationSeconds * 1000)}`
           : null
@@ -77,13 +89,30 @@ function ReserveDialog({ draft, nodes, rules, now, onClose }: { draft: Draft; no
     void qc.invalidateQueries({ queryKey: ["node-choices"] });
     onClose();
   };
+  function touch() {
+    setError(null);
+    setOutcome(null);
+  }
   const save = useMutation({
-    mutationFn: () => (edit ? patchReservation(edit, active ? { end: period.end } : { start: period.start, end: period.end }) : createReservation(ref.cluster, period)),
-    onSuccess: done,
+    mutationFn: async () => {
+      if (edit) {
+        await patchReservation(edit, active ? { end: period.end } : { start: period.start, end: period.end });
+        return { made: 1, failed: [] };
+      }
+      const keys = picked;
+      const results = await Promise.allSettled(keys.map((k) => createReservation(refOfKey(k).cluster, { ...period, node: refOfKey(k).name })));
+      const failed = results.flatMap((r, i) => (r.status === "rejected" ? [{ key: keys[i], why: apiMessage(r.reason) }] : []));
+      return { made: keys.length - failed.length, failed };
+    },
+    onSuccess: (r) => {
+      if (r.failed.length === 0) return done();
+      // those made are made; the rest stay picked, to try again
+      void qc.invalidateQueries({ queryKey: ["reservations"] });
+      setOutcome(r);
+      setPicked(r.failed.map((f) => f.key));
+    },
     onError: (err) => setError(apiMessage(err)),
   });
-  const touch = () => setError(null);
-  const step = rules.granularitySeconds;
   return (
     <Dialog.Root open onOpenChange={(o) => !o && onClose()}>
       <Dialog.Portal>
@@ -98,32 +127,80 @@ function ReserveDialog({ draft, nodes, rules, now, onClose }: { draft: Draft; no
               save.mutate();
             }}
           >
-            <Field label="节点">
-              <Select aria-label="节点" value={node} disabled={!!edit} onChange={(ev) => (setNode(ev.target.value), touch())}>
-                {nodes.map((n) => (
-                  <option key={keyOf(n)} value={keyOf(n)}>
-                    {several && n.cluster ? `${n.cluster} · ` : ""}
-                    {n.name}
-                    {n.gpuTotal > 0 ? ` · ${n.gpuModel ?? "GPU"} ×${n.gpuTotal}` : ""}
-                  </option>
-                ))}
-              </Select>
-            </Field>
+            {edit ? (
+              <Field label="节点">
+                <Select aria-label="节点" value={node} disabled onChange={(ev) => (setNode(ev.target.value), touch())}>
+                  {nodes.map((n) => (
+                    <option key={keyOf(n)} value={keyOf(n)}>
+                      {several && n.cluster ? `${n.cluster} · ` : ""}
+                      {n.name}
+                      {n.gpuTotal > 0 ? ` · ${n.gpuModel ?? "GPU"} ×${n.gpuTotal}` : ""}
+                    </option>
+                  ))}
+                </Select>
+              </Field>
+            ) : (
+              <fieldset className="space-y-1">
+                <legend className="mb-1 flex w-full items-center justify-between text-xs font-medium">
+                  <span>节点（可多选，已选 {picked.length} 台）</span>
+                  <span className="flex gap-2 font-normal">
+                    <button type="button" className="text-accent hover:underline" onClick={() => (setPicked(nodes.map(keyOf)), touch())}>
+                      全选
+                    </button>
+                    <button type="button" className="text-accent hover:underline" onClick={() => (setPicked([]), touch())}>
+                      清空
+                    </button>
+                  </span>
+                </legend>
+                <div className="max-h-48 space-y-0.5 overflow-auto rounded-md border border-line p-1.5">
+                  {nodes.map((n) => {
+                    const k = keyOf(n);
+                    return (
+                      <label key={k} className="flex items-center gap-2 rounded px-1 py-0.5 text-xs hover:bg-sunk">
+                        <input
+                          type="checkbox"
+                          aria-label={nameOf(k)}
+                          checked={picked.includes(k)}
+                          onChange={(ev) => (setPicked((cur) => (ev.target.checked ? [...cur, k] : cur.filter((x) => x !== k))), touch())}
+                        />
+                        <span className="mono break-all">{nameOf(k)}</span>
+                        {n.gpuTotal > 0 && <span className="text-muted">{`${n.gpuModel ?? "GPU"} ×${n.gpuTotal}`}</span>}
+                      </label>
+                    );
+                  })}
+                </div>
+              </fieldset>
+            )}
             <div className="grid gap-3 sm:grid-cols-2">
               <Field label="开始">
-                <Input aria-label="开始" type="datetime-local" step={step} value={start} disabled={active} onChange={(ev) => (setStart(ev.target.value), touch())} />
+                <Input aria-label="开始" type="datetime-local" value={start} disabled={active} onChange={(ev) => (setStart(ev.target.value), touch())} />
               </Field>
               <Field label="结束">
-                <Input aria-label="结束" type="datetime-local" step={step} value={end} onChange={(ev) => (setEnd(ev.target.value), touch())} />
+                <Input aria-label="结束" type="datetime-local" value={end} onChange={(ev) => (setEnd(ev.target.value), touch())} />
               </Field>
             </div>
+            {!problem && (
+              <p className="text-xs">
+                实际预约：{fmtDay(s)} {fmtClock(s)} – {fmtDay(e)} {fmtClock(e)}，{fmtSpan(e - s)}
+              </p>
+            )}
             <p className="text-[11px] text-muted">
-              北京时间，{fmtSpan(g)} 一档
+              北京时间，{fmtSpan(g)}一档，不在整档上的时间自动取整
               {rules.maxDurationSeconds > 0 && `，单次最长 ${fmtSpan(rules.maxDurationSeconds * 1000)}`}
-              {rules.maxAdvanceSeconds > 0 && `，最多提前 ${fmtSpan(rules.maxAdvanceSeconds * 1000)}`}。{!problem && e > s && `时长 ${fmtSpan(e - (active ? Date.parse(edit!.start) : s))}。`}
+              {rules.maxAdvanceSeconds > 0 && `，最多提前 ${fmtSpan(rules.maxAdvanceSeconds * 1000)}`}。
             </p>
             {problem && <Notice>{problem}</Notice>}
             {error && <Notice>{error}</Notice>}
+            {outcome && (
+              <Notice tone="warm">
+                {outcome.made} 台已预约；以下没有成功，仍勾选着，可以改了再试：
+                {outcome.failed.map((f) => (
+                  <span key={f.key} className="block">
+                    {nameOf(f.key)}：{f.why}
+                  </span>
+                ))}
+              </Notice>
+            )}
             {!edit && (
               <p className="text-[11px] text-muted">
                 预约是使用许可，不独占：预约期间你可以在这台机器上运行 DevPod，别人（不需要预约的人、同时段的其他预约人）照样可以用。到期后，你在这台机器上只靠这份预约运行的 DevPod 会被自动休眠。
@@ -133,8 +210,8 @@ function ReserveDialog({ draft, nodes, rules, now, onClose }: { draft: Draft; no
               <Dialog.Close asChild>
                 <Button type="button">取消</Button>
               </Dialog.Close>
-              <Button type="submit" variant="primary" disabled={!!problem || save.isPending}>
-                {edit ? "保存" : "预约"}
+              <Button type="submit" variant="primary" disabled={!!problem || save.isPending || (!edit && picked.length === 0)}>
+                {edit ? "保存" : picked.length > 1 ? `预约 ${picked.length} 台` : "预约"}
               </Button>
             </div>
           </form>
@@ -153,7 +230,9 @@ function Row({
   now,
   gran,
   admin,
-  onDraft,
+  index,
+  sel,
+  bad,
   onPick,
 }: {
   node: NodeChoice;
@@ -163,18 +242,15 @@ function Row({
   now: number;
   gran: number;
   admin: boolean;
-  onDraft: (d: Draft) => void;
+  /** this row's place: what a drag across rows reads */
+  index: number;
+  /** the time a drag picks, when the drag takes this row in */
+  sel: [number, number] | null;
+  bad: boolean;
   onPick: (b: Reservation) => void;
 }) {
-  const track = useRef<HTMLDivElement>(null);
-  const [drag, setDrag] = useState<{ a: number; b: number } | null>(null);
+  void gran;
   const pct = (t: number) => `${Math.min(100, Math.max(0, ((t - from) / (to - from)) * 100))}%`;
-  const at = (clientX: number) => {
-    const r = track.current!.getBoundingClientRect();
-    return from + (r.width > 0 ? Math.min(1, Math.max(0, (clientX - r.left) / r.width)) : 0) * (to - from);
-  };
-  const sel = drag ? selection(drag.a, drag.b, gran) : null;
-  const bad = !!sel && sel[0] < slotStart(now, gran);
   // reservations may overlap: each in the first lane free at its start
   const { lane, lanes } = useMemo(() => {
     const ends: number[] = [];
@@ -189,32 +265,20 @@ function Row({
   }, [blocks]);
   const laneH = lanes === 1 ? 36 : 22;
   return (
-    <div className="flex items-stretch border-b border-line last:border-0">
-      <div className="w-40 shrink-0 border-r border-line px-2 py-1.5">
-        <div className="mono truncate text-xs font-medium" title={node.name}>
+    <div data-row={index} className="flex items-stretch border-b border-line last:border-0">
+      <div className="w-52 shrink-0 border-r border-line px-2 py-1.5">
+        <div className="mono break-all text-xs font-medium">
           {node.cluster && <span className="mr-1 font-normal text-muted">{node.cluster}</span>}
           {node.name}
         </div>
         <div className="truncate text-[11px] text-muted">{node.gpuTotal > 0 ? `${node.gpuModel ?? "GPU"} ×${node.gpuTotal}` : `${Math.round(node.cpu.allocatable)} 核`}</div>
       </div>
       <div
-        ref={track}
+        data-track
         role="group"
         aria-label={`${node.name} 的预约`}
         className="relative min-w-0 flex-1 cursor-crosshair touch-none select-none"
         style={{ height: 8 + lanes * laneH + (lanes - 1) * 4 }}
-        onPointerDown={(e) => {
-          if ((e.target as HTMLElement).closest("button")) return;
-          e.currentTarget.setPointerCapture?.(e.pointerId);
-          const t = at(e.clientX);
-          setDrag({ a: t, b: t });
-        }}
-        onPointerMove={(e) => drag && setDrag({ a: drag.a, b: at(e.clientX) })}
-        onPointerUp={() => {
-          if (sel && !bad) onDraft({ node: keyOf(node), start: sel[0], end: sel[1] });
-          setDrag(null);
-        }}
-        onPointerCancel={() => setDrag(null)}
       >
         {/* past time is not reservable */}
         <div className="pointer-events-none absolute inset-y-0 left-0 bg-sunk/70" style={{ width: pct(now) }} />
@@ -277,6 +341,10 @@ export function ReservationsPage() {
   const [draft, setDraft] = useState<Draft | null>(null);
   const [picked, setPicked] = useState<Reservation | null>(null);
   const [cancel, setCancel] = useState<Reservation | null>(null);
+  // a drag on the timeline, from one row's time to another's: the rows
+  // between, every one, for the time between (a rectangle)
+  const [drag, setDrag] = useState<{ a: number; b: number; r0: number; r1: number } | null>(null);
+  const dragTrack = useRef<HTMLElement | null>(null);
   const del = useMutation({
     mutationFn: (r: Reservation) => deleteReservation(r),
     onSettled: () => {
@@ -294,7 +362,18 @@ export function ReservationsPage() {
   const nodes = (nodesQ.data?.items ?? []).filter((n) => n.reservable && (n.reservationRequired || me.admin) && matches(n));
   const mine = all.filter((b) => b.mine).sort((a, b) => Date.parse(b.start) - Date.parse(a.start));
   const open = (b: Reservation) => setDraft({ node: nodeKey(b), start: Date.parse(b.start), end: Date.parse(b.end) + (b.phase === "Active" ? g : 0), edit: b });
-  const first = slotStart(now, g) + g;
+  // from the slot now is in, so the reservation covers now: no gap
+  const first = slotStart(now, g);
+  const timeAt = (track: HTMLElement, clientX: number) => {
+    const r = track.getBoundingClientRect();
+    return from + (r.width > 0 ? Math.min(1, Math.max(0, (clientX - r.left) / r.width)) : 0) * (to - from);
+  };
+  // the row under the pointer, anywhere in it (its name too)
+  const rowAt = (x: number, y: number) =>
+    typeof document.elementFromPoint === "function" ? ((document.elementFromPoint(x, y) as HTMLElement | null)?.closest<HTMLElement>("[data-row]") ?? null) : null;
+  const dragSel = drag ? selection(drag.a, drag.b, g) : null;
+  const dragBad = !!dragSel && dragSel[0] < slotStart(now, g);
+  const rowsOf: [number, number] = drag ? [Math.min(drag.r0, drag.r1), Math.max(drag.r0, drag.r1)] : [-1, -1];
 
   return (
     <div className="space-y-3 p-3">
@@ -308,7 +387,7 @@ export function ReservationsPage() {
         </div>
         <span className="text-[11px] text-muted">在时间轴上拖动来预约。预约是使用许可，不独占，同一时段可以有多份。北京时间。</span>
         <span className="flex-1" />
-        <Button variant="primary" disabled={nodes.length === 0} onClick={() => setDraft({ node: keyOf(nodes[0]), start: first, end: first + 2 * g })}>
+        <Button variant="primary" disabled={nodes.length === 0} onClick={() => setDraft({ node: keyOf(nodes[0]), start: first, end: first + Math.max(2 * g, HOUR) })}>
           预约节点
         </Button>
       </div>
@@ -318,7 +397,7 @@ export function ReservationsPage() {
         ) : (
           <div>
             <div className="flex border-b border-line text-[11px] text-muted">
-              <div className="w-40 shrink-0 border-r border-line px-2 py-1">节点</div>
+              <div className="w-52 shrink-0 border-r border-line px-2 py-1">节点</div>
               <div className="relative h-6 min-w-0 flex-1">
                 {Array.from({ length: days }, (_, i) => (
                   <span key={i} className="absolute top-1 truncate pl-1" style={{ left: `${(i / days) * 100}%`, width: `${100 / days}%` }}>
@@ -327,9 +406,49 @@ export function ReservationsPage() {
                 ))}
               </div>
             </div>
-            {nodes.map((n) => (
-              <Row key={keyOf(n)} node={n} blocks={live.filter((b) => nodeKey(b) === keyOf(n))} from={from} to={to} now={now} gran={g} admin={me.admin} onDraft={setDraft} onPick={setPicked} />
-            ))}
+            <div
+              onPointerDown={(e) => {
+                const target = e.target as HTMLElement;
+                const track = target.closest<HTMLElement>("[data-track]");
+                const row = target.closest<HTMLElement>("[data-row]");
+                if (target.closest("button") || !track || !row) return;
+                e.currentTarget.setPointerCapture?.(e.pointerId);
+                dragTrack.current = track;
+                const t = timeAt(track, e.clientX);
+                const r = Number(row.dataset.row);
+                setDrag({ a: t, b: t, r0: r, r1: r });
+              }}
+              onPointerMove={(e) => {
+                if (!drag || !dragTrack.current) return;
+                const over = rowAt(e.clientX, e.clientY);
+                setDrag({ ...drag, b: timeAt(dragTrack.current, e.clientX), r1: over ? Number(over.dataset.row) : drag.r1 });
+              }}
+              onPointerUp={() => {
+                if (dragSel && !dragBad) {
+                  const picked = nodes.slice(rowsOf[0], rowsOf[1] + 1).map(keyOf);
+                  setDraft({ node: picked[0], nodes: picked, start: dragSel[0], end: dragSel[1] });
+                }
+                setDrag(null);
+              }}
+              onPointerCancel={() => setDrag(null)}
+            >
+              {nodes.map((n, i) => (
+                <Row
+                  key={keyOf(n)}
+                  node={n}
+                  blocks={live.filter((b) => nodeKey(b) === keyOf(n))}
+                  from={from}
+                  to={to}
+                  now={now}
+                  gran={g}
+                  admin={me.admin}
+                  index={i}
+                  sel={dragSel && i >= rowsOf[0] && i <= rowsOf[1] ? dragSel : null}
+                  bad={dragBad}
+                  onPick={setPicked}
+                />
+              ))}
+            </div>
             <div className="flex flex-wrap gap-x-4 gap-y-1 px-2 py-1.5 text-[11px] text-muted">
               <span className="inline-flex items-center gap-1">
                 <span className="h-2.5 w-4 rounded border border-accent bg-accent-soft" /> 我的预约

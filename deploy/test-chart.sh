@@ -345,8 +345,8 @@ docHas reservation Deployment devpod-controller "- --reservation-retention=720h"
 docHas reservation ClusterRole devpod-controller 'resources: ["reservations"]'
 docHas reservation ClusterRole devpod-controller 'resources: ["reservations/status"]'
 docHas reservation Deployment devpod-webui "- --reservations=true"
-docHas reservation Deployment devpod-webui "- --reservation-granularity=30m"
-docHas reservation Deployment devpod-webui "- --reservation-max-duration=24h"
+docHas reservation Deployment devpod-webui "- --reservation-granularity=10m"
+docHas reservation Deployment devpod-webui "- --reservation-max-duration=0"
 docHas reservation Deployment devpod-webui "- --reservation-max-advance=336h"
 docHas reservation ClusterRole devpod-webui 'resources: ["reservations"]'
 docHas reservation ClusterRole devpod-webui 'verbs: ["patch"]'

@@ -266,8 +266,8 @@ webui:
 # the webui read the same rules.
 reservation:
   enabled: false
-  granularity: 30m         # starts and ends align to this
-  maxDuration: 24h         # longest single reservation; 0 = no limit
+  granularity: 10m         # starts and ends align to this
+  maxDuration: 0           # longest single reservation; 0 = no limit
   maxAdvance: 336h         # how far ahead one may reserve; 0 = no limit
   clearNotice: 30m         # other DevPods on the node are warned this long before the start
   endingNotice: "30m,5m"   # the holder's DevPods are warned at these moments before the end
