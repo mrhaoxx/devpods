@@ -286,6 +286,21 @@ describe("DevPodTable", () => {
     await waitFor(() => expect(rowNames()).toEqual(["alice-a", "bob-c", "alice-b", "bob-d"]));
   }, 15000);
 
+  it("运行时长: running ones first, the longest up first; then those starting; then the asleep, the latest asleep first", async () => {
+    const ago = (h: number) => new Date(Date.now() - h * 3600_000 - 5_000).toISOString();
+    const asleep = (name: string, h?: number) => ({ ...mk(name, "alice", "Stopped", false), status: { phase: "Stopped", ...(h ? { hibernatedAt: ago(h) } : {}) } });
+    stubFetch({
+      "/api/devpods": {
+        items: [asleep("alice-old", 26), mk("alice-short", "alice", "Running"), asleep("alice-never"), mk("alice-starting", "alice", "Pending"), asleep("alice-new", 1), mk("alice-long", "alice", "Running")],
+        pods: { "alice-long": { node: "g1", ip: "", startedAt: ago(3) }, "alice-short": { node: "g1", ip: "", startedAt: ago(1) } },
+      },
+    });
+    renderWithProviders(<DevPodTable scope="mine" />, { route: "/?sort=uptime" });
+    await screen.findByRole("link", { name: "alice-long" });
+    expect(rowNames()).toEqual(["alice-long", "alice-short", "alice-starting", "alice-new", "alice-old", "alice-never"]);
+    expect(screen.getByRole("link", { name: "alice-new" }).closest("tr")!.textContent).toMatch(/休眠 1h/);
+  });
+
   it("node and uptime of a console of several clusters (pods keyed by cluster/name)", async () => {
     const a = { ...mk("alice-a", "alice", "Running"), cluster: "zjusct" };
     stubFetch({ "/api/devpods": { items: [a], pods: { "zjusct/alice-a": { node: "g206", ip: "10.0.0.1", startedAt: "2026-11-10T10:00:00Z" } } } });

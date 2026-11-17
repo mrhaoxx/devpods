@@ -231,8 +231,34 @@ function RdmaCell({ r }: { r: Row }) {
 
 function UptimeCell({ r }: { r: Row }) {
   const { now } = useContext(TableCtx);
-  if (!running(r) || !r.pod?.startedAt) return null;
-  return <span className="mono">{fmtAge(r.pod.startedAt, now)}</span>;
+  if (running(r)) return r.pod?.startedAt ? <span className="mono">{fmtAge(r.pod.startedAt, now)}</span> : null;
+  // asleep: for how long (what the column sorts the asleep by)
+  const h = r.dp.status?.hibernatedAt;
+  if (!r.dp.spec.running && h) {
+    return (
+      <span className="text-muted" title={`${new Date(h).toLocaleString()} 休眠`}>
+        休眠 {fmtAge(h, now)}
+      </span>
+    );
+  }
+  return null;
+}
+
+// 运行时长's order, as one number (so the header's two directions are the
+// two orders): the running, the longest up first; then those asked to run
+// that are not running yet (pending, failing), which join the running as
+// they come up; then the asleep, the latest asleep first, those with no
+// time known last. A group goes where its best-placed member does.
+const BAND = 1e15;
+export function uptimeKey(r: Row): number {
+  if (r.group) return Math.min(...r.group.members.map(uptimeKey));
+  if (running(r)) {
+    const t = r.pod?.startedAt ? Date.parse(r.pod.startedAt) : NaN;
+    return Number.isNaN(t) ? BAND - 1 : t;
+  }
+  if (r.dp.spec.running) return BAND;
+  const h = r.dp.status?.hibernatedAt ? Date.parse(r.dp.status.hibernatedAt) : NaN;
+  return 2 * BAND + (Number.isNaN(h) ? 4e12 : 4e12 - h);
 }
 
 function GroupName({ r, open, onToggle }: { r: Row; open: boolean; onToggle: (key: string) => void }) {
@@ -345,9 +371,9 @@ export function devpodColumns(opts: {
     {
       id: "uptime",
       header: "运行时长",
-      accessorFn: (r) => (r.phase === "Running" && r.pod?.startedAt ? Date.parse(r.pod.startedAt) : Infinity),
+      accessorFn: uptimeKey,
       sortDescFirst: false,
-      meta: { priority: 6, width: 80 },
+      meta: { priority: 6, width: 96 },
       cell: own((r) => <UptimeCell r={r} />),
     },
     { id: "net", header: "网络 ↓/↑", ...by("net"), meta: { priority: 7, width: 150 }, cell: metric((r) => <NetCell r={r} />) },
