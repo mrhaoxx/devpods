@@ -48,6 +48,7 @@ describe("DevPodTable", () => {
     const row = screen.getByText("bob-c").closest("tr") as HTMLElement;
     expect(within(row).getByText("共享自 bob")).toBeTruthy();
     expect(within(row).queryByRole("link", { name: "bob-c" })).toBeNull(); // its page is the owner's
+    expect(within(row).queryByRole("checkbox")).toBeNull(); // not mine to pick
     fireEvent.keyDown(within(row).getByRole("button", { name: "bob-c 操作" }), { key: "Enter" });
     const menu = within(await screen.findByRole("menu"));
     expect(menu.getAllByRole("menuitem").map((m) => m.textContent)).toEqual(["复制 SSH 命令"]); // the terminal: when running and enabled
@@ -369,6 +370,31 @@ describe("DevPodTable", () => {
     const rowOf = (node: string) => screen.getAllByRole("row").find((r) => within(r).queryByText(node))!;
     await waitFor(() => expect(rowOf("na").textContent).toContain("1/4"));
     expect(rowOf("nb").textContent).toContain("3/4");
+  });
+
+  it("no limit: CPU and memory are shown out of the node's, never out of 0", async () => {
+    const free = (name: string): DevPod => {
+      const d = mk(name, "alice", "Running");
+      d.spec.pod!.spec!.containers![0].resources = {};
+      return d;
+    };
+    stubFetch({
+      "/api/devpods": { items: [free("alice-a"), free("alice-b")], pods: { "alice-a": { node: "g206", ip: "" }, "alice-b": { node: "gone", ip: "" } } },
+      "/api/nodes": { items: [{ name: "g206", ready: true, cpu: { allocatable: 64, allocated: 0 }, mem: { allocatable: 512 * 1024 ** 3, allocated: 0 }, gpuTotal: 0, gpuUsed: 0, reservable: false, pending: 0, access: "ok", mine: null, selectable: true }] },
+    });
+    const conns: { url: string; h: SseHandlers }[] = [];
+    const hub = new LiveHub({ open: (url, h) => (conns.push({ url, h }), () => {}) });
+    renderWithProviders(<DevPodTable scope="mine" />, { hub, liveEnabled: true });
+    await screen.findByRole("link", { name: "alice-a" });
+    const item = (name: string) => ({ name, owner: "alice", cpu: 3, cpuLimit: 0, mem: 2 * 1024 ** 3, memLimit: 0, gpu: [], netRx: null, netTx: null, netKind: "", rdmaRx: null, rdmaTx: null, rdmaKind: "", ioR: null, ioW: null, sessions: [], idle: false });
+    await waitFor(() => expect(conns.length).toBeGreaterThan(0));
+    act(() => conns.forEach((c) => c.h.onMessage({ ts: new Date().toISOString(), items: [item("alice-a"), item("alice-b")] })));
+    const a = screen.getByRole("link", { name: "alice-a" }).closest("tr")!;
+    await waitFor(() => expect(a.textContent).toContain("2.0G/512.0G"));
+    expect(a.textContent).toContain("3/64");
+    const b = screen.getByRole("link", { name: "alice-b" }).closest("tr")!; // its node not known: no ceiling
+    expect(b.textContent).toContain("2.0G");
+    expect(b.textContent).not.toMatch(/\/0(\D|$)/);
   });
 
   it("GPU memory: its own column, used of total over the cards; power in the GPU column's hint", async () => {

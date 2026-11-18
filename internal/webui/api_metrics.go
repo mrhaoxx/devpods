@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"slices"
 	"strconv"
 	"time"
 
@@ -178,13 +179,17 @@ func (s *Server) handleLiveRecent(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		owner := sess.User
-		if all {
+		shared := !all && sharedWanted(r) // 我的 DevPod: those shared with me too
+		if all || shared {
 			owner = ""
 		}
 		var err error
 		if dps, err = s.devPods(r, owner); err != nil {
 			s.writeErr(w, http.StatusInternalServerError, "INTERNAL", err.Error(), nil)
 			return
+		}
+		if shared {
+			dps = slices.DeleteFunc(dps, func(dp InCluster) bool { return !mineOrShared(&dp.DevPod, sess.User, true) })
 		}
 	}
 	ts, ok := s.telemetryStore(w)

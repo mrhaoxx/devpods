@@ -448,7 +448,7 @@ export function rebuildFromConfig(r: Ref, dryRun = false) {
 export const getMetrics = (r: Ref, range: MetricRange) =>
   req<MetricSeries>("GET", apiIn(r.cluster, `/api/devpods/${r.name}/metrics?range=${range}`));
 export const getRecent = (p: { scope?: "mine" | "all"; ref?: Ref }) =>
-  req<RecentFrame>("GET", apiIn(p.ref?.cluster, `/api/live/devpods/recent?${p.ref ? `name=${encodeURIComponent(p.ref.name)}` : `scope=${p.scope ?? "mine"}`}`));
+  req<RecentFrame>("GET", apiIn(p.ref?.cluster, `/api/live/devpods/recent?${p.ref ? `name=${encodeURIComponent(p.ref.name)}` : (p.scope ?? "mine") === "mine" ? "scope=mine&shared=1" : `scope=${p.scope}`}`));
 export const getInfo = (r: Ref) => req<ContainerInfo>("GET", apiIn(r.cluster, `/api/devpods/${r.name}/info`));
 export const listNodes = () => req<{ items: NodeView[]; live: boolean }>("GET", "/api/admin/nodes");
 /** Each node's CPU / memory use over the sparkline window, from ClickHouse. */

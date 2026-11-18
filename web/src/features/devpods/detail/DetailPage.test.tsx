@@ -24,6 +24,7 @@ function setup(opts: { route?: string; admin?: boolean; live?: boolean } = {}) {
   const cs = stubFetch({
     "/api/devpods/alice-x": { devpod: dp, pod: { node: "g206", ip: "10.1.2.3", startedAt: "2026-11-10T10:00:00Z" } },
     "/api/audit/sessions": { items: [], next: "" },
+    "/api/nodes": { items: [{ name: "g206", ready: true, cpu: { allocatable: 64, allocated: 0 }, mem: { allocatable: 512 * 1024 ** 3, allocated: 0 }, gpuTotal: 0, gpuUsed: 0, reservable: false, pending: 0, access: "ok", mine: null, selectable: true }] },
     "/api/devpods/alice-x/metrics": (u: URL) => ({ step: u.searchParams.get("range") === "15m" ? 1 : 5, ts: [Math.floor(Date.now() / 1000) - 60], series: { cpu: [2.5] } }),
   });
   calls = cs;
@@ -69,6 +70,14 @@ describe("DevPod detail", () => {
     act(() => conns[0].h.onMessage({ kind: "metrics", metrics: sample }));
     expect(screen.getByTestId("card-cpu").textContent).toContain("3.5/8");
     expect(screen.getByTestId("card-mem").textContent).toContain("4.0G/16.0G");
+  });
+
+  it("no limit: the cards show the node's CPU and memory as the ceiling", async () => {
+    const conns = setup();
+    await screen.findByRole("heading", { name: "alice-x" });
+    act(() => conns[0].h.onMessage({ kind: "metrics", metrics: { ...sample, container: { ...sample.container, cpu_limit: 0, mem_limit: 0 } } }));
+    await waitFor(() => expect(screen.getByTestId("card-mem").textContent).toContain("4.0G/512.0G"));
+    expect(screen.getByTestId("card-cpu").textContent).toContain("3.5/64");
   });
 
   it("cards show — without telemetry", async () => {

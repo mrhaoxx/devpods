@@ -1,13 +1,13 @@
 // 我的 DevPod / 全部 DevPod (UI spec §5.1): one table, the admin view adds
 // Owner, the 空转 / GPU chips and bulk actions.
 import { useClusterFilter } from "../../data/clusterFilter";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import { useQueryClient } from "@tanstack/react-query";
 import type { SortingState } from "@tanstack/react-table";
 import { devpodHref, keyOf } from "../../data/cluster";
 import { deleteDevPod, podKey, patchDevPod, patchDevPodSpec, rebuildFromConfig, redeployDevPod, sshCommand, type LiveItem, shellPath } from "../../data/api";
-import { useDevPods, useMe, useRecent } from "../../data/queries";
+import { useDevPods, useMe, useNodeCeilings, useRecent } from "../../data/queries";
 import { devpodsStream } from "../../data/live/streams";
 import { useLiveEnabled, useLiveRow, useLiveValues } from "../../data/live/hooks";
 import { DataTable, type RowAction } from "../../design/DataTable";
@@ -120,6 +120,9 @@ export function DevPodTable({ scope }: { scope: "mine" | "all" }) {
   const { status } = useLiveRow(spec, "");
   const recent = useRecent({ scope }, useLiveEnabled());
   const reservations = useReservationsNow();
+  // with no limit of its own, a DevPod is shown out of its node's
+  const ceilings = useNodeCeilings();
+  const ceiling = useCallback((r: Row) => ceilings(r.cluster, r.node), [ceilings]);
   const [confirm, setConfirm] = useState<{ rows: Row[]; bulk: boolean } | null>(null);
   const [rebuildAsk, setRebuildAsk] = useState<Row | null>(null);
   // groups are open unless folded; what is folded is kept in this browser —
@@ -294,7 +297,7 @@ export function DevPodTable({ scope }: { scope: "mine" | "all" }) {
   const shown = useMemo(() => groupRows(filtered, folded, order), [filtered, folded, order]);
 
   return (
-    <TableCtx.Provider value={{ scope, now, recent: recent.data, pending, reservations }}>
+    <TableCtx.Provider value={{ scope, now, recent: recent.data, pending, reservations, ceiling }}>
       <div className="flex h-full min-h-0 flex-col">
         <div className="flex flex-wrap items-center gap-2 border-b border-line px-3 py-2">
           <FilterBox value={url.q} onChange={(q) => setUrl({ q })} />
@@ -339,6 +342,8 @@ export function DevPodTable({ scope }: { scope: "mine" | "all" }) {
             onSortingChange={(s) => setUrl({ sort: fromSorting(s) })}
             sorted
             selectable
+            // those shared with me are not mine to manage: not picked at all
+            canSelect={(r) => !(r.group ? r.group.members.some(shared) : shared(r))}
             dim={status === "reconnecting"}
             empty={<EmptyState title={list.isLoading ? "加载中…" : rows.length ? "没有符合条件的 DevPod" : "还没有 DevPod"} />}
             bulkBar={(picked, clear) =>

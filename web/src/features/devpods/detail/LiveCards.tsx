@@ -7,6 +7,7 @@ import type { LiveRow } from "../../../data/live/LiveHub";
 import { Sparkline } from "../../../design/Sparkline";
 import { NO_DATA_HINT } from "../../../design/MetricCell";
 import { fmtBytes, fmtCores, fmtRate } from "../../../lib/format";
+import type { NodeCeiling } from "../../../data/queries";
 
 function Card({ id, label, value, spark, max, sub }: { id: string; label: string; value?: ReactNode; spark?: (number | null)[]; max?: number; sub?: ReactNode }) {
   return (
@@ -42,7 +43,7 @@ function combine(s: MetricSeries | undefined, keep: (k: string) => boolean, avg 
 
 /** The cards' sparklines: 15 min of history (ClickHouse) plus the live
  *  tail, so they are drawn as soon as the page opens. */
-export function LiveCards({ row, hist }: { row?: LiveRow<DevPodSample>; hist?: MetricSeries }) {
+export function LiveCards({ row, hist, ceiling }: { row?: LiveRow<DevPodSample>; hist?: MetricSeries; /** its node's, when it has no limit */ ceiling?: NodeCeiling }) {
   const s = row?.value;
   const c = s?.container;
   const gpus = s?.gpus ?? [];
@@ -59,17 +60,17 @@ export function LiveCards({ row, hist }: { row?: LiveRow<DevPodSample>; hist?: M
       <Card
         id="cpu"
         label="CPU"
-        value={c ? `${fmtCores(c.cpu)}/${c.cpu_limit ? fmtCores(c.cpu_limit) : "∞"}` : undefined}
+        value={c ? `${fmtCores(c.cpu)}/${c.cpu_limit ? fmtCores(c.cpu_limit) : ceiling?.cpu ? fmtCores(ceiling.cpu) : "∞"}` : undefined}
         spark={spark((k) => k === "cpu", (x) => x.container?.cpu)}
-        max={c?.cpu_limit || undefined}
+        max={c?.cpu_limit || ceiling?.cpu || undefined}
         sub={c?.throttled_usec ? "限流中" : undefined}
       />
       <Card
         id="mem"
         label="内存"
-        value={c ? `${fmtBytes(c.mem_ws)}/${c.mem_limit ? fmtBytes(c.mem_limit) : "∞"}` : undefined}
+        value={c ? `${fmtBytes(c.mem_ws)}/${c.mem_limit ? fmtBytes(c.mem_limit) : ceiling?.mem ? fmtBytes(ceiling.mem) : "∞"}` : undefined}
         spark={spark((k) => k === "mem_anon" || k === "mem_file", (x) => x.container?.mem_ws)}
-        max={c?.mem_limit || undefined}
+        max={c?.mem_limit || ceiling?.mem || undefined}
         sub={c?.oom_kills ? `OOM ${c.oom_kills}` : undefined}
       />
       <Card

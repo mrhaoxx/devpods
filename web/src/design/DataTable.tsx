@@ -93,6 +93,9 @@ export type DataTableProps<T> = {
   sorting: SortingState;
   onSortingChange(s: SortingState): void;
   selectable?: boolean;
+  /** canSelect: a row that may be picked (default: every one); the others
+   *  have no box, and 全选, Ctrl+A, a drag and a click pass them by */
+  canSelect?(r: T): boolean;
   bulkBar?(rows: T[], clear: () => void): ReactNode;
   onRowClick?(r: T): void;
   empty?: ReactNode;
@@ -301,7 +304,7 @@ export function DataTable<T>(p: DataTableProps<T>) {
     state: { sorting: p.sorting, rowSelection: liveSelection, columnVisibility },
     onSortingChange: (u: Updater<SortingState>) => p.onSortingChange(typeof u === "function" ? u(p.sorting) : u),
     onRowSelectionChange: setSelection,
-    enableRowSelection: !!p.selectable,
+    enableRowSelection: !p.selectable ? false : p.canSelect ? (row) => p.canSelect!(row.original) : true,
     getCoreRowModel: getCoreRowModel(),
     getSortedRowModel: p.sorted ? undefined : getSortedRowModel(),
     manualSorting: !!p.sorted,
@@ -412,8 +415,9 @@ export function DataTable<T>(p: DataTableProps<T>) {
       }
       const next = { ...d.base };
       for (let k = Math.min(i, j); k <= Math.max(i, j); k++) {
-        if (d.on) next[all[k].id] = true;
-        else delete next[all[k].id];
+        if (d.on) {
+          if (all[k].getCanSelect()) next[all[k].id] = true;
+        } else delete next[all[k].id];
       }
       setSelection(next);
     };
@@ -658,13 +662,13 @@ export function DataTable<T>(p: DataTableProps<T>) {
                     if (p.onRowClick) return p.onRowClick(row.original);
                     // a selectable row with nothing else to do on a click: the click picks it
                     // (anywhere on it, not only the box) — unless text was being selected
-                    if (p.selectable && !window.getSelection()?.toString()) row.toggleSelected();
+                    if (p.selectable && row.getCanSelect() && !window.getSelection()?.toString()) row.toggleSelected();
                   }}
                   className={`group h-7 border-b border-line ${sel ? "bg-accent-soft/60" : "hover:bg-sunk"} ${p.onRowClick ? "cursor-pointer" : ""} ${p.rowClass?.(row.original) ?? ""}`}
                 >
                   {p.selectable && (
                     <td className={`px-2 ${pinnedBg(sel)}`} style={{ position: "sticky", left: 0, zIndex: 1 }}>
-                      <input data-pick type="checkbox" aria-label={`选择 ${row.id}`} checked={sel} onChange={row.getToggleSelectedHandler()} />
+                      {row.getCanSelect() && <input data-pick type="checkbox" aria-label={`选择 ${row.id}`} checked={sel} onChange={row.getToggleSelectedHandler()} />}
                     </td>
                   )}
                   {row.getVisibleCells().flatMap((cell) => {

@@ -52,26 +52,67 @@ type CgroupSample struct {
 	ioR, ioW, ioRops, ioWops uint64
 }
 
-// OpenCgroup detects the layout under root (normally /sys/fs/cgroup).
+// OpenCgroup detects the layout under root (normally /sys/fs/cgroup) and
+// the container's own cgroup in it. In a cgroup namespace of its own the
+// root is that cgroup (/proc/self/cgroup says "0::/"); in the host's —
+// some runtimes run pods so — the root is the node's, and /proc/self/cgroup
+// names the container's path under it, which is read instead: the node's
+// root would measure the whole node (and has no memory.current).
 func OpenCgroup(root string) (*Cgroup, error) {
-	if exists(filepath.Join(root, "cgroup.controllers")) {
-		return &Cgroup{v2: true, cpu: root, cpuacct: root, cpuset: root, mem: root, io: root, pids: root}, nil
+	self, _ := os.ReadFile("/proc/self/cgroup")
+	return openCgroup(root, string(self))
+}
+
+// ownCgroups reads /proc/self/cgroup: the v2 path (under "") and each v1
+// controller's.
+func ownCgroups(self string) map[string]string {
+	paths := map[string]string{}
+	for _, line := range strings.Split(self, "\n") {
+		f := strings.SplitN(strings.TrimSpace(line), ":", 3)
+		if len(f) != 3 {
+			continue
+		}
+		if f[1] == "" {
+			paths[""] = f[2]
+			continue
+		}
+		for _, c := range strings.Split(f[1], ",") {
+			paths[c] = f[2]
+		}
 	}
-	pick := func(names ...string) string {
+	return paths
+}
+
+func openCgroup(root, self string) (*Cgroup, error) {
+	own := ownCgroups(self)
+	// under base, the container's own cgroup when it is there
+	in := func(base, ctrl string) string {
+		if p := own[ctrl]; p != "" && p != "/" {
+			if d := filepath.Join(base, p); exists(d) {
+				return d
+			}
+		}
+		return base
+	}
+	if exists(filepath.Join(root, "cgroup.controllers")) {
+		d := in(root, "")
+		return &Cgroup{v2: true, cpu: d, cpuacct: d, cpuset: d, mem: d, io: d, pids: d}, nil
+	}
+	pick := func(ctrl string, names ...string) string {
 		for _, n := range names {
 			if p := filepath.Join(root, n); exists(p) {
-				return p
+				return in(p, ctrl)
 			}
 		}
 		return ""
 	}
 	c := &Cgroup{
-		cpu:     pick("cpu,cpuacct", "cpu", "cpuacct,cpu"),
-		cpuacct: pick("cpu,cpuacct", "cpuacct", "cpuacct,cpu"),
-		cpuset:  pick("cpuset"),
-		mem:     pick("memory"),
-		io:      pick("blkio"),
-		pids:    pick("pids"),
+		cpu:     pick("cpu", "cpu,cpuacct", "cpu", "cpuacct,cpu"),
+		cpuacct: pick("cpuacct", "cpu,cpuacct", "cpuacct", "cpuacct,cpu"),
+		cpuset:  pick("cpuset", "cpuset"),
+		mem:     pick("memory", "memory"),
+		io:      pick("blkio", "blkio"),
+		pids:    pick("pids", "pids"),
 	}
 	if c.cpu == "" && c.mem == "" {
 		return nil, errors.New("no cgroup v1 or v2 hierarchy under " + root)

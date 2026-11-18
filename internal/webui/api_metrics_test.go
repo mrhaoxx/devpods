@@ -135,6 +135,20 @@ func TestLiveRecentAPI(t *testing.T) {
 		t.Fatalf("one: %+v", out)
 	}
 	get(alice, "/api/live/devpods/recent?name=rc-bob-dev1", http.StatusNotFound)
+
+	// ?shared=1 (我的 DevPod): those shared with me too, for their curves
+	if rec := doJSON(t, s.HandleCreateDevPodForTest(), "POST", "/api/devpods", nil, forge(sm, "rc-bob", false),
+		`{"name":"shared","image":"ubuntu:24.04","cpu":"1","memory":"1Gi","collaborators":["rc-alice"]}`); rec.Code != http.StatusCreated {
+		t.Fatalf("create: %d %s", rec.Code, rec.Body)
+	}
+	waitDevPod(t, "rc-bob-shared")
+	out = get(alice, "/api/live/devpods/recent?scope=mine&shared=1", http.StatusOK)
+	if items := out["items"].(map[string]any); items["rc-alice-dev1"] == nil || items["rc-bob-shared"] == nil || items["rc-bob-dev1"] != nil {
+		t.Fatalf("mine with shared: %+v", out)
+	}
+	if items := get(alice, "/api/live/devpods/recent", http.StatusOK)["items"].(map[string]any); items["rc-bob-shared"] != nil {
+		t.Fatalf("mine alone: %+v", items)
+	}
 }
 
 func TestInfoAPI_NoTelemetry(t *testing.T) {

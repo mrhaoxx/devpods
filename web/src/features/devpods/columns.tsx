@@ -14,6 +14,7 @@ import { MetricCell } from "../../design/MetricCell";
 import { StatusDot, phaseLabel } from "../../design/StatusDot";
 import { Badge } from "../../design/Badge";
 import { fmtAge, fmtBytes, fmtCores, fmtRate, parseQuantity, gpuCount } from "../../lib/format";
+import type { NodeCeiling } from "../../data/queries";
 import { phaseSummary, pinnedNode, reservationNotes, type ReservationsNow } from "./status";
 import { sparkSeries } from "../../lib/spark";
 import { provenance } from "./provenance";
@@ -75,7 +76,15 @@ function ReservationBadges({ r }: { r: Row }) {
   );
 }
 
-export const TableCtx = createContext<{ scope: "mine" | "all"; now: Date; recent?: RecentFrame; pending?: ReadonlyMap<string, Pending>; reservations?: ReservationsNow }>({
+export const TableCtx = createContext<{
+  scope: "mine" | "all";
+  now: Date;
+  recent?: RecentFrame;
+  pending?: ReadonlyMap<string, Pending>;
+  reservations?: ReservationsNow;
+  /** the node's ceiling, for a DevPod with no limit of its own */
+  ceiling?: (r: Row) => NodeCeiling | undefined;
+}>({
   scope: "mine",
   now: new Date(),
 });
@@ -110,6 +119,25 @@ function useUp(r: Row) {
   const lives = useLiveRows<LiveItem>(devpodsStream(scope), rs.map(keyOf));
   return rs.map((m, i) => ({ m, live: lives[i] })).filter((x) => running(x.m));
 }
+/** limitsOf: the members' limits added — each its own, or with none its
+ *  node's (fromNode: some are the node's) */
+function limitsOf(up: ReturnType<typeof useUp>, kind: "cpu" | "mem", ceiling?: (r: Row) => NodeCeiling | undefined) {
+  let limit = 0;
+  let fromNode = false;
+  for (const x of up) {
+    const own = kind === "cpu" ? x.live?.value.cpuLimit || x.m.cpuLimit : x.live?.value.memLimit || x.m.memLimit;
+    if (own) {
+      limit += own;
+      continue;
+    }
+    const c = ceiling?.(x.m)?.[kind];
+    if (c) {
+      limit += c;
+      fromNode = true;
+    }
+  }
+  return { limit, fromNode };
+}
 /** total: the sum of what is known (null: nothing is) */
 const total = (xs: (number | null | undefined)[]) => {
   const known = xs.filter((x): x is number => x != null);
@@ -117,7 +145,7 @@ const total = (xs: (number | null | undefined)[]) => {
 };
 
 function CpuCell({ r }: { r: Row }) {
-  const { now, recent } = useContext(TableCtx);
+  const { now, recent, ceiling } = useContext(TableCtx);
   const up = useUp(r);
   if (!r.group && !running(r)) {
     const s = phaseSummary(r.dp, r.pod, now) ?? "";
@@ -129,7 +157,7 @@ function CpuCell({ r }: { r: Row }) {
   }
   if (up.length === 0) return null;
   const v = total(up.map((x) => x.live?.value.cpu));
-  const limit = up.reduce((a, x) => a + (x.live?.value.cpuLimit || x.m.cpuLimit), 0);
+  const { limit, fromNode } = limitsOf(up, "cpu", ceiling);
   const t = Date.now();
   // the members' curves added bucket by bucket (each is bucketed over the same window)
   const curves = up.map((x) =>
@@ -142,7 +170,8 @@ function CpuCell({ r }: { r: Row }) {
   return (
     <MetricCell
       value={v}
-      text={v == null ? undefined : `${fmtCores(v)}/${fmtCores(limit)}`}
+      text={v == null ? undefined : limit ? `${fmtCores(v)}/${fmtCores(limit)}` : fmtCores(v)}
+      title={fromNode ? `未设 CPU 上限：显示所在节点的 ${fmtCores(limit)} 核` : undefined}
       spark={curves[0].map((_, i) => total(curves.map((c) => c[i])))}
       sparkMax={limit || undefined}
     />
@@ -150,11 +179,19 @@ function CpuCell({ r }: { r: Row }) {
 }
 
 function MemCell({ r }: { r: Row }) {
+  const { ceiling } = useContext(TableCtx);
   const up = useUp(r);
   if (up.length === 0) return null;
   const v = total(up.map((x) => x.live?.value.mem));
-  const limit = up.reduce((a, x) => a + (x.live?.value.memLimit || x.m.memLimit), 0);
-  return <MetricCell value={v} meter={v == null ? undefined : { used: v, limit }} text={v == null ? undefined : `${fmtBytes(v)}/${fmtBytes(limit)}`} />;
+  const { limit, fromNode } = limitsOf(up, "mem", ceiling);
+  return (
+    <MetricCell
+      value={v}
+      meter={v == null || !limit ? undefined : { used: v, limit }}
+      text={v == null ? undefined : limit ? `${fmtBytes(v)}/${fmtBytes(limit)}` : fmtBytes(v)}
+      title={fromNode ? `未设内存上限：显示所在节点的 ${fmtBytes(limit)}` : undefined}
+    />
+  );
 }
 
 const MiB = 1024 * 1024;

@@ -1,6 +1,6 @@
 // Query keys and hooks over the typed client. Server data lives in the
 // TanStack Query cache; live metrics never do (they live in LiveHub).
-import { useEffect } from "react";
+import { useEffect, useMemo } from "react";
 import { useMutation, useQuery, useQueryClient, type QueryClient, keepPreviousData } from "@tanstack/react-query";
 import { keyOf, type Ref } from "./cluster";
 import {
@@ -128,6 +128,17 @@ export const useRecent = (p: { scope?: "mine" | "all"; ref?: Ref }, enabled = tr
 export const useNodesRecent = () => useQuery({ queryKey: ["recent", "nodes"], queryFn: getNodesRecent, ...sparkHistory });
 /** useNodeChoices: the nodes a DevPod can be pinned to, with reservation state. */
 export const useNodeChoices = (enabled = true) => useQuery({ queryKey: ["node-choices"], queryFn: listNodeChoices, enabled, refetchInterval: 30_000 });
+/** NodeCeiling: what a node can give a DevPod — its allocatable cores and bytes. */
+export type NodeCeiling = { cpu: number; mem: number };
+/** useNodeCeilings: a node's ceiling (of the nodes I may see), what a
+ *  DevPod with no limit of its own is shown out of. */
+export function useNodeCeilings(): (cluster: string | undefined, node: string | undefined) => NodeCeiling | undefined {
+  const q = useNodeChoices();
+  return useMemo(() => {
+    const by = new Map((q.data?.items ?? []).map((n) => [keyOf({ cluster: n.cluster, name: n.name }), { cpu: n.cpu.allocatable, mem: n.mem.allocatable }]));
+    return (cluster, node) => (node ? by.get(keyOf({ cluster, name: node })) : undefined);
+  }, [q.data]);
+}
 /** useSnapshots: saved images; refreshed while any is still being saved. */
 export const useSnapshots = (p: { all?: boolean; devpod?: string } = {}, enabled = true) =>
   useQuery({

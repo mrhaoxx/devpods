@@ -89,6 +89,31 @@ describe("DataTable", () => {
     expect((screen.getByLabelText("选择 a") as HTMLInputElement).checked).toBe(false);
   });
 
+  it("a row that cannot be picked: no box, and 全选, Ctrl+A, a drag and a click pass it by", () => {
+    render(
+      <DataTable
+        data={rows}
+        columns={columns}
+        getRowId={(r) => r.name}
+        sorting={[]}
+        onSortingChange={() => {}}
+        selectable
+        canSelect={(r) => r.name !== "b"}
+        bulkBar={(sel) => <button>休眠 {sel.map((r) => r.name).join(",")}</button>}
+      />,
+    );
+    expect(screen.queryByLabelText("选择 b")).toBeNull();
+    fireEvent.click(screen.getByLabelText("全选"));
+    expect(screen.getByRole("button", { name: "休眠 a,c" })).toBeTruthy();
+    expect((screen.getByLabelText("全选") as HTMLInputElement).checked).toBe(true); // all that can be
+    fireEvent.keyDown(document, { key: "Escape" });
+    fireEvent.keyDown(document.body, { key: "a", ctrlKey: true });
+    expect(screen.getByRole("button", { name: "休眠 a,c" })).toBeTruthy();
+    fireEvent.keyDown(document, { key: "Escape" });
+    fireEvent.click(screen.getByText("b"));
+    expect(screen.queryByText(/已选/)).toBeNull();
+  });
+
   it("clear hides the bulk bar", () => {
     render(<Harness />);
     fireEvent.click(screen.getByLabelText("选择 b"));

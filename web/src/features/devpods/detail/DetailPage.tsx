@@ -25,7 +25,7 @@ import {
 } from "../../../data/api";
 import { segCluster } from "../../../data/cluster";
 import { useClusterList } from "../../../data/clusterFilter";
-import { qk, useAuditSessions, useDevPod, useDevPodMutations, useMe, useMetrics } from "../../../data/queries";
+import { qk, useAuditSessions, useDevPod, useDevPodMutations, useMe, useMetrics, useNodeCeilings } from "../../../data/queries";
 import { devpodStream } from "../../../data/live/streams";
 import { useLiveEnabled, useLiveRow } from "../../../data/live/hooks";
 import { StatusDot } from "../../../design/StatusDot";
@@ -67,6 +67,7 @@ function Meta({ k, children }: { k: string; children: ReactNode }) {
 export function DetailPage() {
   const { cluster: seg, name = "" } = useParams();
   const cluster = segCluster(seg);
+  const ceilings = useNodeCeilings();
   // the DevPod: its cluster comes from the address, not from what it says
   const r = useMemo(() => ({ cluster, name }), [cluster, name]);
   const me = useMe().data;
@@ -166,6 +167,8 @@ export function DetailPage() {
   const owner = dp.spec.owner;
   const pod = d.pod;
   const runningPhase = dp.status?.phase === "Running";
+  // with no limit of its own: its node's, as the cards' and charts' ceiling
+  const ceiling = ceilings(cluster, pod?.node || pinnedNode(dp));
   const image = dp.spec.pod?.spec?.containers?.[0]?.image;
   const b = d.binding;
   const kore = b?.pool ? `pool ${b.pool}` : b?.allocatedCpuset ? `pin ${b.allocatedCpuset}${b.reservedNuma ? ` · NUMA ${b.reservedNuma}` : ""}` : b ? "绑定中" : "";
@@ -236,7 +239,7 @@ export function DetailPage() {
       </div>
       {dp.status?.message && !runningPhase && <div className="rounded-md bg-warm-soft px-3 py-1.5 text-xs text-warm">{dp.status.message}</div>}
 
-      <LiveCards row={live ? metrics.row : undefined} hist={recent.data} />
+      <LiveCards row={live ? metrics.row : undefined} hist={recent.data} ceiling={ceiling} />
 
       {/* on a phone the tabs are wider than the screen: the row slides */}
       <div role="tablist" className="flex gap-1 overflow-x-auto overflow-y-hidden border-b border-line text-xs [scrollbar-width:none]">
@@ -279,7 +282,7 @@ export function DetailPage() {
           </div>
         </div>
       )}
-      {tab === "monitor" && <MonitorTab r={r} history={live ? metrics.row?.history : undefined} />}
+      {tab === "monitor" && <MonitorTab r={r} history={live ? metrics.row?.history : undefined} ceiling={ceiling} />}
       {tab === "processes" && (
         <Panel title="全部进程（每秒刷新）">
           <ProcessTable procs={allProcs.row?.value ?? procs.row?.value} live={live} />

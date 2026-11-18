@@ -99,6 +99,7 @@ export function TimeSeriesChart({
   series,
   stacked,
   limit,
+  limitLabel = "限额",
   yFormat = (v) => String(+v.toFixed(2)),
   height = 150,
   zoomKey,
@@ -109,6 +110,8 @@ export function TimeSeriesChart({
   stacked?: boolean;
   /** a labelled horizontal reference line */
   limit?: number | null;
+  /** what the line is called (限额; 节点 for a node's ceiling) */
+  limitLabel?: string;
   yFormat?: (v: number) => string;
   height?: number;
   /** a change of it (a new time range) ends a zoom */
@@ -124,8 +127,8 @@ export function TimeSeriesChart({
   const [hidden, setHidden] = useState<ReadonlySet<string>>(new Set());
   const th = useMemo(readTheme, [theme]); // eslint-disable-line react-hooks/exhaustive-deps
   // what the draw hooks read; refreshed on every render
-  const cur = useRef({ yFormat, limit: limit ?? null, p: plotData({ ts, series, hidden, stacked, limit, yFormat }) });
-  cur.current = { yFormat, limit: limit ?? null, p: plotData({ ts, series, hidden, stacked, limit, yFormat }) };
+  const cur = useRef({ yFormat, limit: limit ?? null, limitLabel, p: plotData({ ts, series, hidden, stacked, limit, yFormat }) });
+  cur.current = { yFormat, limit: limit ?? null, limitLabel, p: plotData({ ts, series, hidden, stacked, limit, yFormat }) };
   const p = cur.current.p;
   const data = [p.x, ...p.series.map((s) => s.drawn)] as uPlot.AlignedData;
   const signature = p.series.map((s) => s.label + s.color + s.fill).join("|") + `|${stacked}`;
@@ -223,7 +226,7 @@ export function TimeSeriesChart({
             ctx.font = `${10 * devicePixelRatio}px ui-sans-serif, system-ui, sans-serif`;
             ctx.textAlign = "right";
             ctx.textBaseline = "bottom";
-            ctx.fillText(`限额 ${cur.current.yFormat(lim)}`, bbox.left + bbox.width - 4 * devicePixelRatio, y - 2 * devicePixelRatio);
+            ctx.fillText(`${cur.current.limitLabel} ${cur.current.yFormat(lim)}`, bbox.left + bbox.width - 4 * devicePixelRatio, y - 2 * devicePixelRatio);
             ctx.restore();
           },
         ],

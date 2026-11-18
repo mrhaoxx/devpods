@@ -12,6 +12,7 @@ export function MetricCell({
   sparkMax,
   meter,
   hint = NO_DATA_HINT,
+  title,
 }: {
   value?: number | null;
   text?: string;
@@ -19,6 +20,8 @@ export function MetricCell({
   sparkMax?: number;
   meter?: { used: number; limit: number };
   hint?: string;
+  /** what the value is out of, when it is not plain (a node's ceiling) */
+  title?: string;
 }) {
   if (value == null) {
     const hasCurve = spark?.some((v) => v != null);
@@ -32,7 +35,7 @@ export function MetricCell({
     );
   }
   return (
-    <span className="inline-flex min-w-0 items-center gap-1.5">
+    <span className="inline-flex min-w-0 items-center gap-1.5" title={title}>
       {spark && <Sparkline values={spark} max={sparkMax} width={48} height={14} />}
       {meter && <Meter used={meter.used} limit={meter.limit} width={40} />}
       {text && <span className="mono truncate">{text}</span>}

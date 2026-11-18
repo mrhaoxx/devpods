@@ -11,6 +11,7 @@ import { EmptyState } from "../../../design/EmptyState";
 import { useUrlState, type Schema } from "../../../lib/urlState";
 import { fmtBytes, fmtCores, fmtRate } from "../../../lib/format";
 import { activeRDMA, chartsFromLive, chartsFromSeries, lastLimit, mergeLive, type ChartSet } from "./monitor";
+import type { NodeCeiling } from "../../../data/queries";
 
 // Grafana-like presets; history from ClickHouse, the live tail appended
 // for the short ones (UI feedback round 1).
@@ -53,7 +54,9 @@ const gpuMetric: Record<GpuMetric, [string, (v: number) => string]> = {
   temp: ["温度", (v) => `${Math.round(v)}°C`],
 };
 
-function Charts({ c, live, range }: { c: ChartSet; live: boolean; /** a new one ends a zoom */ range: string }) {
+function Charts({ c, live, range, ceiling }: { c: ChartSet; live: boolean; /** a new one ends a zoom */ range: string; /** its node's, when it has no limit */ ceiling?: NodeCeiling }) {
+  // the limit line: its own; with none, its node's (labelled so)
+  const line = (own: number | null, node?: number) => (own ? { limit: own } : node ? { limit: node, limitLabel: "节点" } : { limit: null });
   const [splitTcp, setSplitTcp] = useState(false);
   const [rdmaHealth, setRdmaHealth] = useState(false);
   const gpus = Object.entries(c.gpu);
@@ -81,7 +84,7 @@ function Charts({ c, live, range }: { c: ChartSet; live: boolean; /** a new one 
               { label: "使用", values: c.cpu.used, color: "--chart-1", fill: true },
               { label: "throttled", values: c.cpu.throttled, color: "--chart-2" },
             ]}
-            limit={lastLimit(c.cpu.limit)}
+            {...line(lastLimit(c.cpu.limit), ceiling?.cpu)}
             yFormat={fmtCores}
           />
         </div>
@@ -96,7 +99,7 @@ function Charts({ c, live, range }: { c: ChartSet; live: boolean; /** a new one 
               { label: "anon", values: c.mem.anon, color: "--chart-1", fill: true },
               { label: "file", values: c.mem.file, color: "--chart-2", fill: true },
             ]}
-            limit={lastLimit(c.mem.limit)}
+            {...line(lastLimit(c.mem.limit), ceiling?.mem)}
             yFormat={fmtBytes}
           />
         </div>
@@ -182,7 +185,7 @@ function Charts({ c, live, range }: { c: ChartSet; live: boolean; /** a new one 
   );
 }
 
-export function MonitorTab({ r, history }: { r: Ref; history?: ReadonlyArray<{ ts: number; value: DevPodSample }> }) {
+export function MonitorTab({ r, history, ceiling }: { r: Ref; history?: ReadonlyArray<{ ts: number; value: DevPodSample }>; ceiling?: NodeCeiling }) {
   const [url, setUrl] = useUrlState(schema);
   const range = RANGE_MS[url.range] ? url.range : RANGE_MS[lastRange()] ? lastRange() : "1h";
   const rangeMs = RANGE_MS[range];
@@ -222,7 +225,7 @@ export function MonitorTab({ r, history }: { r: Ref; history?: ReadonlyArray<{ t
       ) : charts ? (
         // while a new range loads, the last one's charts stay, dimmed
         <div className={hist.isPlaceholderData ? "opacity-60 transition-opacity" : "transition-opacity"} aria-busy={hist.isPlaceholderData}>
-          <Charts c={charts} live={live && !hist.isPlaceholderData} range={range} />
+          <Charts c={charts} live={live && !hist.isPlaceholderData} range={range} ceiling={ceiling} />
         </div>
       ) : (
         <EmptyState title="加载中…" />
