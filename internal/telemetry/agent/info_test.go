@@ -59,3 +59,28 @@ func TestSnapshot_ListenPortsAndTop(t *testing.T) {
 		t.Fatalf("counts: %+v", s)
 	}
 }
+
+// With the host's network (hostNetwork) the TCP table is the node's: only
+// the ports a process of the container listens on are its ports. In a
+// network namespace of its own every listening socket is the pod's.
+func TestSnapshot_ListenOwnOnlyOnHostNetwork(t *testing.T) {
+	root := writeTree(t, map[string]string{
+		"net/tcp": "  sl  local_address rem_address   st tx_queue rx_queue tr tm->when retrnsmt   uid  timeout inode\n" +
+			"   0: 00000000:22B8 00000000:0000 0A 00000000:00000000 00:00000000 00000000     0        0 777 1\n" + // 8888, the container's
+			"   1: 00000000:0016 00000000:0000 0A 00000000:00000000 00:00000000 00000000     0        0 900 1\n", // 22, the node's sshd
+	})
+	sm := procfs.NewSocketMap(map[uint64]procfs.PID{777: {Pid: 30, Start: 30}})
+	ports := func(own bool) []int {
+		var out []int
+		for _, l := range CollectSnapshot(SnapshotInput{ProcRoot: root, Sockets: sm, OwnOnly: own}).Listen {
+			out = append(out, l.Port)
+		}
+		return out
+	}
+	if got := ports(true); len(got) != 1 || got[0] != 8888 {
+		t.Fatalf("host network: %v", got)
+	}
+	if got := ports(false); len(got) != 2 {
+		t.Fatalf("own network: %v", got)
+	}
+}

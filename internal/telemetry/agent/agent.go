@@ -483,7 +483,7 @@ func (a *agent) procRecords(now time.Time, dt time.Duration) []wire.Record {
 }
 
 func (a *agent) snapshotInput() SnapshotInput {
-	return SnapshotInput{ProcRoot: a.env.ProcRoot, Procs: a.procs, Attrib: a.attrib, CPU: a.cpuRates, Sockets: a.sockets, PVCMounts: a.cfg.PVCMounts}
+	return SnapshotInput{ProcRoot: a.env.ProcRoot, Procs: a.procs, Attrib: a.attrib, CPU: a.cpuRates, Sockets: a.sockets, PVCMounts: a.cfg.PVCMounts, OwnOnly: a.cfg.HostNetwork}
 }
 
 // fullProcs queues the 5-second full process list (memory only, §5.10).

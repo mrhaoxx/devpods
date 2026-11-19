@@ -62,6 +62,10 @@ type SnapshotInput struct {
 	// TCPSocks are /proc/net/tcp and tcp6 by name; nil reads them now
 	// (the agent caches them: the read walks the node's TCP table).
 	TCPSocks map[string][]procfs.TCPSock
+	// OwnOnly: the network is the host's (hostNetwork), its TCP table the
+	// node's — only the ports a process of the container listens on are
+	// listed (known from Sockets; without them, every port as before).
+	OwnOnly bool
 }
 
 // ReadTCPSocks reads /proc/net/tcp and tcp6 under procRoot.
@@ -128,6 +132,9 @@ func CollectSnapshot(in SnapshotInput) wire.Snapshot {
 			l := wire.Listen{Port: int(sk.Local.Port()), Proto: name, Addr: sk.Local.Addr().String()}
 			if in.Sockets != nil {
 				l.Pid = in.Sockets.Owner(sk.Inode).Pid
+				if in.OwnOnly && l.Pid == 0 {
+					continue // another process of the node's
+				}
 			}
 			s.Listen = append(s.Listen, l)
 		}
