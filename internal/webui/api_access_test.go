@@ -19,6 +19,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	devpodv1alpha1 "github.com/mrhaoxx/devpod/api/v1alpha1"
+	"github.com/mrhaoxx/devpod/internal/access"
 	"github.com/mrhaoxx/devpod/internal/webui"
 )
 
@@ -74,23 +75,23 @@ func putBody(t *testing.T, b accessBody) string {
 	return string(raw)
 }
 
-var everyoneDenied = devpodv1alpha1.AccessRule{Machines: []string{"x-*"}, Subject: devpodv1alpha1.AccessSubject{Kind: "everyone"}}
+var everyoneDenied = devpodv1alpha1.AccessRule{Machines: []string{"x-*"}, Subject: &devpodv1alpha1.AccessSubject{Kind: "everyone"}}
 
 func TestAccessDefaultWhenAbsent(t *testing.T) {
 	s, call := accessRig(t)
 	b := readAccess(t, call("ac-root", true, "GET", "/api/admin/access", ""))
-	if len(b.Rules) != 0 || b.ResourceVersion != "" || !b.Default.Allow || !b.Default.Privileged || len(b.Default.HostPaths) != 1 || b.Default.HostPaths[0].Path != "/" {
+	if len(b.Rules) != 0 || b.ResourceVersion != "" || !b.Default.Allow || !access.Grants(b.Default).Privileged || len(b.Default.HostPaths) != 1 || b.Default.HostPaths[0].Path != "/" {
 		t.Fatalf("absent: %+v", b)
 	}
 	d, admin, err := s.DecideForTest(context.Background(), "ac-bob", "", "n1", nil)
-	if err != nil || admin || d.Rule != -1 || !d.Allow || !d.Privileged {
+	if err != nil || admin || d.Rule != -1 || !d.Allow || !access.Grants(d.AccessEffect).Privileged {
 		t.Fatalf("decide: %+v %v %v", d, admin, err)
 	}
 }
 
 func TestAccessPutAndGet(t *testing.T) {
 	_, call := accessRig(t)
-	second := devpodv1alpha1.AccessRule{Cluster: "", Subject: devpodv1alpha1.AccessSubject{Kind: "some", Users: []string{"ac-bob", "ac-carol"}}, Effect: devpodv1alpha1.AccessEffect{Allow: true, NeedsReservation: true}}
+	second := devpodv1alpha1.AccessRule{Cluster: "", Subject: &devpodv1alpha1.AccessSubject{Kind: "some", Users: []string{"ac-bob", "ac-carol"}}, Effect: devpodv1alpha1.AccessEffect{Allow: true, NeedsReservation: true}}
 	rec := call("ac-root", true, "PUT", "/api/admin/access", putBody(t, accessBody{Rules: []devpodv1alpha1.AccessRule{everyoneDenied, second}, Default: devpodv1alpha1.DefaultAccessEffect()}))
 	if put := readAccess(t, rec); put.ResourceVersion == "" {
 		t.Fatalf("no resourceVersion: %+v", put)
@@ -120,13 +121,13 @@ func TestAccessPutConflict(t *testing.T) {
 func TestAccessValidation(t *testing.T) {
 	_, call := accessRig(t)
 	for name, r := range map[string]devpodv1alpha1.AccessRule{
-		"unknown group":       {Subject: devpodv1alpha1.AccessSubject{Kind: "some", Users: []string{"ac-bob"}, Groups: []string{"ac-nogroup"}}},
-		"nobody named":        {Subject: devpodv1alpha1.AccessSubject{Kind: "some"}},
-		"a blank user":        {Subject: devpodv1alpha1.AccessSubject{Kind: "some", Users: []string{" "}}},
-		"relative hostPath":   {Subject: devpodv1alpha1.AccessSubject{Kind: "everyone"}, Effect: devpodv1alpha1.AccessEffect{Allow: true, HostPaths: []devpodv1alpha1.HostPathGrant{{Path: "data"}}}},
-		"empty machine":       {Machines: []string{""}, Subject: devpodv1alpha1.AccessSubject{Kind: "everyone"}},
-		"unknown kind":        {Subject: devpodv1alpha1.AccessSubject{Kind: "someone"}},
-		"the old single kind": {Subject: devpodv1alpha1.AccessSubject{Kind: "user", Users: []string{"ac-bob"}}},
+		"unknown group":       {Subject: &devpodv1alpha1.AccessSubject{Kind: "some", Users: []string{"ac-bob"}, Groups: []string{"ac-nogroup"}}},
+		"nobody named":        {Subject: &devpodv1alpha1.AccessSubject{Kind: "some"}},
+		"a blank user":        {Subject: &devpodv1alpha1.AccessSubject{Kind: "some", Users: []string{" "}}},
+		"relative hostPath":   {Subject: &devpodv1alpha1.AccessSubject{Kind: "everyone"}, Effect: devpodv1alpha1.AccessEffect{Allow: true, HostPaths: []devpodv1alpha1.HostPathGrant{{Path: "data"}}}},
+		"empty machine":       {Machines: []string{""}, Subject: &devpodv1alpha1.AccessSubject{Kind: "everyone"}},
+		"unknown kind":        {Subject: &devpodv1alpha1.AccessSubject{Kind: "someone"}},
+		"the old single kind": {Subject: &devpodv1alpha1.AccessSubject{Kind: "user", Users: []string{"ac-bob"}}},
 	} {
 		if rec := call("ac-root", true, "PUT", "/api/admin/access", putBody(t, accessBody{Rules: []devpodv1alpha1.AccessRule{r}, Default: devpodv1alpha1.DefaultAccessEffect()})); rec.Code != http.StatusBadRequest {
 			t.Errorf("%s: %d %s", name, rec.Code, rec.Body)
@@ -155,7 +156,7 @@ func TestGroupsCRUD(t *testing.T) {
 	if rec := call("ac-root", true, "POST", "/api/admin/groups", `{"name":"ac-other","members":["ac-x"]}`); rec.Code != http.StatusCreated {
 		t.Fatalf("create ac-other: %d %s", rec.Code, rec.Body)
 	}
-	byGroup := devpodv1alpha1.AccessRule{Subject: devpodv1alpha1.AccessSubject{Kind: "some", Users: []string{"ac-bob"}, Groups: []string{"ac-other", "ac-infer"}}, Effect: devpodv1alpha1.AccessEffect{Allow: true}}
+	byGroup := devpodv1alpha1.AccessRule{Subject: &devpodv1alpha1.AccessSubject{Kind: "some", Users: []string{"ac-bob"}, Groups: []string{"ac-other", "ac-infer"}}, Effect: devpodv1alpha1.AccessEffect{Allow: true}}
 	saved := readAccess(t, call("ac-root", true, "PUT", "/api/admin/access", putBody(t, accessBody{Rules: []devpodv1alpha1.AccessRule{byGroup}, Default: devpodv1alpha1.DefaultAccessEffect()})))
 	for _, g := range []string{"ac-infer", "ac-other"} {
 		if rec := call("ac-root", true, "DELETE", "/api/admin/groups/"+g, ""); rec.Code != http.StatusConflict {

@@ -77,20 +77,45 @@ spec:
                     type: boolean
                   privileged:
                     description: |-
-                      Privileged: privileged containers, added capabilities, the host's
-                      PID, IPC or network.
+                      Privileged (the old form): all of Privileges. Ignored when
+                      Privileges is set.
                     type: boolean
+                  privileges:
+                    description: 'Privileges: what beyond an ordinary container may
+                      be asked for.'
+                    properties:
+                      capabilities:
+                        description: |-
+                          Capabilities that may be added (NET_ADMIN, SYS_PTRACE; with or
+                          without CAP_, any case); "*" = any, ALL included.
+                        items:
+                          type: string
+                        type: array
+                      hostIPC:
+                        type: boolean
+                      hostNetwork:
+                        type: boolean
+                      hostPID:
+                        type: boolean
+                      privileged:
+                        description: 'Privileged: privileged containers (every capability
+                          with them).'
+                        type: boolean
+                    type: object
                 required:
                 - allow
                 type: object
               rules:
                 items:
                   description: |-
-                    AccessRule: a resource (a cluster, machines anywhere, or machines of a
-                    cluster), who it is about, and what they get.
+                    AccessRule: a condition on the cluster, the machine and the user, and
+                    what those it holds for get. Match is the condition; a rule without it
+                    is in the old form (Cluster, Machines, Subject), read as the condition
+                    they make.
                   properties:
                     cluster:
-                      description: 'Cluster: a cluster''s name; empty = any cluster.'
+                      description: 'Cluster (the old form): a cluster''s name; empty
+                        = any cluster.'
                       type: string
                     effect:
                       description: 'AccessEffect: deny (Allow false), or allow with
@@ -123,21 +148,53 @@ spec:
                           type: boolean
                         privileged:
                           description: |-
-                            Privileged: privileged containers, added capabilities, the host's
-                            PID, IPC or network.
+                            Privileged (the old form): all of Privileges. Ignored when
+                            Privileges is set.
                           type: boolean
+                        privileges:
+                          description: 'Privileges: what beyond an ordinary container
+                            may be asked for.'
+                          properties:
+                            capabilities:
+                              description: |-
+                                Capabilities that may be added (NET_ADMIN, SYS_PTRACE; with or
+                                without CAP_, any case); "*" = any, ALL included.
+                              items:
+                                type: string
+                              type: array
+                            hostIPC:
+                              type: boolean
+                            hostNetwork:
+                              type: boolean
+                            hostPID:
+                              type: boolean
+                            privileged:
+                              description: 'Privileged: privileged containers (every
+                                capability with them).'
+                              type: boolean
+                          type: object
                       required:
                       - allow
                       type: object
                     machines:
                       description: |-
-                        Machines: empty = every machine (of Cluster); else any of these
-                        matches — a node name, "*" globs allowed, or a label "key=value".
+                        Machines (the old form): empty = every machine (of Cluster); else
+                        any of these matches — a node name, "*" globs allowed, or a label
+                        "key=value".
                       items:
                         type: string
                       type: array
+                    match:
+                      description: |-
+                        Match: the condition — tests of cluster, machine, user and group
+                        joined by and, or, not and parentheses (cluster in (st2, a5) and
+                        machine != st5); empty = everything. Set, the old fields below are
+                        ignored.
+                      maxLength: 2000
+                      type: string
                     subject:
-                      description: 'AccessSubject: everyone, or some users and UserGroups.'
+                      description: 'Subject (the old form): who the rule is about;
+                        none = everyone.'
                       properties:
                         groups:
                           items:
@@ -160,7 +217,6 @@ spec:
                       type: object
                   required:
                   - effect
-                  - subject
                   type: object
                 type: array
             required:

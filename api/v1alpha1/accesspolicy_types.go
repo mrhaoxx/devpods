@@ -21,20 +21,34 @@ type AccessPolicySpec struct {
 	Default AccessEffect `json:"default"`
 }
 
-// AccessRule: a resource (a cluster, machines anywhere, or machines of a
-// cluster), who it is about, and what they get.
+// AccessRule: a condition on the cluster, the machine and the user, and
+// what those it holds for get. Match is the condition; a rule without it
+// is in the old form (Cluster, Machines, Subject), read as the condition
+// they make.
 type AccessRule struct {
-	// Cluster: a cluster's name; empty = any cluster.
+	// Match: the condition — tests of cluster, machine, user and group
+	// joined by and, or, not and parentheses (cluster in (st2, a5) and
+	// machine != st5); empty = everything. Set, the old fields below are
+	// ignored.
+	//
+	// +optional
+	// +kubebuilder:validation:MaxLength=2000
+	Match string `json:"match,omitempty"`
+	// Cluster (the old form): a cluster's name; empty = any cluster.
 	//
 	// +optional
 	Cluster string `json:"cluster,omitempty"`
-	// Machines: empty = every machine (of Cluster); else any of these
-	// matches — a node name, "*" globs allowed, or a label "key=value".
+	// Machines (the old form): empty = every machine (of Cluster); else
+	// any of these matches — a node name, "*" globs allowed, or a label
+	// "key=value".
 	//
 	// +optional
-	Machines []string      `json:"machines,omitempty"`
-	Subject  AccessSubject `json:"subject"`
-	Effect   AccessEffect  `json:"effect"`
+	Machines []string `json:"machines,omitempty"`
+	// Subject (the old form): who the rule is about; none = everyone.
+	//
+	// +optional
+	Subject *AccessSubject `json:"subject,omitempty"`
+	Effect  AccessEffect   `json:"effect"`
 }
 
 // AccessSubject: everyone, or some users and UserGroups.
@@ -53,11 +67,15 @@ type AccessSubject struct {
 // AccessEffect: deny (Allow false), or allow with what comes with it.
 type AccessEffect struct {
 	Allow bool `json:"allow"`
-	// Privileged: privileged containers, added capabilities, the host's
-	// PID, IPC or network.
+	// Privileged (the old form): all of Privileges. Ignored when
+	// Privileges is set.
 	//
 	// +optional
 	Privileged bool `json:"privileged,omitempty"`
+	// Privileges: what beyond an ordinary container may be asked for.
+	//
+	// +optional
+	Privileges *AccessPrivileges `json:"privileges,omitempty"`
 	// HostPaths: the host directories a DevPod may mount (its home, put
 	// there by the controller, aside).
 	//
@@ -68,6 +86,26 @@ type AccessEffect struct {
 	//
 	// +optional
 	NeedsReservation bool `json:"needsReservation,omitempty"`
+}
+
+// AccessPrivileges: each of what makes a container more than an
+// ordinary one, granted on its own.
+type AccessPrivileges struct {
+	// Privileged: privileged containers (every capability with them).
+	//
+	// +optional
+	Privileged bool `json:"privileged,omitempty"`
+	// Capabilities that may be added (NET_ADMIN, SYS_PTRACE; with or
+	// without CAP_, any case); "*" = any, ALL included.
+	//
+	// +optional
+	Capabilities []string `json:"capabilities,omitempty"`
+	// +optional
+	HostPID bool `json:"hostPID,omitempty"`
+	// +optional
+	HostIPC bool `json:"hostIPC,omitempty"`
+	// +optional
+	HostNetwork bool `json:"hostNetwork,omitempty"`
 }
 
 // HostPathGrant: a host directory and what is below it; read-only unless
@@ -81,7 +119,11 @@ type HostPathGrant struct {
 
 // DefaultAccessEffect: everything allowed, as before access control.
 func DefaultAccessEffect() AccessEffect {
-	return AccessEffect{Allow: true, Privileged: true, HostPaths: []HostPathGrant{{Path: "/", Writable: true}}}
+	return AccessEffect{
+		Allow:      true,
+		Privileges: &AccessPrivileges{Privileged: true, Capabilities: []string{"*"}, HostPID: true, HostIPC: true, HostNetwork: true},
+		HostPaths:  []HostPathGrant{{Path: "/", Writable: true}},
+	}
 }
 
 // AccessPolicy is the console's access control: one, named "default", in

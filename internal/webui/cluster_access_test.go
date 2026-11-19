@@ -61,7 +61,7 @@ func TestClustersHiddenWithoutAccess(t *testing.T) {
 	}
 	w.until("both machines are seen", func() bool { return len(nodesOf("root")) == 2 })
 
-	everyone := devpodv1alpha1.AccessSubject{Kind: "everyone"}
+	everyone := &devpodv1alpha1.AccessSubject{Kind: "everyone"}
 	setRules(t, devpodv1alpha1.AccessRule{Cluster: "b", Subject: everyone, Effect: denied})
 	if got := clustersOf("hz-carol"); !slices.Equal(got, []string{"a"}) {
 		t.Fatalf("carol's clusters %v", got)
@@ -115,7 +115,7 @@ func TestClustersHiddenWithoutAccess(t *testing.T) {
 
 	// some machines of b opened to carol: b is hers to see, not bob's
 	setRules(t,
-		devpodv1alpha1.AccessRule{Cluster: "b", Machines: []string{"hz-*"}, Subject: devpodv1alpha1.AccessSubject{Kind: "some", Users: []string{"hz-carol"}}, Effect: devpodv1alpha1.AccessEffect{Allow: true}},
+		devpodv1alpha1.AccessRule{Cluster: "b", Machines: []string{"hz-*"}, Subject: &devpodv1alpha1.AccessSubject{Kind: "some", Users: []string{"hz-carol"}}, Effect: devpodv1alpha1.AccessEffect{Allow: true}},
 		devpodv1alpha1.AccessRule{Cluster: "b", Subject: everyone, Effect: denied})
 	if got := clustersOf("hz-carol"); !slices.Equal(got, []string{"a", "b"}) {
 		t.Fatalf("carol's clusters once b is opened to her %v", got)

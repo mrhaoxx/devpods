@@ -85,8 +85,8 @@ func ClusterOpen(p *v1.AccessPolicySpec, user string, groups map[string]bool, cl
 	return p.Default.Allow
 }
 
-func subjectMatches(s v1.AccessSubject, user string, groups map[string]bool) bool {
-	if s.Kind == "everyone" {
+func subjectMatches(s *v1.AccessSubject, user string, groups map[string]bool) bool {
+	if s == nil || s.Kind == "everyone" {
 		return true
 	}
 	if slices.Contains(s.Users, user) {

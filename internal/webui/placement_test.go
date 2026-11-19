@@ -135,7 +135,7 @@ func TestPlacementUnpinned(t *testing.T) {
 		t.Fatalf("allowed %v", in)
 	}
 	p.patch("pu-carol", dp, `{"running":false}`, http.StatusOK)
-	setRules(t, devpodv1alpha1.AccessRule{Subject: devpodv1alpha1.AccessSubject{Kind: "everyone"}, Effect: denied}) // every machine
+	setRules(t, devpodv1alpha1.AccessRule{Subject: &devpodv1alpha1.AccessSubject{Kind: "everyone"}, Effect: denied}) // every machine
 	if code := p.patch("pu-carol", dp, `{"running":true}`, http.StatusForbidden); code != "ACL_DENIED" {
 		t.Fatalf("no machine left: %q", code)
 	}
@@ -150,7 +150,7 @@ func TestPlacementUnpinned(t *testing.T) {
 func TestPlacementAdminOwner(t *testing.T) {
 	p := newPlaceRig(t, "pa")
 	p.s.Admins = map[string]bool{"pa-root": true}
-	setRules(t, devpodv1alpha1.AccessRule{Subject: devpodv1alpha1.AccessSubject{Kind: "everyone"}, Effect: denied})
+	setRules(t, devpodv1alpha1.AccessRule{Subject: &devpodv1alpha1.AccessSubject{Kind: "everyone"}, Effect: denied})
 	dp := p.create("pa-root", http.StatusCreated)
 	if in := allowedOf(p.get(dp)); in != nil {
 		t.Fatalf("an admin's DevPod got an allow-list: %v", in)
@@ -226,7 +226,7 @@ func TestLaunchConfigChecks(t *testing.T) {
 	}
 }
 
-var everyoneAllowed = devpodv1alpha1.AccessRule{Subject: devpodv1alpha1.AccessSubject{Kind: "everyone"}, Effect: devpodv1alpha1.AccessEffect{Allow: true}}
+var everyoneAllowed = devpodv1alpha1.AccessRule{Subject: &devpodv1alpha1.AccessSubject{Kind: "everyone"}, Effect: devpodv1alpha1.AccessEffect{Allow: true}}
 
 // A machine that needs a reservation is used by pinning to it: an
 // unpinned DevPod never goes there, reservation held or not — nothing
@@ -244,7 +244,7 @@ func TestPlacementReservedMachineByPinOnly(t *testing.T) {
 	p.patch("pk-alice", dp, fmt.Sprintf(`{"node":%q}`, p.n1), http.StatusOK) // pinned, it may
 	p.patch("pk-alice", dp, `{"node":""}`, http.StatusOK)
 	p.patch("pk-alice", dp, `{"running":false}`, http.StatusOK)
-	setRules(t, onNode(p.n1, needsReservation), devpodv1alpha1.AccessRule{Subject: devpodv1alpha1.AccessSubject{Kind: "everyone"}, Effect: denied})
+	setRules(t, onNode(p.n1, needsReservation), devpodv1alpha1.AccessRule{Subject: &devpodv1alpha1.AccessSubject{Kind: "everyone"}, Effect: denied})
 	if code := p.patch("pk-alice", dp, `{"running":true}`, http.StatusConflict); code != "RESERVATION_REQUIRED" {
 		t.Fatalf("only a reserved machine left: %q", code)
 	}

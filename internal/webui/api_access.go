@@ -140,7 +140,10 @@ func (s *Server) validateAccess(ctx context.Context, v *accessView) *serverErr {
 	for i := range v.Rules {
 		rule := &v.Rules[i]
 		where := "rule " + strconv.Itoa(i+1)
-		sub := &rule.Subject
+		if rule.Subject == nil {
+			rule.Subject = &devpodv1alpha1.AccessSubject{Kind: "everyone"}
+		}
+		sub := rule.Subject
 		switch sub.Kind {
 		case "everyone":
 			sub.Users, sub.Groups = nil, nil
@@ -394,7 +397,7 @@ func (s *Server) handleDeleteGroup(w http.ResponseWriter, r *http.Request) {
 	}
 	if p != nil {
 		for i, rule := range p.Spec.Rules {
-			if rule.Subject.Kind == "some" && slices.Contains(rule.Subject.Groups, name) {
+			if rule.Subject != nil && rule.Subject.Kind == "some" && slices.Contains(rule.Subject.Groups, name) {
 				s.writeErr(w, http.StatusConflict, "IN_USE", "rule "+strconv.Itoa(i+1)+" names this group", nil)
 				return
 			}
