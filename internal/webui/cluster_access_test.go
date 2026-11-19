@@ -6,6 +6,9 @@ package webui_test
 
 import (
 	"context"
+	"encoding/json"
+	"fmt"
+	"net/http"
 	"slices"
 	"strings"
 	"testing"
@@ -122,5 +125,44 @@ func TestClustersHiddenWithoutAccess(t *testing.T) {
 	}
 	if got := clustersOf("hz-bob"); !slices.Equal(got, []string{"a"}) {
 		t.Fatalf("bob's clusters %v", got)
+	}
+}
+
+// A rule naming a group that is not there (as kubectl may leave one)
+// denies everyone everything: no cluster is shown but to an admin.
+func TestClustersHiddenByBrokenRule(t *testing.T) {
+	w := setupWorld(t)
+	t.Cleanup(func() {
+		_ = k8sClient.Delete(context.Background(), &devpodv1alpha1.AccessPolicy{ObjectMeta: metav1.ObjectMeta{Name: devpodv1alpha1.AccessPolicyName}})
+	})
+	clustersOf := func(user string) []string {
+		_, out, _ := w.call(user, "GET", "/api/clusters", "")
+		var got []string
+		for _, it := range out["items"].([]any) {
+			got = append(got, it.(map[string]any)["name"].(string))
+		}
+		slices.Sort(got)
+		return got
+	}
+	setRules(t, devpodv1alpha1.AccessRule{Match: "everyone and not group = gone", Effect: devpodv1alpha1.DefaultAccessEffect()})
+	if got := clustersOf("hz-erin"); len(got) != 0 {
+		t.Fatalf("erin's clusters %v", got)
+	}
+	if got := clustersOf("root"); !slices.Equal(got, []string{"a", "b"}) {
+		t.Fatalf("an admin's clusters %v", got)
+	}
+}
+
+// Refused for a privilege, the answer says which one.
+func TestStartRefusedNamesThePrivilege(t *testing.T) {
+	p := newPlaceRig(t, "pv")
+	setRules(t, devpodv1alpha1.AccessRule{Match: "everyone", Effect: devpodv1alpha1.AccessEffect{Allow: true, Privileges: &devpodv1alpha1.AccessPrivileges{HostPID: true}}})
+	yaml := fmt.Sprintf("apiVersion: devpod.io/v1alpha1\nkind: DevPod\nmetadata:\n  name: pv-bob-net\nspec:\n  owner: pv-bob\n  running: true\n  pod:\n    spec:\n      hostNetwork: true\n      nodeSelector:\n        kubernetes.io/hostname: %s\n      containers:\n        - name: dev\n          image: ubuntu:24.04\n", p.n1)
+	body, _ := json.Marshal(map[string]string{"yaml": yaml})
+	rec := doJSON(t, p.s.HandleCreateDevPodForTest(), "POST", "/api/devpods", nil, p.as("pv-bob"), string(body))
+	var e struct{ Code, Message string }
+	_ = json.Unmarshal(rec.Body.Bytes(), &e)
+	if rec.Code != http.StatusForbidden || e.Code != "PRIVILEGE_DENIED" || !strings.Contains(e.Message, "the host's network") {
+		t.Fatalf("host network: %d %s", rec.Code, rec.Body)
 	}
 }

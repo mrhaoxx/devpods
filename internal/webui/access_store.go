@@ -33,6 +33,28 @@ func (s *Server) accessPolicy(ctx context.Context) (*devpodv1alpha1.AccessPolicy
 	return &p.Spec, p.ResourceVersion, nil
 }
 
+// accessFor: the rules compiled against the groups there are (a rule
+// naming one that is not denies everyone), and the groups user is in.
+func (s *Server) accessFor(ctx context.Context, user string) (*access.Policy, map[string]bool, error) {
+	spec, _, err := s.accessPolicy(ctx)
+	if err != nil {
+		return nil, nil, err
+	}
+	var list devpodv1alpha1.UserGroupList
+	if err := s.Client.List(ctx, &list); err != nil {
+		return nil, nil, err
+	}
+	all, mine := map[string]bool{}, map[string]bool{}
+	for i := range list.Items {
+		g := &list.Items[i]
+		all[g.Name] = true
+		if slices.Contains(g.Spec.Members, user) {
+			mine[g.Name] = true
+		}
+	}
+	return access.Compile(spec, all), mine, nil
+}
+
 // groupsOf: the groups user is in.
 func (s *Server) groupsOf(ctx context.Context, user string) (map[string]bool, error) {
 	var list devpodv1alpha1.UserGroupList
@@ -59,17 +81,12 @@ func (s *Server) clusterGate(ctx context.Context, sess Session) func(cluster str
 	if sess.Admin || s.ownerIsAdmin(ctx, sess.User) {
 		return all
 	}
-	p, _, err := s.accessPolicy(ctx)
+	p, groups, err := s.accessFor(ctx, sess.User)
 	if err != nil {
 		slog.Warn("cluster_gate", "user", sess.User, "err", err)
 		return all
 	}
-	groups, err := s.groupsOf(ctx, sess.User)
-	if err != nil {
-		slog.Warn("cluster_gate", "user", sess.User, "err", err)
-		return all
-	}
-	return func(cluster string) bool { return access.ClusterOpen(p, sess.User, groups, cluster) }
+	return func(cluster string) bool { return p.ClusterOpen(sess.User, groups, cluster) }
 }
 
 func (s *Server) ownerIsAdmin(ctx context.Context, owner string) bool {
@@ -86,13 +103,9 @@ func (s *Server) decide(ctx context.Context, owner, cluster string, n access.Nod
 	if s.ownerIsAdmin(ctx, owner) {
 		return access.Decision{AccessEffect: devpodv1alpha1.DefaultAccessEffect(), Rule: -1}, true, nil
 	}
-	p, _, err := s.accessPolicy(ctx)
+	p, groups, err := s.accessFor(ctx, owner)
 	if err != nil {
 		return access.Decision{}, false, err
 	}
-	groups, err := s.groupsOf(ctx, owner)
-	if err != nil {
-		return access.Decision{}, false, err
-	}
-	return access.Decide(p, owner, groups, cluster, n), false, nil
+	return p.Decide(owner, groups, cluster, n), false, nil
 }

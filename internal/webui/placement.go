@@ -28,7 +28,7 @@ import (
 // read once for the many machines of a cluster.
 type judge struct {
 	admin    bool
-	policy   *devpodv1alpha1.AccessPolicySpec
+	policy   *access.Policy
 	owner    string
 	groups   map[string]bool
 	cluster  string
@@ -41,10 +41,7 @@ func (s *Server) judgeFor(ctx context.Context, owner string) (*judge, error) {
 		return j, nil
 	}
 	var err error
-	if j.policy, _, err = s.accessPolicy(ctx); err != nil {
-		return nil, err
-	}
-	if j.groups, err = s.groupsOf(ctx, owner); err != nil {
+	if j.policy, j.groups, err = s.accessFor(ctx, owner); err != nil {
 		return nil, err
 	}
 	j.reserved = map[string]bool{}
@@ -69,7 +66,7 @@ func (j *judge) on(n *corev1.Node) access.Decision {
 	if j.admin {
 		return access.Decision{AccessEffect: devpodv1alpha1.DefaultAccessEffect(), Rule: -1}
 	}
-	return access.Decide(j.policy, j.owner, j.groups, j.cluster, access.Node{Name: n.Name, Labels: n.Labels})
+	return j.policy.Decide(j.owner, j.groups, j.cluster, access.Node{Name: n.Name, Labels: n.Labels})
 }
 
 // refusal: why the owner may not have a DevPod with needs on n (nil: may).
@@ -137,7 +134,7 @@ func (s *Server) placeDevPod(ctx context.Context, dp *devpodv1alpha1.DevPod) *se
 		}
 		return j.refusal(&n, &needs, true)
 	}
-	if access.Unrestricted(j.policy, j.owner, j.groups, j.cluster, needs) {
+	if j.policy.Unrestricted(j.owner, j.groups, j.cluster, needs) {
 		access.SetAllowed(dp, nil)
 		return nil
 	}
