@@ -6,12 +6,16 @@ package webui
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"path"
+	"regexp"
 	"slices"
 	"strconv"
 	"strings"
+	"unicode/utf8"
 
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -23,12 +27,31 @@ import (
 	"github.com/mrhaoxx/devpod/internal/access"
 )
 
-// accessView is the rules as the admin API reads and writes them: the
-// whole ordered list at once, with the version it was read at.
+// accessView is the rules as the admin API reads them: the whole ordered
+// list at once, each rule a condition and an effect in the new form
+// (design 2026-11-19 §8), with the version it was read at and the rules
+// that deny everyone (§5.5).
 type accessView struct {
+	Rules           []ruleView                  `json:"rules"`
+	Default         devpodv1alpha1.AccessEffect `json:"default"`
+	ResourceVersion string                      `json:"resourceVersion"`
+	Problems        []access.Problem            `json:"problems"`
+}
+
+type ruleView struct {
+	Match  string                      `json:"match"`
+	Effect devpodv1alpha1.AccessEffect `json:"effect"`
+}
+
+// accessPut is what a save sends. A rule may still be in the old form (a
+// page loaded before the console was upgraded): it is read as the
+// condition it makes, so its meaning is kept. Problems, sent back as
+// read, is ignored.
+type accessPut struct {
 	Rules           []devpodv1alpha1.AccessRule `json:"rules"`
 	Default         devpodv1alpha1.AccessEffect `json:"default"`
 	ResourceVersion string                      `json:"resourceVersion"`
+	Problems        []access.Problem            `json:"problems,omitempty"`
 }
 
 // currentAccess reads the rules afresh (not from the cache).
@@ -41,15 +64,32 @@ func (s *Server) currentAccess(ctx context.Context) (*devpodv1alpha1.AccessPolic
 	return &p, err
 }
 
-func viewOf(p *devpodv1alpha1.AccessPolicy) accessView {
+// groupNames: every UserGroup there is, read afresh.
+func (s *Server) groupNames(ctx context.Context) (map[string]bool, error) {
+	var list devpodv1alpha1.UserGroupList
+	if err := s.Reader.List(ctx, &list); err != nil {
+		return nil, err
+	}
+	out := map[string]bool{}
+	for i := range list.Items {
+		out[list.Items[i].Name] = true
+	}
+	return out, nil
+}
+
+func viewOf(p *devpodv1alpha1.AccessPolicy, groups map[string]bool) accessView {
+	v := accessView{Rules: []ruleView{}, Default: access.NormalizeEffect(devpodv1alpha1.DefaultAccessEffect()), Problems: []access.Problem{}}
 	if p == nil {
-		return accessView{Rules: []devpodv1alpha1.AccessRule{}, Default: devpodv1alpha1.DefaultAccessEffect()}
+		return v
 	}
-	rules := p.Spec.Rules
-	if rules == nil {
-		rules = []devpodv1alpha1.AccessRule{}
+	for _, r := range p.Spec.Rules {
+		v.Rules = append(v.Rules, ruleView{Match: access.MatchOf(r), Effect: access.NormalizeEffect(r.Effect)})
 	}
-	return accessView{Rules: rules, Default: p.Spec.Default, ResourceVersion: p.ResourceVersion}
+	v.Default, v.ResourceVersion = access.NormalizeEffect(p.Spec.Default), p.ResourceVersion
+	if pr := access.Compile(&p.Spec, groups).Problems(); pr != nil {
+		v.Problems = pr
+	}
+	return v
 }
 
 // handleGetAccess: GET /api/admin/access.
@@ -62,7 +102,12 @@ func (s *Server) handleGetAccess(w http.ResponseWriter, r *http.Request) {
 		s.writeErr(w, http.StatusInternalServerError, "INTERNAL", err.Error(), nil)
 		return
 	}
-	s.writeJSON(w, http.StatusOK, viewOf(p))
+	groups, err := s.groupNames(r.Context())
+	if err != nil {
+		s.writeErr(w, http.StatusInternalServerError, "INTERNAL", err.Error(), nil)
+		return
+	}
+	s.writeJSON(w, http.StatusOK, viewOf(p, groups))
 }
 
 // handlePutAccess: PUT /api/admin/access — the whole list, refused (409)
@@ -71,12 +116,13 @@ func (s *Server) handlePutAccess(w http.ResponseWriter, r *http.Request) {
 	if _, ok := s.requireAdmin(w, r); !ok {
 		return
 	}
-	var req accessView
+	var req accessPut
 	if apiErr := decodeStrict(r, &req); apiErr != nil {
 		s.writeServerErr(w, apiErr)
 		return
 	}
-	if apiErr := s.validateAccess(r.Context(), &req); apiErr != nil {
+	spec, apiErr := s.validateAccess(r.Context(), &req)
+	if apiErr != nil {
 		s.writeServerErr(w, apiErr)
 		return
 	}
@@ -88,7 +134,6 @@ func (s *Server) handlePutAccess(w http.ResponseWriter, r *http.Request) {
 		s.writeErr(w, http.StatusInternalServerError, "INTERNAL", err.Error(), nil)
 		return
 	}
-	spec := devpodv1alpha1.AccessPolicySpec{Rules: req.Rules, Default: req.Default}
 	switch {
 	case cur == nil && req.ResourceVersion != "", cur != nil && req.ResourceVersion != cur.ResourceVersion:
 		conflict()
@@ -108,18 +153,28 @@ func (s *Server) handlePutAccess(w http.ResponseWriter, r *http.Request) {
 		s.writeErr(w, http.StatusBadRequest, "BAD_REQUEST", rejected("save the rules", err), nil)
 		return
 	}
-	s.writeJSON(w, http.StatusOK, viewOf(cur))
+	groups, err := s.groupNames(r.Context())
+	if err != nil {
+		s.writeErr(w, http.StatusInternalServerError, "INTERNAL", err.Error(), nil)
+		return
+	}
+	s.writeJSON(w, http.StatusOK, viewOf(cur, groups))
 }
 
-// validateAccess checks every rule (and cleans the host paths).
-func (s *Server) validateAccess(ctx context.Context, v *accessView) *serverErr {
-	var groups devpodv1alpha1.UserGroupList
-	if err := s.Reader.List(ctx, &groups); err != nil {
-		return &serverErr{http.StatusInternalServerError, "INTERNAL", err.Error(), nil}
-	}
-	group := map[string]bool{}
-	for i := range groups.Items {
-		group[groups.Items[i].Name] = true
+// maxMatch is the longest condition a rule may have (the CRD's maxLength).
+const maxMatch = 2000
+
+// capName: a capability as NormalizeCap names it, or "*".
+var capName = regexp.MustCompile(`^([A-Z0-9_]+|\*)$`)
+
+// validateAccess checks every rule (design 2026-11-19 §5.4) and returns
+// the rules as they are kept: each its condition (old-form rules read as
+// theirs) and its effect in the new form, host paths cleaned.
+func (s *Server) validateAccess(ctx context.Context, v *accessPut) (devpodv1alpha1.AccessPolicySpec, *serverErr) {
+	var spec devpodv1alpha1.AccessPolicySpec
+	group, err := s.groupNames(ctx)
+	if err != nil {
+		return spec, &serverErr{http.StatusInternalServerError, "INTERNAL", err.Error(), nil}
 	}
 	clusterKnown := map[string]bool{}
 	var cl devpodv1alpha1.ClusterList
@@ -128,99 +183,169 @@ func (s *Server) validateAccess(ctx context.Context, v *accessView) *serverErr {
 			clusterKnown[cl.Items[i].Name] = true
 		}
 	}
-	effect := func(where string, e *devpodv1alpha1.AccessEffect) *serverErr {
+	effect := func(where string, e devpodv1alpha1.AccessEffect) (devpodv1alpha1.AccessEffect, *serverErr) {
 		for i, h := range e.HostPaths {
 			if !strings.HasPrefix(h.Path, "/") {
-				return badRequest("%s: host path %q is not absolute", where, h.Path)
+				return e, badRequest("%s: host path %q is not absolute", where, h.Path)
 			}
 			e.HostPaths[i].Path = path.Clean(h.Path)
 		}
-		return nil
+		if e.Privileges != nil {
+			for _, c := range e.Privileges.Capabilities {
+				if !capName.MatchString(access.NormalizeCap(c)) {
+					return e, badRequest("%s：capability %q 不是合法的名字（如 NET_ADMIN，或 * 表示任意）", where, c)
+				}
+			}
+		}
+		return access.NormalizeEffect(e), nil
 	}
 	for i := range v.Rules {
-		rule := &v.Rules[i]
-		where := "rule " + strconv.Itoa(i+1)
-		if rule.Subject == nil {
-			rule.Subject = &devpodv1alpha1.AccessSubject{Kind: "everyone"}
+		where := fmt.Sprintf("第 %d 条", i+1)
+		m := access.MatchOf(v.Rules[i])
+		if utf8.RuneCountInString(m) > maxMatch {
+			return spec, badRequest("%s：条件超过 %d 个字符", where, maxMatch)
 		}
-		sub := rule.Subject
-		switch sub.Kind {
-		case "everyone":
-			sub.Users, sub.Groups = nil, nil
-		case "some":
-			for j, u := range sub.Users {
-				if sub.Users[j] = strings.TrimSpace(u); sub.Users[j] == "" {
-					return badRequest("%s: a blank user name", where)
+		e, err := access.Parse(m)
+		if err != nil {
+			return spec, badRequest("%s%s", where, err.Error())
+		}
+		for _, f := range []access.Field{access.FieldCluster, access.FieldMachine, access.FieldUser, access.FieldGroup} {
+			for _, it := range e.Items(f) {
+				switch {
+				case strings.TrimSpace(it) == "":
+					return spec, badRequest("%s：%s 有一项是空的", where, f)
+				case f == access.FieldCluster && !access.HasGlob(it) && !clusterKnown[it]:
+					return spec, badRequest("%s：没有集群 %s", where, it)
+				case f == access.FieldGroup && !access.HasGlob(it) && !group[it]:
+					return spec, badRequest("%s：没有用户组 %s", where, it)
+				case f == access.FieldMachine && !access.ValidMachine(it):
+					return spec, badRequest("%s：%s 既不是机器名（可用通配）也不是标签 key=value", where, it)
 				}
 			}
-			for _, g := range sub.Groups {
-				if !group[g] {
-					return badRequest("%s: no group %q", where, g)
-				}
-			}
-			if len(sub.Users) == 0 && len(sub.Groups) == 0 {
-				return badRequest("%s: name at least one user or group", where)
-			}
-		default:
-			return badRequest("%s: the subject is everyone, or some users and groups", where)
 		}
-		if rule.Cluster != "" && !clusterKnown[rule.Cluster] {
-			return badRequest("%s: no cluster %q", where, rule.Cluster)
+		eff, apiErr := effect(where, v.Rules[i].Effect)
+		if apiErr != nil {
+			return spec, apiErr
 		}
-		for _, m := range rule.Machines {
-			if !access.ValidMachine(m) {
-				return badRequest("%s: %q is neither a machine name (globs allowed) nor key=value", where, m)
-			}
-		}
-		if apiErr := effect(where, &rule.Effect); apiErr != nil {
-			return apiErr
-		}
+		spec.Rules = append(spec.Rules, devpodv1alpha1.AccessRule{Match: m, Effect: eff})
 	}
-	return effect("the default rule", &v.Default)
+	def, apiErr := effect("默认规则", v.Default)
+	spec.Default = def
+	return spec, apiErr
 }
 
-// handleAccessMatch: GET /api/admin/access/match?machines=a,b[&cluster=] —
-// the machines a selector names, per cluster.
-func (s *Server) handleAccessMatch(w http.ResponseWriter, r *http.Request) {
+// handleAccessPreview: POST /api/admin/access/preview {match} — what a
+// condition names before it is saved (design 2026-11-19 §8): the
+// clusters; per cluster reachable now, the machines (any user); the users
+// there are (any cluster, any machine). A hit is anything not false;
+// "maybe" counts those that depend on what is not known. Not the rules'
+// outcome: order and effects are left out.
+func (s *Server) handleAccessPreview(w http.ResponseWriter, r *http.Request) {
 	if _, ok := s.requireAdmin(w, r); !ok {
 		return
 	}
-	var sel []string
-	for _, m := range strings.Split(r.URL.Query().Get("machines"), ",") {
-		if m = strings.TrimSpace(m); m != "" {
-			sel = append(sel, m)
-		}
+	var req struct {
+		Match string `json:"match"`
 	}
-	type item struct {
+	if apiErr := decodeStrict(r, &req); apiErr != nil {
+		s.writeServerErr(w, apiErr)
+		return
+	}
+	e, err := access.Parse(req.Match)
+	if err != nil {
+		var pe *access.ParseError
+		errors.As(err, &pe)
+		s.writeJSON(w, http.StatusOK, map[string]any{"error": map[string]any{"offset": pe.Offset, "message": pe.Msg}})
+		return
+	}
+	type clusterHit struct {
+		Name  string `json:"name"`
+		Maybe bool   `json:"maybe"`
+	}
+	type machineHits struct {
 		Cluster      string   `json:"cluster,omitempty"`
 		Count        int      `json:"count"`
+		Maybe        int      `json:"maybe"`
 		Names        []string `json:"names"`
 		Unreservable int      `json:"unreservable"`
 	}
-	items := []item{}
+	type userHits struct {
+		Count int      `json:"count"`
+		Maybe int      `json:"maybe"`
+		Total int      `json:"total"`
+		Names []string `json:"names"`
+	}
+	const shown = 20
+	clusters, machines := []clusterHit{}, []machineHits{}
 	for _, cc := range s.ks(r) {
+		name := cc.Name
+		if v := e.Eval(access.Facts{Cluster: &name}); v != access.False {
+			clusters = append(clusters, clusterHit{Name: name, Maybe: v == access.Unknown})
+		}
 		var nodes corev1.NodeList
 		if err := cc.Client.List(r.Context(), &nodes); err != nil {
 			continue // away
 		}
-		it := item{Cluster: s.clusterLabel(cc), Names: []string{}}
+		m := machineHits{Cluster: s.clusterLabel(cc), Names: []string{}}
 		for i := range nodes.Items {
 			n := &nodes.Items[i]
-			if !access.MachineMatches(sel, access.Node{Name: n.Name, Labels: n.Labels}) {
+			v := e.Eval(access.Facts{Cluster: &name, Node: &access.Node{Name: n.Name, Labels: n.Labels}})
+			if v == access.False {
 				continue
 			}
-			it.Count++
-			if len(it.Names) < 20 {
-				it.Names = append(it.Names, n.Name)
+			m.Count++
+			if v == access.Unknown {
+				m.Maybe++
 			}
+			m.Names = append(m.Names, n.Name)
 			if n.Labels[devpodv1alpha1.ReservableNodeLabel] != "true" {
-				it.Unreservable++
+				m.Unreservable++
 			}
 		}
-		slices.Sort(it.Names)
-		items = append(items, it)
+		slices.Sort(m.Names)
+		if len(m.Names) > shown {
+			m.Names = m.Names[:shown]
+		}
+		machines = append(machines, m)
 	}
-	s.writeJSON(w, http.StatusOK, map[string]any{"items": items})
+	users := userHits{Names: []string{}}
+	var ul devpodv1alpha1.UserList
+	var gl devpodv1alpha1.UserGroupList
+	if err := s.Reader.List(r.Context(), &ul); err != nil {
+		s.writeErr(w, http.StatusInternalServerError, "INTERNAL", err.Error(), nil)
+		return
+	}
+	if err := s.Reader.List(r.Context(), &gl); err != nil {
+		s.writeErr(w, http.StatusInternalServerError, "INTERNAL", err.Error(), nil)
+		return
+	}
+	users.Total = len(ul.Items)
+	for i := range ul.Items {
+		u := ul.Items[i].Name
+		in := map[string]bool{}
+		for j := range gl.Items {
+			if slices.Contains(gl.Items[j].Spec.Members, u) {
+				in[gl.Items[j].Name] = true
+			}
+		}
+		v := e.Eval(access.Facts{User: &u, Groups: in})
+		if v == access.False {
+			continue
+		}
+		users.Count++
+		if v == access.Unknown {
+			users.Maybe++
+		}
+		users.Names = append(users.Names, u)
+	}
+	slices.Sort(users.Names)
+	if len(users.Names) > shown {
+		users.Names = users.Names[:shown]
+	}
+	s.writeJSON(w, http.StatusOK, map[string]any{
+		"clusters": clusters, "machines": machines, "users": users,
+		"hasMachine": len(e.Items(access.FieldMachine)) > 0,
+	})
 }
 
 // violation: a running DevPod the rules (as saved now) would not let be
@@ -396,11 +521,21 @@ func (s *Server) handleDeleteGroup(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if p != nil {
+		// named anywhere in a condition, "not" included (a glob does not hold
+		// it: a rule naming a group gone denies everyone, design §5.5)
+		var in []string
 		for i, rule := range p.Spec.Rules {
-			if rule.Subject != nil && rule.Subject.Kind == "some" && slices.Contains(rule.Subject.Groups, name) {
-				s.writeErr(w, http.StatusConflict, "IN_USE", "rule "+strconv.Itoa(i+1)+" names this group", nil)
-				return
+			e, err := access.Parse(access.MatchOf(rule))
+			if err != nil {
+				continue // denies everyone already
 			}
+			if slices.Contains(e.Items(access.FieldGroup), name) {
+				in = append(in, strconv.Itoa(i+1))
+			}
+		}
+		if len(in) > 0 {
+			s.writeErr(w, http.StatusConflict, "IN_USE", "rule "+strings.Join(in, ", ")+" names this group", nil)
+			return
 		}
 	}
 	err = s.Client.Delete(r.Context(), &devpodv1alpha1.UserGroup{ObjectMeta: metav1.ObjectMeta{Name: name}})

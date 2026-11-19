@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -58,6 +59,7 @@ type accessBody struct {
 	Rules           []devpodv1alpha1.AccessRule `json:"rules"`
 	Default         devpodv1alpha1.AccessEffect `json:"default"`
 	ResourceVersion string                      `json:"resourceVersion"`
+	Problems        []access.Problem            `json:"problems,omitempty"`
 }
 
 func readAccess(t *testing.T, rec *httptest.ResponseRecorder) accessBody {
@@ -97,7 +99,7 @@ func TestAccessPutAndGet(t *testing.T) {
 		t.Fatalf("no resourceVersion: %+v", put)
 	}
 	got := readAccess(t, call("ac-root", true, "GET", "/api/admin/access", ""))
-	if len(got.Rules) != 2 || got.Rules[0].Machines[0] != "x-*" || !slices.Equal(got.Rules[1].Subject.Users, []string{"ac-bob", "ac-carol"}) || !got.Rules[1].Effect.NeedsReservation {
+	if len(got.Rules) != 2 || got.Rules[0].Match != "machine in (x-*)" || got.Rules[1].Match != "user in (ac-bob, ac-carol)" || !got.Rules[1].Effect.NeedsReservation {
 		t.Fatalf("order: %+v", got.Rules)
 	}
 }
@@ -120,18 +122,199 @@ func TestAccessPutConflict(t *testing.T) {
 
 func TestAccessValidation(t *testing.T) {
 	_, call := accessRig(t)
-	for name, r := range map[string]devpodv1alpha1.AccessRule{
-		"unknown group":       {Subject: &devpodv1alpha1.AccessSubject{Kind: "some", Users: []string{"ac-bob"}, Groups: []string{"ac-nogroup"}}},
-		"nobody named":        {Subject: &devpodv1alpha1.AccessSubject{Kind: "some"}},
-		"a blank user":        {Subject: &devpodv1alpha1.AccessSubject{Kind: "some", Users: []string{" "}}},
-		"relative hostPath":   {Subject: &devpodv1alpha1.AccessSubject{Kind: "everyone"}, Effect: devpodv1alpha1.AccessEffect{Allow: true, HostPaths: []devpodv1alpha1.HostPathGrant{{Path: "data"}}}},
-		"empty machine":       {Machines: []string{""}, Subject: &devpodv1alpha1.AccessSubject{Kind: "everyone"}},
-		"unknown kind":        {Subject: &devpodv1alpha1.AccessSubject{Kind: "someone"}},
-		"the old single kind": {Subject: &devpodv1alpha1.AccessSubject{Kind: "user", Users: []string{"ac-bob"}}},
+	rule := func(match string) devpodv1alpha1.AccessRule { return devpodv1alpha1.AccessRule{Match: match} }
+	caps := func(cs ...string) devpodv1alpha1.AccessRule {
+		return devpodv1alpha1.AccessRule{Match: "everyone", Effect: devpodv1alpha1.AccessEffect{Allow: true, Privileges: &devpodv1alpha1.AccessPrivileges{Capabilities: cs}}}
+	}
+	for name, c := range map[string]struct {
+		r    devpodv1alpha1.AccessRule
+		says string
+	}{
+		"syntax":                    {rule("cluster in st"), "第 1 条第 12 个字符："},
+		"unknown cluster":           {rule("cluster = nope"), "nope"},
+		"unknown group":             {rule("user = ac-bob or group = ac-nogroup"), "ac-nogroup"},
+		"a bad machine":             {rule(`machine = "["`), "["},
+		"a blank user":              {rule(`user = " "`), ""},
+		"too long":                  {rule("user = " + strings.Repeat("a", 1994)), "2000"},
+		"a blank capability":        {caps(""), ""},
+		"a capability with a space": {caps("NET ADMIN"), "NET ADMIN"},
+		"relative hostPath":         {devpodv1alpha1.AccessRule{Effect: devpodv1alpha1.AccessEffect{Allow: true, HostPaths: []devpodv1alpha1.HostPathGrant{{Path: "data"}}}}, ""},
 	} {
-		if rec := call("ac-root", true, "PUT", "/api/admin/access", putBody(t, accessBody{Rules: []devpodv1alpha1.AccessRule{r}, Default: devpodv1alpha1.DefaultAccessEffect()})); rec.Code != http.StatusBadRequest {
+		rec := call("ac-root", true, "PUT", "/api/admin/access", putBody(t, accessBody{Rules: []devpodv1alpha1.AccessRule{c.r}, Default: devpodv1alpha1.DefaultAccessEffect()}))
+		if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), c.says) {
 			t.Errorf("%s: %d %s", name, rec.Code, rec.Body)
 		}
+	}
+	// a glob of clusters is not checked; capabilities any case, CAP_ or not
+	ok := []devpodv1alpha1.AccessRule{rule("cluster = no*"), caps("cap_net_admin", "*")}
+	if rec := call("ac-root", true, "PUT", "/api/admin/access", putBody(t, accessBody{Rules: ok, Default: devpodv1alpha1.DefaultAccessEffect()})); rec.Code != http.StatusOK {
+		t.Errorf("valid: %d %s", rec.Code, rec.Body)
+	}
+}
+
+// The old form, as kubectl or an older console left it, reads as a
+// condition with the privileges spelled out.
+func TestAccessGetConvertsLegacy(t *testing.T) {
+	_, call := accessRig(t)
+	setRules(t, devpodv1alpha1.AccessRule{Cluster: "yc", Machines: []string{"c500-*"}, Subject: &devpodv1alpha1.AccessSubject{Kind: "everyone"}, Effect: devpodv1alpha1.AccessEffect{Allow: true, Privileged: true}})
+	got := readAccess(t, call("ac-root", true, "GET", "/api/admin/access", ""))
+	if len(got.Rules) != 1 || got.Rules[0].Match != "cluster = yc and machine in (c500-*)" {
+		t.Fatalf("rules: %+v", got.Rules)
+	}
+	e := got.Rules[0].Effect
+	if e.Privileged || e.Privileges == nil || !e.Privileges.Privileged || !e.Privileges.HostNetwork || !slices.Equal(e.Privileges.Capabilities, []string{"*"}) {
+		t.Fatalf("effect: %+v", e)
+	}
+	if len(got.Problems) != 0 {
+		t.Fatalf("problems: %+v", got.Problems)
+	}
+}
+
+// Saved, a rule is its condition (as written, trimmed) and its effect in
+// the new form; nothing of the old form is kept.
+func TestAccessPutNewForm(t *testing.T) {
+	_, call := accessRig(t)
+	if rec := call("ac-root", true, "POST", "/api/admin/groups", `{"name":"ac-ops","members":["ac-bob"]}`); rec.Code != http.StatusCreated {
+		t.Fatalf("group: %d %s", rec.Code, rec.Body)
+	}
+	r := devpodv1alpha1.AccessRule{Match: "  machine != m1 and not group = ac-ops ", Effect: devpodv1alpha1.AccessEffect{Allow: true, Privileges: &devpodv1alpha1.AccessPrivileges{HostPID: true}}}
+	readAccess(t, call("ac-root", true, "PUT", "/api/admin/access", putBody(t, accessBody{Rules: []devpodv1alpha1.AccessRule{r}, Default: devpodv1alpha1.DefaultAccessEffect()})))
+	var p devpodv1alpha1.AccessPolicy
+	if err := k8sClient.Get(context.Background(), client.ObjectKey{Name: devpodv1alpha1.AccessPolicyName}, &p); err != nil {
+		t.Fatal(err)
+	}
+	got := p.Spec.Rules[0]
+	if got.Match != "machine != m1 and not group = ac-ops" || got.Subject != nil || got.Cluster != "" || got.Effect.Privileged || got.Effect.Privileges == nil || !got.Effect.Privileges.HostPID || got.Effect.Privileges.HostNetwork {
+		t.Fatalf("stored: %+v %+v", got, got.Effect.Privileges)
+	}
+}
+
+// A group deleted behind the console's back: the rule naming it is
+// reported (it denies everyone).
+func TestAccessReportsMissingGroup(t *testing.T) {
+	_, call := accessRig(t)
+	if rec := call("ac-root", true, "POST", "/api/admin/groups", `{"name":"ac-lab","members":["ac-bob"]}`); rec.Code != http.StatusCreated {
+		t.Fatalf("group: %d %s", rec.Code, rec.Body)
+	}
+	readAccess(t, call("ac-root", true, "PUT", "/api/admin/access", putBody(t, accessBody{Rules: []devpodv1alpha1.AccessRule{{Match: "group = ac-lab"}}, Default: devpodv1alpha1.DefaultAccessEffect()})))
+	if err := k8sClient.Delete(context.Background(), &devpodv1alpha1.UserGroup{ObjectMeta: metav1.ObjectMeta{Name: "ac-lab"}}); err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		got := readAccess(t, call("ac-root", true, "GET", "/api/admin/access", ""))
+		if len(got.Problems) == 1 && got.Problems[0].Rule == 0 && got.Problems[0].Message == "点名了不存在的组 ac-lab" {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("problems: %+v", got.Problems)
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+}
+
+// What a condition names, before it is saved: the clusters, the machines
+// (any user), the users (any cluster, any machine) — "maybe" where it
+// depends on what is not known.
+func TestAccessPreview(t *testing.T) {
+	_, call := accessRig(t)
+	ctx := context.Background()
+	for name, labels := range map[string]map[string]string{"pw-g1": {"pw-gpu": "B300"}, "pw-g2": nil} {
+		n := &corev1.Node{ObjectMeta: metav1.ObjectMeta{Name: name, Labels: labels}}
+		if err := k8sClient.Create(ctx, n); err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = k8sClient.Delete(ctx, n) })
+	}
+	for _, u := range []string{"pw-alice", "pw-bob"} {
+		obj := &devpodv1alpha1.User{ObjectMeta: metav1.ObjectMeta{Name: u}}
+		if err := k8sClient.Create(ctx, obj); err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = k8sClient.Delete(ctx, obj) })
+	}
+	if rec := call("ac-root", true, "POST", "/api/admin/groups", `{"name":"ac-lab","members":["pw-alice"]}`); rec.Code != http.StatusCreated {
+		t.Fatalf("group: %d %s", rec.Code, rec.Body)
+	}
+	type preview struct {
+		Error *struct {
+			Offset  int    `json:"offset"`
+			Message string `json:"message"`
+		} `json:"error"`
+		Clusters []struct {
+			Name  string `json:"name"`
+			Maybe bool   `json:"maybe"`
+		} `json:"clusters"`
+		Machines []struct {
+			Count, Maybe, Unreservable int
+			Names                      []string
+		} `json:"machines"`
+		Users struct {
+			Count, Maybe, Total int
+			Names               []string
+		} `json:"users"`
+		HasMachine bool `json:"hasMachine"`
+	}
+	ask := func(match string, ready func(preview) bool) preview {
+		t.Helper()
+		body, _ := json.Marshal(map[string]string{"match": match})
+		deadline := time.Now().Add(10 * time.Second)
+		for {
+			var out preview
+			rec := call("ac-root", true, "POST", "/api/admin/access/preview", string(body))
+			if rec.Code == http.StatusOK && json.Unmarshal(rec.Body.Bytes(), &out) == nil && ready(out) {
+				return out
+			}
+			if time.Now().After(deadline) {
+				t.Fatalf("preview %q: %d %s", match, rec.Code, rec.Body)
+			}
+			time.Sleep(100 * time.Millisecond)
+		}
+	}
+	machines := func(p preview) (count, maybe int) {
+		for _, m := range p.Machines {
+			count, maybe = count+m.Count, maybe+m.Maybe
+		}
+		return
+	}
+	if p := ask("machine in (pw-g*)", func(p preview) bool { c, _ := machines(p); return c == 2 }); !p.HasMachine || p.Users.Count != p.Users.Total || p.Users.Maybe != p.Users.Total || len(p.Clusters) == 0 || !p.Clusters[0].Maybe {
+		t.Errorf("machine in (pw-g*): %+v", p)
+	}
+	if p := ask("machine = pw-gpu=B300", func(p preview) bool { c, _ := machines(p); return c == 1 }); p.Machines[0].Names[0] != "pw-g1" || p.Machines[0].Unreservable != 1 {
+		t.Errorf("a label: %+v", p)
+	}
+	p := ask("group = ac-lab", func(p preview) bool { return p.Users.Count == 1 })
+	if !slices.Equal(p.Users.Names, []string{"pw-alice"}) || p.Users.Maybe != 0 || p.HasMachine {
+		t.Errorf("group = ac-lab: users %+v", p.Users)
+	}
+	if c, m := machines(p); c < 2 || c != m {
+		t.Errorf("group = ac-lab: every machine, maybe: %d %d", c, m)
+	}
+	if p := ask("cluster in (", func(p preview) bool { return p.Error != nil }); p.Error.Offset != 12 {
+		t.Errorf("error: %+v", p.Error)
+	}
+}
+
+// A group a rule names is not deleted — wherever it is named, "not"
+// included; a glob does not hold it.
+func TestGroupDeleteGuard(t *testing.T) {
+	_, call := accessRig(t)
+	for _, g := range []string{"ac-interns", "ac-x"} {
+		if rec := call("ac-root", true, "POST", "/api/admin/groups", `{"name":"`+g+`","members":["ac-bob"]}`); rec.Code != http.StatusCreated {
+			t.Fatalf("group %s: %d %s", g, rec.Code, rec.Body)
+		}
+	}
+	saved := readAccess(t, call("ac-root", true, "PUT", "/api/admin/access", putBody(t, accessBody{Rules: []devpodv1alpha1.AccessRule{{Match: "everyone and not group = ac-interns"}}, Default: devpodv1alpha1.DefaultAccessEffect()})))
+	if rec := call("ac-root", true, "DELETE", "/api/admin/groups/ac-interns", ""); rec.Code != http.StatusConflict || !strings.Contains(rec.Body.String(), "rule 1") {
+		t.Fatalf("named under not: %d %s", rec.Code, rec.Body)
+	}
+	readAccess(t, call("ac-root", true, "PUT", "/api/admin/access", putBody(t, accessBody{Rules: []devpodv1alpha1.AccessRule{{Match: "group = ac-intern*"}}, Default: devpodv1alpha1.DefaultAccessEffect(), ResourceVersion: saved.ResourceVersion})))
+	if rec := call("ac-root", true, "DELETE", "/api/admin/groups/ac-interns", ""); rec.Code != http.StatusNoContent {
+		t.Fatalf("a glob holds it: %d %s", rec.Code, rec.Body)
+	}
+	setRules(t, devpodv1alpha1.AccessRule{Subject: &devpodv1alpha1.AccessSubject{Kind: "some", Groups: []string{"ac-x"}}})
+	if rec := call("ac-root", true, "DELETE", "/api/admin/groups/ac-x", ""); rec.Code != http.StatusConflict {
+		t.Fatalf("named in the old form: %d %s", rec.Code, rec.Body)
 	}
 }
 
@@ -171,44 +354,13 @@ func TestGroupsCRUD(t *testing.T) {
 
 func TestAccessAdminOnly(t *testing.T) {
 	_, call := accessRig(t)
-	for _, p := range []string{"/api/admin/access", "/api/admin/groups", "/api/admin/access/match?machines=x"} {
+	for _, p := range []string{"/api/admin/access", "/api/admin/groups"} {
 		if rec := call("ac-bob", false, "GET", p, ""); rec.Code != http.StatusForbidden {
 			t.Errorf("%s: %d", p, rec.Code)
 		}
 	}
-}
-
-// The machines a selector names, per cluster, before it is saved.
-func TestAccessMatch(t *testing.T) {
-	_, call := accessRig(t)
-	ctx := context.Background()
-	for _, name := range []string{"am-n1", "am-n2"} {
-		n := &corev1.Node{ObjectMeta: metav1.ObjectMeta{Name: name}}
-		if err := k8sClient.Create(ctx, n); err != nil {
-			t.Fatal(err)
-		}
-		t.Cleanup(func() { _ = k8sClient.Delete(ctx, n) })
-	}
-	var out struct {
-		Items []struct {
-			Count        int      `json:"count"`
-			Names        []string `json:"names"`
-			Unreservable int      `json:"unreservable"`
-		} `json:"items"`
-	}
-	deadline := time.Now().Add(10 * time.Second)
-	for {
-		rec := call("ac-root", true, "GET", "/api/admin/access/match?machines=am-n*", "")
-		if rec.Code == http.StatusOK && json.Unmarshal(rec.Body.Bytes(), &out) == nil && len(out.Items) == 1 && out.Items[0].Count == 2 {
-			break
-		}
-		if time.Now().After(deadline) {
-			t.Fatalf("match: %d %s", rec.Code, rec.Body)
-		}
-		time.Sleep(100 * time.Millisecond)
-	}
-	if out.Items[0].Unreservable != 2 {
-		t.Fatalf("unreservable %d", out.Items[0].Unreservable)
+	if rec := call("ac-bob", false, "POST", "/api/admin/access/preview", `{"match":""}`); rec.Code != http.StatusForbidden {
+		t.Errorf("preview: %d", rec.Code)
 	}
 }
 

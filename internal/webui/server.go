@@ -59,7 +59,7 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("DELETE /api/admin/users/{name}", s.handleDeleteUser)
 	mux.HandleFunc("GET /api/admin/access", s.handleGetAccess)
 	mux.HandleFunc("PUT /api/admin/access", s.handlePutAccess)
-	mux.HandleFunc("GET /api/admin/access/match", s.handleAccessMatch)
+	mux.HandleFunc("POST /api/admin/access/preview", s.handleAccessPreview)
 	mux.HandleFunc("POST /api/admin/access/check", s.handleAccessCheck)
 	mux.HandleFunc("GET /api/groups", s.handleShareGroups)
 	mux.HandleFunc("GET "+gwlink.CLIPath, s.handleGatewayCLI)
