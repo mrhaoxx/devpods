@@ -184,3 +184,85 @@ func TestItemsAndQuote(t *testing.T) {
 		}
 	}
 }
+
+func strp(s string) *string { return &s }
+
+func evalOf(t *testing.T, src string, f Facts) Tri {
+	t.Helper()
+	e, err := Parse(src)
+	if err != nil {
+		t.Fatalf("Parse(%q): %v", src, err)
+	}
+	return e.Eval(f)
+}
+
+func TestEvalFields(t *testing.T) {
+	b300 := Node{Name: "g206", Labels: map[string]string{"gpu": "B300"}}
+	all := Facts{Cluster: strp("st2"), Node: &b300, User: strp("alice"), Groups: map[string]bool{"lab": true, "ops-east": true}}
+	for src, want := range map[string]Tri{
+		"cluster = st2":        True,
+		"cluster = st":         False,
+		"cluster = st*":        True,
+		"cluster in (yc, st2)": True,
+		"cluster in (yc, bd)":  False,
+		"machine = g206":       True,
+		"machine = g2*":        True,
+		"machine = gpu=B300":   True,
+		"machine = gpu=H100":   False,
+		"machine = zone=a":     False, // no such label: no match
+		"user = alice":         True,
+		"user = al*":           True,
+		"user = bob":           False,
+		"group = lab":          True,
+		"group = ops-*":        True,
+		"group = ops":          False,
+		"group in (x, lab)":    True,
+		"everyone":             True,
+		"cluster = st2 and not user = bob and (machine = x or group = lab)": True,
+	} {
+		if got := evalOf(t, src, all); got != want {
+			t.Errorf("%q = %v, want %v", src, got, want)
+		}
+	}
+}
+
+// A machine not known (one to join later): Kleene's three values.
+func TestEvalKleene(t *testing.T) {
+	st := Facts{Cluster: strp("st"), User: strp("alice")}
+	for src, want := range map[string]Tri{
+		"machine = a":                       Unknown,
+		"not machine = a":                   Unknown,
+		"cluster = st and machine = a":      Unknown,
+		"cluster = yc and machine = a":      False,
+		"cluster = st or machine = a":       True,
+		"cluster = yc or machine = a":       Unknown,
+		"machine = a and machine = b":       Unknown,
+		"machine = a or not machine = a":    Unknown, // a tautology, judged partial: safe
+		"cluster = yc and not machine = a":  False,
+		"cluster = st and machine != st5":   Unknown,
+		"not (cluster = yc or machine = a)": Unknown,
+	} {
+		if got := evalOf(t, src, st); got != want {
+			t.Errorf("%q = %v, want %v", src, got, want)
+		}
+	}
+}
+
+func TestEvalUnknownUser(t *testing.T) {
+	n := Node{Name: "g1"}
+	noUser := Facts{Cluster: strp("st"), Node: &n}
+	for src, want := range map[string]Tri{
+		"user = alice":               Unknown,
+		"group = lab":                Unknown,
+		"everyone":                   True,
+		"cluster = st and user = a":  Unknown,
+		"cluster = yc and group = x": False,
+	} {
+		if got := evalOf(t, src, noUser); got != want {
+			t.Errorf("%q = %v, want %v", src, got, want)
+		}
+	}
+	if got := evalOf(t, "cluster = st", Facts{}); got != Unknown {
+		t.Errorf("no cluster known: %v", got)
+	}
+}

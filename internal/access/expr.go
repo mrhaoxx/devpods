@@ -6,6 +6,7 @@ package access
 
 import (
 	"fmt"
+	"path"
 	"strings"
 	"unicode"
 )
@@ -127,6 +128,90 @@ func QuoteItem(s string) string {
 		return s
 	}
 	return `"` + strings.NewReplacer(`\`, `\\`, `"`, `\"`).Replace(s) + `"`
+}
+
+/* ---- evaluation ---- */
+
+// Tri is a condition's value where not everything is known: Unknown is
+// "it depends on what is not known" (Kleene's logic).
+type Tri int8
+
+const (
+	False Tri = iota
+	Unknown
+	True
+)
+
+func (t Tri) String() string { return [...]string{"false", "unknown", "true"}[t] }
+
+// Facts is what is known when a condition is judged; a nil field is not
+// known (a machine to join later; any user, when counting machines).
+// Groups are User's.
+type Facts struct {
+	Cluster *string
+	Node    *Node
+	User    *string
+	Groups  map[string]bool
+}
+
+// Eval judges the condition on f.
+func (e *Expr) Eval(f Facts) Tri {
+	switch e.kind {
+	case kindTrue:
+		return True
+	case kindNot:
+		return True - e.kids[0].Eval(f)
+	case kindAnd:
+		v := True
+		for _, k := range e.kids {
+			v = min(v, k.Eval(f))
+		}
+		return v
+	case kindOr:
+		v := False
+		for _, k := range e.kids {
+			v = max(v, k.Eval(f))
+		}
+		return v
+	}
+	for _, item := range e.items {
+		switch v := e.test(item, f); v {
+		case True, Unknown:
+			return v // Unknown: the field is not known, for every item alike
+		}
+	}
+	return False
+}
+
+// test: one item on f.
+func (e *Expr) test(item string, f Facts) Tri {
+	known := func(ok bool, match bool) Tri {
+		switch {
+		case !ok:
+			return Unknown
+		case match:
+			return True
+		}
+		return False
+	}
+	switch e.field {
+	case FieldCluster:
+		return known(f.Cluster != nil, f.Cluster != nil && globMatch(item, *f.Cluster))
+	case FieldMachine:
+		return known(f.Node != nil, f.Node != nil && MachineMatches([]string{item}, *f.Node))
+	case FieldUser:
+		return known(f.User != nil, f.User != nil && globMatch(item, *f.User))
+	}
+	in := false
+	for g := range f.Groups {
+		in = in || globMatch(item, g)
+	}
+	return known(f.User != nil, in)
+}
+
+func globMatch(pattern, name string) bool {
+	ok, err := path.Match(pattern, name)
+	return err == nil && ok
 }
 
 /* ---- lexing ---- */
