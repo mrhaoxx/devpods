@@ -111,6 +111,25 @@ describe("AccessPage", () => {
     expect(drawer.getByText(/3 \/ 10 个用户/)).toBeTruthy();
   });
 
+  it("previews the machines cluster by cluster", async () => {
+    stubFetch({
+      "GET /api/admin/access": policy,
+      "/api/admin/groups": { items: [] },
+      "POST /api/admin/access/preview": {
+        ...preview,
+        machines: [
+          { cluster: "yc", count: 2, maybe: 0, names: ["g1", "g2"], unreservable: 0 },
+          { cluster: "st", count: 1, maybe: 1, names: ["s1"], unreservable: 0 },
+        ],
+      },
+    });
+    page();
+    fireEvent.click(await screen.findByRole("button", { name: "新增规则" }));
+    const drawer = within(await screen.findByRole("dialog"));
+    expect(await drawer.findByText(/yc 2 台/)).toBeTruthy();
+    expect(drawer.getByText(/st 1 台/)).toBeTruthy();
+  });
+
   it("shows where a condition is wrong and does not save it", async () => {
     stubFetch({
       "GET /api/admin/access": policy,

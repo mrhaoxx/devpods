@@ -268,7 +268,7 @@ func TestPolicyUserOnlyRule(t *testing.T) {
 // cluster that is not there are taken as written.
 func TestPolicyBroken(t *testing.T) {
 	open := v1.DefaultAccessEffect()
-	for bad, says := range map[string]string{"cluster in (": "第 13 个字符", "group = gone": "点名了不存在的组 gone"} {
+	for bad, says := range map[string]string{"cluster in (": "第 13 个字符", "group = gone": "点名了不存在的组 gone", "everyone and group != interns[": "interns[", `machine = "["`: "["} {
 		p := Compile(&v1.AccessPolicySpec{Rules: []v1.AccessRule{
 			{Match: "user = vip", Effect: open},
 			{Match: bad, Effect: open},

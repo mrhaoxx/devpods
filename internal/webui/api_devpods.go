@@ -38,10 +38,12 @@ import (
 // fixed sequence: session → ownership → (mutations) quota → execute
 // under the webui ServiceAccount.
 type Server struct {
-	Client       client.Client // cached manager client
-	Reader       client.Reader // uncached APIReader: events, live Pod readback
-	Cache        cache.Cache   // informers for the SSE watch
-	NS           string        // devpods namespace
+	Client client.Client // cached manager client
+	Reader client.Reader // uncached APIReader: events, live Pod readback
+	// accessLogged: the access rules' problems logged already (once each)
+	accessLogged sync.Map
+	Cache        cache.Cache // informers for the SSE watch
+	NS           string      // devpods namespace
 	Sessions     *SessionManager
 	OAuth        *OAuth
 	DefaultQuota devpodv1alpha1.UserQuota

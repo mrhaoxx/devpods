@@ -266,3 +266,16 @@ func TestEvalUnknownUser(t *testing.T) {
 		t.Errorf("no cluster known: %v", got)
 	}
 }
+
+// "==" (a habit from other languages) is no operator: the second = would
+// begin the value, and user==bob would name a user "=bob" — never anyone.
+func TestParseDoubleEquals(t *testing.T) {
+	for _, src := range []string{"user==bob", "user ==bob", "user = =bob", "cluster!==st"} {
+		if pe := parseErr(t, src); !strings.Contains(pe.Msg, "==") {
+			t.Errorf("%q: %+v", src, pe)
+		}
+	}
+	if got := parsed(t, `user = "=bob"`); got != "(user = =bob)" {
+		t.Errorf("quoted: %s", got)
+	}
+}

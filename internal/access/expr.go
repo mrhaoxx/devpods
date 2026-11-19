@@ -476,6 +476,9 @@ func (p *parser) item(op string, val *token) (string, error) {
 		p.next()
 		t = &n
 	}
+	if t.kind == tWord && strings.HasPrefix(t.text, "=") {
+		return "", &ParseError{t.off, "多了一个 =：比较用一个 =，不是 ==（值本身以 = 开头要加引号）"}
+	}
 	if t.kind == tWord && keywords[t.text] {
 		return "", &ParseError{t.off, t.text + " 是关键字，作为值要加引号：\"" + t.text + "\""}
 	}

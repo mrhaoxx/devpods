@@ -103,16 +103,44 @@ func Compile(spec *v1.AccessPolicySpec, groups map[string]bool) *Policy {
 			c.broken = err.Error()
 		} else {
 			c.expr = e
+			c.broken = itemsProblem(e)
 			for _, g := range e.Items(FieldGroup) {
-				if !HasGlob(g) && !groups[g] {
+				if c.broken == "" && !HasGlob(g) && !groups[g] {
 					c.broken = "点名了不存在的组 " + g
-					break
 				}
 			}
 		}
 		p.rules = append(p.rules, c)
 	}
 	return p
+}
+
+// ItemProblem: why an item of f can match nothing — blank, a malformed
+// glob, a machine item neither a name nor key=value — or "". Under not,
+// such an item would widen a rule.
+func ItemProblem(f Field, item string) string {
+	switch {
+	case strings.TrimSpace(item) == "":
+		return f.String() + " 有一项是空的"
+	case f == FieldMachine && !ValidMachine(item):
+		return item + " 既不是机器名（可用通配）也不是标签 key=value"
+	case f != FieldMachine:
+		if _, err := path.Match(item, ""); err != nil {
+			return item + " 不是合法的名字或通配"
+		}
+	}
+	return ""
+}
+
+func itemsProblem(e *Expr) string {
+	for _, f := range []Field{FieldCluster, FieldMachine, FieldUser, FieldGroup} {
+		for _, it := range e.Items(f) {
+			if p := ItemProblem(f, it); p != "" {
+				return p
+			}
+		}
+	}
+	return ""
 }
 
 // Problems: the rules that deny everyone everything, and why.

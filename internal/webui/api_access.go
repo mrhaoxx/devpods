@@ -22,6 +22,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/util/retry"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	devpodv1alpha1 "github.com/mrhaoxx/devpod/api/v1alpha1"
 	"github.com/mrhaoxx/devpod/internal/access"
@@ -140,10 +141,12 @@ func (s *Server) handlePutAccess(w http.ResponseWriter, r *http.Request) {
 		return
 	case cur == nil:
 		cur = &devpodv1alpha1.AccessPolicy{ObjectMeta: metav1.ObjectMeta{Name: devpodv1alpha1.AccessPolicyName}, Spec: spec}
-		err = s.Client.Create(r.Context(), cur)
+		// strict: a CRD that predates conditions refuses them rather than
+		// dropping them (a rule without its match holds for everything)
+		err = s.Client.Create(r.Context(), cur, client.FieldValidation("Strict"))
 	default:
 		cur.Spec = spec
-		err = s.Client.Update(r.Context(), cur)
+		err = s.Client.Update(r.Context(), cur, client.FieldValidation("Strict"))
 	}
 	if apierrors.IsAlreadyExists(err) || apierrors.IsConflict(err) {
 		conflict()
@@ -211,15 +214,14 @@ func (s *Server) validateAccess(ctx context.Context, v *accessPut) (devpodv1alph
 		}
 		for _, f := range []access.Field{access.FieldCluster, access.FieldMachine, access.FieldUser, access.FieldGroup} {
 			for _, it := range e.Items(f) {
+				if p := access.ItemProblem(f, it); p != "" {
+					return spec, badRequest("%s：%s", where, p)
+				}
 				switch {
-				case strings.TrimSpace(it) == "":
-					return spec, badRequest("%s：%s 有一项是空的", where, f)
 				case f == access.FieldCluster && !access.HasGlob(it) && !clusterKnown[it]:
 					return spec, badRequest("%s：没有集群 %s", where, it)
 				case f == access.FieldGroup && !access.HasGlob(it) && !group[it]:
 					return spec, badRequest("%s：没有用户组 %s", where, it)
-				case f == access.FieldMachine && !access.ValidMachine(it):
-					return spec, badRequest("%s：%s 既不是机器名（可用通配）也不是标签 key=value", where, it)
 				}
 			}
 		}

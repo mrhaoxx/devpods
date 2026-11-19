@@ -5,13 +5,16 @@
 package webui_test
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -130,15 +133,17 @@ func TestAccessValidation(t *testing.T) {
 		r    devpodv1alpha1.AccessRule
 		says string
 	}{
-		"syntax":                    {rule("cluster in st"), "第 1 条第 12 个字符："},
-		"unknown cluster":           {rule("cluster = nope"), "nope"},
-		"unknown group":             {rule("user = ac-bob or group = ac-nogroup"), "ac-nogroup"},
-		"a bad machine":             {rule(`machine = "["`), "["},
-		"a blank user":              {rule(`user = " "`), ""},
-		"too long":                  {rule("user = " + strings.Repeat("a", 1994)), "2000"},
-		"a blank capability":        {caps(""), ""},
-		"a capability with a space": {caps("NET ADMIN"), "NET ADMIN"},
-		"relative hostPath":         {devpodv1alpha1.AccessRule{Effect: devpodv1alpha1.AccessEffect{Allow: true, HostPaths: []devpodv1alpha1.HostPathGrant{{Path: "data"}}}}, ""},
+		"syntax":                     {rule("cluster in st"), "第 1 条第 12 个字符："},
+		"unknown cluster":            {rule("cluster = nope"), "nope"},
+		"unknown group":              {rule("user = ac-bob or group = ac-nogroup"), "ac-nogroup"},
+		"a bad machine":              {rule(`machine = "["`), "["},
+		"a blank user":               {rule(`user = " "`), ""},
+		"too long":                   {rule("user = " + strings.Repeat("a", 1994)), "2000"},
+		"a blank capability":         {caps(""), ""},
+		"a capability with a space":  {caps("NET ADMIN"), "NET ADMIN"},
+		"a bad group glob under not": {rule("everyone and group != x["), "x["},
+		"== for =":                   {rule("user==bob"), "=="},
+		"relative hostPath":          {devpodv1alpha1.AccessRule{Effect: devpodv1alpha1.AccessEffect{Allow: true, HostPaths: []devpodv1alpha1.HostPathGrant{{Path: "data"}}}}, ""},
 	} {
 		rec := call("ac-root", true, "PUT", "/api/admin/access", putBody(t, accessBody{Rules: []devpodv1alpha1.AccessRule{c.r}, Default: devpodv1alpha1.DefaultAccessEffect()}))
 		if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), c.says) {
@@ -398,4 +403,80 @@ func TestAccessCheck(t *testing.T) {
 	if rec := doJSON(t, p.s.Routes().ServeHTTP, "POST", "/api/admin/access/check", nil, forge(p.sm, "ck-bob", false), ""); rec.Code != http.StatusForbidden {
 		t.Fatalf("a user ran the check: %d", rec.Code)
 	}
+}
+
+// strictSpy records the field validation the rules are written with.
+type strictSpy struct {
+	client.Client
+	mu  sync.Mutex
+	got []string
+}
+
+func (c *strictSpy) Create(ctx context.Context, obj client.Object, opts ...client.CreateOption) error {
+	if _, ok := obj.(*devpodv1alpha1.AccessPolicy); ok {
+		o := &client.CreateOptions{}
+		o.ApplyOptions(opts)
+		c.mu.Lock()
+		c.got = append(c.got, o.FieldValidation)
+		c.mu.Unlock()
+	}
+	return c.Client.Create(ctx, obj, opts...)
+}
+
+func (c *strictSpy) Update(ctx context.Context, obj client.Object, opts ...client.UpdateOption) error {
+	if _, ok := obj.(*devpodv1alpha1.AccessPolicy); ok {
+		o := &client.UpdateOptions{}
+		o.ApplyOptions(opts)
+		c.mu.Lock()
+		c.got = append(c.got, o.FieldValidation)
+		c.mu.Unlock()
+	}
+	return c.Client.Update(ctx, obj, opts...)
+}
+
+// Saved with strict field validation: a cluster whose AccessPolicy CRD
+// predates conditions refuses the save instead of dropping every match
+// (which would leave rules that hold for everything).
+func TestAccessSavedStrictly(t *testing.T) {
+	s, call := accessRig(t)
+	spy := &strictSpy{Client: s.Client}
+	s.Client = spy
+	t.Cleanup(func() { s.Client = spy.Client })
+	first := readAccess(t, call("ac-root", true, "PUT", "/api/admin/access", putBody(t, accessBody{Rules: []devpodv1alpha1.AccessRule{{Match: "user = ac-bob"}}, Default: devpodv1alpha1.DefaultAccessEffect()})))
+	readAccess(t, call("ac-root", true, "PUT", "/api/admin/access", putBody(t, accessBody{Default: devpodv1alpha1.DefaultAccessEffect(), ResourceVersion: first.ResourceVersion})))
+	if !slices.Equal(spy.got, []string{"Strict", "Strict"}) {
+		t.Fatalf("field validation: %q", spy.got)
+	}
+}
+
+// A rule that denies everyone is logged — once, not on every request.
+func TestAccessProblemLoggedOnce(t *testing.T) {
+	s, _ := accessRig(t)
+	var mu sync.Mutex
+	var buf bytes.Buffer
+	prev := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(lockedWriter{&mu, &buf}, nil)))
+	t.Cleanup(func() { slog.SetDefault(prev) })
+	setRules(t, devpodv1alpha1.AccessRule{Match: "group = ac-gone", Effect: devpodv1alpha1.DefaultAccessEffect()})
+	for range 3 {
+		if _, _, err := s.DecideForTest(context.Background(), "ac-bob", "", "n1", nil); err != nil {
+			t.Fatal(err)
+		}
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if n := strings.Count(buf.String(), "点名了不存在的组 ac-gone"); n != 1 {
+		t.Fatalf("logged %d times:\n%s", n, buf.String())
+	}
+}
+
+type lockedWriter struct {
+	mu *sync.Mutex
+	w  *bytes.Buffer
+}
+
+func (l lockedWriter) Write(p []byte) (int, error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.w.Write(p)
 }

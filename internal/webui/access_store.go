@@ -8,6 +8,7 @@ import (
 	"context"
 	"log/slog"
 	"slices"
+	"strconv"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/types"
@@ -36,7 +37,7 @@ func (s *Server) accessPolicy(ctx context.Context) (*devpodv1alpha1.AccessPolicy
 // accessFor: the rules compiled against the groups there are (a rule
 // naming one that is not denies everyone), and the groups user is in.
 func (s *Server) accessFor(ctx context.Context, user string) (*access.Policy, map[string]bool, error) {
-	spec, _, err := s.accessPolicy(ctx)
+	spec, rv, err := s.accessPolicy(ctx)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -52,7 +53,14 @@ func (s *Server) accessFor(ctx context.Context, user string) (*access.Policy, ma
 			mine[g.Name] = true
 		}
 	}
-	return access.Compile(spec, all), mine, nil
+	p := access.Compile(spec, all)
+	for _, pr := range p.Problems() {
+		// once per version of the rules (design §5.5), not on every request
+		if _, seen := s.accessLogged.LoadOrStore(rv+"/"+strconv.Itoa(pr.Rule)+"/"+pr.Message, true); !seen {
+			slog.Error("access_rule_denies_everyone", "rule", pr.Rule+1, "why", pr.Message, "resourceVersion", rv)
+		}
+	}
+	return p, mine, nil
 }
 
 // groupsOf: the groups user is in.

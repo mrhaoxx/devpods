@@ -102,6 +102,17 @@ export function RuleDrawer({
                 )}
               </p>
             )}
+            {hits && hits.machines.length > 1 && (
+              <p className="text-[11px] text-muted">
+                各集群：
+                {hits.machines.map((m, i) => (
+                  <span key={m.cluster ?? i} title={m.names.join(" ")}>
+                    {i > 0 && "、"}
+                    {`${m.cluster ?? ""} ${m.count} 台${m.maybe > 0 ? `（${m.maybe} 台可能）` : ""}`}
+                  </span>
+                ))}
+              </p>
+            )}
           </>
         )}
         <fieldset className="space-y-2">
