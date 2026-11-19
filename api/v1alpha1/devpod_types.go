@@ -155,15 +155,20 @@ type DevPodSpec struct {
 	// +optional
 	ExitOnUserCommandExit bool `json:"exitOnUserCommandExit,omitempty"`
 
-	// Shell selects the interactive login shell sshd exec's inside the
-	// user container. When empty, the supervisor falls back to the user
-	// image's /etc/passwd shell if it exists and is executable; if not
-	// (typical for distroless images), it falls back to /opt/devpod/bin/bash.
-	// The named shells are provided by the supervisor bundle at
-	// /opt/devpod/bin/.
+	// Shell is the interactive login: bash, zsh or fish (the supervisor
+	// bundle's, /opt/devpod/bin/); host — the node's own shell, entered
+	// through its PID 1 (it needs a privileged DevPod sharing the host's
+	// PID; failing that chroot into /host, failing that a shell in the
+	// container); or a login command of the user's (e.g. /usr/bin/zsh,
+	// tmux new -A -s main), run in a login bash for interactive logins —
+	// `ssh … cmd`, scp and sftp keep a plain shell, and a command that
+	// cannot start falls back to bash. When empty, the supervisor uses the
+	// user image's /etc/passwd shell if it exists and is executable, else
+	// /opt/devpod/bin/bash.
 	//
 	// +optional
-	// +kubebuilder:validation:Enum=bash;zsh;fish
+	// +kubebuilder:validation:MaxLength=512
+	// +kubebuilder:validation:Pattern=`^[^\x00-\x1f\x7f]*$`
 	Shell string `json:"shell,omitempty"`
 
 	// Pod, if set, materializes the workload as a Pod.

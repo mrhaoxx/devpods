@@ -102,7 +102,9 @@ func init() {
 			long: "<name> is the part after your user name: `create dev1` makes <you>-dev1.\nNon-admins must give --cpu and --memory. To start from a saved config: config launch.\n" +
 				"With several clusters, say where: --cluster C, or <cluster>/<name> (create st2/dev1).\n" +
 				"--gpu N asks for GPUs of the default kind; --gpu-type T for another (its name or resource, e.g. \"Moore Threads\" or mthreads.com/gpu);\n" +
-				"--gpu \"nvidia=1,moore threads=4\" for several kinds at once. In set, a kind not named keeps what it has, and kind=0 gives it up.",
+				"--gpu \"nvidia=1,moore threads=4\" for several kinds at once. In set, a kind not named keeps what it has, and kind=0 gives it up.\n" +
+				"--shell: bash, zsh or fish; host — the node's own shell (a privileged DevPod sharing the host's PID); or a login command of\n" +
+				"your own, e.g. --shell /usr/bin/zsh or --shell \"tmux new -A -s main\" (`ssh … cmd`, scp and sftp keep a plain shell).",
 			vals: append([]string{"collab"}, edit...), run: runCreate},
 		{name: "start", args: "<name>…", short: "start (wake) DevPods", run: runRunning(true)},
 		{name: "stop", args: "<name>…", short: "stop (hibernate) DevPods; the home volume stays", run: runRunning(false)},

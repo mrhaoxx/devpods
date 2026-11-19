@@ -63,7 +63,8 @@ func shellArgsForChosen(chosen string, containerEnv []string, glob func(string) 
 		envPairs = append(envPairs,
 			"FPATH="+dir+":/usr/share/zsh/functions:/usr/local/share/zsh/site-functions")
 	}
-	envPairs = append(envPairs, "DEVPOD_ACTIVE_SHELL="+chosen)
+	// a login command has spaces (and maybe quotes): one quoted value
+	envPairs = append(envPairs, quoteSetEnvPair("DEVPOD_ACTIVE_SHELL", chosen))
 	envPairs = append(envPairs, containerEnv...)
 	setEnv := strings.Join(envPairs, " ")
 	return []string{"-o", "SetEnv=" + setEnv}
@@ -167,11 +168,12 @@ func resolveShell(
 	passwd func() ([]byte, error),
 	stat func(string) (fs.FileInfo, error),
 ) (chosen string, forcePath string) {
-	if want := getenv("DEVPOD_SHELL"); want != "" {
+	if want := strings.TrimSpace(getenv("DEVPOD_SHELL")); want != "" {
 		if p, ok := allowedShells[want]; ok {
 			return want, p
 		}
-		return "bash", allowedShells["bash"]
+		// host, or a login command of the user's: through the login program
+		return want, loginPath
 	}
 	if passwd != nil {
 		if data, err := passwd(); err == nil {

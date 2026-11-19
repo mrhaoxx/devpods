@@ -44,6 +44,10 @@ type child struct {
 }
 
 func main() {
+	// sshd running root's shell for host or a login command (login.go)
+	if strings.TrimPrefix(filepath.Base(os.Args[0]), "-") == "devpod-login" {
+		os.Exit(runLogin(os.Args[1:]))
+	}
 	if len(os.Args) >= 2 && os.Args[1] == "bootstrap" {
 		os.Exit(runBootstrap())
 	}
@@ -345,6 +349,15 @@ func runBootstrap() int {
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "supervisor bootstrap: %v\n", err)
 		return 1
+	}
+	// the login program for host and login commands: this binary, by name.
+	// Without it only those shells fall back (to bash, sshd failing the
+	// login program); the Pod must still start.
+	link := filepath.Join(dst, "bin", "devpod-login")
+	_ = os.MkdirAll(filepath.Dir(link), 0o755)
+	_ = os.Remove(link)
+	if err := os.Symlink("../devpod-supervisor", link); err != nil {
+		fmt.Fprintf(os.Stderr, "supervisor bootstrap: devpod-login: %v\n", err)
 	}
 	return 0
 }

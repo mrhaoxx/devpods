@@ -377,12 +377,13 @@ func TestRejectionsCarryTheReason(t *testing.T) {
 	} else if strings.Contains(msg, `"object"`) || strings.Contains(msg, "<nil>") {
 		t.Fatalf("the reason carries the API server's packaging: %q", msg)
 	}
-	// an edit the cluster refuses: a container without an image
+	// an edit the cluster refuses
 	if rec := doJSON(t, s.HandleCreateDevPodForTest(), "POST", "/api/devpods", nil, root, `{"name":"ok","image":"ubuntu:24.04"}`); rec.Code != http.StatusCreated {
 		t.Fatalf("create: %d %s", rec.Code, rec.Body)
 	}
 	waitDevPod(t, "rj-root-ok")
-	rec = doJSON(t, s.HandlePatchDevPodForTest(), "PATCH", "/api/devpods/rj-root-ok", map[string]string{"name": "rj-root-ok"}, root, `{"shell":"powershell"}`)
+	// (a shell is a login command of one line: two lines are refused)
+	rec = doJSON(t, s.HandlePatchDevPodForTest(), "PATCH", "/api/devpods/rj-root-ok", map[string]string{"name": "rj-root-ok"}, root, `{"shell":"zsh\nexit"}`)
 	if msg := message(rec); rec.Code != http.StatusBadRequest || !strings.Contains(msg, "update rejected: ") || !strings.Contains(msg, "shell") {
 		t.Fatalf("update: %d %q", rec.Code, msg)
 	}

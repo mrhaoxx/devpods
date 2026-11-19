@@ -165,6 +165,11 @@ func TestSupervisor_Bootstrap_CopiesTree(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(dst, "etc", "sshd_config")); err != nil {
 		t.Errorf("sshd_config not copied: %v", err)
 	}
+	// The login program for host and login commands: the supervisor by
+	// another name.
+	if link, err := os.Readlink(filepath.Join(dst, "bin", "devpod-login")); err != nil || link != "../devpod-supervisor" {
+		t.Errorf("devpod-login: %q %v", link, err)
+	}
 	// Verify mode preserved on the executable.
 	if st, err := os.Stat(filepath.Join(dst, "sbin", "fake-sshd")); err == nil {
 		if st.Mode()&0o111 == 0 {

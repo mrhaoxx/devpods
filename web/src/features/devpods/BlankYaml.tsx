@@ -18,6 +18,7 @@ metadata:
   name: ${user}-dev
 spec:
   running: true
+  # shell: bash | zsh | fish | host (the node's own shell) | a login command, e.g. "tmux new -A -s main"
   pod:
     spec:
       containers:

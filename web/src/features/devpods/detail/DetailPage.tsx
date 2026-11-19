@@ -47,6 +47,7 @@ import { PortsPanel } from "./PortsPanel";
 import { YamlTab } from "./YamlTab";
 import { SnapshotControl } from "../../images/SnapshotControl";
 import { devpodToConfig } from "../../configs/exportConfig";
+import { useUpTarget } from "../../../lib/upLevel";
 
 const schema = {
   tab: { kind: "string", default: "monitor" },
@@ -146,6 +147,8 @@ export function DetailPage() {
 
   const reservations = useReservationsNow();
   const d = detail ?? q.data ?? null;
+  // up a level (Cmd+↑): my list, or everyone's for someone else's DevPod
+  useUpTarget(d && me && d.devpod.spec.owner !== me.user ? "/admin/devpods" : null);
   const notFound = q.error instanceof ApiFailure && q.error.status === 404;
   if (deleted || (notFound && !detail)) {
     return (

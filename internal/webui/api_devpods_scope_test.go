@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -186,5 +187,27 @@ func TestWatchShared(t *testing.T) {
 		case <-ctx.Done():
 			t.Fatal("bob's watch with shared=1 never saw the DevPod alice shares with him")
 		}
+	}
+}
+
+// A DevPod's shell is a bundled one, host, or a login command of the
+// user's; one that would not be a single line is refused.
+func TestCreateDevPodCustomShell(t *testing.T) {
+	setupSuite(t)
+	s, sm := newServer(t)
+	t.Cleanup(func() { cleanupDevPods(t) })
+	alice := forge(sm, "csh-alice", false)
+	for name, shell := range map[string]string{"tm": "tmux new -A -s main", "hs": "host", "zs": "/usr/bin/zsh"} {
+		body := `{"name":"` + name + `","image":"ubuntu:24.04","cpu":"1","memory":"1Gi","shell":` + strconv.Quote(shell) + `}`
+		if rec := doJSON(t, s.HandleCreateDevPodForTest(), "POST", "/api/devpods", nil, alice, body); rec.Code != http.StatusCreated {
+			t.Fatalf("%q: %d %s", shell, rec.Code, rec.Body)
+		}
+		if dp := waitDevPod(t, "csh-alice-"+name); dp.Spec.Shell != shell {
+			t.Fatalf("%q stored as %q", shell, dp.Spec.Shell)
+		}
+	}
+	if rec := doJSON(t, s.HandleCreateDevPodForTest(), "POST", "/api/devpods", nil, alice,
+		`{"name":"bad","image":"ubuntu:24.04","cpu":"1","memory":"1Gi","shell":"zsh\nrm -rf /"}`); rec.Code == http.StatusCreated {
+		t.Fatalf("a shell of two lines was taken")
 	}
 }

@@ -74,14 +74,36 @@ func TestPrepareShellArgs_ExplicitShell_SetsActiveShell(t *testing.T) {
 	mustContain(t, args, "TERMINFO=/opt/devpod/share/terminfo")
 }
 
-func TestPrepareShellArgs_InvalidShell_FallsBackToBash(t *testing.T) {
+// A shell the bundle does not have is a login command of the user's (or
+// host): it lands through the login program, and is told to it.
+func TestPrepareShellArgs_CustomShell_IsTheLoginCommand(t *testing.T) {
 	args := prepareShellArgs(
 		func(string) string { return "tcsh" },
 		nil,
 		fakeStat(map[string]os.FileMode{}),
 	)
 	mustNotContainSubstr(t, args, "ForceCommand=")
-	mustContain(t, args, "DEVPOD_ACTIVE_SHELL=bash")
+	mustContain(t, args, "DEVPOD_ACTIVE_SHELL=tcsh")
+}
+
+// A login command has spaces: on sshd's SetEnv line it is one quoted
+// value, or sshd would read its words as settings of their own and not
+// start.
+func TestPrepareShellArgs_LoginCommandIsQuoted(t *testing.T) {
+	args := prepareShellArgs(func(string) string { return `tmux new -A -s "main"` }, nil, fakeStat(map[string]os.FileMode{}))
+	mustContain(t, args, `DEVPOD_ACTIVE_SHELL="tmux new -A -s \"main\""`)
+}
+
+func TestResolveShell_LoginCommandAndHost(t *testing.T) {
+	for _, want := range []string{"tmux new -A -s main", "/usr/bin/zsh", "host"} {
+		chosen, force := resolveShell(func(string) string { return want }, nil, fakeStat(map[string]os.FileMode{}))
+		if chosen != want || force != loginPath {
+			t.Fatalf("%q: chosen %q force %q", want, chosen, force)
+		}
+	}
+	if chosen, force := resolveShell(func(string) string { return "zsh" }, nil, fakeStat(map[string]os.FileMode{})); chosen != "zsh" || force != allowedShells["zsh"] {
+		t.Fatalf("a bundled shell: %q %q", chosen, force)
+	}
 }
 
 func TestPrepareShellArgs_UnsetEnv_PasswdMissing_FallsBackToBash(t *testing.T) {
