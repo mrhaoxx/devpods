@@ -57,7 +57,10 @@ type CgroupSample struct {
 // root is that cgroup (/proc/self/cgroup says "0::/"); in the host's —
 // some runtimes run pods so — the root is the node's, and /proc/self/cgroup
 // names the container's path under it, which is read instead: the node's
-// root would measure the whole node (and has no memory.current).
+// root would measure the whole node (and has no memory.current). A root
+// that has cpu.max or memory.current is the container's whatever
+// /proc/self/cgroup says: a container may move its processes into a
+// child cgroup of its own (docker:dind does).
 func OpenCgroup(root string) (*Cgroup, error) {
 	self, _ := os.ReadFile("/proc/self/cgroup")
 	return openCgroup(root, string(self))
@@ -95,6 +98,12 @@ func openCgroup(root, self string) (*Cgroup, error) {
 		return base
 	}
 	if exists(filepath.Join(root, "cgroup.controllers")) {
+		// a root with limits of its own (the node's has neither file) is
+		// the container's, though its processes may sit in a child it made
+		// (docker:dind moves them all into /init)
+		if exists(filepath.Join(root, "cpu.max")) || exists(filepath.Join(root, "memory.current")) {
+			return &Cgroup{v2: true, cpu: root, cpuacct: root, cpuset: root, mem: root, io: root, pids: root}, nil
+		}
 		d := in(root, "")
 		return &Cgroup{v2: true, cpu: d, cpuacct: d, cpuset: d, mem: d, io: d, pids: d}, nil
 	}

@@ -168,6 +168,38 @@ func TestCgroup_HostNamespaceV2(t *testing.T) {
 	}
 }
 
+// A container that nests its own processes (docker:dind moves every one,
+// the supervisor too, into /init so dockerd may hand controllers to its
+// containers): /proc/self/cgroup says "0::/init", but the root is still
+// the container's — limits there, its children's use counted in it.
+func TestCgroup_NestedInOwnNamespace(t *testing.T) {
+	root := writeTree(t, map[string]string{
+		"cgroup.controllers":      "cpuset cpu io memory pids",
+		"cpu.stat":                "usage_usec 9000000\n",
+		"cpu.max":                 "200000 100000\n",
+		"memory.current":          "5000\n",
+		"memory.max":              "4294967296\n",
+		"memory.stat":             "anon 4000\nfile 900\ninactive_file 100\n",
+		"init/cgroup.controllers": "cpuset cpu io memory pids",
+		"init/cpu.stat":           "usage_usec 1000\n",
+		"init/cpu.max":            "max 100000\n",
+		"init/memory.current":     "10\n",
+		"init/memory.max":         "max\n",
+		"init/memory.stat":        "anon 7\nfile 3\ninactive_file 0\n",
+	})
+	cg, err := openCgroup(root, "0::/init\n")
+	if err != nil {
+		t.Fatal(err)
+	}
+	s, err := cg.Sample(nil, time.Unix(100, 0))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if s.CPULimit != 2 || s.MemLimit != 4294967296 || s.MemAnon != 4000 {
+		t.Fatalf("read /init, not the container: %+v", s)
+	}
+}
+
 func TestCgroup_HostNamespaceV1(t *testing.T) {
 	root := writeTree(t, map[string]string{
 		"memory/memory.usage_in_bytes":                  "999999\n",
