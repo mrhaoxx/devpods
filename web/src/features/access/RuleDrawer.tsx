@@ -1,12 +1,14 @@
-// The editor of one access rule (or of the default rule's effect).
+// The editor of one access rule — its condition, previewed as it is typed
+// (the server reads it: the page has no parser of its own) — or of the
+// default rule's effect.
 import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Drawer } from "../../design/Drawer";
 import { Button } from "../../design/Button";
-import { Field, Input, Notice, Select } from "../../design/Form";
+import { Field, Input, Notice } from "../../design/Form";
 import { useClusterList } from "../../data/clusterFilter";
 import { useDebounced } from "../../lib/useDebounced";
-import { matchMachines, splitList, type AccessEffect, type AccessRule, type Group } from "./api";
+import { cleanPrivileges, previewMatch, PRIVILEGE_FLAGS, splitList, type AccessEffect, type AccessPrivileges, type AccessRule, type Group } from "./api";
 
 export function RuleDrawer({
   rule,
@@ -22,35 +24,30 @@ export function RuleDrawer({
   onClose: () => void;
 }) {
   const clusters = useClusterList().data?.items ?? [];
-  const [r, setR] = useState<AccessRule>(rule);
-  // the text as typed; the selector previewed once typing pauses
-  const [machines, setMachines] = useState((rule.machines ?? []).join(" "));
-  const [machinesText, setMachinesText] = useDebounced(machines, setMachines);
-  const [usersText, setUsersText] = useState((rule.subject.users ?? []).join(", "));
-  const picked = r.subject.groups ?? [];
-  const nobody = r.subject.kind === "some" && splitList(usersText).length === 0 && picked.length === 0;
-  const e = r.effect;
-  const setEffect = (p: Partial<AccessEffect>) => setR({ ...r, effect: { ...e, ...p } });
-  const match = useQuery({
-    queryKey: ["access-match", r.cluster ?? "", machines],
-    queryFn: () => matchMachines(r.cluster || undefined, splitList(machines)),
-    enabled: !isDefault,
-  });
-  const count = (match.data?.items ?? []).reduce((a, x) => a + x.count, 0);
-  const unreservable = (match.data?.items ?? []).reduce((a, x) => a + x.unreservable, 0);
+  // the condition as typed; previewed once typing pauses
+  const [match, setMatch] = useState(rule.match);
+  const [matchText, setMatchText] = useDebounced(match, setMatch, 300);
+  const preview = useQuery({ queryKey: ["access-preview", match], queryFn: () => previewMatch(match), enabled: !isDefault });
+  const err = preview.data?.error;
+  const hits = preview.data && !preview.data.error ? preview.data : null;
+  const machines = (hits?.machines ?? []).reduce((a, m) => ({ count: a.count + m.count, maybe: a.maybe + m.maybe, unreservable: a.unreservable + m.unreservable }), { count: 0, maybe: 0, unreservable: 0 });
+  const bad = !isDefault && !!err && matchText === match;
+
+  const [e, setE] = useState<AccessEffect>(rule.effect);
+  const setEffect = (p: Partial<AccessEffect>) => setE({ ...e, ...p });
+  const priv: AccessPrivileges = e.privileges ?? {};
+  const setPriv = (p: Partial<AccessPrivileges>) => setEffect({ privileges: { ...priv, ...p } });
+  const [capsText, setCapsText] = useState((priv.capabilities ?? []).join(" "));
   const paths = e.hostPaths ?? [];
   const setPath = (i: number, p: Partial<{ path: string; writable: boolean }>) => setEffect({ hostPaths: paths.map((h, j) => (j === i ? { ...h, ...p } : h)) });
+
   const save = () => {
-    const users = splitList(usersText);
-    const subject: AccessRule["subject"] =
-      r.subject.kind === "everyone" ? { kind: "everyone" } : { kind: "some", ...(users.length ? { users } : {}), ...(picked.length ? { groups: picked } : {}) };
-    const out: AccessRule = { ...r, subject, machines: splitList(machinesText) };
-    if (!out.cluster) delete out.cluster;
-    if (!out.machines?.length) delete out.machines;
-    const eff: AccessEffect = out.effect.allow
-      ? { ...out.effect, hostPaths: (out.effect.hostPaths ?? []).filter((h) => h.path.trim() !== "") }
+    const privileges = cleanPrivileges({ ...priv, capabilities: splitList(capsText) });
+    const kept = paths.filter((h) => h.path.trim() !== "");
+    const eff: AccessEffect = e.allow
+      ? { allow: true, ...(privileges ? { privileges } : {}), ...(kept.length ? { hostPaths: kept } : {}), ...(e.needsReservation ? { needsReservation: true } : {}) }
       : { allow: false };
-    onSave({ ...out, effect: eff });
+    onSave({ match: isDefault ? "" : matchText.trim(), effect: eff });
   };
   return (
     <Drawer
@@ -60,7 +57,7 @@ export function RuleDrawer({
       actions={
         <>
           <Button onClick={onClose}>取消</Button>
-          <Button variant="primary" disabled={nobody} title={nobody ? "至少写一个用户或选一个组" : undefined} onClick={save}>
+          <Button variant="primary" disabled={bad} title={bad ? "条件有错" : undefined} onClick={save}>
             确定
           </Button>
         </>
@@ -69,71 +66,41 @@ export function RuleDrawer({
       <div className="space-y-3 text-xs">
         {!isDefault && (
           <>
-            <Field label="集群">
-              <Select aria-label="集群" value={r.cluster ?? ""} onChange={(ev) => setR({ ...r, cluster: ev.target.value || undefined })}>
-                <option value="">任何集群</option>
-                {clusters.map((c) => (
-                  <option key={c.name} value={c.name}>
-                    {c.displayName || c.name}
-                  </option>
-                ))}
-              </Select>
-            </Field>
-            <Field label="机器" hint="名字（可用 * 通配）或标签 key=value，空格分开；留空 = 全部">
-              <Input
-                aria-label="机器"
-                className="mono"
-                value={machinesText}
-                onChange={(ev) => setMachinesText(ev.target.value)}
+            <Field label="条件" hint="留空 = 全部">
+              <textarea
+                aria-label="条件"
+                className="mono w-full rounded border border-line bg-surface px-2 py-1"
+                rows={3}
+                spellCheck={false}
+                value={matchText}
+                onChange={(ev) => setMatchText(ev.target.value)}
               />
             </Field>
-            {match.data && (
-              <p className="text-muted">
-                命中 {count} 台机器
-                {e.allow && e.needsReservation && unreservable > 0 && (
-                  <span className="text-warm">；其中 {unreservable} 台没标可预约，需预约的人将用不了它们</span>
-                )}
+            <p className="text-[11px] text-muted">
+              字段 <code>cluster</code> <code>machine</code> <code>user</code> <code>group</code>；运算 <code>=</code> <code>!=</code> <code>in (…)</code> <code>not in (…)</code>；组合{" "}
+              <code>and</code> <code>or</code> <code>not</code> 和括号。名字可用 <code>*</code> 通配，机器还可以写标签 <code>key=value</code>。例：<code>cluster in (st2, a5)</code>、
+              <code>cluster = st and machine != st5</code>、<code>everyone and not group = interns</code>
+            </p>
+            {(clusters.length > 0 || groups.length > 0) && (
+              <p className="text-[11px] text-muted">
+                {clusters.length > 0 && <>集群：{clusters.map((c) => c.name).join("、")}　</>}
+                {groups.length > 0 && <>组：{groups.map((g) => g.name).join("、")}</>}
               </p>
             )}
-            <Field label="主体">
-              <Select
-                aria-label="主体"
-                value={r.subject.kind}
-                onChange={(ev) => setR({ ...r, subject: ev.target.value === "everyone" ? { kind: "everyone" } : { kind: "some", groups: picked } })}
-              >
-                <option value="everyone">所有人</option>
-                <option value="some">指定用户和组</option>
-              </Select>
-            </Field>
-            {r.subject.kind === "some" && (
-              <>
-                <Field label="用户" hint="用户名，逗号或空格分开；与下面的组任一命中即算">
-                  <Input aria-label="用户" className="mono" placeholder="alice, bob" value={usersText} onChange={(ev) => setUsersText(ev.target.value)} />
-                </Field>
-                <fieldset className="space-y-1">
-                  <legend className="mb-1 text-muted">组</legend>
-                  {groups.length === 0 ? (
-                    <p className="text-muted">还没有用户组（在「用户组」页新建）</p>
-                  ) : (
-                    <div className="flex flex-wrap gap-x-4 gap-y-1">
-                      {groups.map((g) => (
-                        <label key={g.name} className="inline-flex items-center gap-1.5">
-                          <input
-                            type="checkbox"
-                            aria-label={`组 ${g.name}`}
-                            checked={picked.includes(g.name)}
-                            onChange={(ev) =>
-                              setR({ ...r, subject: { ...r.subject, groups: ev.target.checked ? [...picked, g.name] : picked.filter((x) => x !== g.name) } })
-                            }
-                          />
-                          {g.displayName ? `${g.name}（${g.displayName}）` : g.name}
-                        </label>
-                      ))}
-                    </div>
-                  )}
-                </fieldset>
-                {nobody && <p className="text-[11px] text-warm">至少写一个用户或选一个组</p>}
-              </>
+            {err && (
+              <p className="text-fail">
+                第 {err.offset + 1} 个字符：{err.message}
+              </p>
+            )}
+            {hits && (
+              <p className="text-muted">
+                命中集群 {hits.clusters.length ? hits.clusters.map((c) => (c.maybe ? `${c.name}（可能）` : c.name)).join("、") : "无"}；{machines.count} 台机器
+                {machines.maybe > 0 && `（${machines.maybe} 台可能命中，取决于其他条件）`}；{hits.users.count} / {hits.users.total} 个用户
+                {hits.users.maybe > 0 && `（${hits.users.maybe} 个可能命中，取决于集群和机器）`}，以后的新用户也按条件判断
+                {e.allow && e.needsReservation && machines.unreservable > 0 && (
+                  <span className="text-warm">；其中 {machines.unreservable} 台没标可预约，需预约的人将用不了它们</span>
+                )}
+              </p>
             )}
           </>
         )}
@@ -151,10 +118,18 @@ export function RuleDrawer({
           </div>
           {e.allow && (
             <div className="space-y-2 pl-1">
-              <label className="flex items-center gap-1.5" title="特权容器、额外的 capabilities、主机的 PID / 网络 / IPC">
-                <input type="checkbox" checked={!!e.privileged} onChange={(ev) => setEffect({ privileged: ev.target.checked })} />
-                特权和主机
-              </label>
+              <div className="flex flex-wrap gap-x-4 gap-y-1">
+                {PRIVILEGE_FLAGS.map(([k, label]) => (
+                  <label key={k} className="inline-flex items-center gap-1.5">
+                    <input type="checkbox" checked={!!priv[k]} onChange={(ev) => setPriv({ [k]: ev.target.checked })} />
+                    {label}
+                  </label>
+                ))}
+              </div>
+              <Field label="可加的 capability" hint="空格分开，如 NET_ADMIN SYS_PTRACE；* = 任意">
+                <Input aria-label="可加的 capability" className="mono" disabled={!!priv.privileged} value={capsText} onChange={(ev) => setCapsText(ev.target.value)} />
+              </Field>
+              {priv.privileged && <p className="text-[11px] text-muted">特权容器已含全部 capability</p>}
               <label className="flex items-center gap-1.5" title="只有在本人预约这台机器期间才能用">
                 <input type="checkbox" checked={!!e.needsReservation} onChange={(ev) => setEffect({ needsReservation: ev.target.checked })} />
                 需预约

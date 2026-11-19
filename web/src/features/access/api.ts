@@ -1,23 +1,33 @@
-// Access control (design 2026-11-16): the ordered rules, the user groups
-// they name, and the check of the running DevPods.
+// Access control (design 2026-11-16, conditions and privileges one by one
+// 2026-11-19): the ordered rules, the user groups they name, and the check
+// of the running DevPods.
 import { req } from "../../data/api";
-import { apiIn } from "../../data/cluster";
 
 export type HostPathGrant = { path: string; writable?: boolean };
-export type AccessEffect = { allow: boolean; privileged?: boolean; hostPaths?: HostPathGrant[]; needsReservation?: boolean };
-/** who a rule is about: everyone, or the users and the members of the groups listed */
-export type AccessSubject = { kind: "everyone" | "some"; users?: string[]; groups?: string[] };
-export type AccessRule = { cluster?: string; machines?: string[]; subject: AccessSubject; effect: AccessEffect };
+/** what beyond an ordinary container a rule lets be asked for, each on its own */
+export type AccessPrivileges = { privileged?: boolean; capabilities?: string[]; hostPID?: boolean; hostIPC?: boolean; hostNetwork?: boolean };
+export type AccessEffect = { allow: boolean; privileges?: AccessPrivileges; hostPaths?: HostPathGrant[]; needsReservation?: boolean };
+/** a rule: a condition on the cluster, machine, user and group ("": everything) and what those it holds for get */
+export type AccessRule = { match: string; effect: AccessEffect };
+/** a rule that denies everyone everything: it cannot be read, or names a group that is not there */
+export type AccessProblem = { rule: number; message: string };
 /** The whole ordered list, with the version it was read at (sent back on save). */
-export type AccessPolicy = { rules: AccessRule[]; default: AccessEffect; resourceVersion: string };
+export type AccessPolicy = { rules: AccessRule[]; default: AccessEffect; resourceVersion: string; problems?: AccessProblem[] };
 
 export const getAccess = () => req<AccessPolicy>("GET", "/api/admin/access");
 export const putAccess = (p: AccessPolicy) => req<AccessPolicy>("PUT", "/api/admin/access", p);
 
-export type MatchItem = { cluster?: string; count: number; names: string[]; unreservable: number };
-/** matchMachines: the machines a selector names, per cluster (one cluster, or all). */
-export const matchMachines = (cluster: string | undefined, machines: string[]) =>
-  req<{ items: MatchItem[] }>("GET", apiIn(cluster, `/api/admin/access/match?machines=${encodeURIComponent(machines.join(","))}`));
+/** what a condition names before it is saved: "maybe" where it depends on what is not known */
+export type Preview =
+  | { error: { offset: number; message: string } }
+  | {
+      error?: undefined;
+      clusters: { name: string; maybe: boolean }[];
+      machines: { cluster?: string; count: number; maybe: number; names: string[]; unreservable: number }[];
+      users: { count: number; maybe: number; total: number; names: string[] };
+      hasMachine: boolean;
+    };
+export const previewMatch = (match: string) => req<Preview>("POST", "/api/admin/access/preview", { match });
 
 export type Violation = { cluster?: string; devpod: string; owner: string; node: string; code: string; reason: string; rule: number };
 export const checkRunning = () => req<{ items: Violation[] }>("POST", "/api/admin/access/check");
@@ -31,23 +41,31 @@ export const deleteGroup = (name: string) => req<void>("DELETE", `/api/admin/gro
 /** splitList: "a, b c" → ["a", "b", "c"]. */
 export const splitList = (s: string) => s.split(/[\s,，]+/).filter(Boolean);
 
-export const resourceText = (r: AccessRule) =>
-  [r.cluster ? `集群 ${r.cluster}` : "任何集群", r.machines?.length ? `机器 ${r.machines.join(" ")}` : "全部机器"].join(" · ");
+/** the privileges granted one by one (capabilities apart), and their names on the page */
+export const PRIVILEGE_FLAGS = [
+  ["privileged", "特权容器"],
+  ["hostPID", "主机 PID"],
+  ["hostIPC", "主机 IPC"],
+  ["hostNetwork", "主机网络"],
+] as const;
 
-export const subjectText = (s: AccessSubject, groups: Group[] = []) => {
-  if (s.kind === "everyone") return "所有人";
-  const parts: string[] = [];
-  if (s.users?.length) parts.push(`用户 ${s.users.join(", ")}`);
-  if (s.groups?.length)
-    parts.push(
-      `组 ${s.groups
-        .map((n) => {
-          const g = groups.find((x) => x.name === n);
-          return g?.displayName ? `${n}（${g.displayName}）` : n;
-        })
-        .join(", ")}`,
-    );
-  return parts.join("；");
+export const privilegesText = (p?: AccessPrivileges): string[] => {
+  if (!p) return [];
+  const out: string[] = PRIVILEGE_FLAGS.filter(([k]) => p[k]).map(([, t]) => t);
+  const caps = p.capabilities ?? [];
+  if (caps.includes("*")) out.push("任意 capability");
+  else if (caps.length) out.push(`cap ${caps.join(" ")}`);
+  return out;
+};
+
+/** cleanPrivileges: only what is granted (no capabilities under a privileged container, which has them all); none: undefined */
+export const cleanPrivileges = (p?: AccessPrivileges): AccessPrivileges | undefined => {
+  if (!p) return undefined;
+  const out: AccessPrivileges = {};
+  for (const [k] of PRIVILEGE_FLAGS) if (p[k]) out[k] = true;
+  const caps = (p.capabilities ?? []).map((c) => c.trim()).filter(Boolean);
+  if (caps.length && !p.privileged) out.capabilities = caps;
+  return Object.keys(out).length ? out : undefined;
 };
 
 export const effectText = (e: AccessEffect) =>
@@ -55,7 +73,7 @@ export const effectText = (e: AccessEffect) =>
     ? "拒绝"
     : [
         "允许",
-        e.privileged ? "特权和主机" : null,
+        ...privilegesText(e.privileges),
         e.needsReservation ? "需预约" : null,
         e.hostPaths?.length ? `主机路径 ${e.hostPaths.map((h) => `${h.path}（${h.writable ? "可写" : "只读"}）`).join("、")}` : null,
       ]

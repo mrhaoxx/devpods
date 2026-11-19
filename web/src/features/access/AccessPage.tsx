@@ -1,5 +1,5 @@
-// 访问控制 (design 2026-11-16): the ordered rules — the first whose
-// resource and subject match decides — the default last; a check of the
+// 访问控制 (design 2026-11-16; conditions 2026-11-19): the ordered rules —
+// the first whose condition holds decides — the default last; a check of the
 // running DevPods against them, with the ones found stopped on request.
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
@@ -14,9 +14,9 @@ import { DataTable } from "../../design/DataTable";
 import { BulkToast, type BulkOutcome, type BulkProgress } from "../../design/BulkToast";
 import { runBulk } from "../../lib/bulk";
 import { RuleDrawer } from "./RuleDrawer";
-import { checkRunning, effectText, getAccess, listGroups, putAccess, resourceText, subjectText, type AccessPolicy, type AccessRule, type Violation } from "./api";
+import { checkRunning, effectText, getAccess, listGroups, putAccess, type AccessPolicy, type AccessRule, type Violation } from "./api";
 
-const newRule = (): AccessRule => ({ subject: { kind: "everyone" }, effect: { allow: false } });
+const newRule = (): AccessRule => ({ match: "", effect: { allow: false } });
 
 const violationColumns: ColumnDef<Violation, unknown>[] = [
   { id: "devpod", header: "DevPod", accessorFn: (v) => v.devpod, meta: { priority: 1, width: 180, mono: true } },
@@ -82,7 +82,7 @@ export function AccessPage() {
 
   if (q.isError) return <EmptyState tone="error" title="无法加载访问规则" hint={String(q.error)} />;
   if (!cur) return <EmptyState title="加载中…" />;
-  const editingRule = editing && (editing.at === "new" ? newRule() : editing.at === "default" ? { subject: { kind: "everyone" as const }, effect: cur.default } : cur.rules[editing.at]);
+  const editingRule = editing && (editing.at === "new" ? newRule() : editing.at === "default" ? { match: "", effect: cur.default } : cur.rules[editing.at]);
   return (
     <div className="space-y-3 p-3">
       <Panel
@@ -102,6 +102,18 @@ export function AccessPage() {
             <Notice tone="warm">规则已被别人改过，已重新载入：请重新修改后再保存。</Notice>
           </div>
         )}
+        {(q.data?.problems ?? []).length > 0 && (
+          <div className="p-2">
+            <Notice>
+              这些规则读不懂或点名了不存在的组，现在对所有人拒绝一切，请修改：
+              {(q.data?.problems ?? []).map((p) => (
+                <span key={p.rule} className="block">
+                  第 {p.rule + 1} 条：{p.message}
+                </span>
+              ))}
+            </Notice>
+          </div>
+        )}
         {save.isError && !conflict && (
           <div className="p-2">
             <Notice>保存失败：{String(save.error)}</Notice>
@@ -111,8 +123,7 @@ export function AccessPage() {
           <thead>
             <tr className="border-b border-line text-left text-[11px] text-muted">
               <th className="w-10 px-2 py-1">#</th>
-              <th className="px-2">资源</th>
-              <th className="px-2">主体</th>
+              <th className="px-2">条件</th>
               <th className="px-2">效果</th>
               <th className="w-48 px-2" />
             </tr>
@@ -121,8 +132,7 @@ export function AccessPage() {
             {cur.rules.map((r, i) => (
               <tr key={i} data-testid="access-rule" className="border-b border-line">
                 <td className="px-2 py-1 mono">{i + 1}</td>
-                <td className="px-2 mono">{resourceText(r)}</td>
-                <td className="px-2">{subjectText(r.subject, groups)}</td>
+                <td className="px-2 mono">{r.match || "全部"}</td>
                 <td className={`px-2 ${r.effect.allow ? "" : "text-fail"}`}>{effectText(r.effect)}</td>
                 <td className="px-2 text-right whitespace-nowrap">
                   <Button aria-label={`上移 规则 ${i + 1}`} disabled={i === 0} onClick={() => move(i, -1)}>
@@ -141,7 +151,6 @@ export function AccessPage() {
             <tr data-testid="access-rule" className="text-muted">
               <td className="px-2 py-1">默认</td>
               <td className="px-2">其余一切</td>
-              <td className="px-2">所有人</td>
               <td className="px-2">{effectText(cur.default)}</td>
               <td className="px-2 text-right">
                 <Button onClick={() => setEditing({ at: "default" })}>编辑</Button>
