@@ -9,7 +9,6 @@ package access
 
 import (
 	"path"
-	"slices"
 	"strings"
 
 	v1 "github.com/mrhaoxx/devpod/api/v1alpha1"
@@ -27,13 +26,126 @@ type Decision struct {
 	Rule int // the index in Rules; -1 = the default
 }
 
-// Decide: the first rule whose cluster ("" = any), machines and subject
-// match decides; the default when none does. groups are the user's.
-func Decide(p *v1.AccessPolicySpec, user string, groups map[string]bool, cluster string, n Node) Decision {
-	for i := range p.Rules {
-		r := &p.Rules[i]
-		if (r.Cluster == "" || r.Cluster == cluster) && MachineMatches(r.Machines, n) && subjectMatches(r.Subject, user, groups) {
-			return Decision{AccessEffect: r.Effect, Rule: i}
+// MatchOf: a rule's condition — Match, or, for a rule in the old form,
+// the condition its cluster, machines and subject make. A user of the old
+// form was a name, not a glob: its glob characters are escaped.
+func MatchOf(r v1.AccessRule) string {
+	if r.Match != "" {
+		return strings.TrimSpace(r.Match)
+	}
+	list := func(items []string, each func(string) string) string {
+		q := make([]string, len(items))
+		for i, it := range items {
+			q[i] = QuoteItem(each(it))
+		}
+		return "(" + strings.Join(q, ", ") + ")"
+	}
+	same := func(s string) string { return s }
+	var parts []string
+	if r.Cluster != "" {
+		parts = append(parts, "cluster = "+QuoteItem(r.Cluster))
+	}
+	if len(r.Machines) > 0 {
+		parts = append(parts, "machine in "+list(r.Machines, same))
+	}
+	if s := r.Subject; s != nil && s.Kind != "everyone" {
+		var who []string
+		if len(s.Users) > 0 {
+			who = append(who, "user in "+list(s.Users, escapeGlob))
+		}
+		if len(s.Groups) > 0 {
+			who = append(who, "group in "+list(s.Groups, same))
+		}
+		switch len(who) {
+		case 0:
+			parts = append(parts, "not everyone") // "some" naming nobody: nobody
+		case 1:
+			parts = append(parts, who[0])
+		default:
+			parts = append(parts, "("+strings.Join(who, " or ")+")")
+		}
+	}
+	return strings.Join(parts, " and ")
+}
+
+func escapeGlob(s string) string {
+	return strings.NewReplacer(`\`, `\\`, `*`, `\*`, `?`, `\?`, `[`, `\[`).Replace(s)
+}
+
+// Problem is a rule that denies everyone everything: its condition cannot
+// be read, or it names a group (not a glob) that is not there — a group
+// gone could widen a rule that says "not" it (design 2026-11-19 §5.5).
+type Problem struct {
+	Rule    int    `json:"rule"` // from 0
+	Message string `json:"message"`
+}
+
+// Policy is the rules compiled: their conditions read, their effects in
+// the new form.
+type Policy struct {
+	rules   []compiled
+	Default v1.AccessEffect
+}
+
+type compiled struct {
+	expr   *Expr
+	effect v1.AccessEffect
+	broken string // why it denies everyone everything
+}
+
+// Compile reads the rules; groups are every UserGroup there is.
+func Compile(spec *v1.AccessPolicySpec, groups map[string]bool) *Policy {
+	p := &Policy{Default: NormalizeEffect(spec.Default)}
+	for _, r := range spec.Rules {
+		c := compiled{effect: NormalizeEffect(r.Effect)}
+		e, err := Parse(MatchOf(r))
+		if err != nil {
+			c.broken = err.Error()
+		} else {
+			c.expr = e
+			for _, g := range e.Items(FieldGroup) {
+				if !HasGlob(g) && !groups[g] {
+					c.broken = "点名了不存在的组 " + g
+					break
+				}
+			}
+		}
+		p.rules = append(p.rules, c)
+	}
+	return p
+}
+
+// Problems: the rules that deny everyone everything, and why.
+func (p *Policy) Problems() []Problem {
+	var out []Problem
+	for i, c := range p.rules {
+		if c.broken != "" {
+			out = append(out, Problem{Rule: i, Message: c.broken})
+		}
+	}
+	return out
+}
+
+// on: the rule's condition on f (a broken rule holds for everyone) and its
+// effect (a broken rule's: deny).
+func (c *compiled) on(f Facts) (Tri, v1.AccessEffect) {
+	if c.broken != "" {
+		return True, v1.AccessEffect{}
+	}
+	return c.expr.Eval(f), c.effect
+}
+
+func facts(user string, groups map[string]bool, cluster string, n *Node) Facts {
+	return Facts{Cluster: &cluster, Node: n, User: &user, Groups: groups}
+}
+
+// Decide: the first rule whose condition holds decides; the default when
+// none does. groups are the user's.
+func (p *Policy) Decide(user string, groups map[string]bool, cluster string, n Node) Decision {
+	f := facts(user, groups, cluster, &n)
+	for i := range p.rules {
+		if v, e := p.rules[i].on(f); v == True {
+			return Decision{AccessEffect: e, Rule: i}
 		}
 	}
 	return Decision{AccessEffect: p.Default, Rule: -1}
@@ -41,23 +153,24 @@ func Decide(p *v1.AccessPolicySpec, user string, groups map[string]bool, cluster
 
 // Unrestricted: would every machine of cluster — those there now and any
 // that join later — take a DevPod of user's with needs, no reservation
-// asked? Judged from the rules alone, since machines to come cannot be
-// listed: any rule for user in cluster that would not take it says no,
-// unless an earlier rule for every machine has already decided. The
-// console leaves an unrestricted DevPod without its allow-list.
-func Unrestricted(p *v1.AccessPolicySpec, user string, groups map[string]bool, cluster string, needs Needs) bool {
+// asked? Judged with the machine not known: a rule that may hold for
+// user in cluster (true or unknown) and would not take it says no, unless
+// an earlier rule holding for every machine (true) has already decided.
+// The console leaves an unrestricted DevPod without its allow-list.
+func (p *Policy) Unrestricted(user string, groups map[string]bool, cluster string, needs Needs) bool {
 	takes := func(e v1.AccessEffect) bool {
 		return e.Allow && !e.NeedsReservation && (Decision{AccessEffect: e}).Admits(needs) == nil
 	}
-	for i := range p.Rules {
-		r := &p.Rules[i]
-		if (r.Cluster != "" && r.Cluster != cluster) || !subjectMatches(r.Subject, user, groups) {
+	f := facts(user, groups, cluster, nil)
+	for i := range p.rules {
+		v, e := p.rules[i].on(f)
+		if v == False {
 			continue
 		}
-		if !takes(r.Effect) {
+		if !takes(e) {
 			return false
 		}
-		if len(r.Machines) == 0 {
+		if v == True {
 			return true // every machine is decided here
 		}
 	}
@@ -65,39 +178,23 @@ func Unrestricted(p *v1.AccessPolicySpec, user string, groups map[string]bool, c
 }
 
 // ClusterOpen: may user use some machine of cluster — one there now or
-// one that joins later — by the rules alone? The first rule for user
-// there that allows (a reservation asked or not) says yes; one that
-// denies every machine of it says no, as no rule after it is reached for
-// any machine; with neither, the default says.
-func ClusterOpen(p *v1.AccessPolicySpec, user string, groups map[string]bool, cluster string) bool {
-	for i := range p.Rules {
-		r := &p.Rules[i]
-		if (r.Cluster != "" && r.Cluster != cluster) || !subjectMatches(r.Subject, user, groups) {
-			continue
-		}
-		if r.Effect.Allow {
+// one that joins later — by the rules alone? The first rule that may hold
+// for user there and allows (a reservation asked or not) says yes; a deny
+// holding for every machine of it says no, as no rule after it is reached
+// for any machine; with neither, the default says.
+func (p *Policy) ClusterOpen(user string, groups map[string]bool, cluster string) bool {
+	f := facts(user, groups, cluster, nil)
+	for i := range p.rules {
+		v, e := p.rules[i].on(f)
+		switch {
+		case v == False:
+		case e.Allow:
 			return true
-		}
-		if len(r.Machines) == 0 {
+		case v == True:
 			return false
 		}
 	}
 	return p.Default.Allow
-}
-
-func subjectMatches(s *v1.AccessSubject, user string, groups map[string]bool) bool {
-	if s == nil || s.Kind == "everyone" {
-		return true
-	}
-	if slices.Contains(s.Users, user) {
-		return true
-	}
-	for _, g := range s.Groups {
-		if groups[g] {
-			return true
-		}
-	}
-	return false
 }
 
 // MachineMatches: no selector matches every machine; else any item does —
