@@ -43,6 +43,17 @@ type child struct {
 	exit *int
 }
 
+// supervisorPath is where the controller mounts the supervisor in the
+// user container.
+const supervisorPath = "/opt/devpod/devpod-supervisor"
+
+// inUserContainer: running as a DevPod's supervisor — PID 1, or, in a Pod
+// sharing the host's PIDs (hostPID: a host shell), the one mounted at
+// supervisorPath. Tests run a build of their own, as neither.
+func inUserContainer(pid int, exe string) bool {
+	return pid == 1 || exe == supervisorPath
+}
+
 func main() {
 	// sshd running root's shell for host or a login command (login.go)
 	if strings.TrimPrefix(filepath.Base(os.Args[0]), "-") == "devpod-login" {
@@ -78,10 +89,11 @@ func main() {
 	// inject sshd SetEnv flags. Doing both from the same decision
 	// avoids the loop where patching the passwd file would make the
 	// post-patch resolveShell report the patched path as "chosen".
-	// Patching only runs when we're PID 1 (inside the user container);
-	// otherwise we'd clobber the host's /etc/passwd in unit tests.
+	// Patching only runs inside the user container; otherwise we'd
+	// clobber the host's /etc/passwd in unit tests.
 	chosen, force := resolveShell(os.Getenv, defaultPasswdReader, os.Stat)
-	if os.Getpid() == 1 {
+	exe, _ := os.Executable()
+	if inUserContainer(os.Getpid(), exe) {
 		if err := patchPasswdRootShell(force, os.Getenv("HOME"), defaultPasswdReader, defaultPasswdWriter); err != nil {
 			fmt.Fprintf(os.Stderr, "supervisor: patch /etc/passwd: %v\n", err)
 		}

@@ -36,22 +36,27 @@ func loginCommand(args []string) string {
 //   - host: into the node's namespaces through its PID 1 (nsenter; needs a
 //     privileged DevPod sharing the host's PID), its bash or sh; else
 //     chroot into the node's / mounted at hostRoot; else, said, a shell in
-//     the container. The bundle's own programs (sftp-server) run in the
+//     the container. PID 1 is the node's only when its mount namespace is
+//     not ours (procRoot): without the host's PIDs it is the container's
+//     own. nsenter names the namespaces one by one: the bundle's (BusyBox)
+//     has no -a. The bundle's own programs (sftp-server) run in the
 //     container: the node does not have them.
 //   - a login command: for an interactive login a login bash (its profile
 //     read) that becomes the command (customLogin); a command keeps a
 //     plain bash, so tools that run commands over ssh still work.
 //
 // It is POSIX sh: the bundle's bash runs it, tests run it with /bin/sh.
-func loginScript(bin, hostRoot string) string {
-	return `B=` + shQuote(bin) + `; H=` + shQuote(hostRoot) + `
+func loginScript(bin, hostRoot, procRoot string) string {
+	return `B=` + shQuote(bin) + `; H=` + shQuote(hostRoot) + `; P=` + shQuote(procRoot) + `
 want=$DEVPOD_LOGIN
 cmd=$DEVPOD_LOGIN_CMD
 if [ "$want" = host ]; then
   case "$cmd" in /opt/devpod/*) exec "$B/bash" -c "$cmd" ;; esac
   node='if [ -x /bin/bash ]; then exec /bin/bash "$@"; fi; exec /bin/sh "$@"'
   if [ -n "$cmd" ]; then set -- -c "$cmd"; else set -- -l; fi
-  if "$B/nsenter" -t 1 -a -- true 2>/dev/null; then exec "$B/nsenter" -t 1 -a -- /bin/sh -c "$node" sh "$@"; fi
+  if ! [ "$P/1/ns/mnt" -ef "$P/self/ns/mnt" ] && "$B/nsenter" -t 1 -m -u -i -n -p true 2>/dev/null; then
+    exec "$B/nsenter" -t 1 -m -u -i -n -p /bin/sh -c "$node" sh "$@"
+  fi
   if [ -x "$H/bin/sh" ]; then exec "$B/chroot" "$H" /bin/sh -c "$node" sh "$@"; fi
   echo "devpod: cannot enter the node (it needs a privileged DevPod sharing the host's PID): a shell in the container" >&2
   exec "$B/bash" "$@"
@@ -87,7 +92,7 @@ func runLogin(args []string) int {
 	env := withEnv(os.Environ(), "DEVPOD_LOGIN", want)
 	env = withEnv(env, "DEVPOD_LOGIN_CMD", loginCommand(args))
 	bash := "/opt/devpod/bin/bash"
-	err := syscall.Exec(bash, []string{"bash", "-c", loginScript("/opt/devpod/bin", "/host"), "devpod-login"}, env)
+	err := syscall.Exec(bash, []string{"bash", "-c", loginScript("/opt/devpod/bin", "/host", "/proc"), "devpod-login"}, env)
 	fmt.Fprintf(os.Stderr, "devpod-login: %s: %v\n", bash, err)
 	return 1
 }
