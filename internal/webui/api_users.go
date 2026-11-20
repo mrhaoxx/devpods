@@ -18,6 +18,7 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 
 	devpodv1alpha1 "github.com/mrhaoxx/devpod/api/v1alpha1"
+	"github.com/mrhaoxx/devpod/internal/access"
 	"github.com/mrhaoxx/devpod/internal/gpures"
 )
 
@@ -104,9 +105,13 @@ func (s *Server) handleMe(w http.ResponseWriter, r *http.Request) {
 	// the management permissions the user may hold somewhere (design
 	// 2026-11-20 §6.5): what the pages show; each action is judged itself
 	perms := map[string]bool{}
-	gs, groups, err := s.grantsFor(r.Context(), sess.User)
-	if err != nil {
-		slog.Warn("me_grants", "user", sess.User, "err", err)
+	var gs *access.GrantSet
+	var groups map[string]bool
+	if !sess.Admin { // an admin has every one anyway
+		var err error
+		if gs, groups, err = s.grantsFor(r.Context(), sess.User); err != nil {
+			slog.Warn("me_grants", "user", sess.User, "err", err)
+		}
 	}
 	for _, p := range []devpodv1alpha1.GrantPermission{devpodv1alpha1.PermSetReservable, devpodv1alpha1.PermViewAudit, devpodv1alpha1.PermDisconnectSessions} {
 		perms[string(p)] = sess.Admin || (gs != nil && gs.Possible(p, sess.User, groups))

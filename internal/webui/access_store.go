@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"slices"
 	"strconv"
+	"time"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/types"
@@ -67,8 +68,12 @@ func (s *Server) accessFor(ctx context.Context, user string) (*access.Policy, ma
 // are (one naming a group that is not gives nothing), and the groups user
 // is in. A grant that gives nothing is logged once per version of it.
 func (s *Server) grantsFor(ctx context.Context, user string) (*access.GrantSet, map[string]bool, error) {
+	// bounded: a cache that cannot sync them (the CRD or the console's
+	// RBAC missing) must not hold a request up
+	lctx, cancel := context.WithTimeout(ctx, 3*time.Second)
+	defer cancel()
 	var gl devpodv1alpha1.AccessGrantList
-	if err := s.Client.List(ctx, &gl); err != nil {
+	if err := s.Client.List(lctx, &gl); err != nil {
 		return nil, nil, err
 	}
 	var list devpodv1alpha1.UserGroupList

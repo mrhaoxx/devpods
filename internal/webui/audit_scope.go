@@ -6,6 +6,7 @@ package webui
 
 import (
 	"context"
+	"log/slog"
 	"net/http"
 
 	corev1 "k8s.io/api/core/v1"
@@ -57,7 +58,9 @@ func (s *Server) auditScope(ctx context.Context, sess Session, own bool) (*store
 	}
 	gs, groups, err := s.grantsFor(ctx, sess.User)
 	if err != nil {
-		return nil, err
+		// grants that cannot be read take nothing away and give nothing
+		slog.Warn("audit_grants_unread", "user", sess.User, "err", err)
+		return sc, nil
 	}
 	if !gs.Possible(devpodv1alpha1.PermViewAudit, sess.User, groups) {
 		return sc, nil
@@ -107,6 +110,19 @@ func (s *Server) mayOnSession(ctx context.Context, sess Session, p devpodv1alpha
 		return gs.Has(p, sess.User, groups, c.name, node)
 	}
 	return false // a session of no cluster (the console's CLI)
+}
+
+// mayOnFile: a grant of viewAudit on the machine of the file's session;
+// a file of no session counts its machine unknown.
+func (s *Server) mayOnFile(ctx context.Context, sess Session, fe *store.FileEventRow) bool {
+	d := &store.SessionDetail{Session: store.SessionRow{Cluster: fe.Cluster}}
+	if fe.SessionID != "" {
+		var err error
+		if d, err = s.Audit.Store.GetSession(ctx, fe.SessionID); err != nil {
+			return false
+		}
+	}
+	return s.mayOnSession(ctx, sess, devpodv1alpha1.PermViewAudit, d)
 }
 
 // auditListScope: what an audit list may cover — the viewer's scope — and its

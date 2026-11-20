@@ -314,7 +314,7 @@ func (s *Server) handleAuditFileContent(w http.ResponseWriter, r *http.Request) 
 		s.auditStoreErr(w, err)
 		return
 	}
-	if (!sess.Admin && fe.User != sess.User) || fe.S3Key == "" {
+	if fe.S3Key == "" || !sess.Admin && fe.User != sess.User && !s.mayOnFile(r.Context(), sess, fe) {
 		s.writeErr(w, http.StatusNotFound, "NOT_FOUND", "not found", nil)
 		return
 	}

@@ -6,14 +6,17 @@ package webui_test
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"reflect"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	devpodv1alpha1 "github.com/mrhaoxx/devpod/api/v1alpha1"
 	"github.com/mrhaoxx/devpod/internal/audit/store"
@@ -45,6 +48,10 @@ func scopeRig(t *testing.T) (*webui.Server, *webui.SessionManager, *fakeAuditSto
 	st.sessions["C2"] = sess("C2", "as-carol", "as-n2")
 	st.sessions["G1"] = sess("G1", "as-carol", "as-gone")
 	st.sessions["B1"] = sess("B1", "as-bob", "as-n2")
+	file := func(id, session string) *store.FileEventRow {
+		return &store.FileEventRow{EventID: id, SessionID: session, User: "as-carol", Path: "/home/carol/" + id, S3Key: "files/s1/1-1"}
+	}
+	st.files["FC1"], st.files["FC2"], st.files["FX"] = file("FC1", "C1"), file("FC2", "C2"), file("FX", "")
 	_ = objs
 	return s, sm, st
 }
@@ -199,5 +206,95 @@ func TestAuditScopeClusterAway(t *testing.T) {
 	w.until("b is stale", func() bool { _, stale := w.s.Clusters.Stale("b"); return stale })
 	if sc := scope(); !reflect.DeepEqual(sc.Clusters, []string{"a"}) || len(sc.Machines) != 0 {
 		t.Fatalf("with b away: %+v", sc)
+	}
+}
+
+// File contents are the audit too: one's own, or by a grant on the machine
+// of the file's session; one with no session counts its machine unknown.
+func TestAuditFileContentByGrant(t *testing.T) {
+	s, sm, _ := scopeRig(t)
+	viewAudit(t, s, "as-bob", "user = as-bob and machine = as-n1")
+	viewAudit(t, s, "as-dan", "user = as-dan")
+	get := func(user, id string) int {
+		return route(t, s, "GET", "/api/audit/files/"+id+"/content", forge(sm, user, false), "").Code
+	}
+	if code := get("as-bob", "FC1"); code != http.StatusOK {
+		t.Errorf("bob, a file of a session on as-n1: %d", code)
+	}
+	if code := get("as-bob", "FC2"); code != http.StatusNotFound {
+		t.Errorf("bob, a file of a session on as-n2: %d", code)
+	}
+	if code := get("as-bob", "FX"); code != http.StatusNotFound {
+		t.Errorf("bob, a file of no session: %d", code)
+	}
+	if code := get("as-dan", "FX"); code != http.StatusOK {
+		t.Errorf("dan (the whole cluster), a file of no session: %d", code)
+	}
+	if code := get("as-eve", "FC1"); code != http.StatusNotFound {
+		t.Errorf("eve, no grant: %d", code)
+	}
+}
+
+// grantsTrouble: the console's client, its AccessGrants failing (the CRD
+// not there) or never answering (no RBAC: a cache that cannot sync).
+type grantsTrouble struct {
+	client.Client
+	stall bool
+	asked atomic.Int32
+}
+
+func (g *grantsTrouble) List(ctx context.Context, list client.ObjectList, opts ...client.ListOption) error {
+	if _, ok := list.(*devpodv1alpha1.AccessGrantList); ok {
+		g.asked.Add(1)
+		if g.stall {
+			<-ctx.Done()
+			return ctx.Err()
+		}
+		return errors.New(`no matches for kind "AccessGrant"`)
+	}
+	return g.Client.List(ctx, list, opts...)
+}
+
+// Grants that cannot be read take nothing away: a list holds the viewer
+// to their own, as before grants.
+func TestAuditGrantsUnreadable(t *testing.T) {
+	s, sm, st := scopeRig(t)
+	tr := &grantsTrouble{Client: s.Client}
+	s.Client = tr
+	t.Cleanup(func() { s.Client = tr.Client })
+	if rec := route(t, s, "GET", "/api/audit/sessions", forge(sm, "as-eve", false), ""); rec.Code != http.StatusOK {
+		t.Fatalf("list: %d %s", rec.Code, rec.Body)
+	}
+	st.mu.Lock()
+	defer st.mu.Unlock()
+	if !reflect.DeepEqual(st.sessF.Scope, &store.Scope{User: "as-eve"}) {
+		t.Fatalf("scope: %+v", st.sessF.Scope)
+	}
+}
+
+// Grants that never answer hold no page up: /api/me answers in time
+// (without them for an admin, who has every permission anyway).
+func TestMeGrantsStall(t *testing.T) {
+	s, sm, _ := scopeRig(t)
+	tr := &grantsTrouble{Client: s.Client, stall: true}
+	s.Client = tr
+	t.Cleanup(func() { s.Client = tr.Client })
+	me := func(user string, admin bool) int {
+		done := make(chan int, 1)
+		go func() { done <- route(t, s, "GET", "/api/me", forge(sm, user, admin), "").Code }()
+		select {
+		case code := <-done:
+			return code
+		case <-time.After(8 * time.Second):
+			t.Fatalf("%s: /api/me waited on the grants", user)
+			return 0
+		}
+	}
+	if code := me("as-eve", false); code != http.StatusOK {
+		t.Fatalf("eve: %d", code)
+	}
+	before := tr.asked.Load()
+	if code := me("as-root", true); code != http.StatusOK || tr.asked.Load() != before {
+		t.Fatalf("an admin: %d, grants asked %d times", code, tr.asked.Load()-before)
 	}
 }
