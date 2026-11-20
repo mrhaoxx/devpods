@@ -156,7 +156,7 @@ export function SessionPage() {
         </span>
         {s.close_reason && <span>结束：{s.close_reason}</span>}
         {s.gaps > 0 && <span className="text-fail">gap {s.gaps}</span>}
-        {me?.admin && !s.closed_at && (
+        {(me?.admin || me?.permissions?.disconnectSessions) && !s.closed_at && (
           <Button variant="danger" size="sm" className="ml-auto" disabled={cut.isPending} onClick={() => setCutting(true)}>
             断开会话
           </Button>
@@ -261,9 +261,9 @@ export function SessionPage() {
               )}
             </div>
           )}
-          {me?.admin && current?.raw_recorded && (
+          {(me?.admin || me?.permissions?.viewAudit) && current?.raw_recorded && (
             <p className="mono text-[11px] text-faint">
-              原始流（仅管理员）：
+              原始流：
               {(["in", "out", "err"] as const).map((st) => (
                 <a key={st} href={rawURL(id, current.channel_id, st)} onClick={confirmDownload} className="ml-2 text-accent hover:underline">
                   {st}

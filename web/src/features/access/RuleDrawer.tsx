@@ -2,13 +2,11 @@
 // (the server reads it: the page has no parser of its own) — or of the
 // default rule's effect.
 import { useState } from "react";
-import { useQuery } from "@tanstack/react-query";
 import { Drawer } from "../../design/Drawer";
 import { Button } from "../../design/Button";
 import { Field, Input, Notice } from "../../design/Form";
-import { useClusterList } from "../../data/clusterFilter";
-import { useDebounced } from "../../lib/useDebounced";
-import { cleanPrivileges, previewMatch, PRIVILEGE_FLAGS, splitList, type AccessEffect, type AccessPrivileges, type AccessRule, type Group } from "./api";
+import { ConditionField, useCondition } from "./ConditionField";
+import { cleanPrivileges, PRIVILEGE_FLAGS, splitList, type AccessEffect, type AccessPrivileges, type AccessRule, type Group } from "./api";
 
 export function RuleDrawer({
   rule,
@@ -23,15 +21,9 @@ export function RuleDrawer({
   onSave: (r: AccessRule) => void;
   onClose: () => void;
 }) {
-  const clusters = useClusterList().data?.items ?? [];
   // the condition as typed; previewed once typing pauses
-  const [match, setMatch] = useState(rule.match);
-  const [matchText, setMatchText] = useDebounced(match, setMatch, 300);
-  const preview = useQuery({ queryKey: ["access-preview", match], queryFn: () => previewMatch(match), enabled: !isDefault });
-  const err = preview.data?.error;
-  const hits = preview.data && !preview.data.error ? preview.data : null;
-  const machines = (hits?.machines ?? []).reduce((a, m) => ({ count: a.count + m.count, maybe: a.maybe + m.maybe, unreservable: a.unreservable + m.unreservable }), { count: 0, maybe: 0, unreservable: 0 });
-  const bad = !isDefault && !!err && matchText === match;
+  const c = useCondition(rule.match, !isDefault);
+  const bad = !isDefault && c.bad;
 
   const [e, setE] = useState<AccessEffect>(rule.effect);
   const setEffect = (p: Partial<AccessEffect>) => setE({ ...e, ...p });
@@ -47,7 +39,7 @@ export function RuleDrawer({
     const eff: AccessEffect = e.allow
       ? { allow: true, ...(privileges ? { privileges } : {}), ...(kept.length ? { hostPaths: kept } : {}), ...(e.needsReservation ? { needsReservation: true } : {}) }
       : { allow: false };
-    onSave({ match: isDefault ? "" : matchText.trim(), effect: eff });
+    onSave({ match: isDefault ? "" : c.text.trim(), effect: eff });
   };
   return (
     <Drawer
@@ -64,57 +56,7 @@ export function RuleDrawer({
       }
     >
       <div className="space-y-3 text-xs">
-        {!isDefault && (
-          <>
-            <Field label="条件" hint="留空 = 全部">
-              <textarea
-                aria-label="条件"
-                className="mono w-full rounded border border-line bg-surface px-2 py-1"
-                rows={3}
-                spellCheck={false}
-                value={matchText}
-                onChange={(ev) => setMatchText(ev.target.value)}
-              />
-            </Field>
-            <p className="text-[11px] text-muted">
-              字段 <code>cluster</code> <code>machine</code> <code>user</code> <code>group</code>；运算 <code>=</code> <code>!=</code> <code>in (…)</code> <code>not in (…)</code>；组合{" "}
-              <code>and</code> <code>or</code> <code>not</code> 和括号。名字可用 <code>*</code> 通配，机器还可以写标签 <code>key=value</code>。例：<code>cluster in (st2, a5)</code>、
-              <code>cluster = st and machine != st5</code>、<code>everyone and not group = interns</code>
-            </p>
-            {(clusters.length > 0 || groups.length > 0) && (
-              <p className="text-[11px] text-muted">
-                {clusters.length > 0 && <>集群：{clusters.map((c) => c.name).join("、")}　</>}
-                {groups.length > 0 && <>组：{groups.map((g) => g.name).join("、")}</>}
-              </p>
-            )}
-            {err && (
-              <p className="text-fail">
-                第 {err.offset + 1} 个字符：{err.message}
-              </p>
-            )}
-            {hits && (
-              <p className="text-muted">
-                命中集群 {hits.clusters.length ? hits.clusters.map((c) => (c.maybe ? `${c.name}（可能）` : c.name)).join("、") : "无"}；{machines.count} 台机器
-                {machines.maybe > 0 && `（${machines.maybe} 台可能命中，取决于其他条件）`}；{hits.users.count} / {hits.users.total} 个用户
-                {hits.users.maybe > 0 && `（${hits.users.maybe} 个可能命中，取决于集群和机器）`}，以后的新用户也按条件判断
-                {e.allow && e.needsReservation && machines.unreservable > 0 && (
-                  <span className="text-warm">；其中 {machines.unreservable} 台没标可预约，需预约的人将用不了它们</span>
-                )}
-              </p>
-            )}
-            {hits && hits.machines.length > 1 && (
-              <p className="text-[11px] text-muted">
-                各集群：
-                {hits.machines.map((m, i) => (
-                  <span key={m.cluster ?? i} title={m.names.join(" ")}>
-                    {i > 0 && "、"}
-                    {`${m.cluster ?? ""} ${m.count} 台${m.maybe > 0 ? `（${m.maybe} 台可能）` : ""}`}
-                  </span>
-                ))}
-              </p>
-            )}
-          </>
-        )}
+        {!isDefault && <ConditionField c={c} groups={groups} hint="留空 = 全部" warnUnreservable={e.allow && !!e.needsReservation} />}
         <fieldset className="space-y-2">
           <legend className="mb-1 font-medium text-ink">效果</legend>
           <div className="flex gap-4">

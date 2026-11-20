@@ -86,12 +86,15 @@ export function Sidebar({ me, onNavigate }: { me: Me; onNavigate?: () => void })
     { to: "/admin/access", label: "访问控制", icon: "⚿" },
     { to: "/admin/groups", label: "用户组", icon: "☷" },
   ];
+  // a non-admin with grants sees what they grant (design 2026-11-20 §6.5)
+  const grantedAudit = !admin && audit && !!me.permissions?.viewAudit;
   const auditItems: Item[] = [
     { to: "/audit/sessions", label: "会话 / 回放", icon: "▶" },
     { to: "/audit/commands", label: "命令 · 文件 · HTTP", icon: "⌘" },
     { to: "/audit/alerts", label: "告警", icon: "⚠", count: alertCount && alertCount !== "0" ? alertCount : undefined, countTone: "fail" },
-    { to: "/audit/access-log", label: "访问记录 · 策略", icon: "☰" },
+    ...(admin ? [{ to: "/audit/access-log", label: "访问记录 · 策略", icon: "☰" }] : []),
   ];
+  const granted: Item[] = [...(!admin && me.permissions?.setReservable ? [{ to: "/nodes/managed", label: "我管理的机器", icon: "⬡" }] : [])];
   // quotas are counted per cluster: the filtered one's, or the console's
   const quota = meIn(me, filter)!;
   const quotaMax = quota.quota.maxDevPods;
@@ -106,7 +109,8 @@ export function Sidebar({ me, onNavigate }: { me: Me; onNavigate?: () => void })
       <Group items={userItems} onNavigate={onNavigate} />
       <Group title="设置" items={settings} onNavigate={onNavigate} />
       {admin && <Group title="集群" items={cluster} onNavigate={onNavigate} />}
-      {admin && audit && <Group title="审计" items={auditItems} onNavigate={onNavigate} />}
+      {granted.length > 0 && <Group title="管理" items={granted} onNavigate={onNavigate} />}
+      {(admin || grantedAudit) && audit && <Group title="审计" items={auditItems} onNavigate={onNavigate} />}
       <div className="pt-3">
         <NavLink
           to="/?new=1"

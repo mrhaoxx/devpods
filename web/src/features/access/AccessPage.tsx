@@ -14,6 +14,7 @@ import { DataTable } from "../../design/DataTable";
 import { BulkToast, type BulkOutcome, type BulkProgress } from "../../design/BulkToast";
 import { runBulk } from "../../lib/bulk";
 import { RuleDrawer } from "./RuleDrawer";
+import { GrantsPanel } from "./GrantsPanel";
 import { checkRunning, effectText, getAccess, listGroups, putAccess, type AccessPolicy, type AccessRule, type Violation } from "./api";
 
 const newRule = (): AccessRule => ({ match: "", effect: { allow: false } });
@@ -212,6 +213,7 @@ export function AccessPage() {
           }}
         />
       )}
+      <GrantsPanel groups={groups} />
     </div>
   );
 }

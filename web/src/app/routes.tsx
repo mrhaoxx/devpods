@@ -4,7 +4,7 @@ import { ClustersPage } from "../features/clusters/ClustersPage";
 import { Navigate, Route, Routes, useParams } from "react-router-dom";
 import { Shell } from "./Shell";
 import { LoginPage } from "./LoginPage";
-import { RequireAdmin, RequireAudit } from "./RequireAdmin";
+import { RequireAdmin, RequireAudit, RequirePermission } from "./RequireAdmin";
 import { SettingsPage } from "../features/settings/SettingsPage";
 import { MyDevPodsPage } from "../features/devpods/MyDevPodsPage";
 import { AdminDevPodsPage } from "../features/devpods/AdminDevPodsPage";
@@ -16,6 +16,7 @@ import { SessionPage } from "../features/audit/SessionPage";
 import { CommandsPage, FilesPage, HTTPPage } from "../features/audit/SearchPages";
 import { AccessLogPage, AlertsPage, PolicyPage } from "../features/audit/AdminPages";
 import { NodesPage } from "../features/nodes/NodesPage";
+import { ManagedNodesPage } from "../features/nodes/ManagedNodesPage";
 import { HttpAuthPage } from "../features/devpods/HttpAuthPage";
 import { ReservationsPage } from "../features/reservations/ReservationsPage";
 import { AccessPage } from "../features/access/AccessPage";
@@ -48,6 +49,9 @@ export function AppRoutes() {
         <Route path="configs/new" element={<ConfigEditor key="new" />} />
         <Route path="configs/:name" element={<ConfigEditor />} />
         <Route path="settings" element={<SettingsPage />} />
+        <Route element={<RequirePermission p="setReservable" />}>
+          <Route path="nodes/managed" element={<ManagedNodesPage />} />
+        </Route>
         <Route path="settings/pubkeys" element={<Navigate to="/settings" replace />} />
         <Route path="settings/password" element={<Navigate to="/settings" replace />} />
         <Route element={<RequireAudit />}>
@@ -57,9 +61,11 @@ export function AppRoutes() {
           <Route path="audit/commands" element={<CommandsPage />} />
           <Route path="audit/files" element={<FilesPage />} />
           <Route path="audit/http" element={<HTTPPage />} />
-          <Route element={<RequireAdmin />}>
+          <Route element={<RequirePermission p="viewAudit" />}>
             <Route path="audit/sessions" element={<SessionsPage />} />
             <Route path="audit/alerts" element={<AlertsPage />} />
+          </Route>
+          <Route element={<RequireAdmin />}>
             <Route path="audit/access-log" element={<AccessLogPage />} />
             <Route path="audit/policy" element={<PolicyPage />} />
           </Route>

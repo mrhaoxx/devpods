@@ -27,7 +27,8 @@ const schema = {
 
 export function SessionsPage({ mine }: { mine?: boolean }) {
   const me = useMe().data;
-  const admin = !!me?.admin && !mine;
+  // everyone's (within their grants, for a non-admin): who, as a column and a filter
+  const admin = (!!me?.admin || !!me?.permissions?.viewAudit) && !mine;
   const [url, setUrl] = useUrlState(schema, { key: "audit.sessions" });
   const { filter } = useClusterFilter();
   const now = useNow(10_000);

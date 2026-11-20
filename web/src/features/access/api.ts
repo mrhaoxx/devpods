@@ -79,3 +79,21 @@ export const effectText = (e: AccessEffect) =>
       ]
         .filter(Boolean)
         .join(" · ");
+
+/* management grants (design 2026-11-20): each an AccessGrant of its own */
+export type GrantPermission = "setReservable" | "viewAudit" | "disconnectSessions";
+export const GRANT_PERMISSIONS: [GrantPermission, string][] = [
+  ["setReservable", "切换可预约"],
+  ["viewAudit", "看审计"],
+  ["disconnectSessions", "断开会话"],
+];
+export type Grant = { name: string; match: string; permissions: GrantPermission[]; description?: string; resourceVersion?: string; problem?: string };
+export const listGrants = () => req<{ items: Grant[] }>("GET", "/api/admin/grants");
+export const createGrant = (g: { name: string; match: string; permissions: GrantPermission[]; description?: string }) => req<Grant>("POST", "/api/admin/grants", g);
+export const updateGrant = (g: { name: string; match: string; permissions: GrantPermission[]; description?: string; resourceVersion?: string }) =>
+  req<Grant>("PUT", `/api/admin/grants/${encodeURIComponent(g.name)}`, { match: g.match, permissions: g.permissions, description: g.description ?? "", resourceVersion: g.resourceVersion ?? "" });
+export const deleteGrant = (name: string) => req<void>("DELETE", `/api/admin/grants/${encodeURIComponent(name)}`);
+export const grantText = (ps: GrantPermission[]) =>
+  GRANT_PERMISSIONS.filter(([p]) => ps.includes(p))
+    .map(([, t]) => t)
+    .join(" · ");

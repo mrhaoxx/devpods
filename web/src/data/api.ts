@@ -49,6 +49,8 @@ export async function req<T>(method: string, path: string, body?: unknown, opts:
 export interface Me {
   user: string;
   admin: boolean;
+  /** management permissions the user may hold somewhere (grants): what pages to show; each action is judged itself */
+  permissions?: { setReservable: boolean; viewAudit: boolean; disconnectSessions: boolean };
   nameBudget: number;
   quota: { maxDevPods?: number; compute?: Record<string, string>; storage?: string };
   usage: { devpods: number; running: number; compute: Record<string, string>; storage: string };
@@ -577,6 +579,9 @@ export type ResRef = { id: string; cluster?: string };
 export const createReservation = (cluster: string | undefined, p: Period) => req<Reservation>("POST", apiIn(cluster, "/api/reservations"), p);
 export const patchReservation = (r: ResRef, body: { start?: string; end?: string }) => req<Reservation>("PATCH", apiIn(r.cluster, `/api/reservations/${r.id}`), body);
 export const deleteReservation = (r: ResRef) => req<void>("DELETE", apiIn(r.cluster, `/api/reservations/${r.id}`));
+/** a machine one may switch reservable (a grant, or an admin) */
+export type ManagedNode = { cluster?: string; name: string; reservable: boolean; ready: boolean; gpuModel?: string; gpuTotal: number };
+export const listManagedNodes = () => req<{ items: ManagedNode[] }>("GET", "/api/nodes/managed");
 export const setReservable = (r: Ref, reservable: boolean) =>
   req<{ reservable: boolean; pending: number }>("PUT", apiIn(r.cluster, `/api/admin/nodes/${r.name}/reservable`), { reservable });
 
