@@ -36,7 +36,8 @@ type SessionFilter struct {
 	User, DevPodUID     string
 	Cluster             string // the cluster of its DevPod
 	From, To            time.Time
-	HasFiles, HasAlerts bool // HasAlerts: any alert, policy hit or gap
+	HasFiles, HasAlerts bool   // HasAlerts: any alert, policy hit or gap
+	Scope               *Scope // nil = every session
 	// Open: sessions going on now (see openSilence)
 	Open   bool
 	Cursor string
@@ -69,6 +70,7 @@ type SessionDetail struct {
 type CommandFilter struct {
 	User, DevPodUID, Q string
 	Cluster            string // the cluster of its DevPod
+	Scope              *Scope // nil = every command
 	From, To           time.Time
 	Cursor             string
 	Limit              int
@@ -78,6 +80,7 @@ type CommandFilter struct {
 type FileFilter struct {
 	User, DevPodUID, Path, SHA256 string
 	Cluster                       string // the cluster of its DevPod
+	Scope                         *Scope // nil = every file event
 	From, To                      time.Time
 	Cursor                        string
 	Limit                         int
@@ -86,6 +89,7 @@ type FileFilter struct {
 // HTTPFilter searches HTTP requests; zero fields do not filter.
 type HTTPFilter struct {
 	User, DevPodUID, Cluster, Method string
+	Scope                            *Scope // nil = every request
 	Port, Status                     int
 	From, To                         time.Time
 	Cursor                           string
@@ -98,8 +102,10 @@ type TimeFilter struct {
 	// Cluster: the cluster of the row's DevPod, for a log whose rows are
 	// a DevPod's (alerts); the access log has none.
 	Cluster string
-	Cursor  string
-	Limit   int
+	// Scope narrows alerts (nil = every one); the access log has none.
+	Scope  *Scope
+	Cursor string
+	Limit  int
 }
 
 func (c *CH) readCtx(ctx context.Context) context.Context {
@@ -180,6 +186,7 @@ func (c *CH) ListSessions(ctx context.Context, f SessionFilter) ([]SessionSummar
 	limit := limitOf(f.Limit)
 	w := &where{}
 	w.add("opened_at >= ? AND opened_at < ?", f.From, f.To)
+	w.addScope(f.Scope, scopeSessions, c.db)
 	if f.User != "" {
 		w.add("user = ?", f.User)
 	}
@@ -330,6 +337,7 @@ func (c *CH) SearchCommands(ctx context.Context, f CommandFilter) ([]CommandRow,
 	}
 	w := &where{}
 	w.add("ts >= ? AND ts < ?", f.From, f.To)
+	w.addScope(f.Scope, scopeBySession, c.db)
 	if f.User != "" {
 		w.add("user = ?", f.User)
 	}
@@ -366,6 +374,7 @@ func (c *CH) SearchFiles(ctx context.Context, f FileFilter) ([]FileEventRow, str
 	}
 	w := &where{}
 	w.add("ts >= ? AND ts < ?", f.From, f.To)
+	w.addScope(f.Scope, scopeBySession, c.db)
 	if f.User != "" {
 		w.add("user = ?", f.User)
 	}
@@ -405,6 +414,7 @@ func (c *CH) SearchHTTP(ctx context.Context, f HTTPFilter) ([]HTTPRequestRow, st
 	}
 	w := &where{}
 	w.add("ts >= ? AND ts < ?", f.From, f.To)
+	w.addScope(f.Scope, scopeSessions, c.db)
 	for _, eq := range []struct {
 		col string
 		v   any
@@ -489,6 +499,9 @@ func (c *CH) listLog(ctx context.Context, dst any, cols, table, keyExpr string, 
 	}
 	w := &where{}
 	w.add("ts >= ? AND ts < ?", f.From, f.To)
+	if table == "alerts" {
+		w.addScope(f.Scope, scopeAlerts, c.db)
+	}
 	if f.Cluster != "" && table == "alerts" {
 		w.add("cluster = ?", f.Cluster)
 	}
