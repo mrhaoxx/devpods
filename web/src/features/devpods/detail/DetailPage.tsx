@@ -34,6 +34,7 @@ import { CopyBlock, CopyField, copyText } from "../../../design/Copy";
 import { Panel } from "../../../design/Panel";
 import { EmptyState } from "../../../design/EmptyState";
 import { ConfirmDialog } from "../../../design/ConfirmDialog";
+import { BulkDialog } from "../BulkDialog";
 import { useUrlState, type Schema } from "../../../lib/urlState";
 import { useNow } from "../../../lib/useNow";
 import { fmtAge } from "../../../lib/format";
@@ -85,7 +86,8 @@ export function DetailPage() {
   const [deleted, setDeleted] = useState(false);
   const [events, setEvents] = useState<Record<string, K8sEvent>>({});
   const [confirmDelete, setConfirmDelete] = useState(false);
-  const { setRunning, remove } = useDevPodMutations();
+  const { setRunning, patchSpec, remove } = useDevPodMutations();
+  const [collabOpen, setCollabOpen] = useState(false);
 
   useEffect(() => {
     setDetail(null);
@@ -225,6 +227,9 @@ export function DetailPage() {
           存为配置
         </Button>
         <Button onClick={() => setUrl({ tab: "yaml" }, "push")}>编辑</Button>
+        <Button onClick={() => setCollabOpen(true)} title="添加、移除或替换协作者（不会重建 DevPod）">
+          协作者
+        </Button>
         <Button onClick={() => setRunning.mutate({ ref: r, running: !dp.spec.running })}>{dp.spec.running ? "休眠" : "启动"}</Button>
         <Button variant="danger" onClick={() => setConfirmDelete(true)}>
           删除
@@ -306,6 +311,17 @@ export function DetailPage() {
         </Panel>
       )}
 
+      <BulkDialog
+        key={collabOpen ? "collaborators" : "none"}
+        kind={collabOpen ? "collaborators" : null}
+        targets={[{ cluster: r.cluster, name: dp.metadata.name, collaborators: dp.spec.collaborators ?? [] }]}
+        onClose={() => setCollabOpen(false)}
+        onRun={(plan) => {
+          setCollabOpen(false);
+          patchSpec.mutate({ ref: r, body: plan.patch!({ cluster: r.cluster, name: dp.metadata.name, collaborators: dp.spec.collaborators ?? [] }, 0) });
+        }}
+      />
+      {patchSpec.isError && <Notice>修改协作者失败：{String(patchSpec.error)}</Notice>}
       <ConfirmDialog
         open={confirmDelete}
         onOpenChange={setConfirmDelete}

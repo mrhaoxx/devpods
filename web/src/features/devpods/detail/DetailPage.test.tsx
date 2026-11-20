@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { act, fireEvent, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, screen, waitFor, within } from "@testing-library/react";
 import { Route, Routes, useLocation } from "react-router-dom";
 import { DetailPage } from "./DetailPage";
 import { renderWithProviders, stubFetch, stubMe } from "../../../test/render";
@@ -94,6 +94,17 @@ describe("DevPod detail", () => {
     expect(screen.getByRole("tab", { name: "事件" }).getAttribute("aria-selected")).toBe("true");
     fireEvent.click(screen.getByRole("tab", { name: "会话" }));
     expect(screen.getByTestId("where").textContent).toBe("?tab=sessions");
+  });
+
+  it("协作者 adds collaborators to this DevPod", async () => {
+    setup({ route: "/devpods/-/alice-x" });
+    await screen.findByRole("heading", { name: "alice-x" });
+    fireEvent.click(screen.getByRole("button", { name: "协作者" }));
+    const dialog = within(await screen.findByRole("dialog"));
+    fireEvent.change(dialog.getByLabelText("用户名"), { target: { value: "bob, carol" } });
+    fireEvent.click(dialog.getByRole("button", { name: "应用" }));
+    await waitFor(() => expect(calls.some((c) => c.method === "PATCH")).toBe(true));
+    expect(JSON.parse(calls.find((c) => c.method === "PATCH")!.body!)).toEqual({ collaborators: ["bob", "carol"] });
   });
 
   it("编辑 opens the YAML tab", async () => {
