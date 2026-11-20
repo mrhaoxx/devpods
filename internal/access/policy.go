@@ -102,13 +102,7 @@ func Compile(spec *v1.AccessPolicySpec, groups map[string]bool) *Policy {
 		if err != nil {
 			c.broken = err.Error()
 		} else {
-			c.expr = e
-			c.broken = itemsProblem(e)
-			for _, g := range e.Items(FieldGroup) {
-				if c.broken == "" && !HasGlob(g) && !groups[g] {
-					c.broken = "点名了不存在的组 " + g
-				}
-			}
+			c.expr, c.broken = e, unsound(e, groups)
 		}
 		p.rules = append(p.rules, c)
 	}
@@ -127,6 +121,20 @@ func ItemProblem(f Field, item string) string {
 	case f != FieldMachine:
 		if _, err := path.Match(item, ""); err != nil {
 			return item + " 不是合法的名字或通配"
+		}
+	}
+	return ""
+}
+
+// unsound: why a condition must not be taken as written — an item that
+// can match nothing, a group (not a glob) that is not there — or "".
+func unsound(e *Expr, groups map[string]bool) string {
+	if p := itemsProblem(e); p != "" {
+		return p
+	}
+	for _, g := range e.Items(FieldGroup) {
+		if !HasGlob(g) && !groups[g] {
+			return "点名了不存在的组 " + g
 		}
 	}
 	return ""
