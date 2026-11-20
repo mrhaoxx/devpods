@@ -13,9 +13,12 @@ import (
 	"testing"
 	"time"
 
+	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	devpodv1alpha1 "github.com/mrhaoxx/devpod/api/v1alpha1"
+	"github.com/mrhaoxx/devpod/internal/webui"
 )
 
 type grantView struct {
@@ -162,5 +165,83 @@ func TestMePermissions(t *testing.T) {
 	}
 	if p := perms("ac-root", true); !p["viewAudit"] || !p["setReservable"] || !p["disconnectSessions"] {
 		t.Fatalf("an admin: %v", p)
+	}
+}
+
+// grantNow writes a grant as kubectl would and waits for the cache.
+func grantNow(t *testing.T, s *webui.Server, name, match string, ps ...devpodv1alpha1.GrantPermission) {
+	t.Helper()
+	ctx := context.Background()
+	g := &devpodv1alpha1.AccessGrant{ObjectMeta: metav1.ObjectMeta{Name: name}, Spec: devpodv1alpha1.AccessGrantSpec{Match: match, Permissions: ps}}
+	if err := k8sClient.Create(ctx, g); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = k8sClient.Delete(context.Background(), g) })
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		var got devpodv1alpha1.AccessGrant
+		if s.Client.Get(ctx, client.ObjectKey{Name: name}, &got) == nil {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("grant %s never reached the cache", name)
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+}
+
+func TestSetReservableByGrant(t *testing.T) {
+	s, sm, _, _ := rsvRig(t, "sr")
+	grantNow(t, s, "sr-bob", "user = sr-bob and machine = sr-n2", devpodv1alpha1.PermSetReservable)
+	// bob may not use these machines at all: switching them is another matter
+	setRules(t, devpodv1alpha1.AccessRule{Match: "user = sr-bob"})
+	put := func(user, node string) int {
+		return doJSON(t, s.Routes().ServeHTTP, "PUT", "/api/admin/nodes/"+node+"/reservable", nil, forge(sm, user, false), `{"reservable":true}`).Code
+	}
+	if code := put("sr-bob", "sr-n2"); code != http.StatusOK {
+		t.Fatalf("bob on sr-n2: %d", code)
+	}
+	var n corev1.Node
+	if err := k8sClient.Get(context.Background(), client.ObjectKey{Name: "sr-n2"}, &n); err != nil || n.Labels[devpodv1alpha1.ReservableNodeLabel] != "true" {
+		t.Fatalf("sr-n2 not reservable: %v %v", err, n.Labels)
+	}
+	if code := put("sr-bob", "sr-n1"); code != http.StatusForbidden {
+		t.Fatalf("bob on sr-n1: %d", code)
+	}
+	if code := put("sr-carol", "sr-n2"); code != http.StatusForbidden {
+		t.Fatalf("carol: %d", code)
+	}
+}
+
+func TestManagedNodes(t *testing.T) {
+	s, sm, _, _ := rsvRig(t, "mn")
+	grantNow(t, s, "mn-bob", "user = mn-bob and machine = mn-n2", devpodv1alpha1.PermSetReservable)
+	managed := func(user string, admin bool) map[string]bool {
+		rec := doJSON(t, s.Routes().ServeHTTP, "GET", "/api/nodes/managed", nil, forge(sm, user, admin), "")
+		var out struct {
+			Items []struct {
+				Name       string `json:"name"`
+				Reservable bool   `json:"reservable"`
+			} `json:"items"`
+		}
+		if rec.Code != http.StatusOK || json.Unmarshal(rec.Body.Bytes(), &out) != nil {
+			t.Fatalf("managed: %d %s", rec.Code, rec.Body)
+		}
+		got := map[string]bool{}
+		for _, it := range out.Items {
+			if strings.HasPrefix(it.Name, "mn-") {
+				got[it.Name] = it.Reservable
+			}
+		}
+		return got
+	}
+	if got := managed("mn-bob", false); len(got) != 1 || got["mn-n2"] {
+		t.Fatalf("bob: %v", got)
+	}
+	if got := managed("mn-carol", false); len(got) != 0 {
+		t.Fatalf("carol: %v", got)
+	}
+	if got := managed("mn-root", true); len(got) != 2 || !got["mn-n1"] {
+		t.Fatalf("an admin: %v", got)
 	}
 }

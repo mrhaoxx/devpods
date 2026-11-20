@@ -534,8 +534,30 @@ func (s *Server) handleDeleteReservation(w http.ResponseWriter, r *http.Request)
 // {reservable}: the node label that opens a node for reservation.
 // Turning it off leaves reservations already made to run their course.
 func (s *Server) handleSetReservable(w http.ResponseWriter, r *http.Request) {
-	if _, ok := s.requireAdmin(w, r); !ok {
+	sess, ok := s.sessionFrom(w, r)
+	if !ok {
 		return
+	}
+	// an admin, or one granted it on this machine (design 2026-11-20 §6.1)
+	if !sess.Admin {
+		var n corev1.Node
+		if err := s.k(r).Client.Get(r.Context(), types.NamespacedName{Name: r.PathValue("name")}, &n); err != nil {
+			if apierrors.IsNotFound(err) {
+				s.writeErr(w, http.StatusNotFound, "NOT_FOUND", "node not found", nil)
+				return
+			}
+			s.writeErr(w, http.StatusInternalServerError, "INTERNAL", err.Error(), nil)
+			return
+		}
+		gs, groups, err := s.grantsFor(r.Context(), sess.User)
+		if err != nil {
+			s.writeErr(w, http.StatusInternalServerError, "INTERNAL", err.Error(), nil)
+			return
+		}
+		if !gs.Has(devpodv1alpha1.PermSetReservable, sess.User, groups, s.resCluster(r.Context()), &access.Node{Name: n.Name, Labels: n.Labels}) {
+			s.writeErr(w, http.StatusForbidden, "FORBIDDEN", "you may not switch this machine reservable", nil)
+			return
+		}
 	}
 	ru, ok := s.reservationRules(w)
 	if !ok {
