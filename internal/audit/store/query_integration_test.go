@@ -11,7 +11,9 @@ import (
 	"crypto/rand"
 	"errors"
 	"fmt"
+	"reflect"
 	"slices"
+	"sort"
 	"strings"
 	"testing"
 	"time"
@@ -541,5 +543,83 @@ func TestListSessions_Open(t *testing.T) {
 	slices.Sort(ids)
 	if err != nil || !slices.Equal(ids, []string{"live", "new"}) {
 		t.Fatalf("open sessions %v %v", ids, err)
+	}
+}
+
+// A Scope as ClickHouse reads it (management grants): one's own rows, a
+// whole cluster's, a machine's — sessions by their own user/cluster/node,
+// commands through their session's machine, alerts never as one's own.
+func TestScope_ReadByClickHouse(t *testing.T) {
+	c := freshDB(t)
+	ctx := context.Background()
+	at := func(id, user, node string, i int) SessionRow {
+		s := sess(id, user, "u-"+id, base.Add(time.Duration(i)*time.Minute), 1, false)
+		s.Node = node
+		return s
+	}
+	cmd := func(id, session, user string, i int) CommandRow {
+		return CommandRow{EventID: id, TS: base.Add(time.Duration(i) * time.Minute), SessionID: session, DevPodUID: "u-" + session, User: user, Cmdline: "ls", Version: 1}
+	}
+	a := Batch{
+		Sessions: []SessionRow{at("S1", "alice", "n1", 0), at("S2", "bob", "n2", 1)},
+		Commands: []CommandRow{cmd("c1", "S1", "alice", 0), cmd("c2", "S2", "bob", 1)},
+		Alerts:   []AlertRow{{TS: base, SessionID: "S1", Kind: "gap"}, {TS: base.Add(time.Minute), SessionID: "S2", Kind: "gap"}},
+	}
+	a.SetCluster("a")
+	mustInsert(t, c, a, "a")
+	b := Batch{
+		Sessions: []SessionRow{at("S3", "carol", "n1", 2)},
+		Commands: []CommandRow{cmd("c3", "S3", "carol", 2)},
+		Alerts:   []AlertRow{{TS: base.Add(2 * time.Minute), SessionID: "S3", Kind: "gap"}},
+	}
+	b.SetCluster("b")
+	mustInsert(t, c, b, "b")
+
+	f := day()
+	ids := func(sc *Scope) (sessions, commands, alerts []string) {
+		t.Helper()
+		sf := f
+		sf.Scope = sc
+		ss, _, err := c.ListSessions(ctx, sf)
+		if err != nil {
+			t.Fatalf("sessions %+v: %v", sc, err)
+		}
+		for _, s := range ss {
+			sessions = append(sessions, s.SessionID)
+		}
+		cs, _, err := c.SearchCommands(ctx, CommandFilter{From: f.From, To: f.To, Scope: sc})
+		if err != nil {
+			t.Fatalf("commands %+v: %v", sc, err)
+		}
+		for _, x := range cs {
+			commands = append(commands, x.EventID)
+		}
+		as, _, err := c.ListAlerts(ctx, TimeFilter{From: f.From, To: f.To, Scope: sc})
+		if err != nil {
+			t.Fatalf("alerts %+v: %v", sc, err)
+		}
+		for _, x := range as {
+			alerts = append(alerts, x.SessionID)
+		}
+		sort.Strings(sessions)
+		sort.Strings(commands)
+		sort.Strings(alerts)
+		return
+	}
+	for _, tc := range []struct {
+		name                       string
+		sc                         *Scope
+		sessions, commands, alerts []string
+	}{
+		{"own only", &Scope{User: "alice"}, []string{"S1"}, []string{"c1"}, nil},
+		{"a whole cluster", &Scope{User: "zed", Clusters: []string{"b"}}, []string{"S3"}, []string{"c3"}, []string{"S3"}},
+		{"a machine", &Scope{User: "zed", Machines: []ClusterNode{{"a", "n2"}}}, []string{"S2"}, []string{"c2"}, []string{"S2"}},
+		{"own and a machine of another cluster's name", &Scope{User: "alice", Machines: []ClusterNode{{"b", "n1"}}}, []string{"S1", "S3"}, []string{"c1", "c3"}, []string{"S3"}},
+		{"nothing", &Scope{}, nil, nil, nil},
+	} {
+		s, cm, al := ids(tc.sc)
+		if !reflect.DeepEqual(s, tc.sessions) || !reflect.DeepEqual(cm, tc.commands) || !reflect.DeepEqual(al, tc.alerts) {
+			t.Errorf("%s: sessions %v commands %v alerts %v; want %v %v %v", tc.name, s, cm, al, tc.sessions, tc.commands, tc.alerts)
+		}
 	}
 }
