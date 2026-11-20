@@ -116,7 +116,7 @@ func (s *Server) handleMe(w http.ResponseWriter, r *http.Request) {
 	for _, p := range []devpodv1alpha1.GrantPermission{devpodv1alpha1.PermSetReservable, devpodv1alpha1.PermViewAudit, devpodv1alpha1.PermDisconnectSessions} {
 		perms[string(p)] = sess.Admin || (gs != nil && gs.Possible(p, sess.User, groups))
 	}
-	s.writeJSON(w, http.StatusOK, map[string]any{
+	me := map[string]any{
 		"user":        sess.User,
 		"admin":       sess.Admin,
 		"permissions": perms,
@@ -143,7 +143,12 @@ func (s *Server) handleMe(w http.ResponseWriter, r *http.Request) {
 		},
 		"hasPassword": hasPassword,
 		"ssh":         map[string]any{"host": s.SSHHost, "port": s.SSHPort, "loginSuffix": s.SSHLoginSuffix},
-	})
+	}
+	// the CLI over SSH, while it is on: run here, or by a gateway with the key
+	if s.CLIUser != "" && (s.CLI != nil || len(s.CLIKey) > 0) {
+		me["cli"] = s.CLIUser
+	}
+	s.writeJSON(w, http.StatusOK, me)
 }
 
 func (s *Server) handleGetPubkeys(w http.ResponseWriter, r *http.Request) {

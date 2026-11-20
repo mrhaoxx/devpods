@@ -19,10 +19,11 @@ import (
 // cliFlags: the key that lets a gateway that still runs the CLI itself
 // call the API for a user it authenticated. Gateways of this release hand
 // the CLI to the console (consoleCLI) and need no key.
-type cliFlags struct{ keyFile string }
+type cliFlags struct{ keyFile, user string }
 
 func addCLIFlags(fs *flag.FlagSet) *cliFlags {
 	f := &cliFlags{}
+	fs.StringVar(&f.user, "cli-user", "devpod", "the CLI's SSH login name (the gateways' --cli-user), shown on the settings page; empty: not shown")
 	fs.StringVar(&f.keyFile, "cli-api-key-file", "", "key shared with the gateway (--cli-api-key-file); enables API calls on behalf of SSH-authenticated users")
 	return f
 }

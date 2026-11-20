@@ -263,6 +263,7 @@ func main() {
 		slog.Error("snapshots", "err", err)
 		os.Exit(1)
 	}
+	srv.CLIUser = cf.user
 	if srv.CLIKey, err = cf.key(); err != nil {
 		slog.Error("cli key", "err", err)
 		os.Exit(1)

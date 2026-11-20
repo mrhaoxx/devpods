@@ -9,6 +9,7 @@ import { Field, Input, Notice, Textarea } from "../../design/Form";
 import { Panel } from "../../design/Panel";
 import { Tokens } from "./Tokens";
 import { Registries } from "./Registries";
+import { Cli } from "./Cli";
 
 function Keys({ editable }: { editable: boolean }) {
   const [text, setText] = useState("");
@@ -103,6 +104,7 @@ export function SettingsPage() {
           <CopyBlock value={sshConfig(me, me.user, `${me.user}-pod`)} />
         </div>
       </Panel>
+      <Cli me={me} />
       <Panel title="访问令牌">
         <Tokens />
       </Panel>

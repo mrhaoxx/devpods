@@ -64,6 +64,9 @@ type Server struct {
 	// CLI is the DevPod CLI, run here for the gateways (cli_ssh.go); nil
 	// leaves it to gateways that still run it themselves.
 	CLI *gatewaycli.Server
+	// CLIUser is the CLI's SSH login name (the gateways' --cli-user), told
+	// to the page to show how to reach it; "" = not told.
+	CLIUser string
 	// CLILoopbackKey is what the console's own CLI calls its API with,
 	// heard from loopback only; made at start, never kept.
 	CLILoopbackKey []byte

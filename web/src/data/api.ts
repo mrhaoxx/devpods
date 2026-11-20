@@ -59,6 +59,8 @@ export interface Me {
   features: { pubkeySelfService: boolean; kore: boolean; passwordAuth: boolean; audit?: boolean; telemetry?: boolean; reservations?: boolean; clusters?: boolean; webshell?: boolean; httpProxy?: boolean; snapshots?: boolean; snapshotDefaultRegistry?: boolean };
   hasPassword: boolean;
   ssh: { host: string; port: number; loginSuffix?: string };
+  /** the DevPod CLI's SSH login name (ssh <user>+<cli>@gateway), while it is on */
+  cli?: string;
   /** per cluster, in a console of several */
   clusters?: Record<string, { quota: Me["quota"]; usage: Me["usage"]; ssh?: Me["ssh"] }>;
 }

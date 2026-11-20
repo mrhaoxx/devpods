@@ -124,3 +124,37 @@ func TestMeAndPubkeys(t *testing.T) {
 		}
 	})
 }
+
+// /api/me says the CLI's SSH login name while the CLI is on — run here
+// for the gateways, or by a gateway with the shared key — and nothing
+// otherwise.
+func TestMeCLI(t *testing.T) {
+	setupSuite(t)
+	s, sm := newServer(t)
+	alice := forge(sm, "mc-alice", false)
+	cli := func() (string, bool) {
+		t.Helper()
+		rec := doJSON(t, s.HandleMeForTest(), "GET", "/api/me", nil, alice, "")
+		if rec.Code != http.StatusOK {
+			t.Fatalf("me: %d %s", rec.Code, rec.Body)
+		}
+		var body map[string]any
+		if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+			t.Fatal(err)
+		}
+		v, ok := body["cli"].(string)
+		return v, ok
+	}
+	s.CLIUser = "devpod"
+	if v, ok := cli(); ok {
+		t.Fatalf("CLI off: cli=%q", v)
+	}
+	s.CLIKey = []byte("0123456789abcdef0123")
+	if v, _ := cli(); v != "devpod" {
+		t.Fatalf("CLI on: cli=%q", v)
+	}
+	s.CLIUser = ""
+	if v, ok := cli(); ok {
+		t.Fatalf("no login name: cli=%q", v)
+	}
+}

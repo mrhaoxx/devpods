@@ -110,6 +110,7 @@ spec:
         {{- end }}
         {{- if include "devpod.cli.on" $ }}
         - --cli-api-key-file=/etc/devpod/cli/key
+        - --cli-user={{ .Values.gateway.cli.user | default "devpod" }}
         {{- end }}
         {{- with (.Values.snapshot | default dict) }}
         {{- if or .enabled .imageTemplate }}
