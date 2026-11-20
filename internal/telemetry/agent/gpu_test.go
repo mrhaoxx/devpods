@@ -6,6 +6,7 @@ package agent
 
 import (
 	"context"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -316,5 +317,93 @@ func TestGPUMinor_Davinci(t *testing.T) {
 	}
 	if _, ok := gpuMinor("/dev/davinci_manager"); ok {
 		t.Fatal("davinci_manager counted as a card")
+	}
+}
+
+// mthreads-gmi 2.3.x (driver 3.3) has no --query-gpu: `-q --json -l 1`
+// prints a document a second, every card in it, the values with their
+// units ("Power Draw " with a space after it, as it is).
+const mthreadsJSONDoc = `{
+    "Timestamp": "Fri Nov 20 07:56:46 2026",
+    "Driver Version": "3.3.10-server",
+    "Attached GPUs": "2",
+    "GPU": [
+        {
+            "Index": "0",
+            "Product Name": "MTT S5000",
+            "GPU UUID": "u-0",
+            "FB Memory Usage": {"Total": "81920MiB", "Used": "1MiB", "Free": "81919MiB"},
+            "Utilization": {"Gpu": "7%", "Memory": "0%"},
+            "Temperature": {"GPU Current Temp": "38C"},
+            "Power Readings": {"Power Draw ": "410.68W", "Current Power Limit": "750.00W"},
+            "Clocks": {"Graphics": "1750MHz", "Memory": "2500MHz"}
+        },
+        {
+            "Index": "1",
+            "Product Name": "MTT S5000",
+            "GPU UUID": "u-1",
+            "FB Memory Usage": {"Total": "81920MiB", "Used": "40960MiB"},
+            "Utilization": {"Gpu": "N/A"},
+            "Temperature": {"GPU Current Temp": "41C"},
+            "Power Readings": {"Power Draw ": "N/A"},
+            "Clocks": {"Graphics": "1750MHz"}
+        }
+    ]
+}
+`
+
+func TestMthreadsJSON_Parse(t *testing.T) {
+	dec := json.NewDecoder(strings.NewReader(mthreadsJSONDoc + mthreadsJSONDoc))
+	for doc := 0; doc < 2; doc++ {
+		gpus, err := parseMthreadsJSON(dec)
+		if err != nil {
+			t.Fatalf("doc %d: %v", doc, err)
+		}
+		if len(gpus) != 2 {
+			t.Fatalf("doc %d: %+v", doc, gpus)
+		}
+		g := gpus[0]
+		if g.Index != 0 || g.UUID != "u-0" || g.Name != "MTT S5000" || g.Util != 7 || g.MemUsed != 1 || g.MemTotal != 81920 || g.Power != 410.68 || g.Temp != 38 || g.SMClock != 1750 {
+			t.Fatalf("card 0: %+v", g)
+		}
+		if g := gpus[1]; g.Index != 1 || g.Util != -1 || g.Power != -1 || g.MemUsed != 40960 {
+			t.Fatalf("card 1: %+v", g)
+		}
+	}
+	if _, err := parseMthreadsJSON(dec); err == nil {
+		t.Fatal("past the last document")
+	}
+}
+
+// A version without --query-gpu: asked the CSV way it says so, and the
+// collector reads `-q --json -l 1` instead.
+func TestMthreadsGMI_OldVersionUsesJSON(t *testing.T) {
+	dir := t.TempDir()
+	args := filepath.Join(dir, "args")
+	doc := filepath.Join(dir, "doc.json")
+	if err := os.WriteFile(doc, []byte(mthreadsJSONDoc), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	script := filepath.Join(dir, "mthreads-gmi")
+	body := "#!/bin/sh\ncase \"$1\" in --query-gpu=*) echo \"Error: input is unknow. Please run 'mthreads-gmi -h' for help.\"; exit 0 ;; esac\n" +
+		"echo \"$@\" > " + args + "\ncat " + doc + "\nsleep 5\n"
+	if err := os.WriteFile(script, []byte(body), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	c := NewMthreadsGMI(ctx, script)
+	defer c.Close()
+	deadline := time.Now().Add(5 * time.Second)
+	var gpus []wire.GPU
+	for ok := false; !ok && time.Now().Before(deadline); time.Sleep(50 * time.Millisecond) {
+		gpus, ok = c.Latest()
+	}
+	if len(gpus) != 2 || gpus[0].UUID != "u-0" || gpus[0].Util != 7 || gpus[1].MemUsed != 40960 {
+		t.Fatalf("latest: %+v", gpus)
+	}
+	b, _ := os.ReadFile(args)
+	if got := strings.TrimSpace(string(b)); got != "-q --json -l 1" {
+		t.Fatalf("args %q", got)
 	}
 }

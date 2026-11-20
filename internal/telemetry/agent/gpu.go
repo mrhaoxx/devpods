@@ -7,8 +7,10 @@ package agent
 import (
 	"bufio"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"regexp"
@@ -18,6 +20,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+	"unicode"
 
 	"github.com/mrhaoxx/devpod/internal/telemetry/agent/procfs"
 	"github.com/mrhaoxx/devpod/internal/telemetry/wire"
@@ -42,10 +45,13 @@ const gpuStale = 5 * time.Second
 // smiCollector keeps a GPU vendor's query tool (nvidia-smi,
 // mthreads-gmi) running in a loop and keeps each card's latest line.
 type smiCollector struct {
-	tool       string // its name, for messages
-	path       string
-	args       []string
-	parse      func(line string) (wire.GPU, error)
+	tool  string // its name, for messages
+	path  string
+	args  []string
+	parse func(line string) (wire.GPU, error)
+	// parseDoc, when set, reads the tool's output as a stream of
+	// documents — a document's cards each time — instead of lines
+	parseDoc   func(dec *json.Decoder) ([]wire.GPU, error)
 	before     func(ctx context.Context) // before each run, when set
 	minBackoff time.Duration
 	cancel     context.CancelFunc
@@ -69,8 +75,12 @@ func newNvidiaSMI(ctx context.Context, path string, minBackoff time.Duration) GP
 
 // NewMthreadsGMI is NewNvidiaSMI for Moore Threads cards: `mthreads-gmi
 // -lms 1000` with the same query (it has no nounits: the values carry
-// their units, which the parser drops).
+// their units, which the parser drops) — or, for a version that has no
+// --query-gpu (2.3.x, with driver 3.3), `mthreads-gmi -q --json -l 1`.
 func NewMthreadsGMI(ctx context.Context, path string) GPUCollector {
+	if !mthreadsHasQuery(ctx, path) {
+		return newSMIWith(ctx, "mthreads-gmi", path, []string{"-q", "--json", "-l", "1"}, nil, nil, time.Second, parseMthreadsJSON)
+	}
 	return newSMI(ctx, "mthreads-gmi", path, []string{"--query-gpu=" + mthreadsQuery, "--format=csv,noheader", "-lms", "1000"}, parseMthreadsCSV, nil, time.Second)
 }
 
@@ -226,8 +236,13 @@ func newAscendParser(cards func() map[int]ascendCard) func(string) (wire.GPU, er
 }
 
 func newSMI(ctx context.Context, tool, path string, args []string, parse func(string) (wire.GPU, error), before func(context.Context), minBackoff time.Duration) GPUCollector {
+	return newSMIWith(ctx, tool, path, args, parse, before, minBackoff, nil)
+}
+
+// newSMIWith is newSMI with parseDoc: the output read as documents.
+func newSMIWith(ctx context.Context, tool, path string, args []string, parse func(string) (wire.GPU, error), before func(context.Context), minBackoff time.Duration, parseDoc func(*json.Decoder) ([]wire.GPU, error)) *smiCollector {
 	ctx, cancel := context.WithCancel(ctx)
-	n := &smiCollector{tool: tool, path: path, args: args, parse: parse, before: before, minBackoff: minBackoff, cancel: cancel, latest: map[string]wire.GPU{}, seen: map[string]time.Time{}}
+	n := &smiCollector{tool: tool, path: path, args: args, parse: parse, parseDoc: parseDoc, before: before, minBackoff: minBackoff, cancel: cancel, latest: map[string]wire.GPU{}, seen: map[string]time.Time{}}
 	if _, err := os.Stat(path); err != nil {
 		n.starts.Add(1)
 		return n // N/A: never started
@@ -299,12 +314,30 @@ func (n *smiCollector) runOnce(ctx context.Context) {
 	}
 	n.child.Store(int64(cmd.Process.Pid))
 	defer n.child.Store(0)
+	keep := func(g wire.GPU) {
+		n.mu.Lock()
+		n.latest[g.UUID], n.seen[g.UUID] = g, time.Now()
+		n.mu.Unlock()
+	}
+	if n.parseDoc != nil {
+		dec := json.NewDecoder(out)
+		for {
+			gs, err := n.parseDoc(dec)
+			if err != nil {
+				break // the end, or not a document: run again (with backoff)
+			}
+			for _, g := range gs {
+				keep(g)
+			}
+		}
+		_, _ = io.Copy(io.Discard, out)
+		_ = cmd.Wait()
+		return
+	}
 	sc := bufio.NewScanner(out)
 	for sc.Scan() {
 		if g, err := n.parse(sc.Text()); err == nil {
-			n.mu.Lock()
-			n.latest[g.UUID], n.seen[g.UUID] = g, time.Now()
-			n.mu.Unlock()
+			keep(g)
 		}
 	}
 	_ = cmd.Wait()
@@ -353,6 +386,75 @@ func parseMthreadsCSV(line string) (wire.GPU, error) {
 		f[i] = v
 	}
 	return parseNvidiaCSV(strings.Join(f, ","))
+}
+
+// mthreadsHasQuery: does this mthreads-gmi take --query-gpu? Asked once:
+// a version that does not says "input is unknow" and no card.
+func mthreadsHasQuery(ctx context.Context, path string) bool {
+	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	out, _ := exec.CommandContext(ctx, path, "--query-gpu=index", "--format=csv,noheader").CombinedOutput()
+	first, _, _ := strings.Cut(strings.TrimSpace(string(out)), "\n")
+	idx, _, _ := strings.Cut(first, ",")
+	_, err := strconv.Atoi(strings.TrimSpace(idx))
+	return err == nil
+}
+
+// mthreadsDoc: what of `mthreads-gmi -q --json` is read.
+type mthreadsDoc struct {
+	GPU []struct {
+		Index  string `json:"Index"`
+		Name   string `json:"Product Name"`
+		UUID   string `json:"GPU UUID"`
+		Memory struct {
+			Total string `json:"Total"`
+			Used  string `json:"Used"`
+		} `json:"FB Memory Usage"`
+		Utilization struct {
+			GPU string `json:"Gpu"`
+		} `json:"Utilization"`
+		Temperature struct {
+			Current string `json:"GPU Current Temp"`
+		} `json:"Temperature"`
+		Power  map[string]string `json:"Power Readings"` // its "Power Draw " has a space after it
+		Clocks struct {
+			Graphics string `json:"Graphics"`
+		} `json:"Clocks"`
+	} `json:"GPU"`
+}
+
+// parseMthreadsJSON reads the next document of `mthreads-gmi -q --json`:
+// the values with their units ("81920MiB", "410.68W", "38C", "7%"), the
+// units dropped; "N/A" becomes -1.
+func parseMthreadsJSON(dec *json.Decoder) ([]wire.GPU, error) {
+	var d mthreadsDoc
+	if err := dec.Decode(&d); err != nil {
+		return nil, err
+	}
+	num := func(s string) float64 {
+		s = strings.TrimRightFunc(strings.TrimSpace(s), func(r rune) bool { return !unicode.IsDigit(r) && r != '.' })
+		v, err := strconv.ParseFloat(s, 64)
+		if err != nil {
+			return -1
+		}
+		return v
+	}
+	out := make([]wire.GPU, 0, len(d.GPU))
+	for _, g := range d.GPU {
+		idx, err := strconv.Atoi(strings.TrimSpace(g.Index))
+		if err != nil {
+			continue
+		}
+		power := "N/A"
+		for k, v := range g.Power {
+			if strings.TrimSpace(k) == "Power Draw" {
+				power = v
+			}
+		}
+		out = append(out, wire.GPU{Index: idx, UUID: g.UUID, Name: g.Name, Util: num(g.Utilization.GPU), MemUsed: num(g.Memory.Used), MemTotal: num(g.Memory.Total),
+			Power: num(power), Temp: num(g.Temperature.Current), SMClock: num(g.Clocks.Graphics)})
+	}
+	return out, nil
 }
 
 // metaxCard: what `mx-smi -L` says of a card.
