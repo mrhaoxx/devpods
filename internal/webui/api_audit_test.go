@@ -217,15 +217,16 @@ func TestAuditAPI(t *testing.T) {
 		if rec := route(t, s, "GET", "/api/audit/sessions?user=gl-bob", forge(sm, "gl-alice", false), ""); rec.Code != 200 {
 			t.Fatalf("%d %s", rec.Code, rec.Body)
 		}
-		if st.sessF.User != "gl-alice" {
-			t.Fatalf("store saw user %q", st.sessF.User)
+		// user= only narrows: the store is held to alice's own by the scope
+		if st.sessF.User != "gl-bob" || st.sessF.Scope == nil || st.sessF.Scope.User != "gl-alice" || len(st.sessF.Scope.Clusters)+len(st.sessF.Scope.Machines) != 0 {
+			t.Fatalf("store saw user %q scope %+v", st.sessF.User, st.sessF.Scope)
 		}
 		route(t, s, "GET", "/api/audit/sessions?user=gl-bob", forge(sm, "gl-root", false), "")
-		if st.sessF.User != "gl-bob" {
-			t.Fatalf("admin filter: store saw %q", st.sessF.User)
+		if st.sessF.User != "gl-bob" || st.sessF.Scope != nil {
+			t.Fatalf("admin filter: store saw %q scope %+v", st.sessF.User, st.sessF.Scope)
 		}
 		route(t, s, "GET", "/api/audit/commands?q=rm&user=gl-bob", forge(sm, "gl-alice", false), "")
-		if st.cmdF.User != "gl-alice" || st.cmdF.Q != "rm" {
+		if st.cmdF.Scope == nil || st.cmdF.Scope.User != "gl-alice" || st.cmdF.Q != "rm" {
 			t.Fatalf("commands filter %+v", st.cmdF)
 		}
 	})
@@ -242,8 +243,8 @@ func TestAuditAPI(t *testing.T) {
 			t.Fatalf("admin filter %+v", f)
 		}
 		route(t, s, "GET", "/api/audit/http?user=gl-bob", forge(sm, "gl-alice", false), "")
-		if st.httpF.User != "gl-alice" {
-			t.Fatalf("non-admin saw user %q", st.httpF.User)
+		if st.httpF.Scope == nil || st.httpF.Scope.User != "gl-alice" {
+			t.Fatalf("non-admin scope %+v", st.httpF.Scope)
 		}
 		if rec := route(t, s, "GET", "/api/audit/http?port=x", forge(sm, "gl-root", false), ""); rec.Code != 400 {
 			t.Fatalf("bad port: %d", rec.Code)
