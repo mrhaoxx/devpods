@@ -282,20 +282,22 @@ function UptimeCell({ r }: { r: Row }) {
 }
 
 // 运行时长's order, as one number (so the header's two directions are the
-// two orders): the running, the longest up first; then those asked to run
-// that are not running yet (pending, failing), which join the running as
-// they come up; then the asleep, the latest asleep first, those with no
-// time known last. A group goes where its best-placed member does.
+// two orders): those asked to run that are not running yet (starting,
+// failing) first; then the running, the shortest up first (those with no
+// start known last of them); then the asleep, the shortest asleep first,
+// those with no time known last. A group goes where its best-placed
+// member does.
 const BAND = 1e15;
+const LATEST = 4e12; // later than any time here (ms): LATEST - t grows as t is earlier
 export function uptimeKey(r: Row): number {
   if (r.group) return Math.min(...r.group.members.map(uptimeKey));
   if (running(r)) {
     const t = r.pod?.startedAt ? Date.parse(r.pod.startedAt) : NaN;
-    return Number.isNaN(t) ? BAND - 1 : t;
+    return BAND + (Number.isNaN(t) ? LATEST : LATEST - t);
   }
-  if (r.dp.spec.running) return BAND;
+  if (r.dp.spec.running) return 0;
   const h = r.dp.status?.hibernatedAt ? Date.parse(r.dp.status.hibernatedAt) : NaN;
-  return 2 * BAND + (Number.isNaN(h) ? 4e12 : 4e12 - h);
+  return 2 * BAND + (Number.isNaN(h) ? LATEST : LATEST - h);
 }
 
 function GroupName({ r, open, onToggle }: { r: Row; open: boolean; onToggle: (key: string) => void }) {

@@ -287,7 +287,7 @@ describe("DevPodTable", () => {
     await waitFor(() => expect(rowNames()).toEqual(["alice-a", "bob-c", "alice-b", "bob-d"]));
   }, 15000);
 
-  it("运行时长: running ones first, the longest up first; then those starting; then the asleep, the latest asleep first", async () => {
+  it("运行时长: those starting first; then the running, the shortest up first; then the asleep, the shortest asleep first", async () => {
     const ago = (h: number) => new Date(Date.now() - h * 3600_000 - 5_000).toISOString();
     const asleep = (name: string, h?: number) => ({ ...mk(name, "alice", "Stopped", false), status: { phase: "Stopped", ...(h ? { hibernatedAt: ago(h) } : {}) } });
     stubFetch({
@@ -297,8 +297,8 @@ describe("DevPodTable", () => {
       },
     });
     renderWithProviders(<DevPodTable scope="mine" />, { route: "/?sort=uptime" });
-    await screen.findByRole("link", { name: "alice-long" });
-    expect(rowNames()).toEqual(["alice-long", "alice-short", "alice-starting", "alice-new", "alice-old", "alice-never"]);
+    await screen.findByRole("link", { name: "alice-starting" });
+    expect(rowNames()).toEqual(["alice-starting", "alice-short", "alice-long", "alice-new", "alice-old", "alice-never"]);
     expect(screen.getByRole("link", { name: "alice-new" }).closest("tr")!.textContent).toMatch(/休眠 1h/);
   });
 
