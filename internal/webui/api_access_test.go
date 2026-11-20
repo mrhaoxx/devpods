@@ -37,12 +37,15 @@ func accessRig(t *testing.T) (*webui.Server, func(user string, admin bool, metho
 	clear := func() {
 		_ = k8sClient.Delete(ctx, &devpodv1alpha1.AccessPolicy{ObjectMeta: metav1.ObjectMeta{Name: devpodv1alpha1.AccessPolicyName}})
 		_ = k8sClient.DeleteAllOf(ctx, &devpodv1alpha1.UserGroup{})
+		_ = k8sClient.DeleteAllOf(ctx, &devpodv1alpha1.AccessGrant{})
 		// gone from the cache too, before the test reads through it
 		deadline := time.Now().Add(10 * time.Second)
 		for time.Now().Before(deadline) {
 			var p devpodv1alpha1.AccessPolicy
 			var gs devpodv1alpha1.UserGroupList
-			if k8sClient.Get(ctx, client.ObjectKey{Name: devpodv1alpha1.AccessPolicyName}, &p) != nil && k8sClient.List(ctx, &gs) == nil && len(gs.Items) == 0 {
+			var ag devpodv1alpha1.AccessGrantList
+			if k8sClient.Get(ctx, client.ObjectKey{Name: devpodv1alpha1.AccessPolicyName}, &p) != nil && k8sClient.List(ctx, &gs) == nil && len(gs.Items) == 0 &&
+				k8sClient.List(ctx, &ag) == nil && len(ag.Items) == 0 {
 				return
 			}
 			time.Sleep(100 * time.Millisecond)

@@ -63,6 +63,39 @@ func (s *Server) accessFor(ctx context.Context, user string) (*access.Policy, ma
 	return p, mine, nil
 }
 
+// grantsFor: the management grants compiled against the groups there
+// are (one naming a group that is not gives nothing), and the groups user
+// is in. A grant that gives nothing is logged once per version of it.
+func (s *Server) grantsFor(ctx context.Context, user string) (*access.GrantSet, map[string]bool, error) {
+	var gl devpodv1alpha1.AccessGrantList
+	if err := s.Client.List(ctx, &gl); err != nil {
+		return nil, nil, err
+	}
+	var list devpodv1alpha1.UserGroupList
+	if err := s.Client.List(ctx, &list); err != nil {
+		return nil, nil, err
+	}
+	all, mine := map[string]bool{}, map[string]bool{}
+	for i := range list.Items {
+		g := &list.Items[i]
+		all[g.Name] = true
+		if slices.Contains(g.Spec.Members, user) {
+			mine[g.Name] = true
+		}
+	}
+	gs := access.CompileGrants(gl.Items, all)
+	rv := map[string]string{}
+	for i := range gl.Items {
+		rv[gl.Items[i].Name] = gl.Items[i].ResourceVersion
+	}
+	for _, pr := range gs.Problems() {
+		if _, seen := s.accessLogged.LoadOrStore("grant/"+pr.Name+"/"+rv[pr.Name]+"/"+pr.Message, true); !seen {
+			slog.Error("access_grant_grants_nothing", "grant", pr.Name, "why", pr.Message, "resourceVersion", rv[pr.Name])
+		}
+	}
+	return gs, mine, nil
+}
+
 // groupsOf: the groups user is in.
 func (s *Server) groupsOf(ctx context.Context, user string) (map[string]bool, error) {
 	var list devpodv1alpha1.UserGroupList

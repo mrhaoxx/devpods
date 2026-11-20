@@ -164,8 +164,55 @@ func (s *Server) handlePutAccess(w http.ResponseWriter, r *http.Request) {
 	s.writeJSON(w, http.StatusOK, viewOf(cur, groups))
 }
 
-// maxMatch is the longest condition a rule may have (the CRD's maxLength).
+// maxMatch is the longest condition a rule or a grant may have (the
+// CRDs' maxLength).
 const maxMatch = 2000
+
+// matchChecker checks conditions against the clusters and groups there
+// are (design 2026-11-19 §5.4): rules and grants alike.
+type matchChecker struct{ clusters, groups map[string]bool }
+
+func (s *Server) matchChecker(ctx context.Context) (*matchChecker, *serverErr) {
+	groups, err := s.groupNames(ctx)
+	if err != nil {
+		return nil, &serverErr{http.StatusInternalServerError, "INTERNAL", err.Error(), nil}
+	}
+	clusters := map[string]bool{}
+	var cl devpodv1alpha1.ClusterList
+	if s.Reader.List(ctx, &cl) == nil {
+		for i := range cl.Items {
+			clusters[cl.Items[i].Name] = true
+		}
+	}
+	return &matchChecker{clusters: clusters, groups: groups}, nil
+}
+
+// check: m as a condition — its length, its syntax, items that can match
+// nothing, clusters and groups (not globs) that are not there; where
+// opens the message ("第 3 条", "授权 x 的条件").
+func (c *matchChecker) check(where, m string) *serverErr {
+	if utf8.RuneCountInString(m) > maxMatch {
+		return badRequest("%s：条件超过 %d 个字符", where, maxMatch)
+	}
+	e, err := access.Parse(m)
+	if err != nil {
+		return badRequest("%s%s", where, err.Error())
+	}
+	for _, f := range []access.Field{access.FieldCluster, access.FieldMachine, access.FieldUser, access.FieldGroup} {
+		for _, it := range e.Items(f) {
+			if p := access.ItemProblem(f, it); p != "" {
+				return badRequest("%s：%s", where, p)
+			}
+			switch {
+			case f == access.FieldCluster && !access.HasGlob(it) && !c.clusters[it]:
+				return badRequest("%s：没有集群 %s", where, it)
+			case f == access.FieldGroup && !access.HasGlob(it) && !c.groups[it]:
+				return badRequest("%s：没有用户组 %s", where, it)
+			}
+		}
+	}
+	return nil
+}
 
 // capName: a capability as NormalizeCap names it, or "*".
 var capName = regexp.MustCompile(`^([A-Z0-9_]+|\*)$`)
@@ -175,16 +222,9 @@ var capName = regexp.MustCompile(`^([A-Z0-9_]+|\*)$`)
 // theirs) and its effect in the new form, host paths cleaned.
 func (s *Server) validateAccess(ctx context.Context, v *accessPut) (devpodv1alpha1.AccessPolicySpec, *serverErr) {
 	var spec devpodv1alpha1.AccessPolicySpec
-	group, err := s.groupNames(ctx)
-	if err != nil {
-		return spec, &serverErr{http.StatusInternalServerError, "INTERNAL", err.Error(), nil}
-	}
-	clusterKnown := map[string]bool{}
-	var cl devpodv1alpha1.ClusterList
-	if s.Reader.List(ctx, &cl) == nil {
-		for i := range cl.Items {
-			clusterKnown[cl.Items[i].Name] = true
-		}
+	mc, apiErr := s.matchChecker(ctx)
+	if apiErr != nil {
+		return spec, apiErr
 	}
 	effect := func(where string, e devpodv1alpha1.AccessEffect) (devpodv1alpha1.AccessEffect, *serverErr) {
 		for i, h := range e.HostPaths {
@@ -205,25 +245,8 @@ func (s *Server) validateAccess(ctx context.Context, v *accessPut) (devpodv1alph
 	for i := range v.Rules {
 		where := fmt.Sprintf("第 %d 条", i+1)
 		m := access.MatchOf(v.Rules[i])
-		if utf8.RuneCountInString(m) > maxMatch {
-			return spec, badRequest("%s：条件超过 %d 个字符", where, maxMatch)
-		}
-		e, err := access.Parse(m)
-		if err != nil {
-			return spec, badRequest("%s%s", where, err.Error())
-		}
-		for _, f := range []access.Field{access.FieldCluster, access.FieldMachine, access.FieldUser, access.FieldGroup} {
-			for _, it := range e.Items(f) {
-				if p := access.ItemProblem(f, it); p != "" {
-					return spec, badRequest("%s：%s", where, p)
-				}
-				switch {
-				case f == access.FieldCluster && !access.HasGlob(it) && !clusterKnown[it]:
-					return spec, badRequest("%s：没有集群 %s", where, it)
-				case f == access.FieldGroup && !access.HasGlob(it) && !group[it]:
-					return spec, badRequest("%s：没有用户组 %s", where, it)
-				}
-			}
+		if apiErr := mc.check(where, m); apiErr != nil {
+			return spec, apiErr
 		}
 		eff, apiErr := effect(where, v.Rules[i].Effect)
 		if apiErr != nil {
@@ -539,6 +562,21 @@ func (s *Server) handleDeleteGroup(w http.ResponseWriter, r *http.Request) {
 			s.writeErr(w, http.StatusConflict, "IN_USE", "rule "+strings.Join(in, ", ")+" names this group", nil)
 			return
 		}
+	}
+	var grants devpodv1alpha1.AccessGrantList
+	if err := s.Reader.List(r.Context(), &grants); err != nil {
+		s.writeErr(w, http.StatusInternalServerError, "INTERNAL", err.Error(), nil)
+		return
+	}
+	var by []string
+	for i := range grants.Items {
+		if e, err := access.Parse(grants.Items[i].Spec.Match); err == nil && slices.Contains(e.Items(access.FieldGroup), name) {
+			by = append(by, grants.Items[i].Name)
+		}
+	}
+	if len(by) > 0 {
+		s.writeErr(w, http.StatusConflict, "IN_USE", "grant "+strings.Join(by, ", ")+" names this group", nil)
+		return
 	}
 	err = s.Client.Delete(r.Context(), &devpodv1alpha1.UserGroup{ObjectMeta: metav1.ObjectMeta{Name: name}})
 	if apierrors.IsNotFound(err) {

@@ -7,6 +7,7 @@ package webui
 import (
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"strconv"
 
@@ -100,13 +101,24 @@ func (s *Server) handleMe(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// the management permissions the user may hold somewhere (design
+	// 2026-11-20 §6.5): what the pages show; each action is judged itself
+	perms := map[string]bool{}
+	gs, groups, err := s.grantsFor(r.Context(), sess.User)
+	if err != nil {
+		slog.Warn("me_grants", "user", sess.User, "err", err)
+	}
+	for _, p := range []devpodv1alpha1.GrantPermission{devpodv1alpha1.PermSetReservable, devpodv1alpha1.PermViewAudit, devpodv1alpha1.PermDisconnectSessions} {
+		perms[string(p)] = sess.Admin || (gs != nil && gs.Possible(p, sess.User, groups))
+	}
 	s.writeJSON(w, http.StatusOK, map[string]any{
-		"user":       sess.User,
-		"admin":      sess.Admin,
-		"nameBudget": NameBudget(sess.User),
-		"quota":      EffectiveQuota(userPtr, "", s.DefaultQuota),
-		"usage":      usage,
-		"clusters":   perCluster,
+		"user":        sess.User,
+		"admin":       sess.Admin,
+		"permissions": perms,
+		"nameBudget":  NameBudget(sess.User),
+		"quota":       EffectiveQuota(userPtr, "", s.DefaultQuota),
+		"usage":       usage,
+		"clusters":    perCluster,
 		// the kinds of GPU here, the default first; quotas limit their sum as devpod.io/gpu
 		"gpuTypes": gpures.Types(),
 		"features": map[string]any{
