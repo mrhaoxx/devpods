@@ -88,15 +88,6 @@ func queryLimit(r *http.Request) int {
 	return n
 }
 
-// scopeUser is the user a list query may cover: non-admins are always
-// pinned to themselves.
-func scopeUser(sess Session, r *http.Request) string {
-	if !sess.Admin {
-		return sess.User
-	}
-	return r.URL.Query().Get("user")
-}
-
 // devpodUID resolves a DevPod name filter; found=false means "no such
 // DevPod", which callers answer with an empty page. In whichever cluster
 // it is — the request's, when it names one; a name in two clusters,
@@ -179,8 +170,12 @@ func (s *Server) handleAuditSessions(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	q := r.URL.Query()
+	sc, user, ok := s.auditListScope(w, r, sess)
+	if !ok {
+		return
+	}
 	items, next, err := s.Audit.Store.ListSessions(r.Context(), store.SessionFilter{
-		User: scopeUser(sess, r), DevPodUID: uid, Cluster: s.namedCluster(r.Context()), From: from, To: to,
+		User: user, Scope: sc, DevPodUID: uid, Cluster: s.namedCluster(r.Context()), From: from, To: to,
 		HasFiles: q.Get("hasFiles") == "true", HasAlerts: q.Get("hasAlerts") == "true", Open: q.Get("open") == "true",
 		Cursor: q.Get("cursor"), Limit: queryLimit(r),
 	})
@@ -202,7 +197,9 @@ func (s *Server) visibleSession(w http.ResponseWriter, r *http.Request, sess Ses
 		s.auditStoreErr(w, err)
 		return nil, false
 	}
-	if !sess.Admin && d.Session.User != sess.User {
+	// one's own, an admin's, or under a grant of viewAudit on its machine;
+	// the others are not said to exist
+	if !sess.Admin && d.Session.User != sess.User && !s.mayOnSession(r.Context(), sess, devpodv1alpha1.PermViewAudit, d) {
 		s.writeErr(w, http.StatusNotFound, "NOT_FOUND", "not found", nil)
 		return nil, false
 	}
@@ -262,12 +259,17 @@ func (s *Server) handleAuditCast(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleAuditRaw(w http.ResponseWriter, r *http.Request) {
-	sess, ok := s.auditAdmin(w, r)
+	sess, ok := s.auditSession(w, r)
 	if !ok {
 		return
 	}
 	d, ok := s.visibleSession(w, r, sess)
 	if !ok {
+		return
+	}
+	// an admin's, or by a grant on its machine — not for being one's own
+	if !s.mayOnSession(r.Context(), sess, devpodv1alpha1.PermViewAudit, d) {
+		s.writeErr(w, http.StatusForbidden, "FORBIDDEN", "raw records need a grant of the audit on this machine", nil)
 		return
 	}
 	ch, err := channelParam(r)
@@ -350,8 +352,12 @@ func (s *Server) handleAuditCommands(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	q := r.URL.Query()
+	sc, user, ok := s.auditListScope(w, r, sess)
+	if !ok {
+		return
+	}
 	items, next, err := s.Audit.Store.SearchCommands(r.Context(), store.CommandFilter{
-		User: scopeUser(sess, r), DevPodUID: uid, Cluster: s.namedCluster(r.Context()), Q: q.Get("q"), From: from, To: to, Cursor: q.Get("cursor"), Limit: queryLimit(r),
+		User: user, Scope: sc, DevPodUID: uid, Cluster: s.namedCluster(r.Context()), Q: q.Get("q"), From: from, To: to, Cursor: q.Get("cursor"), Limit: queryLimit(r),
 	})
 	if err != nil {
 		s.auditStoreErr(w, err)
@@ -395,8 +401,12 @@ func (s *Server) handleAuditHTTP(w http.ResponseWriter, r *http.Request) {
 		s.writeJSON(w, http.StatusOK, page[store.HTTPRequestRow]{Items: []store.HTTPRequestRow{}})
 		return
 	}
+	sc, user, ok := s.auditListScope(w, r, sess)
+	if !ok {
+		return
+	}
 	items, next, err := s.Audit.Store.SearchHTTP(r.Context(), store.HTTPFilter{
-		User: scopeUser(sess, r), DevPodUID: uid, Cluster: s.namedCluster(r.Context()), Method: q.Get("method"),
+		User: user, Scope: sc, DevPodUID: uid, Cluster: s.namedCluster(r.Context()), Method: q.Get("method"),
 		Port: num["port"], Status: num["status"], From: from, To: to, Cursor: q.Get("cursor"), Limit: queryLimit(r),
 	})
 	if err != nil {
@@ -428,8 +438,12 @@ func (s *Server) handleAuditFiles(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	q := r.URL.Query()
+	sc, user, ok := s.auditListScope(w, r, sess)
+	if !ok {
+		return
+	}
 	items, next, err := s.Audit.Store.SearchFiles(r.Context(), store.FileFilter{
-		User: scopeUser(sess, r), DevPodUID: uid, Cluster: s.namedCluster(r.Context()), Path: q.Get("path"), SHA256: q.Get("sha256"),
+		User: user, Scope: sc, DevPodUID: uid, Cluster: s.namedCluster(r.Context()), Path: q.Get("path"), SHA256: q.Get("sha256"),
 		From: from, To: to, Cursor: q.Get("cursor"), Limit: queryLimit(r),
 	})
 	if err != nil {
@@ -443,8 +457,22 @@ func (s *Server) handleAuditFiles(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleAuditAlerts(w http.ResponseWriter, r *http.Request) {
-	if _, ok := s.auditAdmin(w, r); !ok {
+	sess, ok := s.auditSession(w, r)
+	if !ok {
 		return
+	}
+	// an admin's, or within grants of viewAudit — never one's own as such
+	sc, err := s.auditScope(r.Context(), sess, false)
+	if err != nil {
+		s.writeErr(w, http.StatusInternalServerError, "INTERNAL", err.Error(), nil)
+		return
+	}
+	if sc != nil && len(sc.Clusters) == 0 && len(sc.Machines) == 0 {
+		gs, groups, err := s.grantsFor(r.Context(), sess.User)
+		if err != nil || !gs.Possible(devpodv1alpha1.PermViewAudit, sess.User, groups) {
+			s.writeErr(w, http.StatusForbidden, "FORBIDDEN", "admin only", nil)
+			return
+		}
 	}
 	from, to, err := timeRange(r)
 	if err != nil {
@@ -452,7 +480,7 @@ func (s *Server) handleAuditAlerts(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// asked through a cluster: that cluster's (each row says its DevPod's cluster)
-	items, next, err := s.Audit.Store.ListAlerts(r.Context(), store.TimeFilter{From: from, To: to, Cluster: s.namedCluster(r.Context()), Cursor: r.URL.Query().Get("cursor"), Limit: queryLimit(r)})
+	items, next, err := s.Audit.Store.ListAlerts(r.Context(), store.TimeFilter{From: from, To: to, Cluster: s.namedCluster(r.Context()), Scope: sc, Cursor: r.URL.Query().Get("cursor"), Limit: queryLimit(r)})
 	if err != nil {
 		s.auditStoreErr(w, err)
 		return

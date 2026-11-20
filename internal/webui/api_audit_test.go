@@ -32,6 +32,8 @@ type fakeAuditStore struct {
 	sessF     store.SessionFilter
 	cmdF      store.CommandFilter
 	httpF     store.HTTPFilter
+	fileF     store.FileFilter
+	alertF    store.TimeFilter
 	sessions  map[string]*store.SessionDetail
 	files     map[string]*store.FileEventRow
 	presence  map[string][]string
@@ -61,7 +63,10 @@ func (f *fakeAuditStore) SearchCommands(_ context.Context, cf store.CommandFilte
 	return nil, "", nil
 }
 
-func (f *fakeAuditStore) SearchFiles(context.Context, store.FileFilter) ([]store.FileEventRow, string, error) {
+func (f *fakeAuditStore) SearchFiles(_ context.Context, ff store.FileFilter) ([]store.FileEventRow, string, error) {
+	f.mu.Lock()
+	f.fileF = ff
+	f.mu.Unlock()
 	return nil, "", nil
 }
 
@@ -79,7 +84,10 @@ func (f *fakeAuditStore) GetFileEvent(_ context.Context, id string) (*store.File
 	return nil, store.ErrNotFound
 }
 
-func (f *fakeAuditStore) ListAlerts(context.Context, store.TimeFilter) ([]store.AlertRow, string, error) {
+func (f *fakeAuditStore) ListAlerts(_ context.Context, tf store.TimeFilter) ([]store.AlertRow, string, error) {
+	f.mu.Lock()
+	f.alertF = tf
+	f.mu.Unlock()
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.alertsHit = true

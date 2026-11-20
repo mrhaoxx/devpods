@@ -1,0 +1,203 @@
+// Copyright 2026 The DevPod Authors.
+//
+// SPDX-License-Identifier: Apache-2.0
+
+package webui_test
+
+import (
+	"context"
+	"net/http"
+	"reflect"
+	"strings"
+	"testing"
+	"time"
+
+	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+
+	devpodv1alpha1 "github.com/mrhaoxx/devpod/api/v1alpha1"
+	"github.com/mrhaoxx/devpod/internal/audit/store"
+	"github.com/mrhaoxx/devpod/internal/webui"
+)
+
+// scopeRig: the audit rig, its cluster's nodes as-n1 and as-n2, and
+// carol's sessions there (C1 on as-n1, C2 on as-n2, G1 on a node gone,
+// B1 bob's own on as-n2); grants are made per test.
+func scopeRig(t *testing.T) (*webui.Server, *webui.SessionManager, *fakeAuditStore) {
+	t.Helper()
+	setupSuite(t)
+	s, sm, st, objs := auditRig(t)
+	s.Admins = map[string]bool{"as-root": true} // the audit judges admins afresh, not by the cookie
+	ctx := context.Background()
+	for _, name := range []string{"as-n1", "as-n2"} {
+		n := &corev1.Node{ObjectMeta: metav1.ObjectMeta{Name: name}}
+		if err := k8sClient.Create(ctx, n); err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = k8sClient.Delete(context.Background(), n) })
+	}
+	t0 := time.Unix(1794210460, 0).UTC()
+	seg := []store.RawSegmentRow{{SessionID: "x", Seq: 1, S3Key: "raw/s1/1"}}
+	sess := func(id, user, node string) *store.SessionDetail {
+		return &store.SessionDetail{Session: store.SessionRow{SessionID: id, User: user, Node: node, OpenedAt: t0}, Segments: seg}
+	}
+	st.sessions["C1"] = sess("C1", "as-carol", "as-n1")
+	st.sessions["C2"] = sess("C2", "as-carol", "as-n2")
+	st.sessions["G1"] = sess("G1", "as-carol", "as-gone")
+	st.sessions["B1"] = sess("B1", "as-bob", "as-n2")
+	_ = objs
+	return s, sm, st
+}
+
+func viewAudit(t *testing.T, s *webui.Server, name, match string) {
+	t.Helper()
+	grantNow(t, s, name, match, devpodv1alpha1.PermViewAudit)
+}
+
+func TestAuditScopeComputed(t *testing.T) {
+	s, sm, st := scopeRig(t)
+	viewAudit(t, s, "as-bob", "user = as-bob and machine = as-n1")
+	viewAudit(t, s, "as-dan", "user = as-dan")
+	list := func(user string, admin bool) *store.Scope {
+		if rec := route(t, s, "GET", "/api/audit/sessions", forge(sm, user, admin), ""); rec.Code != http.StatusOK {
+			t.Fatalf("%s: %d %s", user, rec.Code, rec.Body)
+		}
+		st.mu.Lock()
+		defer st.mu.Unlock()
+		return st.sessF.Scope
+	}
+	if got := list("as-bob", false); !reflect.DeepEqual(got, &store.Scope{User: "as-bob", Machines: []store.ClusterNode{{Cluster: "", Node: "as-n1"}}}) {
+		t.Errorf("a machine grant: %+v", got)
+	}
+	if got := list("as-dan", false); !reflect.DeepEqual(got, &store.Scope{User: "as-dan", Clusters: []string{""}}) {
+		t.Errorf("a whole-cluster grant: %+v", got)
+	}
+	if got := list("as-eve", false); !reflect.DeepEqual(got, &store.Scope{User: "as-eve"}) {
+		t.Errorf("no grant: %+v", got)
+	}
+	if got := list("as-root", true); got != nil {
+		t.Errorf("an admin: %+v", got)
+	}
+	// commands, files and HTTP alike
+	route(t, s, "GET", "/api/audit/commands", forge(sm, "as-bob", false), "")
+	route(t, s, "GET", "/api/audit/files", forge(sm, "as-bob", false), "")
+	route(t, s, "GET", "/api/audit/http", forge(sm, "as-bob", false), "")
+	st.mu.Lock()
+	defer st.mu.Unlock()
+	for name, sc := range map[string]*store.Scope{"commands": st.cmdF.Scope, "files": st.fileF.Scope, "http": st.httpF.Scope} {
+		if sc == nil || sc.User != "as-bob" || len(sc.Machines) != 1 {
+			t.Errorf("%s: %+v", name, sc)
+		}
+	}
+}
+
+// user= narrows within one's scope; it never widens it.
+func TestAuditScopeUserParamNarrows(t *testing.T) {
+	s, sm, st := scopeRig(t)
+	viewAudit(t, s, "as-bob", "user = as-bob and machine = as-n1")
+	if rec := route(t, s, "GET", "/api/audit/sessions?user=as-carol", forge(sm, "as-bob", false), ""); rec.Code != http.StatusOK {
+		t.Fatalf("%d %s", rec.Code, rec.Body)
+	}
+	st.mu.Lock()
+	defer st.mu.Unlock()
+	if st.sessF.User != "as-carol" || st.sessF.Scope == nil || st.sessF.Scope.User != "as-bob" || len(st.sessF.Scope.Machines) != 1 {
+		t.Fatalf("filter %+v scope %+v", st.sessF, st.sessF.Scope)
+	}
+}
+
+func TestAuditSessionByGrant(t *testing.T) {
+	s, sm, _ := scopeRig(t)
+	viewAudit(t, s, "as-bob", "user = as-bob and machine = as-n1")
+	bob := forge(sm, "as-bob", false)
+	if rec := route(t, s, "GET", "/api/audit/sessions/C1", bob, ""); rec.Code != http.StatusOK {
+		t.Errorf("C1 on as-n1: %d %s", rec.Code, rec.Body)
+	}
+	if rec := route(t, s, "GET", "/api/audit/sessions/C1/channels/1/cast", bob, ""); rec.Code != http.StatusOK {
+		t.Errorf("C1's replay: %d", rec.Code)
+	}
+	if rec := route(t, s, "GET", "/api/audit/sessions/C2", bob, ""); rec.Code != http.StatusNotFound {
+		t.Errorf("C2 on as-n2: %d", rec.Code)
+	}
+	// raw records: by the grant, not by being one's own
+	if rec := route(t, s, "GET", "/api/audit/sessions/C1/channels/1/raw?stream=out", bob, ""); rec.Code != http.StatusOK {
+		t.Errorf("C1's raw: %d %s", rec.Code, rec.Body)
+	}
+	if rec := route(t, s, "GET", "/api/audit/sessions/B1/channels/1/raw?stream=out", bob, ""); rec.Code != http.StatusForbidden {
+		t.Errorf("bob's own raw without a grant there: %d", rec.Code)
+	}
+}
+
+// A session on a node no longer in the cluster: its machine is not known.
+func TestAuditSessionOnGoneNode(t *testing.T) {
+	s, sm, _ := scopeRig(t)
+	viewAudit(t, s, "as-fay", "user = as-fay and machine = as-gone")
+	viewAudit(t, s, "as-dan", "user = as-dan")
+	if rec := route(t, s, "GET", "/api/audit/sessions/G1", forge(sm, "as-fay", false), ""); rec.Code != http.StatusNotFound {
+		t.Errorf("a machine grant, the machine gone: %d", rec.Code)
+	}
+	if rec := route(t, s, "GET", "/api/audit/sessions/G1", forge(sm, "as-dan", false), ""); rec.Code != http.StatusOK {
+		t.Errorf("a whole-cluster grant: %d", rec.Code)
+	}
+}
+
+func TestAuditAlertsByGrant(t *testing.T) {
+	s, sm, st := scopeRig(t)
+	viewAudit(t, s, "as-bob", "user = as-bob and machine = as-n1")
+	if rec := route(t, s, "GET", "/api/audit/alerts", forge(sm, "as-eve", false), ""); rec.Code != http.StatusForbidden {
+		t.Errorf("no grant: %d", rec.Code)
+	}
+	if rec := route(t, s, "GET", "/api/audit/alerts", forge(sm, "as-bob", false), ""); rec.Code != http.StatusOK {
+		t.Fatalf("a grant: %d %s", rec.Code, rec.Body)
+	}
+	st.mu.Lock()
+	defer st.mu.Unlock()
+	if sc := st.alertF.Scope; sc == nil || sc.User != "" || len(sc.Machines) != 1 {
+		t.Errorf("alert scope: %+v", sc)
+	}
+}
+
+func TestAuditDisconnectByGrant(t *testing.T) {
+	s, sm, _ := scopeRig(t)
+	viewAudit(t, s, "as-bob", "user = as-bob and machine = as-n1")
+	grantNow(t, s, "as-gil", "user = as-gil and machine = as-n1", devpodv1alpha1.PermViewAudit, devpodv1alpha1.PermDisconnectSessions)
+	if rec := route(t, s, "POST", "/api/audit/sessions/C1/disconnect", forge(sm, "as-bob", false), ""); rec.Code != http.StatusForbidden {
+		t.Errorf("view only: %d", rec.Code)
+	}
+	if rec := route(t, s, "POST", "/api/audit/sessions/C1/disconnect", forge(sm, "as-gil", false), ""); rec.Code == http.StatusForbidden || rec.Code == http.StatusNotFound && !strings.Contains(rec.Body.String(), "LIVE_DISABLED") {
+		t.Errorf("view and disconnect: %d %s", rec.Code, rec.Body)
+	}
+}
+
+// A cluster that cannot be reached: its machine grants wait, the whole-
+// cluster ones stand, and the list is answered.
+func TestAuditScopeClusterAway(t *testing.T) {
+	w := setupWorld(t)
+	ctx := context.Background()
+	n := &corev1.Node{ObjectMeta: metav1.ObjectMeta{Name: "hz-b1"}}
+	if err := w.b.Create(ctx, n); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = w.b.Delete(context.Background(), n) })
+	st := &fakeAuditStore{sessions: map[string]*store.SessionDetail{}, files: map[string]*store.FileEventRow{}, presence: map[string][]string{}}
+	w.s.Audit = &webui.AuditDeps{Store: st, Objects: fakeObjects{}}
+	grantNow(t, w.s, "hz-bob-a", "user = hz-bob and cluster = a", devpodv1alpha1.PermViewAudit)
+	grantNow(t, w.s, "hz-bob-b", "user = hz-bob and cluster = b and machine = hz-b1", devpodv1alpha1.PermViewAudit)
+	scope := func() *store.Scope {
+		code, _, _ := w.call("hz-bob", "GET", "/api/audit/sessions", "")
+		if code != http.StatusOK {
+			t.Fatalf("list: %d", code)
+		}
+		st.mu.Lock()
+		defer st.mu.Unlock()
+		return st.sessF.Scope
+	}
+	w.until("b's machine is in the scope", func() bool {
+		sc := scope()
+		return sc != nil && len(sc.Machines) == 1 && sc.Machines[0] == store.ClusterNode{Cluster: "b", Node: "hz-b1"}
+	})
+	w.stopB()
+	w.until("b is stale", func() bool { _, stale := w.s.Clusters.Stale("b"); return stale })
+	if sc := scope(); !reflect.DeepEqual(sc.Clusters, []string{"a"}) || len(sc.Machines) != 0 {
+		t.Fatalf("with b away: %+v", sc)
+	}
+}

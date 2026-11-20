@@ -5,6 +5,7 @@
 package webui
 
 import (
+	devpodv1alpha1 "github.com/mrhaoxx/devpod/api/v1alpha1"
 	"net/http"
 	"net/url"
 
@@ -16,17 +17,22 @@ import (
 // session's gateway over the internal live endpoint; the access log row
 // is written first, so an attempt is on record even if the cut fails.
 func (s *Server) handleAuditDisconnect(w http.ResponseWriter, r *http.Request) {
-	sess, ok := s.auditAdmin(w, r)
+	sess, ok := s.auditSession(w, r)
 	if !ok {
+		return
+	}
+	d, ok := s.visibleSession(w, r, sess)
+	if !ok {
+		return
+	}
+	// an admin, or by a grant of disconnectSessions on its machine
+	if !s.mayOnSession(r.Context(), sess, devpodv1alpha1.PermDisconnectSessions, d) {
+		s.writeErr(w, http.StatusForbidden, "FORBIDDEN", "you may not disconnect this session", nil)
 		return
 	}
 	ls := s.LiveSessions
 	if ls == nil {
 		s.writeErr(w, http.StatusNotFound, "LIVE_DISABLED", "the gateway control endpoint is not enabled", nil)
-		return
-	}
-	d, ok := s.visibleSession(w, r, sess)
-	if !ok {
 		return
 	}
 	if d.Session.ClosedAt != nil {
