@@ -41,8 +41,65 @@ function Host({ single, max, initial = [] }: { single?: boolean; max?: number; i
 const picked = () => screen.getByTestId("picked").textContent;
 const box = (name: string) => (screen.queryByRole("checkbox", { name }) ?? screen.getByRole("radio", { name })) as HTMLInputElement;
 
+// rows 30 px tall from the top, in the order shown: the row under a point
+function rowsAt() {
+  const rows = () => [...document.querySelectorAll<HTMLElement>("li[data-name]")];
+  Object.defineProperty(document, "elementFromPoint", { value: (_x: number, y: number) => rows()[Math.floor(y / 30)] ?? null, configurable: true });
+  return (name: string) => rows().findIndex((r) => r.dataset.name === name) * 30 + 10;
+}
+const dragFrom = (from: string, to: string, yOf: (n: string) => number) => {
+  const start = screen.getByRole("checkbox", { name: from }).closest("label")!;
+  fireEvent.mouseDown(start, { button: 0, clientX: 5, clientY: yOf(from) });
+  fireEvent.mouseMove(document, { clientX: 5, clientY: yOf(to) });
+  fireEvent.mouseUp(document, { clientX: 5, clientY: yOf(to) });
+  return start;
+};
+
 describe("NodeList", () => {
-  afterEach(() => vi.unstubAllGlobals());
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    Reflect.deleteProperty(document, "elementFromPoint");
+    localStorage.clear();
+  });
+
+  it("a drag across rows picks them in the order passed over; from a picked row it unpicks", async () => {
+    stubFetch({ "/api/nodes": nodes });
+    renderWithProviders(<Host />);
+    await screen.findByRole("checkbox", { name: "m601" });
+    const yOf = rowsAt();
+    const start = dragFrom("m601", "m604", yOf);
+    expect(picked()).toBe("m601,m602,m604");
+    // the click that ends the drag picks nothing more
+    fireEvent.click(start);
+    expect(picked()).toBe("m601,m602,m604");
+    // from a picked row: those passed over are unpicked
+    dragFrom("m602", "m604", yOf);
+    expect(picked()).toBe("m601");
+  });
+
+  it("dragged upwards, the order is the drag's; rows that cannot be picked are passed over; no more than max", async () => {
+    stubFetch({ "/api/nodes": nodes });
+    renderWithProviders(<Host max={3} />);
+    await screen.findByRole("checkbox", { name: "m601" });
+    const yOf = rowsAt();
+    dragFrom("zjusct-920b-1", "m601", yOf); // starts on a row that cannot be picked: nothing
+    expect(picked()).toBe("");
+    dragFrom("m800", "m601", yOf);
+    expect(picked()).toBe("m800,m604,m602");
+  });
+
+  it("remembers the filters for next time", async () => {
+    stubFetch({ "/api/nodes": nodes });
+    const first = renderWithProviders(<Host />);
+    fireEvent.click(await screen.findByRole("checkbox", { name: "只看可用" }));
+    fireEvent.click(screen.getByRole("checkbox", { name: "只看有空闲 GPU" }));
+    first.unmount();
+    renderWithProviders(<Host />);
+    expect((await screen.findByRole("checkbox", { name: "只看可用" }) as HTMLInputElement).checked).toBe(true);
+    expect((screen.getByRole("checkbox", { name: "只看有空闲 GPU" }) as HTMLInputElement).checked).toBe(true);
+    expect(await screen.findByRole("checkbox", { name: "m800" })).toBeTruthy();
+    expect(screen.queryByRole("checkbox", { name: "m601" })).toBeNull(); // no free GPU
+  });
 
   it("rows of differing heights: scrolling never makes the measured height go back and forth (React #185)", async () => {
     stubFetch({ "/api/nodes": { items: Array.from({ length: 600 }, (_, i) => node(`n${i}`)) } });

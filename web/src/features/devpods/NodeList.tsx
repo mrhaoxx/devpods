@@ -1,7 +1,9 @@
 // Picking nodes when there are many: a list to search and filter, with
 // each node's free GPUs and state; picked in order — the order numbers
 // the DevPods (INDEX) or pairs them with the nodes of a migration. A
-// node someone else holds now cannot be picked. single: one node.
+// node someone else holds now cannot be picked. single: one node. A drag
+// across rows picks them in the order passed over (from a picked row it
+// unpicks them); the filters are remembered in this browser.
 import { keyOf } from "../../data/cluster";
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { rowWindow, useView } from "../../design/DataTable";
@@ -11,6 +13,24 @@ import { fmtCores } from "../../lib/format";
 import { fmtTime } from "../../lib/reservations";
 
 const gpuName = (m?: string) => (m ?? "GPU").replace(/^NVIDIA-/, "");
+
+type Filters = { onlyUsable: boolean; onlyGpu: boolean };
+const FILTERS = "devpod.nodeList.filters";
+function readFilters(): Filters {
+  try {
+    const v: Partial<Filters> = JSON.parse(localStorage.getItem(FILTERS) ?? "{}");
+    return { onlyUsable: v.onlyUsable === true, onlyGpu: v.onlyGpu === true };
+  } catch {
+    return { onlyUsable: false, onlyGpu: false };
+  }
+}
+function saveFilters(f: Filters) {
+  try {
+    localStorage.setItem(FILTERS, JSON.stringify(f));
+  } catch {
+    // private window, storage off: not remembered
+  }
+}
 const usable = (n: NodeChoice) => n.selectable && n.ready;
 
 function state(n: NodeChoice): string | null {
@@ -42,8 +62,13 @@ export function NodeList({
   const all = useNodeChoices().data?.items;
   const nodes = useMemo(() => (all ?? []).filter((n) => !cluster || n.cluster === cluster), [all, cluster]);
   const [q, setQ] = useState("");
-  const [onlyUsable, setOnlyUsable] = useState(false);
-  const [onlyGpu, setOnlyGpu] = useState(false);
+  const [filters, setFilters] = useState(readFilters);
+  const { onlyUsable, onlyGpu } = filters;
+  const setFilter = (p: Partial<Filters>) => {
+    const f = { ...filters, ...p };
+    setFilters(f);
+    saveFilters(f);
+  };
   const shown = useMemo(() => {
     const s = q.trim().toLowerCase();
     return nodes.filter(
@@ -86,6 +111,85 @@ export function NodeList({
     if (picked.includes(name)) setPicked(picked.filter((x) => x !== name));
     else if (!full) setPicked([...picked, name]);
   };
+  // a drag across rows: from the row pressed to the one under the pointer,
+  // in that order; from a picked row, those passed over are unpicked. A
+  // press that stays on its row is a click. Near the list's top or bottom
+  // edge the list scrolls.
+  const pickedNow = useRef(picked);
+  pickedNow.current = picked;
+  const shownNow = useRef(shown);
+  shownNow.current = shown;
+  const drag = useRef<{ from: string; base: string[]; on: boolean; moved: boolean } | null>(null);
+  const afterDrag = useRef(false); // the click that ends a drag picks nothing more
+  const [dragging, setDragging] = useState(false);
+  const startDrag = (e: React.MouseEvent) => {
+    afterDrag.current = false;
+    if (single || disabled || e.button !== 0 || e.shiftKey || e.metaKey || e.ctrlKey || e.altKey) return;
+    const from = (e.target as HTMLElement).closest<HTMLElement>("li[data-name]")?.dataset.name;
+    const at = shownNow.current.find((n) => n.name === from);
+    if (!from || !at?.selectable) return;
+    drag.current = { from, base: pickedNow.current, on: !pickedNow.current.includes(from), moved: false };
+    let x = e.clientX;
+    let y = e.clientY;
+    let raf = 0;
+    const pick = () => {
+      const d = drag.current;
+      if (!d) return;
+      // over the rows, even when the pointer has gone above or below them
+      let py = y;
+      const r = list.current?.getBoundingClientRect();
+      if (r && r.height > 0) py = Math.min(Math.max(y, r.top + 1), r.bottom - 2);
+      const id = (typeof document.elementFromPoint === "function" ? document.elementFromPoint(x, py) : null)?.closest<HTMLElement>("li[data-name]")?.dataset.name;
+      const all = shownNow.current;
+      const i = all.findIndex((n) => n.name === id);
+      const j = all.findIndex((n) => n.name === d.from);
+      if (i < 0 || j < 0 || (!d.moved && i === j)) return;
+      if (!d.moved) {
+        d.moved = true;
+        setDragging(true);
+        window.getSelection()?.removeAllRanges();
+      }
+      const step = i >= j ? 1 : -1;
+      const passed: string[] = [];
+      for (let k = j; k !== i + step; k += step) if (all[k].selectable) passed.push(all[k].name);
+      if (d.on) {
+        const more = passed.filter((n) => !d.base.includes(n));
+        setPicked([...d.base, ...more].slice(0, Math.max(max, d.base.length)));
+      } else setPicked(d.base.filter((n) => !passed.includes(n)));
+    };
+    const edge = () => {
+      const ul = list.current;
+      if (ul && drag.current?.moved) {
+        const r = ul.getBoundingClientRect();
+        const dy = y < r.top + 16 ? -Math.ceil((r.top + 16 - y) / 2) : y > r.bottom - 16 ? Math.ceil((y - r.bottom + 16) / 2) : 0;
+        if (dy && r.height > 0) {
+          ul.scrollTop += Math.max(-30, Math.min(30, dy));
+          pick();
+        }
+      }
+      raf = requestAnimationFrame(edge);
+    };
+    raf = requestAnimationFrame(edge);
+    const move = (ev: MouseEvent) => {
+      x = ev.clientX;
+      y = ev.clientY;
+      pick();
+    };
+    const end = () => {
+      cancelAnimationFrame(raf);
+      document.removeEventListener("mousemove", move);
+      document.removeEventListener("mouseup", end);
+      if (drag.current?.moved) {
+        afterDrag.current = true;
+        setTimeout(() => (afterDrag.current = false), 0);
+      }
+      drag.current = null;
+      setDragging(false);
+    };
+    document.addEventListener("mousemove", move);
+    document.addEventListener("mouseup", end);
+  };
+
   const addShown = () => {
     const more = shown.filter((n) => n.selectable && !picked.includes(n.name)).map((n) => n.name);
     setPicked([...picked, ...more].slice(0, Math.max(max, picked.length)));
@@ -106,11 +210,11 @@ export function NodeList({
           className="h-7 min-w-0 flex-1 rounded-md border border-line-strong bg-surface px-2 text-xs focus:border-accent focus:outline-none"
         />
         <label className="inline-flex items-center gap-1 text-[11px]">
-          <input type="checkbox" checked={onlyUsable} onChange={(e) => setOnlyUsable(e.target.checked)} />
+          <input type="checkbox" checked={onlyUsable} onChange={(e) => setFilter({ onlyUsable: e.target.checked })} />
           只看可用
         </label>
         <label className="inline-flex items-center gap-1 text-[11px]">
-          <input type="checkbox" checked={onlyGpu} onChange={(e) => setOnlyGpu(e.target.checked)} />
+          <input type="checkbox" checked={onlyGpu} onChange={(e) => setFilter({ onlyGpu: e.target.checked })} />
           只看有空闲 GPU
         </label>
         {!single && (
@@ -132,14 +236,24 @@ export function NodeList({
         </ol>
       )}
       {full && <p role="status" className="text-[11px] text-warm">最多选 {max} 个。</p>}
-      <ul ref={list} className="max-h-72 overflow-y-auto rounded-md border border-line">
+      <ul
+        ref={list}
+        className={`max-h-72 overflow-y-auto rounded-md border border-line ${dragging ? "select-none" : ""}`}
+        onMouseDown={startDrag}
+        onClickCapture={(e) => {
+          if (afterDrag.current) {
+            e.preventDefault();
+            e.stopPropagation();
+          }
+        }}
+      >
         {first > 0 && <li aria-hidden="true" style={{ height: first * rowH }} />}
         {shown.slice(first, last).map((n) => {
           const at = picked.indexOf(n.name);
           const st = state(n);
           const free = n.gpuTotal - n.gpuUsed;
           return (
-            <li key={keyOf(n)} data-node className="border-b border-line last:border-0">
+            <li key={keyOf(n)} data-node data-name={n.name} className="border-b border-line last:border-0">
               <label className={`flex items-center gap-2 px-2 py-1 ${n.selectable ? "cursor-pointer hover:bg-sunk" : "opacity-50"} ${at >= 0 ? "bg-accent-soft" : ""}`}>
                 <input
                   type={single ? "radio" : "checkbox"}
