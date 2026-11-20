@@ -34,6 +34,12 @@ namespaces:
 # gateway, webui and audit-migrate pods, e.g. [{name: harbor-pull}].
 imagePullSecrets: []
 
+# Pull secrets (names; must exist in namespaces.devpods) the controller
+# puts on every DevPod Pod and snapshot Job, whatever else they carry: for
+# a supervisor or snapshot image in a registry only they open (shanhu:
+# [approaching-ccr-registry]).
+devpodPullSecrets: []
+
 # The extended resources that are GPUs, the default kind first. A GPU
 # count (a node's, a DevPod's, a quota's devpod.io/gpu) is the sum over
 # them; `gpu: N` without a kind asks for the first. Empty: the built-in

@@ -59,6 +59,7 @@ func main() {
 		snapshotImage                                 string
 		snapshotDockerImage, snapshotContainerdSocket string
 		snapshotPlainHTTP                             string
+		pullSecrets                                   string
 		ingestURL                                     string
 		ingestKeyFile                                 string
 		tel                                           = config.DefaultConfig()
@@ -84,6 +85,8 @@ func main() {
 		"container mount prefix for home directories (e.g. /home → /home/{owner})")
 	flag.StringVar(&snapshotImage, "snapshot-image", "ghcr.io/mrhaoxx/devpod-snapshot:dev",
 		"image for snapshot Jobs (images/snapshot: devpod-snapshot, which commits and pushes through the node's containerd or Docker API)")
+	flag.StringVar(&pullSecrets, "pull-secrets", "",
+		"comma-separated image pull Secrets (in the DevPod namespace) put on every DevPod Pod and snapshot Job, whatever else they carry: for a supervisor or snapshot image in a registry only they open")
 	flag.StringVar(&snapshotDockerImage, "snapshot-docker-image", "",
 		"snapshot Job image for Docker nodes; empty = --snapshot-image")
 	flag.StringVar(&snapshotContainerdSocket, "snapshot-containerd-socket", "/run/containerd/containerd.sock",
@@ -167,6 +170,7 @@ func main() {
 		GatewayInternalPub: internalPub,
 		Telemetry:          telemetrySettings(ingestKeyFile, ingestURL, gatewayNamespace, tel),
 		Reservations:       reservations,
+		PullSecrets:        splitList(pullSecrets),
 	}).SetupWithManager(mgr); err != nil {
 		die(err, "set up DevPodReconciler")
 	}
@@ -196,7 +200,7 @@ func main() {
 		Client:        mgr.GetClient(),
 		Scheme:        mgr.GetScheme(),
 		SnapshotImage: snapshotImage, DockerImage: snapshotDockerImage, ContainerdSocket: snapshotContainerdSocket,
-		PlainHTTPRegistries: splitList(snapshotPlainHTTP),
+		PlainHTTPRegistries: splitList(snapshotPlainHTTP), PullSecrets: splitList(pullSecrets),
 	}).SetupWithManager(mgr); err != nil {
 		die(err, "set up DevPodSnapshotReconciler")
 	}

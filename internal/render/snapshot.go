@@ -75,6 +75,9 @@ type SnapshotTarget struct {
 	ContainerdSocket string
 	// PlainHTTPRegistries are pushed to without TLS (host or host:port).
 	PlainHTTPRegistries []string
+	// PullSecrets are the cluster's image pull Secrets: the Job image may
+	// live in a registry only they open.
+	PullSecrets []string
 }
 
 // SnapshotJob renders the batch/v1 Job that commits the container on its
@@ -147,8 +150,9 @@ func SnapshotJob(snap *devpodv1alpha1.DevPodSnapshot, t SnapshotTarget) *batchv1
 			Template: corev1.PodTemplateSpec{
 				ObjectMeta: metav1.ObjectMeta{Labels: labels},
 				Spec: corev1.PodSpec{
-					RestartPolicy: corev1.RestartPolicyNever,
-					NodeName:      t.NodeName,
+					RestartPolicy:    corev1.RestartPolicyNever,
+					NodeName:         t.NodeName,
+					ImagePullSecrets: pullSecretRefs(t.PullSecrets),
 					// a cancel (the snapshot is deleted) sends SIGTERM:
 					// devpod-snapshot stops and removes the image it made
 					TerminationGracePeriodSeconds: ptr.To[int64](snapshotGraceSeconds),
@@ -206,4 +210,12 @@ func ParseSnapshotResult(msg string) SnapshotResult {
 		r.Error = strings.TrimPrefix(last, "@error ")
 	}
 	return r
+}
+
+func pullSecretRefs(names []string) []corev1.LocalObjectReference {
+	var out []corev1.LocalObjectReference
+	for _, n := range names {
+		out = append(out, corev1.LocalObjectReference{Name: n})
+	}
+	return out
 }

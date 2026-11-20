@@ -226,3 +226,27 @@ func TestSnapshotJob_PlainHTTPRegistries(t *testing.T) {
 		t.Fatalf("PLAIN_HTTP_REGISTRIES = %q", got)
 	}
 }
+
+// The cluster's pull secrets reach the Job too (its image may live where
+// only they open).
+func TestSnapshotJob_PullSecrets(t *testing.T) {
+	snap := &devpodv1alpha1.DevPodSnapshot{
+		ObjectMeta: metav1.ObjectMeta{Name: "s1", Namespace: "devpods"},
+		Spec:       devpodv1alpha1.DevPodSnapshotSpec{DevPodName: "dp", Image: "reg/x:1"},
+	}
+	names := func(t2 render.SnapshotTarget) []string {
+		var out []string
+		for _, r := range render.SnapshotJob(snap, t2).Spec.Template.Spec.ImagePullSecrets {
+			out = append(out, r.Name)
+		}
+		return out
+	}
+	base := render.SnapshotTarget{Runtime: render.RuntimeContainerd, ContainerID: "c", NodeName: "n", Image: "img"}
+	if got := names(base); len(got) != 0 {
+		t.Fatalf("none named: %v", got)
+	}
+	base.PullSecrets = []string{"ccr-pull"}
+	if got := names(base); len(got) != 1 || got[0] != "ccr-pull" {
+		t.Fatalf("pull secrets: %v", got)
+	}
+}

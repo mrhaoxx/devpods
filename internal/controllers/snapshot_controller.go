@@ -39,6 +39,8 @@ type DevPodSnapshotReconciler struct {
 	ContainerdSocket string
 	// PlainHTTPRegistries are the registries snapshot Jobs push to without TLS.
 	PlainHTTPRegistries []string
+	// PullSecrets are the cluster's image pull Secrets, on every Job.
+	PullSecrets []string
 }
 
 // +kubebuilder:rbac:groups=devpod.io,resources=devpodsnapshots,verbs=get;list;watch;update;patch;delete
@@ -129,7 +131,7 @@ func (r *DevPodSnapshotReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 	job := render.SnapshotJob(&snap, render.SnapshotTarget{
 		Runtime: containerRuntime, ContainerID: containerID, NodeName: nodeName,
 		PushSecret: pushSecret, Image: image, ContainerdSocket: r.ContainerdSocket,
-		PlainHTTPRegistries: r.PlainHTTPRegistries,
+		PlainHTTPRegistries: r.PlainHTTPRegistries, PullSecrets: r.PullSecrets,
 	})
 
 	if err := controllerutil.SetControllerReference(&snap, job, r.Scheme); err != nil {

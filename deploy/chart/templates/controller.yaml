@@ -29,6 +29,9 @@ spec:
         - --leader-elect=true
         - --zap-devel=false
         - --snapshot-image={{ .Values.image.snapshot.repository }}:{{ .Values.image.snapshot.tag }}
+        {{- with .Values.devpodPullSecrets }}
+        - --pull-secrets={{ join "," . }}
+        {{- end }}
         {{- with (.Values.snapshot | default dict) }}
         {{- with .containerdSocket }}
         - --snapshot-containerd-socket={{ . }}

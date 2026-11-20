@@ -44,6 +44,13 @@ type DevPodReconciler struct {
 	// follow-up plan will wire it from a real GatewayConfig Get.
 	GwConfig *devpodv1alpha1.GatewayConfig
 
+	// PullSecrets are the cluster's image pull Secrets (in the DevPod
+	// namespace), put on every Pod made: the supervisor may live in a
+	// registry only they open, and Kubernetes adds a ServiceAccount's to a
+	// Pod naming none only — not to one with the owner's credentials or
+	// pull secrets of its own.
+	PullSecrets []string
+
 	// GatewayNamespace is the namespace where the gateway Deployment
 	// runs. Per-owner NetworkPolicy uses it as the trusted source for
 	// ingress on port 22.
@@ -628,13 +635,18 @@ func (r *DevPodReconciler) attachRegistrySecret(ctx context.Context, dp *devpodv
 	if sec.Labels[devpodv1alpha1.RegistryCredentialsLabel] != "true" || sec.Labels[devpodv1alpha1.OwnerLabel] != dp.Spec.Owner {
 		return nil
 	}
+	addPullSecret(pod, name)
+	return nil
+}
+
+// addPullSecret names a pull Secret on pod, once.
+func addPullSecret(pod *corev1.Pod, name string) {
 	for _, ref := range pod.Spec.ImagePullSecrets {
 		if ref.Name == name {
-			return nil
+			return
 		}
 	}
 	pod.Spec.ImagePullSecrets = append(pod.Spec.ImagePullSecrets, corev1.LocalObjectReference{Name: name})
-	return nil
 }
 
 // specHashAnnotation tags a rendered Pod with a SHA256 of its spec.
@@ -698,6 +710,9 @@ func (r *DevPodReconciler) applyPodWithDriftRecreate(ctx context.Context, dp *de
 		// The owner's registry credentials (snapshot spec v2 §5.2), also
 		// after the hash: saving or removing a credential must not
 		// recreate running Pods, it only reaches Pods created later.
+		for _, name := range r.PullSecrets {
+			addPullSecret(pod, name)
+		}
 		if err := r.attachRegistrySecret(ctx, dp, pod); err != nil {
 			return err
 		}
