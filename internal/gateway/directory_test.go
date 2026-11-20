@@ -9,9 +9,11 @@ import (
 	"errors"
 	"net"
 	"testing"
+	"time"
 
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	devpodv1alpha1 "github.com/mrhaoxx/devpod/api/v1alpha1"
 	"github.com/mrhaoxx/devpod/internal/gateway"
@@ -122,13 +124,15 @@ func TestDialer_DialInGoesThroughTheClusterDialer(t *testing.T) {
 	}
 }
 
-// A DevPod found says the machine its Pod is on; without a Pod, none.
+// A DevPod found says the machine its Pod is on (read with the pods
+// reader); without a Pod, none.
 func TestKubeDirectory_Node(t *testing.T) {
 	dp := func(name string) *devpodv1alpha1.DevPod {
 		return &devpodv1alpha1.DevPod{ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "devpods"}, Spec: devpodv1alpha1.DevPodSpec{Owner: "alice"}}
 	}
 	pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "alice-dev", Namespace: "devpods"}, Spec: corev1.PodSpec{NodeName: "n7"}}
-	d := gateway.NewKubeDirectory(fakeClient(t, dp("alice-dev"), dp("alice-cold"), pod), "devpods")
+	c := fakeClient(t, dp("alice-dev"), dp("alice-cold"), pod)
+	d := gateway.NewKubeDirectoryWithPods(c, c, "devpods")
 	ctx := context.Background()
 	found, err := d.Lookup(ctx, "alice", "dev", "")
 	if err != nil || len(found) != 1 || found[0].Node != "n7" {
@@ -137,5 +141,43 @@ func TestKubeDirectory_Node(t *testing.T) {
 	found, err = d.Lookup(ctx, "alice", "cold", "")
 	if err != nil || len(found) != 1 || found[0].Node != "" {
 		t.Fatalf("without a Pod: %+v %v", found, err)
+	}
+}
+
+// stallingPods: a reader whose Pods never come (a cache whose Pod
+// informer cannot sync: no RBAC) — Get waits for its context.
+type stallingPods struct{ client.Reader }
+
+func (s stallingPods) Get(ctx context.Context, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
+	if _, ok := obj.(*corev1.Pod); ok {
+		<-ctx.Done()
+		return ctx.Err()
+	}
+	return s.Reader.Get(ctx, key, obj, opts...)
+}
+
+// The machine is best effort: a login or a proxied request never waits on
+// it — not on the DevPod reader (it is not asked for Pods), and not long
+// on the pods reader.
+func TestKubeDirectory_NodeNeverStalls(t *testing.T) {
+	c := fakeClient(t, &devpodv1alpha1.DevPod{ObjectMeta: metav1.ObjectMeta{Name: "alice-dev", Namespace: "devpods"}, Spec: devpodv1alpha1.DevPodSpec{Owner: "alice"}})
+	stall := stallingPods{c}
+	for name, d := range map[string]gateway.Directory{
+		"no pods reader":         gateway.NewKubeDirectory(stall, "devpods"),
+		"a stalling pods reader": gateway.NewKubeDirectoryWithPods(c, stall, "devpods"),
+	} {
+		done := make(chan []gateway.Found, 1)
+		go func() {
+			found, _ := d.Lookup(context.Background(), "alice", "dev", "")
+			done <- found
+		}()
+		select {
+		case found := <-done:
+			if len(found) != 1 || found[0].Node != "" {
+				t.Errorf("%s: %+v", name, found)
+			}
+		case <-time.After(4 * time.Second):
+			t.Errorf("%s: the lookup waited on the Pod", name)
+		}
 	}
 }

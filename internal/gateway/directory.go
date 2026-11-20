@@ -48,6 +48,10 @@ type kubeDirectory struct {
 	c   client.Reader
 	ns  string
 	now func() time.Time
+	// pods reads a DevPod's Pod for the machine it is on; nil = not read.
+	// Not the DevPod cache: a Pod informer there needs RBAC over every
+	// Pod and would hold a login until it synced.
+	pods client.Reader
 
 	mu    sync.Mutex
 	ids   map[string]string // port-link id → DevPod name
@@ -72,14 +76,27 @@ func (d *kubeDirectory) Lookup(ctx context.Context, user, pod, cluster string) (
 	return []Found{{DevPod: &dp, Node: d.nodeOf(ctx, &dp)}}, nil
 }
 
-// nodeOf: the machine dp's Pod is on; "" when there is none or it cannot
-// be read.
+// nodeOf: the machine dp's Pod is on; "" when there is no pods reader,
+// no Pod, or it cannot be read soon — what a session records is best
+// effort, a login never waits on it.
 func (d *kubeDirectory) nodeOf(ctx context.Context, dp *devpodv1alpha1.DevPod) string {
+	if d.pods == nil {
+		return ""
+	}
+	ctx, cancel := context.WithTimeout(ctx, 2*time.Second)
+	defer cancel()
 	var pod corev1.Pod
-	if err := d.c.Get(ctx, types.NamespacedName{Name: dp.Name, Namespace: d.ns}, &pod); err != nil {
+	if err := d.pods.Get(ctx, types.NamespacedName{Name: dp.Name, Namespace: d.ns}, &pod); err != nil {
 		return ""
 	}
 	return pod.Spec.NodeName
+}
+
+// NewKubeDirectoryWithPods is NewKubeDirectory that also says the machine
+// a DevPod's Pod is on, read through pods (an uncached reader: the gateway
+// may read Pods of the DevPod namespace, no more).
+func NewKubeDirectoryWithPods(r, pods client.Reader, namespace string) Directory {
+	return &kubeDirectory{c: r, ns: namespace, now: time.Now, pods: pods}
 }
 
 func (d *kubeDirectory) ByHTTPID(ctx context.Context, id string) (*Found, error) {

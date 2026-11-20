@@ -70,6 +70,15 @@ func NewHTTPProxy(c client.Reader, devpodNamespace, baseDomain, suffix string) *
 	return p
 }
 
+// WithPods has the proxy's own DevPod lookup (NewHTTPProxy) say the
+// machine a DevPod's Pod is on, read through pods.
+func (p *HTTPProxy) WithPods(pods client.Reader) *HTTPProxy {
+	if d, ok := p.dir.(*kubeDirectory); ok {
+		d.pods = pods
+	}
+	return p
+}
+
 // NewHTTPProxyWith serves the DevPods dir knows (a gateway of several
 // clusters asks the console).
 func NewHTTPProxyWith(dir Directory, baseDomain, suffix string) *HTTPProxy {

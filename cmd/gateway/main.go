@@ -160,6 +160,13 @@ func main() {
 		slog.Error("cache", "err", err)
 		os.Exit(1)
 	}
+	// Pods are read one at a time, uncached, for the machine a session is
+	// on: the gateway may read Pods of the DevPod namespace, no more
+	pods, err := client.New(cfg, client.Options{Scheme: scheme})
+	if err != nil {
+		slog.Error("pods_client", "err", err)
+		os.Exit(1)
+	}
 
 	gw, err := loadGatewayConfig(ctx, c, gcName)
 	if err != nil {
@@ -197,6 +204,10 @@ func main() {
 			os.Exit(1)
 		}
 		authn.WithDirectory(gateway.NewConsoleDirectory(theHub.link)).WithSources(theHub.sources(srcs))
+	} else {
+		authn.WithDirectory(gateway.NewKubeDirectoryWithPods(c, pods, devpodNamespace))
+	}
+	if theHub != nil {
 		hubName = *hf.name
 		dialer.Net = theHub.dial
 		slog.Info("gateway_of_several_clusters", "console", *hf.console, "name", *hf.name)
@@ -211,7 +222,7 @@ func main() {
 	var hp *gateway.HTTPProxy // the HTTP proxy, served once audit is wired (below)
 	var serveHTTP func()
 	if httpListenAddr != "" && httpBaseDomain != "" {
-		hp = gateway.NewHTTPProxy(c, devpodNamespace, httpBaseDomain, httpSubdomainSuffix)
+		hp = gateway.NewHTTPProxy(c, devpodNamespace, httpBaseDomain, httpSubdomainSuffix).WithPods(pods)
 		if theHub != nil {
 			hp = gateway.NewHTTPProxyWith(gateway.NewConsoleDirectory(theHub.link), httpBaseDomain, httpSubdomainSuffix)
 			hp.Net = theHub.dial
