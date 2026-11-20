@@ -23,6 +23,7 @@ import (
 
 	"github.com/coder/websocket"
 	"golang.org/x/crypto/ssh"
+	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 
@@ -134,6 +135,21 @@ func TestGateways(t *testing.T) {
 	// a gateway is told who may log in and where the DevPod runs — not what it runs
 	if dp := found[0].DevPod; dp.Spec.Pod != nil || dp.UID == "" || len(dp.ManagedFields) != 0 {
 		t.Fatalf("what a gateway is given of a DevPod: %+v", dp)
+	}
+	// the machine its Pod is on (a's has one, b's none)
+	if err := w.a.Create(ctx, &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "gl-alice-x", Namespace: "devpods"},
+		Spec: corev1.PodSpec{NodeName: "n7", Containers: []corev1.Container{{Name: "dev", Image: "ubuntu:24.04"}}}}); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_ = w.a.Delete(context.Background(), &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "gl-alice-x", Namespace: "devpods"}})
+	})
+	w.until("the console sees the Pod's machine", func() bool {
+		found, _, err := gwlink.NewClient(gwlink.Options{Console: web.URL, Gateway: "b300", Identity: id, TTL: time.Millisecond}).Lookup(ctx, "gl-alice", "x", "a")
+		return err == nil && len(found) == 1 && found[0].Node == "n7"
+	})
+	if found, _, err := gw.Lookup(ctx, "gl-alice", "x", "b"); err != nil || len(found) != 1 || found[0].Node != "" {
+		t.Fatalf("no Pod, no machine: %+v %v", found, err)
 	}
 	if found, _, err := gw.Lookup(ctx, "gl-alice", "x", "b"); err != nil || len(found) != 1 || found[0].Cluster != "b" {
 		t.Fatalf("with the cluster: %+v %v", found, err)

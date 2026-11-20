@@ -566,3 +566,20 @@ func TestSession_LongSessionRowsKeepUp(t *testing.T) {
 		t.Fatalf("the close row: %+v", end)
 	}
 }
+
+// A session records the machine its DevPod was on when it opened.
+func TestSession_RecordsTheMachine(t *testing.T) {
+	g := newRig(t, 64<<20)
+	s := g.r.Start(SessionMeta{ID: NewSessionID(time.Now()), User: "alice", DevPod: "alice-dev", DevPodUID: "uid-1", Owner: "alice", OpenedAt: time.Now(),
+		Cluster: "zjusct", Gateway: "gw", Node: "n7"}, policy.Effective{})
+	s.Close("client_disconnect", 0, 0)
+	all := g.drain()
+	if len(all.Sessions) == 0 {
+		t.Fatal("no session row")
+	}
+	for _, r := range all.Sessions {
+		if r.Node != "n7" {
+			t.Fatalf("session row %+v", r)
+		}
+	}
+}

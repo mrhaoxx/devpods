@@ -34,14 +34,14 @@ type HTTPAudit interface {
 // to answer through (it counts the answer, and both directions once the
 // connection is upgraded) and what records the request once it has ended,
 // as the user it turned out to be.
-func (p *HTTPProxy) record(w http.ResponseWriter, r *http.Request, dp *devpodv1alpha1.DevPod, cluster string, port int) (http.ResponseWriter, func(user string)) {
+func (p *HTTPProxy) record(w http.ResponseWriter, r *http.Request, dp *devpodv1alpha1.DevPod, cluster, node string, port int) (http.ResponseWriter, func(user string)) {
 	start := p.Now()
 	clientIP, _, err := net.SplitHostPort(r.RemoteAddr)
 	if err != nil {
 		clientIP = r.RemoteAddr
 	}
 	row := store.HTTPRequestRow{
-		TS: start.UTC(), Cluster: cluster, DevPod: dp.Name, DevPodUID: string(dp.UID), Owner: dp.Spec.Owner,
+		TS: start.UTC(), Cluster: cluster, Node: node, DevPod: dp.Name, DevPodUID: string(dp.UID), Owner: dp.Spec.Owner,
 		Port: uint16(port), Access: httpauth.Access(dp, port), Method: r.Method, Host: r.Host,
 		Path: r.URL.Path, Query: r.URL.RawQuery, ClientIP: clientIP, ForwardedFor: r.Header.Get("X-Forwarded-For"),
 		UserAgent: r.UserAgent(), RequestID: ulid.MustNew(ulid.Timestamp(start), ulid.DefaultEntropy()).String(),

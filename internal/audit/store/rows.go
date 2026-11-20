@@ -14,6 +14,8 @@ import "time"
 type SessionRow struct {
 	// Cluster: the cluster of its DevPod, in a console of several ("" in a console of one).
 	Cluster string `ch:"cluster" json:"cluster,omitempty"`
+	// Node: the machine its DevPod was on when it opened; "" = not known
+	Node string `ch:"node" json:"node,omitempty"`
 	// Gateway: the registered gateway it came in at, for a gateway of
 	// several clusters.
 	Gateway    string `ch:"gateway" json:"gateway,omitempty"`
@@ -142,6 +144,7 @@ type HTTPRequestRow struct {
 	// Cluster: the DevPod's ("" in a console of one); Gateway: the
 	// gateway's registered name ("" for a gateway of one cluster).
 	Cluster    string `ch:"cluster" json:"cluster,omitempty"`
+	Node       string `ch:"node" json:"node,omitempty"`
 	Gateway    string `ch:"gateway" json:"gateway,omitempty"`
 	GatewayPod string `ch:"gateway_pod" json:"gateway_pod"`
 	DevPod     string `ch:"devpod" json:"devpod"`

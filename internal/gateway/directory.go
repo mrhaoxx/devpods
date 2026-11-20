@@ -9,6 +9,7 @@ import (
 	"sync"
 	"time"
 
+	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -22,6 +23,8 @@ import (
 type Found struct {
 	Cluster string
 	DevPod  *devpodv1alpha1.DevPod
+	// Node: the machine its Pod is on; "" = none or not known
+	Node string
 }
 
 // Directory answers which DevPod a login or a port-link address means.
@@ -66,7 +69,17 @@ func (d *kubeDirectory) Lookup(ctx context.Context, user, pod, cluster string) (
 	if err != nil {
 		return nil, err
 	}
-	return []Found{{DevPod: &dp}}, nil
+	return []Found{{DevPod: &dp, Node: d.nodeOf(ctx, &dp)}}, nil
+}
+
+// nodeOf: the machine dp's Pod is on; "" when there is none or it cannot
+// be read.
+func (d *kubeDirectory) nodeOf(ctx context.Context, dp *devpodv1alpha1.DevPod) string {
+	var pod corev1.Pod
+	if err := d.c.Get(ctx, types.NamespacedName{Name: dp.Name, Namespace: d.ns}, &pod); err != nil {
+		return ""
+	}
+	return pod.Spec.NodeName
 }
 
 func (d *kubeDirectory) ByHTTPID(ctx context.Context, id string) (*Found, error) {
@@ -98,5 +111,5 @@ func (d *kubeDirectory) ByHTTPID(ctx context.Context, id string) (*Found, error)
 	if err := d.c.Get(ctx, client.ObjectKey{Name: name, Namespace: d.ns}, &dp); err != nil || dp.Annotations[httpauth.IDAnnotation] != id {
 		return nil, nil
 	}
-	return &Found{DevPod: &dp}, nil
+	return &Found{DevPod: &dp, Node: d.nodeOf(ctx, &dp)}, nil
 }

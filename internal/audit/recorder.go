@@ -49,6 +49,8 @@ type SessionMeta struct {
 	// Cluster the DevPod is in and Gateway (by registered name) the
 	// session came in at: set by a gateway that serves several clusters.
 	Cluster, Gateway string
+	// Node: the machine the DevPod is on; "" = not known.
+	Node string
 }
 
 // NewSessionID returns a ULID for a session opened at t.

@@ -30,7 +30,7 @@ func (d consoleDirectory) Lookup(ctx context.Context, user, pod, cluster string)
 	out := make([]Found, 0, len(found))
 	for _, f := range found {
 		if f.DevPod != nil {
-			out = append(out, Found{Cluster: f.Cluster, DevPod: f.DevPod})
+			out = append(out, Found{Cluster: f.Cluster, DevPod: f.DevPod, Node: f.Node})
 		}
 	}
 	return out, nil
@@ -44,7 +44,7 @@ func (d consoleDirectory) ByHTTPID(ctx context.Context, id string) (*Found, erro
 	if err != nil || f.DevPod == nil {
 		return nil, err
 	}
-	return &Found{Cluster: f.Cluster, DevPod: f.DevPod}, nil
+	return &Found{Cluster: f.Cluster, DevPod: f.DevPod, Node: f.Node}, nil
 }
 
 // NewConsoleSource resolves a user's keys from those registered at the

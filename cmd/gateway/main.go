@@ -535,6 +535,7 @@ func handle(parent context.Context, id uint64, conn net.Conn, hostSigner ssh.Sig
 				"devpod.io/devpod":    res.DevPodName,
 				"devpod.io/endpoint":  res.Endpoint,
 				"devpod.io/cluster":   res.Cluster,
+				"devpod.io/node":      res.Node,
 				"devpod.io/uid":       res.DevPodUID,
 				"devpod.io/owner":     res.Owner,
 				"devpod.io/ambiguous": strings.Join(res.Ambiguous, " "),
@@ -585,6 +586,7 @@ func handle(parent context.Context, id uint64, conn net.Conn, hostSigner ssh.Sig
 		AuthKind: ap.Kind, ProxyAlias: ap.Alias, OpenedAt: start,
 		DevPodUID: srvConn.Permissions.Extensions["devpod.io/uid"], Owner: srvConn.Permissions.Extensions["devpod.io/owner"],
 		Cluster: srvConn.Permissions.Extensions["devpod.io/cluster"], Gateway: ad.gatewayName,
+		Node: srvConn.Permissions.Extensions["devpod.io/node"],
 	})
 
 	stats := &gateway.ProxyStats{}

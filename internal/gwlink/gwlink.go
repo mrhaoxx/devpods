@@ -116,6 +116,8 @@ var PurposeSSH = []byte(`{"kind":"ssh"}`)
 type Found struct {
 	Cluster string                 `json:"cluster"`
 	DevPod  *devpodv1alpha1.DevPod `json:"devpod"`
+	// Node: the machine its Pod is on; "" = none (not running) or not known
+	Node string `json:"node,omitempty"`
 }
 
 // Lookup asks which DevPods "<user>+<pod>" could mean, in Cluster or

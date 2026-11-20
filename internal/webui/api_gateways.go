@@ -21,6 +21,7 @@ import (
 
 	"golang.org/x/crypto/ssh"
 
+	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
@@ -30,6 +31,7 @@ import (
 	devpodv1alpha1 "github.com/mrhaoxx/devpod/api/v1alpha1"
 	"github.com/mrhaoxx/devpod/internal/gwlink"
 	"github.com/mrhaoxx/devpod/internal/httpauth"
+	"github.com/mrhaoxx/devpod/internal/render"
 	"github.com/mrhaoxx/devpod/internal/tunnel"
 	"github.com/mrhaoxx/devpod/internal/webui/clusters"
 )
@@ -467,7 +469,7 @@ func (s *Server) handleGatewayLookup(w http.ResponseWriter, r *http.Request) {
 		}
 		switch {
 		case err == nil:
-			out.Found = append(out.Found, gwlink.Found{Cluster: cc.Name, DevPod: forGateway(&dp)})
+			out.Found = append(out.Found, gwlink.Found{Cluster: cc.Name, DevPod: forGateway(&dp), Node: s.podNode(r.Context(), cc, &dp)})
 		case !apierrors.IsNotFound(err):
 			failed = err
 		}
@@ -497,7 +499,7 @@ func (s *Server) handleGatewayHTTP(w http.ResponseWriter, r *http.Request) {
 			}
 			for i := range list.Items {
 				if list.Items[i].Annotations[httpauth.IDAnnotation] == id {
-					found = &gwlink.Found{Cluster: cc.Name, DevPod: forGateway(&list.Items[i])}
+					found = &gwlink.Found{Cluster: cc.Name, DevPod: forGateway(&list.Items[i]), Node: s.podNode(r.Context(), cc, &list.Items[i])}
 					return
 				}
 			}
@@ -651,4 +653,14 @@ func authorizedKeyLine(k string) (string, bool) {
 		return "", false
 	}
 	return strings.TrimSpace(string(ssh.MarshalAuthorizedKey(pub))), true
+}
+
+// podNode: the machine dp's Pod is on in cc; "" when there is none or it
+// cannot be read — what a gateway records a session on (grants design §8).
+func (s *Server) podNode(ctx context.Context, cc *clusters.ClusterClients, dp *devpodv1alpha1.DevPod) string {
+	var pod corev1.Pod
+	if err := cc.Client.Get(ctx, types.NamespacedName{Name: render.PodName(dp), Namespace: s.NS}, &pod); err != nil {
+		return ""
+	}
+	return pod.Spec.NodeName
 }

@@ -10,6 +10,7 @@ import (
 	"net"
 	"testing"
 
+	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	devpodv1alpha1 "github.com/mrhaoxx/devpod/api/v1alpha1"
@@ -118,5 +119,23 @@ func TestDialer_DialInGoesThroughTheClusterDialer(t *testing.T) {
 	_, _, _, err := d.DialIn(context.Background(), gateway.Target{Cluster: "mulan", Addr: "10.0.0.1:22", DevPodUID: "uid-1", User: "alice"})
 	if want := (gateway.Target{Cluster: "mulan", Addr: "10.0.0.1:22", Purpose: gateway.PurposeSSH, DevPodUID: "uid-1", User: "alice"}); err == nil || got != want {
 		t.Fatalf("DialIn: %v %+v", err, got)
+	}
+}
+
+// A DevPod found says the machine its Pod is on; without a Pod, none.
+func TestKubeDirectory_Node(t *testing.T) {
+	dp := func(name string) *devpodv1alpha1.DevPod {
+		return &devpodv1alpha1.DevPod{ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "devpods"}, Spec: devpodv1alpha1.DevPodSpec{Owner: "alice"}}
+	}
+	pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "alice-dev", Namespace: "devpods"}, Spec: corev1.PodSpec{NodeName: "n7"}}
+	d := gateway.NewKubeDirectory(fakeClient(t, dp("alice-dev"), dp("alice-cold"), pod), "devpods")
+	ctx := context.Background()
+	found, err := d.Lookup(ctx, "alice", "dev", "")
+	if err != nil || len(found) != 1 || found[0].Node != "n7" {
+		t.Fatalf("with a Pod: %+v %v", found, err)
+	}
+	found, err = d.Lookup(ctx, "alice", "cold", "")
+	if err != nil || len(found) != 1 || found[0].Node != "" {
+		t.Fatalf("without a Pod: %+v %v", found, err)
 	}
 }

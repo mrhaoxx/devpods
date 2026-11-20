@@ -115,7 +115,7 @@ func (s *Session) row(version uint64, closedAt *time.Time, reason string, in, ou
 		AuthKind: s.meta.AuthKind, ProxyAlias: s.meta.ProxyAlias, BackendLocalAddr: s.backend,
 		OpenedAt: s.meta.OpenedAt, ClosedAt: closedAt, CloseReason: reason, BytesIn: in, BytesOut: out,
 		PolicySnapshot: string(snap), Gaps: s.gaps.Load(), Version: version,
-		Cluster: s.meta.Cluster, Gateway: s.meta.Gateway, LastActive: last,
+		Cluster: s.meta.Cluster, Gateway: s.meta.Gateway, LastActive: last, Node: s.meta.Node,
 	}
 }
 

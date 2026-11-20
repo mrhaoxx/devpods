@@ -77,12 +77,12 @@ func NewHTTPProxyWith(dir Directory, baseDomain, suffix string) *HTTPProxy {
 }
 
 // lookup finds the DevPod with the id, and its cluster.
-func (p *HTTPProxy) lookup(r *http.Request, id string) (*devpodv1alpha1.DevPod, string, bool) {
+func (p *HTTPProxy) lookup(r *http.Request, id string) (*devpodv1alpha1.DevPod, string, string, bool) {
 	f, err := p.dir.ByHTTPID(r.Context(), id)
 	if err != nil || f == nil {
-		return nil, "", false
+		return nil, "", "", false
 	}
-	return f.DevPod, f.Cluster, true
+	return f.DevPod, f.Cluster, f.Node, true
 }
 
 // transport is how the DevPod of that uid in cluster is reached; nil is
@@ -190,7 +190,7 @@ func (p *HTTPProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid host", http.StatusBadRequest)
 		return
 	}
-	dp, cluster, ok := p.lookup(r, id)
+	dp, cluster, node, ok := p.lookup(r, id)
 	if !ok {
 		http.Error(w, "not found", http.StatusNotFound)
 		return
@@ -205,7 +205,7 @@ func (p *HTTPProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 		if record {
 			var done func(string)
-			w, done = p.record(w, r, dp, cluster, port)
+			w, done = p.record(w, r, dp, cluster, node, port)
 			defer func() { done(user) }()
 		}
 	}
