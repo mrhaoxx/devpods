@@ -250,7 +250,7 @@ export function DetailPage() {
       <LiveCards row={live ? metrics.row : undefined} hist={recent.data} ceiling={ceiling} />
 
       {/* on a phone the tabs are wider than the screen: the row slides */}
-      <div role="tablist" className="flex gap-1 overflow-x-auto overflow-y-hidden border-b border-line text-xs [scrollbar-width:none]">
+      <div role="tablist" className="relative flex gap-1 overflow-x-auto overflow-y-hidden border-b border-line text-xs [scrollbar-width:none]">
         {tabs.map(([id, label]) => (
           <button
             key={id}

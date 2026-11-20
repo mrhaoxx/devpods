@@ -103,7 +103,7 @@ export function ClustersPage() {
       {q.data && items.length === 0 ? (
         <EmptyState title="还没有集群" hint="新建一个集群，然后在该集群里用给出的命令安装 agent。" />
       ) : (
-        <div className="overflow-x-auto rounded-md border border-line bg-surface">
+        <div className="relative overflow-x-auto rounded-md border border-line bg-surface">
           <table className="w-full text-left text-xs">
             <thead className="border-b border-line text-muted">
               <tr>

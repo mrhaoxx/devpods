@@ -99,7 +99,7 @@ export function SnapshotProgressView({ snapshot, onClose }: { snapshot: Pick<Sna
           <div className="h-full rounded-full bg-accent transition-[width] duration-500" style={{ width: `${Math.min(100, ((p.pushedBytes ?? 0) / p.totalBytes) * 100)}%` }} />
         </div>
       )}
-      <pre ref={log} aria-label="输出" className="mono h-40 overflow-auto rounded-md border border-line bg-sunk p-2 text-[11px] leading-relaxed whitespace-pre-wrap">
+      <pre ref={log} aria-label="输出" className="relative mono h-40 overflow-auto rounded-md border border-line bg-sunk p-2 text-[11px] leading-relaxed whitespace-pre-wrap">
         {p?.lines.length ? p.lines.join("\n") : running ? "等待快照任务的输出…" : "（没有输出）"}
       </pre>
       {stage === "done" && (

@@ -521,7 +521,7 @@ export function DataTable<T>(p: DataTableProps<T>) {
         列
       </Menu.Trigger>
       <Menu.Portal>
-        <Menu.Content align="end" className="z-50 max-h-96 min-w-40 overflow-y-auto rounded-md border border-line bg-surface p-1 text-xs shadow-lg">
+        <Menu.Content align="end" className="relative z-50 max-h-96 min-w-40 overflow-y-auto rounded-md border border-line bg-surface p-1 text-xs shadow-lg">
           {choosable.map((m) => (
             <Menu.CheckboxItem
               key={m.id}
@@ -566,7 +566,7 @@ export function DataTable<T>(p: DataTableProps<T>) {
           const t = e.target as HTMLElement;
           if (any && !afterDrag.current && e.currentTarget.contains(t) && !t.closest("tr[data-row],thead")) setSelection({});
         }}
-        className={p.fill ? "min-h-0 flex-1 overflow-auto" : "overflow-x-auto"}
+        className={p.fill ? "relative min-h-0 flex-1 overflow-auto" : "relative overflow-x-auto"}
         style={selected.length > 0 && p.fill ? { paddingBottom: BAR_ROOM } : undefined}
       >
         <table aria-label={p.label} className={`border-collapse text-xs ${dragging ? "select-none" : ""}`} style={{ tableLayout: "fixed", width: "100%" }}>

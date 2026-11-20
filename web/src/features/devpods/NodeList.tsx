@@ -238,7 +238,7 @@ export function NodeList({
       {full && <p role="status" className="text-[11px] text-warm">最多选 {max} 个。</p>}
       <ul
         ref={list}
-        className={`max-h-72 overflow-y-auto rounded-md border border-line ${dragging ? "select-none" : ""}`}
+        className={`relative max-h-72 overflow-y-auto rounded-md border border-line ${dragging ? "select-none" : ""}`}
         onMouseDown={startDrag}
         onClickCapture={(e) => {
           if (afterDrag.current) {

@@ -25,7 +25,7 @@ export function YamlDiff({ original, modified, height = 360 }: { original: strin
   return (
     <div data-testid="yaml-diff" className="grid grid-cols-2 gap-2">
       {[original, modified].map((t, i) => (
-        <pre key={i} aria-label={i === 0 ? "现在" : "按新配置"} className="mono max-h-96 overflow-auto rounded-md border border-line bg-sunk p-2 text-[11px] whitespace-pre">
+        <pre key={i} aria-label={i === 0 ? "现在" : "按新配置"} className="relative mono max-h-96 overflow-auto rounded-md border border-line bg-sunk p-2 text-[11px] whitespace-pre">
           {t}
         </pre>
       ))}

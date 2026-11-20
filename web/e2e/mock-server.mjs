@@ -74,7 +74,7 @@ function live(d, i) {
   };
 }
 
-const nodes = Array.from({ length: 12 }, (_, i) => ({
+const nodes = Array.from({ length: 400 }, (_, i) => ({
   name: `g${200 + i}`,
   ready: i !== 7,
   labels: { "nvidia.com/gpu.product": i % 2 ? "NVIDIA-A100" : "NVIDIA-H100", "kubernetes.io/arch": "amd64" },
@@ -224,6 +224,8 @@ const server = http.createServer((req, res) => {
     if (/\/info$/.test(p)) return json(res, 200, { info: { ts: iso(), os: "Ubuntu 24.04.1 LTS", kernel: "6.8.0-45-generic", cpu_limit: 8, cpuset: "0-7", mem_limit: 32 * GiB, shell: "/bin/bash", agent_version: "v0.3.0" }, infoTs: iso() });
     if (/\/topology$/.test(p)) return json(res, 200, { node: null });
     if (p === "/api/admin/nodes") return json(res, 200, { items: nodes, live: true });
+    // stored history for the CPU curves (before the node route: "recent" is no node)
+    if (p === "/api/admin/nodes/recent") return json(res, 200, { step: 60, ts: [], items: {} });
     if ((m = /^\/api\/admin\/nodes\/([^/]+)$/.exec(p))) {
       const n = nodes.find((x) => x.name === m[1]);
       return json(res, 200, { node: n, devpods: devpods.slice(0, 6).map((d) => ({ name: d.metadata.name, owner: d.spec.owner, phase: d.status.phase, cpu: 2, mem: 4 * GiB, gpu: 0 })), live: true });

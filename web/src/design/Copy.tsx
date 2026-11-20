@@ -58,7 +58,7 @@ export function CopyBlock({ value }: { value: string }) {
       >
         {done ? "已复制" : "复制"}
       </button>
-      <pre className="mono overflow-x-auto p-3 pr-14 text-xs leading-5">{value}</pre>
+      <pre className="relative mono overflow-x-auto p-3 pr-14 text-xs leading-5">{value}</pre>
     </div>
   );
 }

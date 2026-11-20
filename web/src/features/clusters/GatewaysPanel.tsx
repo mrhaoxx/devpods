@@ -69,7 +69,7 @@ function Replica({ r }: { r: GatewayReplica }) {
         <p className="text-muted">这个副本没有给出它的状态{r.error ? `：${r.error}` : ""}（网关升级到 v0.9.23 以上才有）。</p>
       ) : (
         <>
-          <div className="overflow-x-auto">
+          <div className="relative overflow-x-auto">
             <table className="w-full min-w-[28rem] text-left">
               <caption className="pb-1 text-left text-muted">已连上的集群（{st.clusters.length}）</caption>
               <thead className="text-muted">
@@ -100,7 +100,7 @@ function Replica({ r }: { r: GatewayReplica }) {
               </tbody>
             </table>
           </div>
-          <div className="overflow-x-auto">
+          <div className="relative overflow-x-auto">
             <table className="w-full min-w-[40rem] text-left">
               <caption className="pb-1 text-left text-muted">当前会话（{sessions.length}）</caption>
               {sessions.length > 0 && (
@@ -185,7 +185,7 @@ export function GatewaysPanel({ every = 10_000 }: { every?: number }) {
       </header>
       {error && <Notice>{error}</Notice>}
       {items.length > 0 && (
-        <div className="overflow-x-auto rounded-md border border-line bg-surface">
+        <div className="relative overflow-x-auto rounded-md border border-line bg-surface">
           <table className="w-full text-left text-xs">
             <thead className="border-b border-line text-muted">
               <tr>

@@ -102,7 +102,7 @@ export function PortsPanel({ r, sshPort }: { r: Ref; /** the container's sshd po
           容器里的 HTTP 服务可以通过 <code className="mono text-ink">{url(0).replace("-0", "-{端口}")}</code> 访问。每个端口有三种访问方式：默认只有你、协作者和管理员能打开；「登录用户」是任何登录了本控制台的人；「公开」是任何拿到链接的人，不需要登录。
         </p>
         {rows.length > 0 && (
-          <div className="overflow-x-auto">
+          <div className="relative overflow-x-auto">
           <table className="w-full min-w-[34rem] border-collapse">
             <thead>
               <tr className="h-6 border-b border-line text-left text-[11px] text-muted">

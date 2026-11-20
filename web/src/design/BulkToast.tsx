@@ -29,7 +29,7 @@ export function BulkToast({ progress, outcome, onClose }: { progress: BulkProgre
       )}
       {outcome && (
         <div role="status" className="pointer-events-auto flex items-start gap-2 rounded-lg border border-line bg-surface p-1 shadow-lg">
-          <div className="max-h-60 flex-1 overflow-y-auto">
+          <div className="relative max-h-60 flex-1 overflow-y-auto">
             <Notice tone={failed.length ? "warm" : "run"}>
               {outcome.action}：成功 {outcome.results.length - failed.length}，失败 {failed.length}
               {failed.length > 0 && <>（{failed.map((f) => `${f.item}：${f.error}`).join("；")}）</>}

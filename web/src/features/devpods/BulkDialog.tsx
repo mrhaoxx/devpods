@@ -47,7 +47,7 @@ function MigrateBody({ cluster, devpods, picked, setPicked, unpin, setUnpin }: {
         </p>
       )}
       {!unpin && pairs && (
-        <ol aria-label="迁移计划" className="mono max-h-40 space-y-0.5 overflow-y-auto rounded-md border border-line bg-sunk p-2">
+        <ol aria-label="迁移计划" className="relative mono max-h-40 space-y-0.5 overflow-y-auto rounded-md border border-line bg-sunk p-2">
           {pairs.map(([d, n]) => (
             <li key={d}>
               {d} → {n}

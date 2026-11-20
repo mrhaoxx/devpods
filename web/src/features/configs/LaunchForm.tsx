@@ -52,7 +52,7 @@ export function requested(yamls: string[]): { cpu: number; memory: number; gpu: 
 
 function Items({ cluster, outcome, onEditOnce }: { cluster?: string; outcome: Outcome; onEditOnce?: (yaml: string) => void }) {
   return (
-    <ol aria-label="结果" className="max-h-56 space-y-1 overflow-y-auto rounded-md border border-line bg-sunk p-2 text-xs">
+    <ol aria-label="结果" className="relative max-h-56 space-y-1 overflow-y-auto rounded-md border border-line bg-sunk p-2 text-xs">
       {outcome.items.map((it) => (
         <li key={it.index}>
           <div className="flex flex-wrap items-baseline gap-x-2">
@@ -82,7 +82,7 @@ function Items({ cluster, outcome, onEditOnce }: { cluster?: string; outcome: Ou
                   只为这次改一改
                 </Button>
               )}
-              <pre className="mono mt-1 max-h-48 overflow-auto rounded border border-line bg-surface p-2 text-[11px] whitespace-pre">{it.yaml}</pre>
+              <pre className="relative mono mt-1 max-h-48 overflow-auto rounded border border-line bg-surface p-2 text-[11px] whitespace-pre">{it.yaml}</pre>
             </details>
           )}
         </li>
@@ -217,7 +217,7 @@ export function LaunchForm({
           {names.length > 0 && !outcome && (
             <div className="text-xs">
               <div className="mb-1 font-medium">将创建 {names.length} 个</div>
-              <ol aria-label="将创建" className="mono max-h-32 space-y-0.5 overflow-y-auto rounded-md border border-line bg-sunk p-2">
+              <ol aria-label="将创建" className="relative mono max-h-32 space-y-0.5 overflow-y-auto rounded-md border border-line bg-sunk p-2">
                 {names.map((name, i) => (
                   <li key={i}>{usesNode ? `${name} → ${nodes[i]}` : name}</li>
                 ))}

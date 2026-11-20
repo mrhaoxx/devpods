@@ -71,7 +71,7 @@ export function CommandPalette() {
         placeholder="搜索用户、DevPod、会话、命令…"
         className="h-10 w-full border-b border-line bg-transparent px-3 text-sm outline-none"
       />
-      <Command.List className="max-h-[60vh] overflow-y-auto p-1">
+      <Command.List className="relative max-h-[60vh] overflow-y-auto p-1">
         {!query && <div className="px-3 py-6 text-center text-xs text-faint">输入关键字开始搜索</div>}
         {query && res.isFetching && !r && <Command.Loading>
           <div className="px-3 py-4 text-xs text-faint">搜索中…</div>

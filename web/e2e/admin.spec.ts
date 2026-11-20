@@ -32,10 +32,12 @@ test("400 DevPods: the filters and header stay in view, only the rows in sight a
   const scroller = page.locator("[data-table-scroller]");
   await scroller.evaluate((el) => (el.scrollTop = el.scrollHeight));
   await expect(page.getByLabel("过滤")).toBeInViewport();
-  await expect(page.locator("thead")).toBeInViewport();
+  await expect(page.locator("thead th").first()).toBeInViewport(); // the header cells stick (the <thead> box scrolls)
   await expect(page.locator("tbody tr[data-row]").last()).toBeInViewport();
   expect(await drawn()).toBeLessThan(80);
   expect(await page.evaluate(() => document.querySelector("main")!.scrollTop)).toBe(0); // the page stays; the table scrolls
+  // and it does not grow: nothing of a row (a status dot's hidden label) escapes the table
+  expect(await page.evaluate(() => document.querySelector("main")!.scrollHeight - document.querySelector("main")!.clientHeight)).toBeLessThanOrEqual(0);
   await shot(page, "all-devpods-scrolled");
 
   await page.getByRole("button", { name: /^Running/ }).click();
@@ -44,6 +46,24 @@ test("400 DevPods: the filters and header stay in view, only the rows in sight a
   await page.goto("/admin/devpods");
   await expect(page).toHaveURL(/phase=Running/);
   await shot(page, "all-devpods-remembered");
+});
+
+// A row's hidden text (a status dot's sr-only label is position:absolute)
+// must stay inside the table's scroller: escaped, it sits as deep as its
+// row and makes the page itself as tall as the whole table.
+test("400 nodes scrolled to the end: the page does not grow under the table", async ({ page }) => {
+  await page.goto("/admin/nodes");
+  await expect(page.getByText("g200", { exact: true }).first()).toBeVisible();
+  const scroller = page.locator("[data-table-scroller]");
+  await scroller.evaluate((el) => (el.scrollTop = el.scrollHeight));
+  await expect(page.locator("tbody tr[data-row]").last()).toBeInViewport();
+  const grown = await page.evaluate(() => {
+    const m = document.querySelector("main")!;
+    return m.scrollHeight - m.clientHeight;
+  });
+  expect(grown).toBeLessThanOrEqual(0);
+  await expect(page.locator("thead th").first()).toBeInViewport(); // the header cells stick (the <thead> box scrolls)
+  await shot(page, "nodes-scrolled");
 });
 
 test("overview shows live KPIs", async ({ page }) => {

@@ -195,7 +195,7 @@ export function SessionPage() {
       </p>
       <div className="grid gap-3 lg:grid-cols-[minmax(0,1fr)_minmax(0,1.5fr)]">
         <Panel title="时间线">
-          <ol className="mono max-h-[70vh] overflow-y-auto p-1 text-xs">
+          <ol className="relative mono max-h-[70vh] overflow-y-auto p-1 text-xs">
             {timeline.map((item, i) => (
               <li key={i} aria-current={i === playhead ? "true" : undefined} className={`flex gap-2 rounded px-1.5 py-1 hover:bg-sunk ${i === playhead ? "bg-accent-soft" : ""}`}>
                 <button

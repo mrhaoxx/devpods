@@ -202,7 +202,7 @@ function ReserveDialog({ draft, nodes, rules, now, onClose }: { draft: Draft; no
                     </button>
                   </span>
                 </legend>
-                <div className="max-h-48 space-y-0.5 overflow-auto rounded-md border border-line p-1.5">
+                <div className="relative max-h-48 space-y-0.5 overflow-auto rounded-md border border-line p-1.5">
                   {nodes.map((n) => {
                     const k = keyOf(n);
                     return (
