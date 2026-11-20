@@ -33,7 +33,7 @@ import { Field, Input, Notice, Select } from "../../design/Form";
 import { Panel } from "../../design/Panel";
 import { useNow } from "../../lib/useNow";
 import { LoadMore } from "../audit/common";
-import { dayStart, fmtClock, fmtDay, fmtSpan, fmtTime, fromInput, periodError, selection, slotStart, toInput } from "../../lib/reservations";
+import { dayStart, fmtClock, fmtDay, fmtSpan, fmtTime, fromInput, fromNow, periodError, selection, slotStart, toInput } from "../../lib/reservations";
 import * as Dialog from "@radix-ui/react-dialog";
 
 const DAY = 86_400_000;
@@ -474,8 +474,9 @@ export function ReservationsPage() {
   // the row under the pointer, anywhere in it (its name too)
   const rowAt = (x: number, y: number) =>
     typeof document.elementFromPoint === "function" ? ((document.elementFromPoint(x, y) as HTMLElement | null)?.closest<HTMLElement>("[data-row]") ?? null) : null;
-  const dragSel = drag ? selection(drag.a, drag.b, g) : null;
-  const dragBad = !!dragSel && dragSel[0] < slotStart(now, g);
+  // a drag that starts in the past starts now (the slot now is in)
+  const dragSel = drag ? fromNow(selection(drag.a, drag.b, g), first) : null;
+  const dragBad = !!dragSel && dragSel[0] < first;
   const rowsOf: [number, number] = drag ? [Math.min(drag.r0, drag.r1), Math.max(drag.r0, drag.r1)] : [-1, -1];
 
   return (

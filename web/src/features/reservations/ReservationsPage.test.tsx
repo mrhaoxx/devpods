@@ -95,6 +95,48 @@ describe("ReservationsPage", () => {
     }
   });
 
+  it("a drag from the past into the future starts at the slot now is in; one wholly past cannot be reserved", async () => {
+    at();
+    stubFetch({
+      "/api/reservations/rules": rules,
+      "/api/nodes": { items: [node("g206")] },
+      "/api/reservations": { items: [] },
+    });
+    renderWithProviders(<ReservationsPage />, { me: me() });
+    const track = await screen.findByRole("group", { name: "g206 的预约" });
+    track.getBoundingClientRect = () => ({ left: 0, width: 1000, top: 0, height: 50, right: 1000, bottom: 50, x: 0, y: 0, toJSON: () => ({}) });
+    if (!("PointerEvent" in window)) {
+      class PointerEvent extends MouseEvent {
+        pointerId: number;
+        constructor(type: string, init: PointerEventInit = {}) {
+          super(type, init);
+          this.pointerId = init.pointerId ?? 0;
+        }
+      }
+      vi.stubGlobal("PointerEvent", PointerEvent);
+    }
+    Object.defineProperty(document, "elementFromPoint", { value: () => track, configurable: true });
+    try {
+      // 3 days over 1000 px: 111.1 px ≈ 08:00, 125 px ≈ 09:00, 194.4 px ≈ 13:59; now is 10:1x
+      fireEvent.pointerDown(track, { clientX: 111.2, clientY: 10, pointerId: 1, cancelable: true });
+      fireEvent.pointerMove(track, { clientX: 125.1, clientY: 10, pointerId: 1 });
+      expect(screen.getByText(/不可预约/)).toBeTruthy();
+      fireEvent.pointerUp(track, { clientX: 125.1, clientY: 10, pointerId: 1 });
+      expect(screen.queryByRole("dialog")).toBeNull();
+
+      fireEvent.pointerDown(track, { clientX: 125.1, clientY: 10, pointerId: 1, cancelable: true });
+      fireEvent.pointerMove(track, { clientX: 194.4, clientY: 10, pointerId: 1 });
+      expect(screen.getByText(/10:10–14:00 ·/)).toBeTruthy();
+      expect(screen.queryByText(/不可预约/)).toBeNull();
+      fireEvent.pointerUp(track, { clientX: 194.4, clientY: 10, pointerId: 1 });
+      const dialog = within(await screen.findByRole("dialog"));
+      expect(input(dialog, "开始").value).toBe("2026-11-12T10:10");
+      expect(input(dialog, "结束").value).toBe("2026-11-12T14:00");
+    } finally {
+      Reflect.deleteProperty(document, "elementFromPoint");
+    }
+  });
+
   it("reserves several machines at once; one refused is said and stays picked, the others are made", async () => {
     at();
     const calls = stubFetch({

@@ -22,6 +22,13 @@ export function selection(a: number, b: number, granMs: number): [number, number
   return [start, Math.max(slotStart(hi, granMs) + granMs, start + granMs)];
 }
 
+/** fromNow: a selection that starts in the past but reaches past first
+ *  (the start of the slot now is in) starts at first instead; one wholly
+ *  in the past is left as it is — it cannot be reserved. */
+export function fromNow(sel: [number, number], first: number): [number, number] {
+  return sel[0] < first && sel[1] > first ? [first, sel[1]] : sel;
+}
+
 /** periodError mirrors the server's rule check; null = fine. */
 export function periodError(start: number, end: number, r: ReservationRules, now: number): string | null {
   const g = r.granularitySeconds * 1000;

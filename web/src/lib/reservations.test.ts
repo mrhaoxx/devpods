@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { dayStart, fmtDay, fmtSpan, fmtTime, fromInput, periodError, selection, slotStart, toInput } from "./reservations";
+import { dayStart, fmtDay, fmtSpan, fmtTime, fromInput, fromNow, periodError, selection, slotStart, toInput } from "./reservations";
 import type { ReservationRules } from "../data/api";
 
 const G = 30 * 60_000;
@@ -22,6 +22,12 @@ describe("reservation time math", () => {
     expect(selection(a, b, G)).toEqual([at("2026-11-12T03:00:00Z"), at("2026-11-12T04:30:00Z")]);
     expect(selection(b, a, G)).toEqual(selection(a, b, G));
     expect(selection(a, a, G)).toEqual([at("2026-11-12T03:00:00Z"), at("2026-11-12T03:30:00Z")]);
+  });
+  it("a drag that starts in the past starts at the slot now is in; one wholly past stays as it is", () => {
+    const first = slotStart(now, G); // 10:00
+    expect(fromNow([at("2026-11-12T01:00:00Z"), at("2026-11-12T04:00:00Z")], first)).toEqual([first, at("2026-11-12T04:00:00Z")]);
+    expect(fromNow([at("2026-11-12T03:00:00Z"), at("2026-11-12T04:00:00Z")], first)).toEqual([at("2026-11-12T03:00:00Z"), at("2026-11-12T04:00:00Z")]);
+    expect(fromNow([at("2026-11-12T00:00:00Z"), first], first)).toEqual([at("2026-11-12T00:00:00Z"), first]);
   });
   it("checks a period against the rules like the server", () => {
     const slot = at("2026-11-12T02:00:00Z");
