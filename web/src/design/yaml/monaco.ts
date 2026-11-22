@@ -163,9 +163,12 @@ export function createYamlEditor(
     setValue(text) {
       if (text === model.getValue()) return;
       silent = true;
-      // keeps undo history and the cursor where it can
-      editor.executeEdits("external", [{ range: model.getFullModelRange(), text }]);
-      editor.pushUndoStop();
+      // on the model, not the editor: a read-only editor drops its own edits
+      // (a config shared with me came up blank when its text arrived after
+      // the editor); undo history kept
+      model.pushStackElement();
+      model.pushEditOperations([], [{ range: model.getFullModelRange(), text }], () => null);
+      model.pushStackElement();
       silent = false;
     },
     setReadOnly(readOnly) {

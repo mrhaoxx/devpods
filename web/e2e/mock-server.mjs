@@ -223,6 +223,15 @@ const server = http.createServer((req, res) => {
     }
     if (/\/info$/.test(p)) return json(res, 200, { info: { ts: iso(), os: "Ubuntu 24.04.1 LTS", kernel: "6.8.0-45-generic", cpu_limit: 8, cpuset: "0-7", mem_limit: 32 * GiB, shell: "/bin/bash", agent_version: "v0.3.0" }, infoTs: iso() });
     if (/\/topology$/.test(p)) return json(res, 200, { node: null });
+    // a config that comes a moment late (after the YAML editor has loaded),
+    // as on a first visit: shared with alice (not hers), or hers
+    if ((m = /^\/api\/configs\/(late-shared|late-mine)$/.exec(p))) {
+      const mine = m[1] === "late-mine";
+      const config = { name: m[1], owner: mine ? "alice" : "bob", title: m[1], description: "", sharedWith: [], public: false, official: false, variables: [], mine,
+        updatedAt: iso(), content: "apiVersion: devpod.io/v1alpha1\nkind: DevPod\nspec:\n  image: ubuntu:24.04 # from-the-config\n" };
+      setTimeout(() => json(res, 200, config), 2500);
+      return;
+    }
     if (p === "/api/admin/nodes") return json(res, 200, { items: nodes, live: true });
     // stored history for the CPU curves (before the node route: "recent" is no node)
     if (p === "/api/admin/nodes/recent") return json(res, 200, { step: 60, ts: [], items: {} });

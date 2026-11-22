@@ -61,3 +61,19 @@ test("the YAML editor knows what a DevPod is: completion, hover, unknown fields"
   await expect(page.getByTestId("yaml-monaco").locator(".squiggly-warning, .squiggly-error").first()).toBeVisible();
   await shot(page, "yaml-unknown-field");
 });
+
+// A config's YAML shows when Monaco is already loaded as the page opens
+// (reached from inside the app) — read-only (shared with me) or not (mine,
+// read-only only until it loaded) — and when it loads late.
+for (const name of ["late-shared", "late-mine"]) {
+  test(`a config opened inside the app shows its YAML: ${name}`, async ({ page, context }) => {
+    await login(context, "alice");
+    await page.goto("/devpods/-/alice-train?tab=yaml"); // Monaco loaded here
+    await expect(monacoEditor(page)).toBeVisible();
+    await page.evaluate((to) => {
+      history.pushState({}, "", to);
+      dispatchEvent(new PopStateEvent("popstate"));
+    }, `/configs/${name}`);
+    await expect(page.getByTestId("yaml-monaco").locator(".view-lines")).toContainText("from-the-config", { timeout: 8000 });
+  });
+}
