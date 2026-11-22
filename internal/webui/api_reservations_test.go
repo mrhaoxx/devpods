@@ -10,6 +10,8 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"reflect"
+	"sort"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -153,7 +155,8 @@ func TestReservationsOverlap(t *testing.T) {
 	}
 }
 
-// Only where the rules ask for a reservation, and only on reservable machines.
+// Only on reservable machines, by someone the rules let use them — whether
+// or not they need a reservation there.
 func TestReservationNeedsRule(t *testing.T) {
 	s, sm, _, node := rsvRig(t, "nr")
 	alice := forge(sm, "nr-alice", false)
@@ -162,9 +165,9 @@ func TestReservationNeedsRule(t *testing.T) {
 	if code, v := reserveAs(t, s, alice, "nr-n2", slot, slot.Add(time.Hour)); code != http.StatusBadRequest || v.Code != "NOT_RESERVABLE" {
 		t.Fatalf("not reservable: %d %+v", code, v)
 	}
-	// no rule: everyone may use it without one
-	if code, v := reserveAs(t, s, alice, node, slot, slot.Add(time.Hour)); code != http.StatusBadRequest || v.Code != "NO_NEED" {
-		t.Fatalf("no need: %d %+v", code, v)
+	// no rule: everyone may use it without one, and may reserve it all the same
+	if code, v := reserveAs(t, s, alice, node, slot, slot.Add(time.Hour)); code != http.StatusCreated {
+		t.Fatalf("no need, reserved anyway: %d %+v", code, v)
 	}
 	setRules(t, onNode(node, devpodv1alpha1.AccessEffect{}))
 	if code, v := reserveAs(t, s, alice, node, slot, slot.Add(time.Hour)); code != http.StatusForbidden || v.Code != "ACL_DENIED" {
@@ -420,4 +423,50 @@ func TestMyReservationsPaged(t *testing.T) {
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("a bad cursor: %d", rec.Code)
 	}
+}
+
+// Closing a machine for reservation ends every reservation on it that is
+// not over — one not begun is gone, one under way is cancelled now, as
+// their owners would cancel them; another machine's stay.
+func TestSetReservableOffEndsReservations(t *testing.T) {
+	s, sm, _, node := rsvRig(t, "ro")
+	admin := forge(sm, "ro-root", true)
+	put := func(n string, on bool) int {
+		return doJSON(t, s.Routes().ServeHTTP, "PUT", "/api/admin/nodes/"+n+"/reservable", nil, admin, fmt.Sprintf(`{"reservable":%v}`, on)).Code
+	}
+	if code := put("ro-n2", true); code != http.StatusOK {
+		t.Fatalf("opening ro-n2: %d", code)
+	}
+	alice, bob, carol := forge(sm, "ro-alice", false), forge(sm, "ro-bob", false), forge(sm, "ro-carol", false)
+	slot := time.Date(2026, 11, 12, 2, 0, 0, 0, time.UTC) // 10:00; now is 10:10
+	var other rsvView
+	for deadline := time.Now().Add(10 * time.Second); time.Now().Before(deadline); time.Sleep(50 * time.Millisecond) {
+		var code int
+		if code, other = reserveAs(t, s, carol, "ro-n2", slot, slot.Add(time.Hour)); code == http.StatusCreated {
+			break
+		}
+	}
+	if other.ID == "" {
+		t.Fatalf("carol on ro-n2: %+v", other)
+	}
+	if code, v := reserveAs(t, s, alice, node, slot, slot.Add(time.Hour)); code != http.StatusCreated {
+		t.Fatalf("alice: %d %+v", code, v)
+	}
+	if code, v := reserveAs(t, s, bob, node, slot.Add(2*time.Hour), slot.Add(3*time.Hour)); code != http.StatusCreated {
+		t.Fatalf("bob: %d %+v", code, v)
+	}
+
+	if code := put(node, false); code != http.StatusOK {
+		t.Fatalf("closing %s: %d", node, code)
+	}
+	// everyone sees every reservation
+	var got []string
+	for _, v := range listReservations(t, s, alice) {
+		got = append(got, v.User+" "+v.Node+" "+v.Phase)
+	}
+	sort.Strings(got)
+	if want := []string{"ro-alice ro-n1 Cancelled", "ro-carol ro-n2 Active"}; !reflect.DeepEqual(got, want) {
+		t.Errorf("after closing %s: %v; want %v (bob's, not begun, gone)", node, got, want)
+	}
+	_ = bob
 }

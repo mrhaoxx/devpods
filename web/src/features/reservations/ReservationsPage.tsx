@@ -44,7 +44,6 @@ const phaseLabel: Record<Reservation["phase"], string> = { Upcoming: "即将开�
 function apiMessage(e: unknown): string {
   if (e instanceof ApiFailure) {
     if (e.code === "NOT_RESERVABLE") return "这台机器没有开放预约。";
-    if (e.code === "NO_NEED") return "你可以直接使用这台机器，不需要预约。";
     if (e.code === "ACL_DENIED") return "你没有使用这台机器的权限。";
     return e.body.message;
   }
@@ -431,8 +430,8 @@ export function ReservationsPage() {
   const g = rules.data.granularitySeconds * 1000;
   const all = (q.data?.items ?? []).filter(matches);
   const live = all.filter((b) => b.phase !== "Cancelled");
-  // the machines I need a reservation for (an admin sees every reservable one)
-  const nodes = (nodesQ.data?.items ?? []).filter((n) => n.reservable && (n.reservationRequired || me.admin) && matches(n));
+  // the reservable machines I may use, whether I need a reservation there or not
+  const nodes = (nodesQ.data?.items ?? []).filter((n) => n.reservable && n.access !== "denied" && matches(n));
   const mine = (mineQ.data?.pages.flatMap((p) => p.items) ?? []).filter((b) => b.mine && matches(b));
   const cancelAll = async (rows: Reservation[], clear: () => void) => {
     setBulkCancel(null);
@@ -497,7 +496,7 @@ export function ReservationsPage() {
       </div>
       <Panel title="时间轴">
         {nodes.length === 0 ? (
-          <EmptyState title="没有需要你预约的机器" hint={me.admin ? "在「节点」页把节点设为可预约；谁需要预约由「访问控制」的规则决定。" : "你能用的机器都不需要预约。"} />
+          <EmptyState title="没有你能预约的机器" hint={me.admin ? "在「节点」页把节点设为可预约；谁需要预约由「访问控制」的规则决定。" : "还没有向你开放预约的机器。"} />
         ) : (
           <div>
             <div className="flex border-b border-line text-[11px] text-muted">

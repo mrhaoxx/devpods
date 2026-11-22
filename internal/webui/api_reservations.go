@@ -396,16 +396,13 @@ func (s *Server) handleCreateReservation(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	cluster := s.resCluster(r.Context())
-	d, admin, err := s.decide(r.Context(), user, cluster, access.Node{Name: n.Name, Labels: n.Labels})
+	d, _, err := s.decide(r.Context(), user, cluster, access.Node{Name: n.Name, Labels: n.Labels})
 	switch {
 	case err != nil:
 		s.writeErr(w, http.StatusInternalServerError, "INTERNAL", err.Error(), nil)
 		return
 	case !d.Allow:
 		s.writeErr(w, http.StatusForbidden, "ACL_DENIED", fmt.Sprintf("%s may not use node %s", user, n.Name), nil)
-		return
-	case admin || !d.NeedsReservation:
-		s.writeErr(w, http.StatusBadRequest, "NO_NEED", fmt.Sprintf("%s may use node %s without a reservation", user, n.Name), nil)
 		return
 	}
 	nr := &devpodv1alpha1.NodeReservation{
@@ -512,22 +509,28 @@ func (s *Server) handleDeleteReservation(w http.ResponseWriter, r *http.Request)
 	if !ok {
 		return
 	}
-	var err error
-	if now.Before(nr.Spec.Start.Time) {
-		if err = s.deleteReservation(r.Context(), nr.Name); err == nil {
-			s.reservationHistory(r.Context(), nr, "deleted")
-		}
-	} else {
-		_, err = s.changeReservation(r.Context(), nr.Name, func(spec *devpodv1alpha1.NodeReservationSpec) bool {
-			spec.Cancelled = &devpodv1alpha1.ReservationCancel{By: sess.User, At: metav1.NewTime(now.UTC().Truncate(time.Second))}
-			return true
-		})
-	}
-	if err != nil {
+	if err := s.cancelReservation(r.Context(), nr, sess.User, now); err != nil {
 		s.writeErr(w, http.StatusInternalServerError, "INTERNAL", err.Error(), nil)
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// cancelReservation: one not begun is deleted; one under way is cancelled
+// now (its end is then handled as any end is).
+func (s *Server) cancelReservation(ctx context.Context, nr *devpodv1alpha1.NodeReservation, by string, now time.Time) error {
+	if now.Before(nr.Spec.Start.Time) {
+		err := s.deleteReservation(ctx, nr.Name)
+		if err == nil {
+			s.reservationHistory(ctx, nr, "deleted")
+		}
+		return err
+	}
+	_, err := s.changeReservation(ctx, nr.Name, func(spec *devpodv1alpha1.NodeReservationSpec) bool {
+		spec.Cancelled = &devpodv1alpha1.ReservationCancel{By: by, At: metav1.NewTime(now.UTC().Truncate(time.Second))}
+		return true
+	})
+	return err
 }
 
 // handleSetReservable serves PUT /api/admin/nodes/{name}/reservable
@@ -590,7 +593,22 @@ func (s *Server) handleSetReservable(w http.ResponseWriter, r *http.Request) {
 		s.writeErr(w, http.StatusInternalServerError, "INTERNAL", err.Error(), nil)
 		return
 	}
-	s.writeJSON(w, http.StatusOK, map[string]any{"reservable": *req.Reservable, "pending": pendingOn(all, s.resCluster(r.Context()), name, ru.now())})
+	cluster, now := s.resCluster(r.Context()), ru.now()
+	if !*req.Reservable {
+		// closed: every reservation on it that is not over ends, as its owner would end it
+		for i := range all {
+			nr := &all[i]
+			if nr.Spec.Cluster != cluster || nr.Spec.Node != name || !now.Before(overAt(nr)) {
+				continue
+			}
+			if err := s.cancelReservation(r.Context(), nr, sess.User, now); err != nil {
+				s.writeErr(w, http.StatusInternalServerError, "INTERNAL", err.Error(), nil)
+				return
+			}
+		}
+		all = nil
+	}
+	s.writeJSON(w, http.StatusOK, map[string]any{"reservable": *req.Reservable, "pending": pendingOn(all, cluster, name, now)})
 }
 
 // pendingOn counts the node's reservations that are not over.

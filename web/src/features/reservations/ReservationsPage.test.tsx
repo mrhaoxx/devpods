@@ -24,18 +24,26 @@ describe("ReservationsPage", () => {
     vi.setSystemTime(new Date(now));
   };
 
-  it("lists the reservable machines the rules ask a reservation for; overlapping ones share a row; the form reserves at once", async () => {
+  it("lists the reservable machines I may use, needing a reservation or not; overlapping ones share a row; the form reserves at once", async () => {
     at();
     const calls = stubFetch({
       "/api/reservations/rules": rules,
-      "/api/nodes": { items: [node("g206"), node("g207", { reservationRequired: false, access: "ok", selectable: true }), node("c101", { reservable: false })] },
+      "/api/nodes": {
+        items: [
+          node("g206"),
+          node("g207", { reservationRequired: false, access: "ok", selectable: true }),
+          node("g208", { reservationRequired: false, access: "denied" }),
+          node("c101", { reservable: false }),
+        ],
+      },
       "/api/reservations": { items: [block({ id: "b1", user: "bob", mine: false }), block({ id: "b2", user: "carol", mine: false, start: "2026-11-12T04:30:00Z", end: "2026-11-12T05:30:00Z" })] },
       "POST /api/reservations": block({ id: "new" }),
     });
     renderWithProviders(<ReservationsPage />, { me: me() });
     const row = await screen.findByRole("group", { name: "g206 的预约" });
-    expect(screen.queryByRole("group", { name: "g207 的预约" })).toBeNull(); // no reservation needed there
-    expect(screen.queryByRole("group", { name: "c101 的预约" })).toBeNull();
+    expect(screen.getByRole("group", { name: "g207 的预约" })).toBeTruthy(); // no reservation needed there: reservable all the same
+    expect(screen.queryByRole("group", { name: "g208 的预约" })).toBeNull(); // barred
+    expect(screen.queryByRole("group", { name: "c101 的预约" })).toBeNull(); // not reservable
     expect(await within(row).findByText(/bob · 12:00–14:00/)).toBeTruthy();
     expect(within(row).getByText(/carol · 12:30–13:30/)).toBeTruthy();
 
