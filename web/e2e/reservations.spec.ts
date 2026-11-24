@@ -11,7 +11,12 @@ test("reservations: the timeline zooms and scrolls sideways, opens near now, the
   const scroller = page.locator("[data-timeline]");
   const at3 = await scroller.evaluate((el) => ({ sw: el.scrollWidth, cw: el.clientWidth, sl: el.scrollLeft }));
   expect(at3.sw).toBeGreaterThan(at3.cw * 4);
-  expect(at3.sl).toBeGreaterThan(0); // scrolled toward now (today is the first of 15 days)
+  void at3.sl;
+  // opened near now, whatever the hour: the now line is in the visible part
+  const view = (await scroller.boundingBox())!;
+  const nowLine = (await page.locator("[data-track] .bg-fail.w-px").first().boundingBox())!;
+  expect(nowLine.x).toBeGreaterThan(view.x);
+  expect(nowLine.x).toBeLessThan(view.x + view.width);
   expect(await page.evaluate(() => document.querySelector("main")!.scrollWidth - document.querySelector("main")!.clientWidth)).toBeLessThanOrEqual(0);
   await shot(page, "reservations-3d");
   await page.getByRole("radio", { name: "14 天" }).click();

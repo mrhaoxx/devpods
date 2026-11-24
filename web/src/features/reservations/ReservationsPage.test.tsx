@@ -238,9 +238,10 @@ describe("ReservationsPage", () => {
     };
     fireEvent.click((await menu("进行中")).getByRole("menuitem", { name: "修改" }));
     const dialog = within(screen.getByRole("dialog"));
-    // it has started: its start stays; its end is offered one step later
+    // it has started: its start stays; its end is what it is, moved by hand
     expect(input(dialog, "开始").disabled).toBe(true);
-    expect(input(dialog, "结束").value).toBe("2026-11-12T11:10");
+    expect(input(dialog, "结束").value).toBe("2026-11-12T11:00");
+    fireEvent.change(input(dialog, "结束"), { target: { value: "2026-11-12T11:10" } });
     fireEvent.click(dialog.getByRole("button", { name: "保存" }));
     await waitFor(() => expect(calls.find((c) => c.method === "PATCH")?.body).toBe('{"end":"2026-11-12T03:10:00.000Z"}'));
 
@@ -394,5 +395,71 @@ describe("ReservationsPage", () => {
     } finally {
       Reflect.deleteProperty(document, "elementFromPoint");
     }
+  });
+
+  it("a purpose-only change to one under way sends the purpose alone (its end stays)", async () => {
+    at();
+    const calls = stubFetch({
+      "/api/reservations/rules": rules,
+      "/api/nodes": { items: [node("g206")] },
+      "/api/reservations": { items: [block({ id: "act", start: "2026-11-12T01:00:00Z", end: "2026-11-12T03:00:00Z", phase: "Active", canManage: true, purpose: "旧" })] },
+      "PATCH /api/reservations/act": block({ id: "act" }),
+    });
+    renderWithProviders(<ReservationsPage />, { me: me() });
+    const row = (await screen.findByText("进行中")).closest("tr") as HTMLElement;
+    fireEvent.keyDown(within(row).getByRole("button", { name: /操作$/ }), { key: "Enter" });
+    fireEvent.click(within(await screen.findByRole("menu")).getByRole("menuitem", { name: "修改" }));
+    const dialog = within(screen.getByRole("dialog"));
+    fireEvent.change(dialog.getByLabelText("用途"), { target: { value: "新" } });
+    fireEvent.click(dialog.getByRole("button", { name: "保存" }));
+    await waitFor(() => expect(calls.find((c) => c.method === "PATCH")?.body).toBe('{"purpose":"新"}'));
+  });
+
+  it("the timeline's reservations are fetched for the whole window it shows", async () => {
+    at();
+    const calls = stubFetch({
+      "/api/reservations/rules": { ...rules, maxAdvanceSeconds: 20 * 86400 },
+      "/api/nodes": { items: [node("g206")] },
+      "/api/reservations": { items: [] },
+    });
+    renderWithProviders(<ReservationsPage />, { me: me() });
+    await screen.findByRole("group", { name: "g206 的预约" });
+    // 11/12 00:00 Shanghai + 21 days (now 10:10 + 20 days reaches into the 21st)
+    await waitFor(() =>
+      expect(calls.some((c) => c.url.pathname === "/api/reservations" && !c.url.searchParams.get("mine") && c.url.searchParams.get("to") === "2026-12-02T16:00:00.000Z")).toBe(true),
+    );
+  });
+
+  it("a pen is like a finger: a drag never selects, a tap opens the form there", async () => {
+    at();
+    stubFetch({ "/api/reservations/rules": rules, "/api/nodes": { items: [node("g206")] }, "/api/reservations": { items: [] } });
+    renderWithProviders(<ReservationsPage />, { me: me() });
+    const track = await screen.findByRole("group", { name: "g206 的预约" });
+    track.getBoundingClientRect = () => ({ left: 0, width: 5000, top: 0, height: 50, right: 5000, bottom: 50, x: 0, y: 0, toJSON: () => ({}) });
+    pointerEvents();
+    Object.defineProperty(document, "elementFromPoint", { value: () => track, configurable: true });
+    try {
+      fireEvent.pointerDown(track, { clientX: 166.7, clientY: 10, pointerId: 4, pointerType: "pen" });
+      fireEvent.pointerMove(track, { clientX: 300, clientY: 10, pointerId: 4, pointerType: "pen" });
+      fireEvent.pointerUp(track, { clientX: 300, clientY: 10, pointerId: 4, pointerType: "pen" });
+      expect(screen.queryByRole("dialog")).toBeNull();
+      fireEvent.pointerDown(track, { clientX: 166.7, clientY: 10, pointerId: 5, pointerType: "pen" });
+      fireEvent.pointerUp(track, { clientX: 167, clientY: 10, pointerId: 5, pointerType: "pen" });
+      expect(input(within(await screen.findByRole("dialog")), "开始").value).toBe("2026-11-12T12:00");
+    } finally {
+      Reflect.deleteProperty(document, "elementFromPoint");
+    }
+  });
+
+  it("a short reservation is still wide enough to tap", async () => {
+    at();
+    stubFetch({
+      "/api/reservations/rules": rules,
+      "/api/nodes": { items: [node("g206")] },
+      "/api/reservations": { items: [block({ id: "s1", user: "bob", mine: false, start: "2026-11-12T04:00:00Z", end: "2026-11-12T04:10:00Z" })] },
+    });
+    renderWithProviders(<ReservationsPage />, { me: me() });
+    const b = await within(await screen.findByRole("group", { name: "g206 的预约" })).findByRole("button", { name: /bob/ });
+    expect(b.style.minWidth).toBe("16px");
   });
 });

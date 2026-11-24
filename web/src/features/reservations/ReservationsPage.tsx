@@ -154,8 +154,12 @@ function ReserveDialog({ draft, nodes, rules, now, forOthers, onClose }: { draft
   const save = useMutation({
     mutationFn: async () => {
       if (edit) {
-        const p = purpose.trim() !== (edit.purpose ?? "") ? { purpose: purpose.trim() } : {};
-        await patchReservation(edit, active ? { end: period.end, ...p } : { start: period.start, end: period.end, ...p });
+        // only what was changed
+        const body: { start?: string; end?: string; purpose?: string } = {};
+        if (!active && s !== Date.parse(edit.start)) body.start = period.start;
+        if (e !== Date.parse(edit.end)) body.end = period.end;
+        if (purpose.trim() !== (edit.purpose ?? "")) body.purpose = purpose.trim();
+        if (Object.keys(body).length > 0) await patchReservation(edit, body);
         return { made: 1, failed: [] };
       }
       const keys = picked;
@@ -361,7 +365,7 @@ function Row({
         {blocks.map((b) => {
           const cls = b.mine ? "border-accent bg-accent-soft text-accent" : "border-line-strong bg-sunk text-muted";
           const text = `${b.mine ? "我" : b.user} · ${fmtClock(b.start)}–${fmtClock(b.end)}${b.purpose ? ` · ${b.purpose}` : ""}`;
-          const style = { left: pct(Date.parse(b.start)), width: `calc(${pct(Date.parse(b.end))} - ${pct(Date.parse(b.start))})`, top: 4 + (lane.get(b.id) ?? 0) * (laneH + 4), height: laneH, lineHeight: `${laneH - 2}px` };
+          const style = { left: pct(Date.parse(b.start)), width: `calc(${pct(Date.parse(b.end))} - ${pct(Date.parse(b.start))})`, minWidth: 16, top: 4 + (lane.get(b.id) ?? 0) * (laneH + 4), height: laneH, lineHeight: `${laneH - 2}px` };
           const title = `${b.user}：${fmtTime(b.start)} – ${fmtTime(b.end)}（${phaseLabel[b.phase]}）${b.purpose ? `\n${b.purpose}` : ""}`;
           return (
             <button key={b.id} type="button" title={title} onClick={() => onPick(b)} style={style} className={`absolute overflow-hidden rounded border px-1 text-left text-[11px] whitespace-nowrap hover:brightness-95 ${cls}`}>
@@ -446,8 +450,9 @@ export function ReservationsPage() {
   const tap = useRef<{ x: number; y: number; track: HTMLElement; row: number } | null>(null);
   const listFrom = from - 30 * DAY;
   const q = useQuery({
-    queryKey: ["reservations", new Date(listFrom).toISOString(), 14],
-    queryFn: () => listReservations(new Date(listFrom).toISOString(), new Date(from + 15 * DAY).toISOString()),
+    // the whole window the timeline shows
+    queryKey: ["reservations", new Date(listFrom).toISOString(), new Date(to).toISOString()],
+    queryFn: () => listReservations(new Date(listFrom).toISOString(), new Date(to).toISOString()),
     refetchInterval: 30_000,
     enabled: !!rules.data,
   });
@@ -523,7 +528,8 @@ export function ReservationsPage() {
       { label: "复制节点名", onSelect: () => void copyText([...new Set(rows.map((b) => b.node))].join("\n")) },
     ];
   };
-  const open = (b: Reservation) => setDraft({ node: nodeKey(b), start: Date.parse(b.start), end: Date.parse(b.end) + (b.phase === "Active" ? g : 0), edit: b });
+  // opened as it is: a change goes in only where made (a purpose alone moves no end)
+  const open = (b: Reservation) => setDraft({ node: nodeKey(b), start: Date.parse(b.start), end: Date.parse(b.end), edit: b });
   // from the slot now is in, so the reservation covers now: no gap
   const first = slotStart(now, g);
   const timeAt = (track: HTMLElement, clientX: number) => {
@@ -548,7 +554,7 @@ export function ReservationsPage() {
             </button>
           ))}
         </div>
-        <span className="text-[11px] text-muted">在时间轴上拖动（触屏上点一下）来预约，左右滑动看更多天。预约是使用许可，不独占，同一时段可以有多份。北京时间。</span>
+        <span className="text-[11px] text-muted">在时间轴上拖动（触屏或手写笔点一下）来预约，左右滑动看更多天。预约是使用许可，不独占，同一时段可以有多份。北京时间。</span>
         <span className="flex-1" />
         <Button variant="primary" disabled={nodes.length === 0} onClick={() => setDraft({ node: keyOf(nodes[0]), start: first, end: first + Math.max(2 * g, HOUR) })}>
           预约节点
@@ -579,8 +585,8 @@ export function ReservationsPage() {
                 const track = target.closest<HTMLElement>("[data-track]");
                 const row = target.closest<HTMLElement>("[data-row]");
                 if (target.closest("button") || !track || !row) return;
-                if (e.pointerType === "touch") {
-                  // the browser pans on a swipe; a tap (no move) reserves there
+                if (e.pointerType === "touch" || e.pointerType === "pen") {
+                  // the browser pans on a swipe (finger or pen); a tap (no move) reserves there
                   tap.current = { x: e.clientX, y: e.clientY, track, row: Number(row.dataset.row) };
                   return;
                 }
@@ -598,7 +604,7 @@ export function ReservationsPage() {
                 setDrag({ ...drag, b: timeAt(dragTrack.current, e.clientX), r1: over ? Number(over.dataset.row) : drag.r1 });
               }}
               onPointerUp={(e) => {
-                if (e.pointerType === "touch") {
+                if (e.pointerType === "touch" || e.pointerType === "pen") {
                   const t = tap.current;
                   tap.current = null;
                   if (t && Math.hypot(e.clientX - t.x, e.clientY - t.y) <= 8 && nodes[t.row]) {
