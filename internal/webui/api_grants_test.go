@@ -245,3 +245,34 @@ func TestManagedNodes(t *testing.T) {
 		t.Fatalf("an admin: %v", got)
 	}
 }
+
+// 管理预约 is a grant permission like the others, and /api/me says it.
+func TestGrantManageReservations(t *testing.T) {
+	_, call := accessRig(t)
+	if rec := call("ac-root", true, "POST", "/api/admin/grants", `{"name":"mr-keeper","match":"user = mr-bob and machine = mr-n1","permissions":["manageReservations"]}`); rec.Code != http.StatusCreated {
+		t.Fatalf("grant: %d %s", rec.Code, rec.Body)
+	}
+	perms := func(user string, admin bool) map[string]bool {
+		var out struct {
+			Permissions map[string]bool `json:"permissions"`
+		}
+		rec := call(user, admin, "GET", "/api/me", "")
+		if rec.Code != http.StatusOK || json.Unmarshal(rec.Body.Bytes(), &out) != nil {
+			t.Fatalf("me: %d %s", rec.Code, rec.Body)
+		}
+		return out.Permissions
+	}
+	deadline := time.Now().Add(10 * time.Second)
+	for !perms("mr-bob", false)["manageReservations"] {
+		if time.Now().After(deadline) {
+			t.Fatalf("bob: %v", perms("mr-bob", false))
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	if p := perms("ac-root", true); !p["manageReservations"] {
+		t.Fatalf("an admin: %v", p)
+	}
+	if p := perms("mr-carol", false); p["manageReservations"] {
+		t.Fatalf("carol: %v", p)
+	}
+}

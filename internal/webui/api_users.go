@@ -113,7 +113,7 @@ func (s *Server) handleMe(w http.ResponseWriter, r *http.Request) {
 			slog.Warn("me_grants", "user", sess.User, "err", err)
 		}
 	}
-	for _, p := range []devpodv1alpha1.GrantPermission{devpodv1alpha1.PermSetReservable, devpodv1alpha1.PermViewAudit, devpodv1alpha1.PermDisconnectSessions} {
+	for _, p := range []devpodv1alpha1.GrantPermission{devpodv1alpha1.PermSetReservable, devpodv1alpha1.PermViewAudit, devpodv1alpha1.PermDisconnectSessions, devpodv1alpha1.PermManageReservations} {
 		perms[string(p)] = sess.Admin || (gs != nil && gs.Possible(p, sess.User, groups))
 	}
 	me := map[string]any{

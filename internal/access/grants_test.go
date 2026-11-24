@@ -94,3 +94,24 @@ func TestGrantsPossible(t *testing.T) {
 		t.Error("b may view nowhere")
 	}
 }
+
+// PossibleIn: some grant of p could hold somewhere in the cluster (the
+// machine not known) — what decides whether a cluster is shown at all.
+func TestGrantSetPossibleIn(t *testing.T) {
+	g := CompileGrants([]v1.AccessGrant{
+		grant("keeper", "user = alice and cluster = st and machine = g1", v1.PermManageReservations),
+		grant("audit", "user = alice and cluster = st2", v1.PermViewAudit),
+	}, known)
+	for _, c := range []struct {
+		user, cluster string
+		want          bool
+	}{
+		{"alice", "st", true},
+		{"alice", "st2", false}, // a grant there, of another permission
+		{"bob", "st", false},
+	} {
+		if got := g.PossibleIn(v1.PermManageReservations, c.user, nil, c.cluster); got != c.want {
+			t.Errorf("%s in %s: %v", c.user, c.cluster, got)
+		}
+	}
+}

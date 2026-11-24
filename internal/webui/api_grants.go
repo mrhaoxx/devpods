@@ -105,7 +105,7 @@ func (s *Server) validGrant(r *http.Request, name string, b *grantBody) (devpodv
 	if len(b.Permissions) == 0 {
 		return spec, badRequest("授权 %s 没有授予任何权限", name)
 	}
-	known := []devpodv1alpha1.GrantPermission{devpodv1alpha1.PermSetReservable, devpodv1alpha1.PermViewAudit, devpodv1alpha1.PermDisconnectSessions}
+	known := []devpodv1alpha1.GrantPermission{devpodv1alpha1.PermSetReservable, devpodv1alpha1.PermViewAudit, devpodv1alpha1.PermDisconnectSessions, devpodv1alpha1.PermManageReservations}
 	seen := map[devpodv1alpha1.GrantPermission]bool{}
 	for _, p := range b.Permissions {
 		switch {

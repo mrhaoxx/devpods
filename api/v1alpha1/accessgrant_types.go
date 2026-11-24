@@ -11,7 +11,7 @@ import (
 // GrantPermission is a management permission a grant gives (design
 // 2026-11-20 §6).
 //
-// +kubebuilder:validation:Enum=setReservable;viewAudit;disconnectSessions
+// +kubebuilder:validation:Enum=setReservable;viewAudit;disconnectSessions;manageReservations
 type GrantPermission string
 
 const (
@@ -23,6 +23,10 @@ const (
 	// PermDisconnectSessions: cut the sessions on a machine; given only
 	// together with PermViewAudit.
 	PermDisconnectSessions GrantPermission = "disconnectSessions"
+	// PermManageReservations: on a machine, what an admin may do with its
+	// reservations — reserve for someone, change or end someone else's
+	// (design 2026-11-24).
+	PermManageReservations GrantPermission = "manageReservations"
 )
 
 // AccessGrantSpec: a condition — the access rules' language, on the user

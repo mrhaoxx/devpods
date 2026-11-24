@@ -77,6 +77,12 @@ func (g *GrantSet) Possible(p v1.GrantPermission, user string, groups map[string
 	return g.any(p, Facts{User: &user, Groups: groups}, func(t Tri) bool { return t != False })
 }
 
+// PossibleIn: some grant giving p may hold for user somewhere in cluster
+// (the machine not known) — whether that cluster is shown to them at all.
+func (g *GrantSet) PossibleIn(p v1.GrantPermission, user string, groups map[string]bool, cluster string) bool {
+	return g.any(p, Facts{Cluster: &cluster, User: &user, Groups: groups}, func(t Tri) bool { return t != False })
+}
+
 func (g *GrantSet) any(p v1.GrantPermission, f Facts, ok func(Tri) bool) bool {
 	for _, c := range g.list {
 		if c.broken == "" && slices.Contains(c.perms, p) && ok(c.expr.Eval(f)) {
