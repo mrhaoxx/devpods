@@ -552,8 +552,10 @@ func (s *Server) handlePatchReservation(w http.ResponseWriter, r *http.Request) 
 		end = req.End.UTC()
 	}
 	started := !now.Before(nr.Spec.Start.Time)
+	moves := req.Start != nil || req.End != nil // a purpose alone: the times are left as they are
 	var err error
 	switch {
+	case !moves:
 	case started && !start.Equal(nr.Spec.Start.Time):
 		err = fmt.Errorf("a reservation that has started can only have its end moved")
 	case started:
@@ -566,7 +568,9 @@ func (s *Server) handlePatchReservation(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	changed, err := s.changeReservation(r.Context(), nr.Name, func(spec *devpodv1alpha1.NodeReservationSpec) bool {
-		spec.Start, spec.End = metav1.NewTime(start), metav1.NewTime(end)
+		if moves {
+			spec.Start, spec.End = metav1.NewTime(start), metav1.NewTime(end)
+		}
 		if req.Purpose != nil {
 			spec.Purpose = purpose
 		}

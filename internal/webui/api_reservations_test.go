@@ -618,3 +618,65 @@ func TestReservationsManagedByGrant(t *testing.T) {
 		t.Errorf("carol's nodes lack %s", node)
 	}
 }
+
+// A purpose-only change touches the purpose alone: the times are neither
+// checked again (the rules may have changed since) nor written back.
+func TestReservationPurposeOnlyPatchKeepsTimes(t *testing.T) {
+	s, sm, _, node := rsvRig(t, "po")
+	alice := forge(sm, "po-alice", false)
+	slot := time.Date(2026, 11, 12, 2, 0, 0, 0, time.UTC) // 10:00; now is 10:10
+	code, v := reserveAs(t, s, alice, node, slot, slot.Add(30*time.Minute))
+	if code != http.StatusCreated {
+		t.Fatalf("reserve: %d %+v", code, v)
+	}
+	s.Reservations.Granularity = time.Hour // 10:30 is no longer on a step
+	rec := doJSON(t, s.HandlePatchReservationForTest(), "PATCH", "/api/reservations/"+v.ID, map[string]string{"id": v.ID}, alice, `{"purpose":"x"}`)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("purpose only: %d %s", rec.Code, rec.Body)
+	}
+	for _, x := range listReservations(t, s, alice) {
+		if x.ID == v.ID && (x.Purpose != "x" || !x.Start.Equal(slot) || !x.End.Equal(slot.Add(30*time.Minute))) {
+			t.Fatalf("after: %+v", x)
+		}
+	}
+}
+
+// A 管理预约 grant reaches the machines it names and no others.
+func TestReservationGrantLimitedToItsMachine(t *testing.T) {
+	s, sm, _, _ := rsvRig(t, "gl")
+	admin := forge(sm, "gl-root", true)
+	if c := doJSON(t, s.Routes().ServeHTTP, "PUT", "/api/admin/nodes/gl-n2/reservable", nil, admin, `{"reservable":true}`).Code; c != http.StatusOK {
+		t.Fatalf("opening gl-n2: %d", c)
+	}
+	grantNow(t, s, "gl-keeper", "user = gl-carol and machine = gl-n1", devpodv1alpha1.PermManageReservations)
+	alice, carol := forge(sm, "gl-alice", false), forge(sm, "gl-carol", false)
+	slot := time.Date(2026, 11, 12, 2, 0, 0, 0, time.UTC)
+	var a rsvView
+	for deadline := time.Now().Add(10 * time.Second); time.Now().Before(deadline); time.Sleep(50 * time.Millisecond) {
+		var code int
+		if code, a = reserveAs(t, s, alice, "gl-n2", slot, slot.Add(time.Hour)); code == http.StatusCreated {
+			break
+		}
+	}
+	if a.ID == "" {
+		t.Fatalf("alice on gl-n2: %+v", a)
+	}
+	for _, v := range listReservations(t, s, carol) {
+		if v.ID == a.ID && v.CanManage {
+			t.Errorf("carol may manage a reservation of gl-n2: %+v", v)
+		}
+	}
+	call := func(h http.HandlerFunc, method, body string) int {
+		return doJSON(t, h, method, "/api/reservations/"+a.ID, map[string]string{"id": a.ID}, carol, body).Code
+	}
+	if c := call(s.HandlePatchReservationForTest(), "PATCH", `{"purpose":"x"}`); c != http.StatusForbidden {
+		t.Errorf("carol changing one on gl-n2: %d", c)
+	}
+	if c := call(s.HandleDeleteReservationForTest(), "DELETE", ""); c != http.StatusForbidden {
+		t.Errorf("carol ending one on gl-n2: %d", c)
+	}
+	body, _ := json.Marshal(map[string]any{"node": "gl-n2", "start": slot.Add(2 * time.Hour), "end": slot.Add(3 * time.Hour), "user": "gl-bob"})
+	if c := doJSON(t, s.HandleCreateReservationForTest(), "POST", "/api/reservations", nil, carol, string(body)).Code; c != http.StatusForbidden {
+		t.Errorf("carol reserving gl-n2 for bob: %d", c)
+	}
+}
