@@ -131,7 +131,7 @@ function GrantDrawer({ grant, groups, onClose }: { grant: Grant | null; groups: 
               </label>
             ))}
           </div>
-          <p className="text-[11px] text-muted">看审计：会话、回放、命令、文件、HTTP 记录、告警和实时观看；断开会话须同时看审计。</p>
+          <p className="text-[11px] text-muted">看审计：会话、回放、命令、文件、HTTP 记录、告警和实时观看；断开会话须同时看审计。管理预约：在这些机器上代人预约，修改、取消或提前释放别人的预约。</p>
         </fieldset>
         <Field label="说明（可选）">
           <Input aria-label="说明" value={description} onChange={(ev) => setDescription(ev.target.value)} />

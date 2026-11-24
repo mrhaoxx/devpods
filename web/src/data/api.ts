@@ -50,7 +50,7 @@ export interface Me {
   user: string;
   admin: boolean;
   /** management permissions the user may hold somewhere (grants): what pages to show; each action is judged itself */
-  permissions?: { setReservable: boolean; viewAudit: boolean; disconnectSessions: boolean };
+  permissions?: { setReservable: boolean; viewAudit: boolean; disconnectSessions: boolean; manageReservations?: boolean };
   nameBudget: number;
   quota: { maxDevPods?: number; compute?: Record<string, string>; storage?: string };
   usage: { devpods: number; running: number; compute: Record<string, string>; storage: string };
@@ -546,6 +546,8 @@ export type NodeChoice = {
   gpuTotal: number;
   gpuUsed: number;
   reservable: boolean;
+  /** I may run others' reservations here (an admin, or a 管理预约 grant) */
+  manageReservations?: boolean;
   /** the access rules let me use it only under a reservation */
   reservationRequired?: boolean;
   /** what it is to me: usable, needs a reservation I do not hold now, or barred */
@@ -568,6 +570,10 @@ export type Reservation = {
   phase: "Upcoming" | "Active" | "Ended" | "Cancelled";
   mine: boolean;
   cancelledBy?: string;
+  /** what it is for, as its holder says */
+  purpose?: string;
+  /** I may change or end it: mine, an admin, or a 管理预约 grant on its machine */
+  canManage?: boolean;
 };
 export type ReservationRules = { granularitySeconds: number; maxDurationSeconds: number; maxAdvanceSeconds: number; clearNoticeSeconds: number; timezone: string; now: string };
 export const getReservationRules = () => req<ReservationRules>("GET", "/api/reservations/rules");
@@ -575,11 +581,11 @@ export const listReservations = (from: string, to: string) => req<{ items: Reser
 /** listMyReservations: a page of mine, of any time, the latest start first; `next` asks for the page after. */
 export const listMyReservations = (cursor?: string, limit = 50) =>
   req<{ items: Reservation[]; next?: string }>("GET", `/api/reservations?mine=1&limit=${limit}${cursor ? `&cursor=${encodeURIComponent(cursor)}` : ""}`);
-type Period = { node: string; start: string; end: string };
+type Period = { node: string; start: string; end: string; purpose?: string; /** for someone else (an admin, or a 管理预约 grant) */ user?: string };
 /** ResRef names a reservation: its id and cluster. */
 export type ResRef = { id: string; cluster?: string };
 export const createReservation = (cluster: string | undefined, p: Period) => req<Reservation>("POST", apiIn(cluster, "/api/reservations"), p);
-export const patchReservation = (r: ResRef, body: { start?: string; end?: string }) => req<Reservation>("PATCH", apiIn(r.cluster, `/api/reservations/${r.id}`), body);
+export const patchReservation = (r: ResRef, body: { start?: string; end?: string; purpose?: string }) => req<Reservation>("PATCH", apiIn(r.cluster, `/api/reservations/${r.id}`), body);
 export const deleteReservation = (r: ResRef) => req<void>("DELETE", apiIn(r.cluster, `/api/reservations/${r.id}`));
 /** a machine one may switch reservable (a grant, or an admin) */
 export type ManagedNode = { cluster?: string; name: string; reservable: boolean; ready: boolean; gpuModel?: string; gpuTotal: number };

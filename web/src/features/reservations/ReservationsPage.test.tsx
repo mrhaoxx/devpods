@@ -251,4 +251,84 @@ describe("ReservationsPage", () => {
     fireEvent.keyDown(document.activeElement ?? document.body, { key: "Escape" });
     expect((await menu("进行中")).getByRole("menuitem", { name: "提前释放" })).toBeTruthy();
   });
+
+  it("anyone opens a reservation's details; another's I may not manage has no actions", async () => {
+    at();
+    stubFetch({
+      "/api/reservations/rules": rules,
+      "/api/nodes": { items: [node("g206")] },
+      "/api/reservations": { items: [block({ id: "b1", user: "bob", mine: false, canManage: false, purpose: "跑基准" })] },
+    });
+    renderWithProviders(<ReservationsPage />, { me: me() });
+    const row = await screen.findByRole("group", { name: "g206 的预约" });
+    fireEvent.click(await within(row).findByRole("button", { name: /bob/ }));
+    const dialog = within(await screen.findByRole("dialog"));
+    expect(dialog.getByText(/跑基准/)).toBeTruthy();
+    expect(dialog.getAllByText(/bob/).length).toBeGreaterThan(0);
+    for (const name of [/修改/, /取消预约/, /提前释放/, /取消这个预约/]) expect(dialog.queryByRole("button", { name })).toBeNull();
+  });
+
+  it("another's reservation I may manage (a grant) has 修改… and 取消预约", async () => {
+    at();
+    stubFetch({
+      "/api/reservations/rules": rules,
+      "/api/nodes": { items: [node("g206")] },
+      "/api/reservations": { items: [block({ id: "b2", user: "bob", mine: false, canManage: true })] },
+    });
+    renderWithProviders(<ReservationsPage />, { me: me() });
+    const row = await screen.findByRole("group", { name: "g206 的预约" });
+    fireEvent.click(await within(row).findByRole("button", { name: /bob/ }));
+    const dialog = within(await screen.findByRole("dialog"));
+    expect(dialog.getByRole("button", { name: "修改…" })).toBeTruthy();
+    expect(dialog.getByRole("button", { name: "取消预约" })).toBeTruthy();
+  });
+
+  it("the purpose goes with the reservation; 为谁预约 only for one who may manage reservations", async () => {
+    at();
+    const calls = stubFetch({
+      "/api/reservations/rules": rules,
+      "/api/nodes": { items: [node("g206")] },
+      "/api/reservations": { items: [] },
+      "POST /api/reservations": block({ id: "new" }),
+    });
+    renderWithProviders(<ReservationsPage />, { me: me() });
+    fireEvent.click(await screen.findByRole("button", { name: "预约节点" }));
+    const dialog = within(screen.getByRole("dialog"));
+    expect(dialog.queryByLabelText("为谁预约")).toBeNull();
+    fireEvent.change(dialog.getByLabelText("用途"), { target: { value: "跑基准" } });
+    fireEvent.click(dialog.getByRole("button", { name: "预约" }));
+    await waitFor(() => expect(calls.some((c) => c.method === "POST")).toBe(true));
+    expect(JSON.parse(calls.find((c) => c.method === "POST")!.body!).purpose).toBe("跑基准");
+  });
+
+  it("one granted 管理预约 may reserve for someone else", async () => {
+    at();
+    const calls = stubFetch({
+      "/api/reservations/rules": rules,
+      "/api/nodes": { items: [node("g206", { manageReservations: true })] },
+      "/api/reservations": { items: [] },
+      "POST /api/reservations": block({ id: "new", user: "bob", mine: false }),
+    });
+    const m = me();
+    m.permissions = { setReservable: false, viewAudit: false, disconnectSessions: false, manageReservations: true };
+    renderWithProviders(<ReservationsPage />, { me: m });
+    fireEvent.click(await screen.findByRole("button", { name: "预约节点" }));
+    const dialog = within(screen.getByRole("dialog"));
+    fireEvent.change(dialog.getByLabelText("为谁预约"), { target: { value: "bob" } });
+    fireEvent.click(dialog.getByRole("button", { name: "预约" }));
+    await waitFor(() => expect(calls.some((c) => c.method === "POST")).toBe(true));
+    expect(JSON.parse(calls.find((c) => c.method === "POST")!.body!).user).toBe("bob");
+  });
+
+  it("我的预约 shows each one's purpose", async () => {
+    at();
+    stubFetch({
+      "/api/reservations/rules": rules,
+      "/api/nodes": { items: [node("g206")] },
+      "/api/reservations": { items: [block({ id: "m1", purpose: "训练 7B" })] },
+    });
+    renderWithProviders(<ReservationsPage />, { me: me() });
+    const table = await screen.findByRole("table");
+    expect(await within(table).findByText("训练 7B")).toBeTruthy();
+  });
 });

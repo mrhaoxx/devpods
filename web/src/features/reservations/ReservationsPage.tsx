@@ -28,6 +28,7 @@ import { DataTable, type RowAction } from "../../design/DataTable";
 import { copyText } from "../../design/Copy";
 import { Button } from "../../design/Button";
 import { ConfirmDialog } from "../../design/ConfirmDialog";
+import { phaseLabel, ReservationDetails } from "./ReservationDetails";
 import { EmptyState } from "../../design/EmptyState";
 import { Field, Input, Notice, Select } from "../../design/Form";
 import { Panel } from "../../design/Panel";
@@ -38,7 +39,6 @@ import * as Dialog from "@radix-ui/react-dialog";
 
 const DAY = 86_400_000;
 const RANGES = [3, 7, 14] as const;
-const phaseLabel: Record<Reservation["phase"], string> = { Upcoming: "即将开始", Active: "进行中", Ended: "已结束", Cancelled: "已取消" };
 
 /** apiMessage turns a reservation API failure into a sentence. */
 function apiMessage(e: unknown): string {
@@ -95,12 +95,19 @@ function mineColumns(user: () => string, actions: (b: Reservation) => React.Reac
         </>
       ),
     },
+    {
+      id: "purpose",
+      header: "用途",
+      accessorFn: (b) => b.purpose ?? "",
+      meta: { priority: 2, width: 200 },
+      cell: ({ getValue }) => <span title={getValue() as string}>{getValue() as string}</span>,
+    },
     { id: "actions", header: "", enableSorting: false, meta: { priority: 1, width: 48, align: "right", pin: "right" }, cell: ({ row }) => actions(row.original) },
   ];
 }
 
 /** The form: new reservation, move (not started) or move the end of one that has started. */
-function ReserveDialog({ draft, nodes, rules, now, onClose }: { draft: Draft; nodes: NodeChoice[]; rules: ReservationRules; now: number; onClose: () => void }) {
+function ReserveDialog({ draft, nodes, rules, now, forOthers, onClose }: { draft: Draft; nodes: NodeChoice[]; rules: ReservationRules; now: number; forOthers: boolean; onClose: () => void }) {
   const qc = useQueryClient();
   const edit = draft.edit;
   const active = edit?.phase === "Active";
@@ -115,6 +122,8 @@ function ReserveDialog({ draft, nodes, rules, now, onClose }: { draft: Draft; no
     return several && r.cluster ? `${r.cluster} · ${r.name}` : r.name;
   };
   const [error, setError] = useState<string | null>(null);
+  const [purpose, setPurpose] = useState(edit?.purpose ?? "");
+  const [forUser, setForUser] = useState("");
   const g = rules.granularitySeconds * 1000;
   // the system's own pickers (no step: Safari's handles it badly); what
   // is typed is rounded out to whole steps, and the period said below
@@ -145,11 +154,13 @@ function ReserveDialog({ draft, nodes, rules, now, onClose }: { draft: Draft; no
   const save = useMutation({
     mutationFn: async () => {
       if (edit) {
-        await patchReservation(edit, active ? { end: period.end } : { start: period.start, end: period.end });
+        const p = purpose.trim() !== (edit.purpose ?? "") ? { purpose: purpose.trim() } : {};
+        await patchReservation(edit, active ? { end: period.end, ...p } : { start: period.start, end: period.end, ...p });
         return { made: 1, failed: [] };
       }
       const keys = picked;
-      const results = await Promise.allSettled(keys.map((k) => createReservation(refOfKey(k).cluster, { ...period, node: refOfKey(k).name })));
+      const extra = { ...(purpose.trim() ? { purpose: purpose.trim() } : {}), ...(forOthers && forUser.trim() ? { user: forUser.trim() } : {}) };
+      const results = await Promise.allSettled(keys.map((k) => createReservation(refOfKey(k).cluster, { ...period, ...extra, node: refOfKey(k).name })));
       const failed = results.flatMap((r, i) => (r.status === "rejected" ? [{ key: keys[i], why: apiMessage(r.reason) }] : []));
       return { made: keys.length - failed.length, failed };
     },
@@ -228,6 +239,14 @@ function ReserveDialog({ draft, nodes, rules, now, onClose }: { draft: Draft; no
                 <Input aria-label="结束" type="datetime-local" value={end} onChange={(ev) => (setEnd(ev.target.value), touch())} />
               </Field>
             </div>
+            <Field label="用途（选填）">
+              <Input aria-label="用途" value={purpose} maxLength={200} placeholder="例如：跑 sglang 基准" onChange={(ev) => (setPurpose(ev.target.value), touch())} />
+            </Field>
+            {forOthers && !edit && (
+              <Field label="为谁预约" hint="留空为自己；对方要能使用这台机器">
+                <Input aria-label="为谁预约" className="mono" value={forUser} placeholder="用户名" onChange={(ev) => (setForUser(ev.target.value), touch())} />
+              </Field>
+            )}
             {!problem && (
               <p className="text-xs">
                 实际预约：{fmtDay(s)} {fmtClock(s)} – {fmtDay(e)} {fmtClock(e)}，{fmtSpan(e - s)}
@@ -278,7 +297,6 @@ function Row({
   to,
   now,
   gran,
-  admin,
   index,
   sel,
   bad,
@@ -291,7 +309,6 @@ function Row({
   to: number;
   now: number;
   gran: number;
-  admin: boolean;
   /** this row's place: what a drag across rows reads */
   index: number;
   /** the time a drag picks, when the drag takes this row in */
@@ -338,19 +355,14 @@ function Row({
           <div key={i} className="pointer-events-none absolute inset-y-0 w-px bg-line" style={{ left: pct(from + (i + 1) * DAY) }} />
         ))}
         {blocks.map((b) => {
-          const canOpen = b.mine || admin;
           const cls = b.mine ? "border-accent bg-accent-soft text-accent" : "border-line-strong bg-sunk text-muted";
-          const text = `${b.mine ? "我" : b.user} · ${fmtClock(b.start)}–${fmtClock(b.end)}`;
+          const text = `${b.mine ? "我" : b.user} · ${fmtClock(b.start)}–${fmtClock(b.end)}${b.purpose ? ` · ${b.purpose}` : ""}`;
           const style = { left: pct(Date.parse(b.start)), width: `calc(${pct(Date.parse(b.end))} - ${pct(Date.parse(b.start))})`, top: 4 + (lane.get(b.id) ?? 0) * (laneH + 4), height: laneH, lineHeight: `${laneH - 2}px` };
-          const title = `${b.user}：${fmtTime(b.start)} – ${fmtTime(b.end)}（${phaseLabel[b.phase]}）`;
-          return canOpen ? (
+          const title = `${b.user}：${fmtTime(b.start)} – ${fmtTime(b.end)}（${phaseLabel[b.phase]}）${b.purpose ? `\n${b.purpose}` : ""}`;
+          return (
             <button key={b.id} type="button" title={title} onClick={() => onPick(b)} style={style} className={`absolute overflow-hidden rounded border px-1 text-left text-[11px] whitespace-nowrap hover:brightness-95 ${cls}`}>
               {text}
             </button>
-          ) : (
-            <div key={b.id} title={title} style={style} className={`absolute overflow-hidden rounded border px-1 text-[11px] whitespace-nowrap ${cls}`}>
-              {text}
-            </div>
           );
         })}
         {now > from && now < to && <div className="pointer-events-none absolute inset-y-0 w-px bg-fail" style={{ left: pct(now) }} aria-hidden />}
@@ -431,7 +443,7 @@ export function ReservationsPage() {
   const all = (q.data?.items ?? []).filter(matches);
   const live = all.filter((b) => b.phase !== "Cancelled");
   // the reservable machines I may use, whether I need a reservation there or not
-  const nodes = (nodesQ.data?.items ?? []).filter((n) => n.reservable && n.access !== "denied" && matches(n));
+  const nodes = (nodesQ.data?.items ?? []).filter((n) => n.reservable && (n.access !== "denied" || n.manageReservations) && matches(n));
   const mine = (mineQ.data?.pages.flatMap((p) => p.items) ?? []).filter((b) => b.mine && matches(b));
   const cancelAll = async (rows: Reservation[], clear: () => void) => {
     setBulkCancel(null);
@@ -546,7 +558,6 @@ export function ReservationsPage() {
                   to={to}
                   now={now}
                   gran={g}
-                  admin={me.admin}
                   index={i}
                   sel={dragSel && i >= rowsOf[0] && i <= rowsOf[1] ? dragSel : null}
                   bad={dragBad}
@@ -609,31 +620,24 @@ export function ReservationsPage() {
             : "它们都还没开始，直接取消。")}
       </ConfirmDialog>
       {bulk.toast}
-      {draft && <ReserveDialog key={`${draft.node}-${draft.start}-${draft.edit?.id ?? ""}`} draft={draft} nodes={nodes} rules={rules.data} now={now} onClose={() => setDraft(null)} />}
-      <ConfirmDialog
-        open={!!picked}
-        onOpenChange={(o) => !o && setPicked(null)}
-        title={picked ? `${picked.node} · ${picked.mine ? "我的预约" : `${picked.user} 的预约`}` : ""}
-        confirmLabel={picked?.mine ? "修改…" : "取消这个预约"}
-        danger={!picked?.mine}
-        onConfirm={() => {
-          const b = picked!;
-          setPicked(null);
-          if (b.mine) open(b);
-          else setCancel(b);
-        }}
-      >
-        {picked && (
-          <span>
-            {fmtTime(picked.start)} – {fmtTime(picked.end)}，{phaseLabel[picked.phase]}。
-            {picked.mine && (
-              <button type="button" className="ml-2 text-fail hover:underline" onClick={() => (setCancel(picked), setPicked(null))}>
-                {picked.phase === "Active" ? "提前释放" : "取消预约"}
-              </button>
-            )}
-          </span>
-        )}
-      </ConfirmDialog>
+      {draft && <ReserveDialog key={`${draft.node}-${draft.start}-${draft.edit?.id ?? ""}`} draft={draft} nodes={nodes} rules={rules.data} now={now} forOthers={me.admin || !!me.permissions?.manageReservations} onClose={() => setDraft(null)} />}
+      {picked && (
+        <ReservationDetails
+          b={picked}
+          canManage={picked.canManage ?? (picked.mine || me.admin)}
+          onClose={() => setPicked(null)}
+          onEdit={() => {
+            const b = picked;
+            setPicked(null);
+            open(b);
+          }}
+          onCancel={() => {
+            const b = picked;
+            setPicked(null);
+            setCancel(b);
+          }}
+        />
+      )}
       <ConfirmDialog
         open={!!cancel}
         onOpenChange={(o) => !o && setCancel(null)}

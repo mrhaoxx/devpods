@@ -61,4 +61,21 @@ describe("GrantsPanel", () => {
     expect(sent).toEqual({ name: "g3", match: "user = a", permissions: ["viewAudit"] });
     expect(calls.some((c) => c.method === "PUT" && c.url.pathname === "/api/admin/access")).toBe(false);
   });
+
+  it("管理预约 is a permission a grant can give", async () => {
+    const calls = stubFetch({
+      "GET /api/admin/grants": grants,
+      "POST /api/admin/access/preview": preview,
+      "POST /api/admin/grants": { name: "g4", match: "machine = g1", permissions: ["manageReservations"], resourceVersion: "4", problem: "" },
+    });
+    panel();
+    fireEvent.click(await screen.findByRole("button", { name: "新增授权" }));
+    const drawer = within(await screen.findByRole("dialog"));
+    fireEvent.change(drawer.getByLabelText("名字"), { target: { value: "g4" } });
+    fireEvent.change(drawer.getByLabelText("条件"), { target: { value: "machine = g1" } });
+    fireEvent.click(drawer.getByLabelText("管理预约"));
+    fireEvent.click(drawer.getByRole("button", { name: "确定" }));
+    await waitFor(() => expect(calls.some((c) => c.method === "POST" && c.url.pathname === "/api/admin/grants")).toBe(true));
+    expect(JSON.parse(calls.find((c) => c.method === "POST" && c.url.pathname === "/api/admin/grants")!.body!).permissions).toEqual(["manageReservations"]);
+  });
 });

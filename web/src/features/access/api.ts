@@ -81,11 +81,12 @@ export const effectText = (e: AccessEffect) =>
         .join(" · ");
 
 /* management grants (design 2026-11-20): each an AccessGrant of its own */
-export type GrantPermission = "setReservable" | "viewAudit" | "disconnectSessions";
+export type GrantPermission = "setReservable" | "viewAudit" | "disconnectSessions" | "manageReservations";
 export const GRANT_PERMISSIONS: [GrantPermission, string][] = [
   ["setReservable", "切换可预约"],
   ["viewAudit", "看审计"],
   ["disconnectSessions", "断开会话"],
+  ["manageReservations", "管理预约"],
 ];
 export type Grant = { name: string; match: string; permissions: GrantPermission[]; description?: string; resourceVersion?: string; problem?: string };
 export const listGrants = () => req<{ items: Grant[] }>("GET", "/api/admin/grants");
