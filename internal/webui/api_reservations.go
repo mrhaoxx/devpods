@@ -137,6 +137,27 @@ type reservationView struct {
 	Mine        bool      `json:"mine"`
 	CancelledBy string    `json:"cancelledBy,omitempty"`
 	Purpose     string    `json:"purpose,omitempty"`
+	// CanManage: the caller may change or end it — theirs, an admin, or
+	// a 管理预约 grant on its machine
+	CanManage bool `json:"canManage"`
+}
+
+// mayManageReservation: the caller may run others' reservations of node
+// (ctx's cluster) — an admin, or one granted 管理预约 on it (design
+// 2026-11-24). A node that cannot be read is judged by its name.
+func (s *Server) mayManageReservation(ctx context.Context, sess Session, node string) bool {
+	if sess.Admin {
+		return true
+	}
+	gs, groups, err := s.grantsFor(ctx, sess.User)
+	if err != nil {
+		return false
+	}
+	var n corev1.Node
+	if err := s.kc(ctx).Client.Get(ctx, types.NamespacedName{Name: node}, &n); err != nil {
+		n.Name = node
+	}
+	return gs.Has(devpodv1alpha1.PermManageReservations, sess.User, groups, s.resCluster(ctx), &access.Node{Name: n.Name, Labels: n.Labels})
 }
 
 // validPurpose: a reservation's purpose — trimmed, one line, at most
@@ -153,7 +174,7 @@ func validPurpose(p string) (string, error) {
 }
 
 func viewOfReservation(nr *devpodv1alpha1.NodeReservation, me string, now time.Time) reservationView {
-	v := reservationView{ID: nr.Name, Node: nr.Spec.Node, User: nr.Spec.User, Start: nr.Spec.Start.Time.UTC(), End: overAt(nr).UTC(), Mine: nr.Spec.User == me, Purpose: nr.Spec.Purpose}
+	v := reservationView{ID: nr.Name, Node: nr.Spec.Node, User: nr.Spec.User, Start: nr.Spec.Start.Time.UTC(), End: overAt(nr).UTC(), Mine: nr.Spec.User == me, Purpose: nr.Spec.Purpose, CanManage: nr.Spec.User == me}
 	switch {
 	case nr.Spec.Cancelled != nil:
 		v.Phase, v.CancelledBy = "Cancelled", nr.Spec.Cancelled.By
@@ -244,10 +265,37 @@ func (s *Server) handleListReservations(w http.ResponseWriter, r *http.Request) 
 	}
 	items := []reservationView{}
 	shown := s.clusterGate(r.Context(), sess)
+	var gs *access.GrantSet
+	var groups map[string]bool
+	if !sess.Admin {
+		var gerr error
+		if gs, groups, gerr = s.grantsFor(r.Context(), sess.User); gerr != nil {
+			gs = nil // unread: no grant gives anything
+		}
+	}
 	for _, cc := range s.ks(r) {
 		ctx := s.in(r.Context(), cc)
 		cluster := s.resCluster(ctx)
 		open := shown(cc.Name)
+		// the machines whose reservations the caller may run (a grant)
+		managed := map[string]bool{}
+		manageable := func(node string) bool {
+			if sess.Admin {
+				return true
+			}
+			if gs == nil {
+				return false
+			}
+			if ok, seen := managed[node]; seen {
+				return ok
+			}
+			var n corev1.Node
+			if err := cc.Client.Get(ctx, types.NamespacedName{Name: node}, &n); err != nil {
+				n.Name = node
+			}
+			managed[node] = gs.Has(devpodv1alpha1.PermManageReservations, sess.User, groups, cluster, &access.Node{Name: n.Name, Labels: n.Labels})
+			return managed[node]
+		}
 		// others' reservations of a machine the rules keep the caller off
 		// are not shown to them, as the machine is not
 		var j *judge
@@ -281,7 +329,8 @@ func (s *Server) handleListReservations(w http.ResponseWriter, r *http.Request) 
 			if mine && !v.Mine {
 				continue
 			}
-			if !v.Mine && (!open || !usable(nr.Spec.Node)) {
+			v.CanManage = v.Mine || manageable(nr.Spec.Node)
+			if !v.CanManage && (!open || !usable(nr.Spec.Node)) {
 				continue // others' reservations in a cluster, or of a machine, not shown to them
 			}
 			if v.Start.Before(to) && from.Before(v.End) {
@@ -402,8 +451,8 @@ func (s *Server) handleCreateReservation(w http.ResponseWriter, r *http.Request)
 	}
 	user := sess.User
 	if req.User != "" && req.User != sess.User {
-		if !sess.Admin {
-			s.writeErr(w, http.StatusForbidden, "FORBIDDEN", "only an admin reserves for someone else", nil)
+		if !s.mayManageReservation(r.Context(), sess, req.Node) {
+			s.writeErr(w, http.StatusForbidden, "FORBIDDEN", "only an admin, or one granted 管理预约 on this machine, reserves for someone else", nil)
 			return
 		}
 		user = req.User
@@ -436,7 +485,9 @@ func (s *Server) handleCreateReservation(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	s.reservationHistory(r.Context(), nr, "created")
-	s.writeJSON(w, http.StatusCreated, viewOfReservation(nr, sess.User, ru.now()))
+	created := viewOfReservation(nr, sess.User, ru.now())
+	created.CanManage = true // made by them: theirs, or one they may run
+	s.writeJSON(w, http.StatusCreated, created)
 }
 
 // ownReservation loads reservation id of the request's cluster for a change
@@ -448,7 +499,7 @@ func (s *Server) ownReservation(w http.ResponseWriter, r *http.Request, sess Ses
 		s.writeErr(w, http.StatusNotFound, "NOT_FOUND", "no such reservation", nil)
 		return nil, false
 	}
-	if nr.Spec.User != sess.User && !sess.Admin {
+	if nr.Spec.User != sess.User && !s.mayManageReservation(r.Context(), sess, nr.Spec.Node) {
 		s.writeErr(w, http.StatusForbidden, "FORBIDDEN", "this is someone else's reservation", nil)
 		return nil, false
 	}
@@ -525,7 +576,9 @@ func (s *Server) handlePatchReservation(w http.ResponseWriter, r *http.Request) 
 		s.writeErr(w, http.StatusInternalServerError, "INTERNAL", err.Error(), nil)
 		return
 	}
-	s.writeJSON(w, http.StatusOK, viewOfReservation(changed, sess.User, now))
+	out := viewOfReservation(changed, sess.User, now)
+	out.CanManage = true // they just changed it
+	s.writeJSON(w, http.StatusOK, out)
 }
 
 // handleDeleteReservation serves DELETE /api/reservations/{id}: one that
@@ -684,6 +737,10 @@ type nodeChoice struct {
 	ReservationRequired bool      `json:"reservationRequired"`
 	Pending             int       `json:"pending"` // reservations not over yet
 	Mine                *nodeHold `json:"mine"`    // the caller's reservation covering now
+	// ManageReservations: the caller may run others' reservations here
+	// (an admin, or a 管理预约 grant) — listed even where the rules keep
+	// them off it.
+	ManageReservations bool `json:"manageReservations,omitempty"`
 	// Selectable: the caller's own DevPods may be pinned here now.
 	Selectable bool   `json:"selectable"`
 	Reason     string `json:"reason,omitempty"`
@@ -699,9 +756,19 @@ func (s *Server) handleNodes(w http.ResponseWriter, r *http.Request) {
 	}
 	items := []nodeChoice{}
 	shown := s.clusterGate(r.Context(), sess)
+	var gs *access.GrantSet
+	var groups map[string]bool
+	if !sess.Admin {
+		var gerr error
+		if gs, groups, gerr = s.grantsFor(r.Context(), sess.User); gerr != nil {
+			gs = nil
+		}
+	}
 	for _, cc := range s.ks(r) {
-		if !shown(cc.Name) {
-			continue // a cluster the rules keep them off: not shown
+		// a cluster the rules keep them off is not shown — unless a 管理预约
+		// grant of theirs may hold there
+		if !shown(cc.Name) && (gs == nil || !gs.PossibleIn(devpodv1alpha1.PermManageReservations, sess.User, groups, s.resCluster(s.in(r.Context(), cc)))) {
+			continue
 		}
 		part, err := s.nodeChoicesIn(s.in(r.Context(), cc), sess)
 		if away(err) {
@@ -728,6 +795,14 @@ func (s *Server) handleNodes(w http.ResponseWriter, r *http.Request) {
 // nodeChoicesIn: the nodes of ctx's cluster, as the caller may use them.
 func (s *Server) nodeChoicesIn(ctx context.Context, sess Session) ([]nodeChoice, error) {
 	views, _, _, _ := s.nodeViews(ctx)
+	var gs *access.GrantSet
+	var groups map[string]bool
+	if !sess.Admin {
+		var gerr error
+		if gs, groups, gerr = s.grantsFor(ctx, sess.User); gerr != nil {
+			gs = nil
+		}
+	}
 	var all []devpodv1alpha1.NodeReservation
 	now := time.Now()
 	if s.Reservations != nil {
@@ -756,10 +831,11 @@ func (s *Server) nodeChoicesIn(ctx context.Context, sess Session) ([]nodeChoice,
 		var d access.Decision
 		c.Access, d = j.accessOf(&corev1.Node{ObjectMeta: metav1.ObjectMeta{Name: v.Name, Labels: v.Labels}})
 		c.ReservationRequired = d.NeedsReservation && !j.admin
+		c.ManageReservations = sess.Admin || (gs != nil && gs.Has(devpodv1alpha1.PermManageReservations, sess.User, groups, cluster, &access.Node{Name: v.Name, Labels: v.Labels}))
 		switch c.Access {
 		case "denied":
-			if !sess.Admin {
-				continue // a machine the rules keep them off is not shown to them
+			if !sess.Admin && !c.ManageReservations {
+				continue // a machine the rules keep them off is not shown to them (unless its reservations are theirs to run)
 			}
 			c.Selectable, c.Reason = false, "no access"
 		case "reservation":

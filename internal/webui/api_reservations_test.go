@@ -79,6 +79,8 @@ type rsvView struct {
 	Code    string    `json:"code"`
 	Message string    `json:"message"`
 	Purpose string    `json:"purpose"`
+	// CanManage: the caller may change or end it
+	CanManage bool `json:"canManage"`
 }
 
 func rsvBody(node string, start, end time.Time) string {
@@ -527,5 +529,92 @@ func TestReservationPurpose(t *testing.T) {
 	}
 	if code, _ := post(slot.Add(6*time.Hour), "a\nb"); code != http.StatusBadRequest {
 		t.Fatalf("two lines: %d", code)
+	}
+}
+
+// A 管理预约 grant on a machine makes its reservations the grantee's to
+// run, as an admin's — even where the rules keep the grantee off it; the
+// one reserved for must still be let use it.
+func TestReservationsManagedByGrant(t *testing.T) {
+	s, sm, _, node := rsvRig(t, "mg")
+	grantNow(t, s, "mg-keeper", "user = mg-carol and machine = mg-n1", devpodv1alpha1.PermManageReservations)
+	setRules(t, devpodv1alpha1.AccessRule{Match: "user in (mg-carol, mg-dave) and machine = mg-n1"})
+	alice, bob, carol := forge(sm, "mg-alice", false), forge(sm, "mg-bob", false), forge(sm, "mg-carol", false)
+	slot := time.Date(2026, 11, 12, 2, 0, 0, 0, time.UTC) // 10:00; now is 10:10
+	code, a := reserveAs(t, s, alice, node, slot, slot.Add(time.Hour))
+	if code != http.StatusCreated {
+		t.Fatalf("alice: %d %+v", code, a)
+	}
+	seen := func(c *http.Cookie) (bool, bool) {
+		for _, v := range listReservations(t, s, c) {
+			if v.ID == a.ID {
+				return true, v.CanManage
+			}
+		}
+		return false, false
+	}
+	if ok, can := seen(carol); !ok || !can {
+		t.Errorf("carol (granted, kept off the machine): seen %v, can manage %v", ok, can)
+	}
+	if ok, can := seen(bob); !ok || can {
+		t.Errorf("bob: seen %v, can manage %v", ok, can)
+	}
+	if ok, can := seen(alice); !ok || !can {
+		t.Errorf("alice, hers: seen %v, can manage %v", ok, can)
+	}
+	call := func(h http.HandlerFunc, c *http.Cookie, method, body string) int {
+		return doJSON(t, h, method, "/api/reservations/"+a.ID, map[string]string{"id": a.ID}, c, body).Code
+	}
+	end := fmt.Sprintf(`{"end":%q}`, slot.Add(2*time.Hour).Format(time.RFC3339))
+	if c := call(s.HandlePatchReservationForTest(), bob, "PATCH", end); c != http.StatusForbidden {
+		t.Errorf("bob moving alice's end: %d", c)
+	}
+	if c := call(s.HandlePatchReservationForTest(), carol, "PATCH", end); c != http.StatusOK {
+		t.Errorf("carol moving alice's end: %d", c)
+	}
+	if c := call(s.HandleDeleteReservationForTest(), bob, "DELETE", ""); c != http.StatusForbidden {
+		t.Errorf("bob ending alice's: %d", c)
+	}
+	if c := call(s.HandleDeleteReservationForTest(), carol, "DELETE", ""); c != http.StatusNoContent {
+		t.Errorf("carol ending alice's: %d", c)
+	}
+	reserveFor := func(user string) (int, rsvView) {
+		body, _ := json.Marshal(map[string]any{"node": node, "start": slot.Add(3 * time.Hour), "end": slot.Add(4 * time.Hour), "user": user})
+		rec := doJSON(t, s.HandleCreateReservationForTest(), "POST", "/api/reservations", nil, carol, string(body))
+		var v rsvView
+		_ = json.Unmarshal(rec.Body.Bytes(), &v)
+		return rec.Code, v
+	}
+	if code, v := reserveFor("mg-bob"); code != http.StatusCreated || v.User != "mg-bob" {
+		t.Errorf("carol reserving for bob: %d %+v", code, v)
+	}
+	if code, v := reserveFor("mg-carol"); code != http.StatusForbidden || v.Code != "ACL_DENIED" {
+		t.Errorf("carol reserving for herself, kept off: %d %+v", code, v)
+	}
+	if code, v := reserveFor("mg-dave"); code != http.StatusForbidden || v.Code != "ACL_DENIED" {
+		t.Errorf("carol reserving for dave, kept off: %d %+v", code, v)
+	}
+	rec := doJSON(t, s.HandleNodesForTest(), "GET", "/api/nodes", nil, carol, "")
+	var out struct {
+		Items []struct {
+			Name               string `json:"name"`
+			ManageReservations bool   `json:"manageReservations"`
+			Selectable         bool   `json:"selectable"`
+		} `json:"items"`
+	}
+	if rec.Code != http.StatusOK || json.Unmarshal(rec.Body.Bytes(), &out) != nil {
+		t.Fatalf("nodes: %d %s", rec.Code, rec.Body)
+	}
+	found := false
+	for _, n := range out.Items {
+		if n.Name == node {
+			found = true
+			if !n.ManageReservations || n.Selectable {
+				t.Errorf("carol's %s: %+v", node, n)
+			}
+		}
+	}
+	if !found {
+		t.Errorf("carol's nodes lack %s", node)
 	}
 }
