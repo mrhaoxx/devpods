@@ -14,6 +14,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode"
+	"unicode/utf8"
 
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -134,10 +136,24 @@ type reservationView struct {
 	Phase       string    `json:"phase"` // Upcoming | Active | Ended | Cancelled
 	Mine        bool      `json:"mine"`
 	CancelledBy string    `json:"cancelledBy,omitempty"`
+	Purpose     string    `json:"purpose,omitempty"`
+}
+
+// validPurpose: a reservation's purpose — trimmed, one line, at most
+// 200 characters.
+func validPurpose(p string) (string, error) {
+	p = strings.TrimSpace(p)
+	if utf8.RuneCountInString(p) > 200 {
+		return "", fmt.Errorf("the purpose is longer than 200 characters")
+	}
+	if strings.IndexFunc(p, unicode.IsControl) >= 0 {
+		return "", fmt.Errorf("the purpose is one line, without control characters")
+	}
+	return p, nil
 }
 
 func viewOfReservation(nr *devpodv1alpha1.NodeReservation, me string, now time.Time) reservationView {
-	v := reservationView{ID: nr.Name, Node: nr.Spec.Node, User: nr.Spec.User, Start: nr.Spec.Start.Time.UTC(), End: overAt(nr).UTC(), Mine: nr.Spec.User == me}
+	v := reservationView{ID: nr.Name, Node: nr.Spec.Node, User: nr.Spec.User, Start: nr.Spec.Start.Time.UTC(), End: overAt(nr).UTC(), Mine: nr.Spec.User == me, Purpose: nr.Spec.Purpose}
 	switch {
 	case nr.Spec.Cancelled != nil:
 		v.Phase, v.CancelledBy = "Cancelled", nr.Spec.Cancelled.By
@@ -367,15 +383,21 @@ func (s *Server) handleCreateReservation(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	var req struct {
-		Node  string    `json:"node"`
-		Start time.Time `json:"start"`
-		End   time.Time `json:"end"`
-		User  string    `json:"user"`
+		Node    string    `json:"node"`
+		Start   time.Time `json:"start"`
+		End     time.Time `json:"end"`
+		User    string    `json:"user"`
+		Purpose string    `json:"purpose"`
 	}
 	dec := json.NewDecoder(r.Body)
 	dec.DisallowUnknownFields()
 	if err := dec.Decode(&req); err != nil {
 		s.writeErr(w, http.StatusBadRequest, "BAD_REQUEST", "malformed request body: "+err.Error(), nil)
+		return
+	}
+	purpose, err := validPurpose(req.Purpose)
+	if err != nil {
+		s.writeErr(w, http.StatusBadRequest, "BAD_REQUEST", err.Error(), nil)
 		return
 	}
 	user := sess.User
@@ -407,7 +429,7 @@ func (s *Server) handleCreateReservation(w http.ResponseWriter, r *http.Request)
 	}
 	nr := &devpodv1alpha1.NodeReservation{
 		ObjectMeta: metav1.ObjectMeta{Name: fmt.Sprintf("%s-%s-%s", n.Name, user, randSuffix(6))},
-		Spec:       devpodv1alpha1.NodeReservationSpec{Cluster: cluster, Node: n.Name, User: user, Start: metav1.NewTime(req.Start.UTC()), End: metav1.NewTime(req.End.UTC())},
+		Spec:       devpodv1alpha1.NodeReservationSpec{Cluster: cluster, Node: n.Name, User: user, Start: metav1.NewTime(req.Start.UTC()), End: metav1.NewTime(req.End.UTC()), Purpose: purpose},
 	}
 	if err := s.createReservation(r.Context(), nr); err != nil {
 		s.writeErr(w, http.StatusBadRequest, "BAD_REQUEST", rejected("reserve", err), nil)
@@ -438,7 +460,8 @@ func (s *Server) ownReservation(w http.ResponseWriter, r *http.Request, sess Ses
 }
 
 // handlePatchReservation serves PATCH /api/reservations/{id} {start?,
-// end?}: one that has started can only have its end moved.
+// end?, purpose?}: one that has started can only have its end moved (and
+// its purpose changed).
 func (s *Server) handlePatchReservation(w http.ResponseWriter, r *http.Request) {
 	sess, ok := s.sessionFrom(w, r)
 	if !ok {
@@ -449,12 +472,21 @@ func (s *Server) handlePatchReservation(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	var req struct {
-		Start *time.Time `json:"start"`
-		End   *time.Time `json:"end"`
+		Start   *time.Time `json:"start"`
+		End     *time.Time `json:"end"`
+		Purpose *string    `json:"purpose"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || (req.Start == nil && req.End == nil) {
-		s.writeErr(w, http.StatusBadRequest, "BAD_REQUEST", "send start and / or end", nil)
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || (req.Start == nil && req.End == nil && req.Purpose == nil) {
+		s.writeErr(w, http.StatusBadRequest, "BAD_REQUEST", "send start, end and / or purpose", nil)
 		return
+	}
+	purpose := ""
+	if req.Purpose != nil {
+		var err error
+		if purpose, err = validPurpose(*req.Purpose); err != nil {
+			s.writeErr(w, http.StatusBadRequest, "BAD_REQUEST", err.Error(), nil)
+			return
+		}
 	}
 	now := ru.now()
 	nr, ok := s.ownReservation(w, r, sess, now)
@@ -484,6 +516,9 @@ func (s *Server) handlePatchReservation(w http.ResponseWriter, r *http.Request) 
 	}
 	changed, err := s.changeReservation(r.Context(), nr.Name, func(spec *devpodv1alpha1.NodeReservationSpec) bool {
 		spec.Start, spec.End = metav1.NewTime(start), metav1.NewTime(end)
+		if req.Purpose != nil {
+			spec.Purpose = purpose
+		}
 		return true
 	})
 	if err != nil {

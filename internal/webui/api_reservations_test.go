@@ -78,6 +78,7 @@ type rsvView struct {
 	Mine    bool      `json:"mine"`
 	Code    string    `json:"code"`
 	Message string    `json:"message"`
+	Purpose string    `json:"purpose"`
 }
 
 func rsvBody(node string, start, end time.Time) string {
@@ -469,4 +470,62 @@ func TestSetReservableOffEndsReservations(t *testing.T) {
 		t.Errorf("after closing %s: %v; want %v (bob's, not begun, gone)", node, got, want)
 	}
 	_ = bob
+}
+
+// A reservation's purpose: optional, one line, at most 200 characters;
+// changeable while the reservation is not over, under way too.
+func TestReservationPurpose(t *testing.T) {
+	s, sm, _, node := rsvRig(t, "pp")
+	alice := forge(sm, "pp-alice", false)
+	slot := time.Date(2026, 11, 12, 2, 0, 0, 0, time.UTC) // 10:00; now is 10:10
+	post := func(start time.Time, purpose any) (int, rsvView) {
+		b := map[string]any{"node": node, "start": start, "end": start.Add(time.Hour)}
+		if purpose != nil {
+			b["purpose"] = purpose
+		}
+		body, _ := json.Marshal(b)
+		rec := doJSON(t, s.HandleCreateReservationForTest(), "POST", "/api/reservations", nil, alice, string(body))
+		var v rsvView
+		_ = json.Unmarshal(rec.Body.Bytes(), &v)
+		return rec.Code, v
+	}
+	purposeOf := func(id string) string {
+		for _, x := range listReservations(t, s, alice) {
+			if x.ID == id {
+				return x.Purpose
+			}
+		}
+		return "<missing>"
+	}
+	patch := func(id, body string) int {
+		return doJSON(t, s.HandlePatchReservationForTest(), "PATCH", "/api/reservations/"+id, map[string]string{"id": id}, alice, body).Code
+	}
+	code, v := post(slot, "跑 sglang 基准")
+	if code != http.StatusCreated || v.Purpose != "跑 sglang 基准" {
+		t.Fatalf("with a purpose: %d %+v", code, v)
+	}
+	if p := purposeOf(v.ID); p != "跑 sglang 基准" {
+		t.Fatalf("listed: %q", p)
+	}
+	if c := patch(v.ID, `{"purpose":"改"}`); c != http.StatusOK {
+		t.Fatalf("changing the purpose of one under way: %d", c)
+	}
+	if p := purposeOf(v.ID); p != "改" {
+		t.Fatalf("changed: %q", p)
+	}
+	if c := patch(v.ID, `{"purpose":""}`); c != http.StatusOK {
+		t.Fatalf("clearing: %d", c)
+	}
+	if p := purposeOf(v.ID); p != "" {
+		t.Fatalf("cleared: %q", p)
+	}
+	if code, v := post(slot.Add(2*time.Hour), strings.Repeat("测", 200)); code != http.StatusCreated {
+		t.Fatalf("200 characters: %d %+v", code, v)
+	}
+	if code, _ := post(slot.Add(4*time.Hour), strings.Repeat("测", 201)); code != http.StatusBadRequest {
+		t.Fatalf("201 characters: %d", code)
+	}
+	if code, _ := post(slot.Add(6*time.Hour), "a\nb"); code != http.StatusBadRequest {
+		t.Fatalf("two lines: %d", code)
+	}
 }

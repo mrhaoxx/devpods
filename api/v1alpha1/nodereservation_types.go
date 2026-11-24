@@ -22,6 +22,11 @@ type NodeReservationSpec struct {
 	User  string      `json:"user"`
 	Start metav1.Time `json:"start"`
 	End   metav1.Time `json:"end"`
+	// Purpose: what it is for, as its holder says — one line.
+	//
+	// +optional
+	// +kubebuilder:validation:MaxLength=200
+	Purpose string `json:"purpose,omitempty"`
 	// Cancelled: ended early (or never started) — by whom, when.
 	//
 	// +optional

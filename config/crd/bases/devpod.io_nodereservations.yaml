@@ -86,6 +86,10 @@ spec:
               node:
                 minLength: 1
                 type: string
+              purpose:
+                description: 'Purpose: what it is for, as its holder says — one line.'
+                maxLength: 200
+                type: string
               start:
                 format: date-time
                 type: string
