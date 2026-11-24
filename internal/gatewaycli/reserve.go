@@ -21,23 +21,24 @@ import (
 
 const reserveLong = `reserve [list]             reservations from now on (--days N ahead, default 14)
 reserve rules              the steps, the longest period and how far ahead one may reserve
-reserve add <node> --start T (--end T | --for D)
-                           reserve a node for yourself (where the rules ask for it)
-reserve change <id> [--start T] [--end T]
+reserve add <node> --start T (--end T | --for D) [--purpose P]
+                           reserve a reservable node you may use, for yourself
+reserve change <id> [--start T] [--end T] [--purpose P]
 reserve cancel <id>
 
 Times: 2026-11-14T09:00 or 09:00 (today) in the console's time zone (reserve
 rules), an RFC 3339 time, now, or +2h / +30m from now. --for 4h instead of
---end. Periods are in whole steps of the rules' granularity.`
+--end. Periods are in whole steps of the rules' granularity. --purpose says
+what it is for (optional, one line, at most 200 characters; "" clears it).`
 
 func reserveCommands() []*command {
 	return []*command{
 		{name: "reserve", aliases: []string{"reservations"},
-			args:  "[list [--days N] | rules | add <node> --start T (--end T | --for D) | change <id> [--start T] [--end T] | cancel <id>] [--cluster C]",
+			args:  "[list [--days N] | rules | add <node> --start T (--end T | --for D) [--purpose P] | change <id> [--start T] [--end T] [--purpose P] | cancel <id>] [--cluster C]",
 			brief: "[list|rules|add|change|cancel …]",
 			short: "node reservations: list, the rules, reserve a node, change or cancel one",
 			long:  reserveLong,
-			vals:  []string{"start", "end", "for", "days"}, run: runReserve},
+			vals:  []string{"start", "end", "for", "days", "purpose"}, run: runReserve},
 	}
 }
 
@@ -51,6 +52,7 @@ type reservation struct {
 	Phase       string    `json:"phase"`
 	Mine        bool      `json:"mine"`
 	CancelledBy string    `json:"cancelledBy"`
+	Purpose     string    `json:"purpose"`
 }
 
 type reserveRules struct {
@@ -112,6 +114,9 @@ func runReserve(e *Env, a *parsed) int {
 		}
 		path := scoped(e, cluster, "/api/reservations")
 		body := map[string]any{"node": node, "start": start.UTC().Format(time.RFC3339), "end": end.UTC().Format(time.RFC3339)}
+		if p, ok := a.val["purpose"]; ok {
+			body["purpose"] = p
+		}
 		var v reservation
 		raw, err := call(e, "POST", path, body, &v)
 		if err != nil {
@@ -142,8 +147,11 @@ func runReserve(e *Env, a *parsed) int {
 				body[f] = t.UTC().Format(time.RFC3339)
 			}
 		}
+		if p, ok := a.val["purpose"]; ok {
+			body["purpose"] = p
+		}
 		if len(body) == 0 {
-			return usage(e, c, "give --start and/or --end")
+			return usage(e, c, "give --start, --end and/or --purpose")
 		}
 		var v reservation
 		raw, err := call(e, "PATCH", scoped(e, cluster, "/api/reservations/"+url.PathEscape(id)), body, &v)
@@ -208,14 +216,14 @@ func reserveList(e *Env, a *parsed) int {
 		loc = r.loc()
 	}
 	sort.Slice(items, func(i, j int) bool { return items[i].Start.Before(items[j].Start) })
-	table(e, "ID\tNODE\tUSER\tSTART\tEND\tPHASE", func(w io.Writer) {
+	table(e, "ID\tNODE\tUSER\tSTART\tEND\tPHASE\tPURPOSE", func(w io.Writer) {
 		for _, v := range items {
 			user := v.User
 			if v.Mine {
 				user += " (you)"
 			}
-			fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\n", joinRef(v.Cluster, v.ID), joinRef(v.Cluster, v.Node), user,
-				v.Start.In(loc).Format("01-02 15:04"), v.End.In(loc).Format("01-02 15:04"), v.Phase)
+			fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\t%s\n", joinRef(v.Cluster, v.ID), joinRef(v.Cluster, v.Node), user,
+				v.Start.In(loc).Format("01-02 15:04"), v.End.In(loc).Format("01-02 15:04"), v.Phase, v.Purpose)
 		}
 	})
 	return ExitOK
