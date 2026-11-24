@@ -98,6 +98,7 @@ func (s *Server) reservationHistory(ctx context.Context, nr *devpodv1alpha1.Node
 	row := store.ReservationEventRow{
 		TS: time.Now().UTC(), Cluster: nr.Spec.Cluster, ID: nr.Name, Node: nr.Spec.Node, User: nr.Spec.User,
 		Start: nr.Spec.Start.Time.UTC(), End: nr.Spec.End.Time.UTC(), Event: event, Detail: strings.Join(detail, " "),
+		Purpose: nr.Spec.Purpose,
 	}
 	if nr.Spec.Cancelled != nil {
 		row.CancelledBy = nr.Spec.Cancelled.By

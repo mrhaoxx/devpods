@@ -207,6 +207,8 @@ type ReservationEventRow struct {
 	CancelledBy string    `ch:"cancelled_by" json:"cancelled_by,omitempty"`
 	Event       string    `ch:"event" json:"event"`
 	Detail      string    `ch:"detail" json:"detail,omitempty"`
+	// Purpose: what it is for, as it was at this change (migration 0010)
+	Purpose string `ch:"purpose" json:"purpose,omitempty"`
 }
 
 // Batch groups rows written together.

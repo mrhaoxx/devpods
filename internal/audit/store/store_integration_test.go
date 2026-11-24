@@ -107,6 +107,24 @@ func TestReservationEvents(t *testing.T) {
 	}
 }
 
+// A reservation's purpose is in its history, whole (CJK and all).
+func TestReservationEvents_Purpose(t *testing.T) {
+	ctx := context.Background()
+	c := openTestCH(t, "audit_rsv_purpose")
+	if err := Migrate(ctx, c, DefaultRetention(180)); err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().UTC().Truncate(time.Millisecond)
+	purpose := strings.Repeat("测", 200)
+	if err := c.InsertReservationEvent(ctx, ReservationEventRow{TS: now, ID: "g1-alice-p", Node: "g1", User: "alice", Start: now, End: now.Add(time.Hour), Event: "created", Purpose: purpose}); err != nil {
+		t.Fatal(err)
+	}
+	var got string
+	if err := c.conn.QueryRow(ctx, "SELECT purpose FROM audit_rsv_purpose.reservations WHERE id = ?", "g1-alice-p").Scan(&got); err != nil || got != purpose {
+		t.Fatalf("purpose = %q (%v)", got, err)
+	}
+}
+
 func sampleBatch(sid string) Batch {
 	now := time.Now().UTC().Truncate(time.Millisecond)
 	exit := int32(3)

@@ -40,6 +40,7 @@ type fakeAuditStore struct {
 	access    []store.AccessLogRow
 	accessErr error
 	alertsHit bool
+	resv      []store.ReservationEventRow // reservation history written
 }
 
 func (f *fakeAuditStore) ListSessions(_ context.Context, sf store.SessionFilter) ([]store.SessionSummary, string, error) {
@@ -98,7 +99,10 @@ func (f *fakeAuditStore) ListAccessLog(context.Context, store.TimeFilter) ([]sto
 	return nil, "", nil
 }
 
-func (f *fakeAuditStore) InsertReservationEvent(context.Context, store.ReservationEventRow) error {
+func (f *fakeAuditStore) InsertReservationEvent(_ context.Context, r store.ReservationEventRow) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.resv = append(f.resv, r)
 	return nil
 }
 

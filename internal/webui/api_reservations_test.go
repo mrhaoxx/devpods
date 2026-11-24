@@ -680,3 +680,34 @@ func TestReservationGrantLimitedToItsMachine(t *testing.T) {
 		t.Errorf("carol reserving gl-n2 for bob: %d", c)
 	}
 }
+
+// A reservation's history keeps its purpose as it was at each change —
+// the reservation object goes 90 days after it ends, the history stays.
+func TestReservationHistoryKeepsPurpose(t *testing.T) {
+	s, sm, _, node := rsvRig(t, "ph")
+	st := &fakeAuditStore{}
+	s.Audit = &webui.AuditDeps{Store: st}
+	t.Cleanup(func() { s.Audit = nil })
+	alice := forge(sm, "ph-alice", false)
+	slot := time.Date(2026, 11, 12, 4, 0, 0, 0, time.UTC)
+	body, _ := json.Marshal(map[string]any{"node": node, "start": slot, "end": slot.Add(time.Hour), "purpose": "跑基准"})
+	rec := doJSON(t, s.HandleCreateReservationForTest(), "POST", "/api/reservations", nil, alice, string(body))
+	var v rsvView
+	if rec.Code != http.StatusCreated || json.Unmarshal(rec.Body.Bytes(), &v) != nil {
+		t.Fatalf("reserve: %d %s", rec.Code, rec.Body)
+	}
+	if c := doJSON(t, s.HandlePatchReservationForTest(), "PATCH", "/api/reservations/"+v.ID, map[string]string{"id": v.ID}, alice, `{"purpose":"改了"}`).Code; c != http.StatusOK {
+		t.Fatalf("patch: %d", c)
+	}
+	st.mu.Lock()
+	defer st.mu.Unlock()
+	got := map[string]string{}
+	for _, r := range st.resv {
+		if r.ID == v.ID {
+			got[r.Event] = r.Purpose
+		}
+	}
+	if got["created"] != "跑基准" || got["changed"] != "改了" {
+		t.Fatalf("history purposes: %v", got)
+	}
+}
