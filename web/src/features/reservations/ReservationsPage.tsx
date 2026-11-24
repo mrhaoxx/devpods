@@ -5,7 +5,7 @@
 // reservation is a permit, not a hold: they may overlap, drawn in lanes.
 import { keyOf, refOfKey } from "../../data/cluster";
 import { useClusterFilter } from "../../data/clusterFilter";
-import { useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   ApiFailure,
@@ -301,6 +301,7 @@ function Row({
   sel,
   bad,
   label,
+  trackW,
   onPick,
 }: {
   node: NodeChoice;
@@ -316,6 +317,8 @@ function Row({
   bad: boolean;
   /** the drag's time is said on the top row it takes in only */
   label: boolean;
+  /** the track's width in px (the whole window at the zoom); 0: not measured, fill the row */
+  trackW: number;
   onPick: (b: Reservation) => void;
 }) {
   void gran;
@@ -335,7 +338,7 @@ function Row({
   const laneH = lanes === 1 ? 36 : 22;
   return (
     <div data-row={index} className="flex items-stretch border-b border-line last:border-0">
-      <div className="w-52 shrink-0 border-r border-line px-2 py-1.5">
+      <div className="sticky left-0 z-10 w-28 shrink-0 border-r border-line bg-surface px-2 py-1.5 sm:w-52" title={node.name}>
         <div className="mono break-all text-xs font-medium">
           {node.cluster && <span className="mr-1 font-normal text-muted">{node.cluster}</span>}
           {node.name}
@@ -346,8 +349,9 @@ function Row({
         data-track
         role="group"
         aria-label={`${node.name} 的预约`}
-        className="relative min-w-0 flex-1 cursor-crosshair touch-none select-none"
-        style={{ height: 8 + lanes * laneH + (lanes - 1) * 4 }}
+        // touch: the browser pans (sideways through the days, down the page); a tap reserves
+        className={`relative cursor-crosshair touch-pan-x touch-pan-y select-none ${trackW > 0 ? "shrink-0" : "min-w-0 flex-1"}`}
+        style={{ height: 8 + lanes * laneH + (lanes - 1) * 4, ...(trackW > 0 ? { width: trackW } : {}) }}
       >
         {/* past time is not reservable */}
         <div className="pointer-events-none absolute inset-y-0 left-0 bg-sunk/70" style={{ width: pct(now) }} />
@@ -395,7 +399,51 @@ export function ReservationsPage() {
   const skew = useMemo(() => (rules.data ? Date.parse(rules.data.now) - Date.now() : 0), [rules.data]);
   const now = tick + skew;
   const from = dayStart(now);
-  const to = from + days * DAY;
+  // the timeline holds the whole window one may reserve in (00:00 today to
+  // the furthest bookable moment); the zoom says how many days fit a screen
+  const ahead = rules.data && rules.data.maxAdvanceSeconds > 0 ? rules.data.maxAdvanceSeconds * 1000 : 14 * DAY;
+  const spanDays = Math.max(days, Math.ceil((now + ahead - from) / DAY));
+  const to = from + spanDays * DAY;
+  // the width the track has on screen: the scroller's, less the name column
+  const scroller = useRef<HTMLDivElement | null>(null);
+  const nameCol = useRef<HTMLDivElement | null>(null);
+  const [vis, setVis] = useState(0);
+  const measure = useCallback(() => {
+    const el = scroller.current;
+    if (!el) return;
+    const w = el.clientWidth - (nameCol.current?.offsetWidth ?? 0);
+    setVis((v) => (Math.abs(v - w) > 0.5 ? w : v));
+  }, []);
+  const scrollerRef = useCallback(
+    (el: HTMLDivElement | null) => {
+      scroller.current = el;
+      if (el) measure();
+    },
+    [measure],
+  );
+  useEffect(() => {
+    window.addEventListener("resize", measure);
+    const el = scroller.current;
+    const ro = el && typeof ResizeObserver !== "undefined" ? new ResizeObserver(() => measure()) : null;
+    if (el) ro?.observe(el);
+    return () => {
+      window.removeEventListener("resize", measure);
+      ro?.disconnect();
+    };
+    // the scroller comes with the machines
+  }, [measure, nodesQ.data]);
+  const trackW = vis > 0 ? Math.round((vis * spanDays) / days) : 0;
+  // opened, or zoomed: now a little in from the left
+  const placed = useRef("");
+  useLayoutEffect(() => {
+    const el = scroller.current;
+    const key = `${days}:${from}:${trackW > 0}`;
+    if (!el || trackW <= 0 || placed.current === key) return;
+    placed.current = key;
+    el.scrollLeft = Math.max(0, ((now - from) / (to - from)) * trackW - vis * 0.1);
+  });
+  // a touch that may be a tap (no move): where it went down
+  const tap = useRef<{ x: number; y: number; track: HTMLElement; row: number } | null>(null);
   const listFrom = from - 30 * DAY;
   const q = useQuery({
     queryKey: ["reservations", new Date(listFrom).toISOString(), 14],
@@ -500,7 +548,7 @@ export function ReservationsPage() {
             </button>
           ))}
         </div>
-        <span className="text-[11px] text-muted">在时间轴上拖动来预约。预约是使用许可，不独占，同一时段可以有多份。北京时间。</span>
+        <span className="text-[11px] text-muted">在时间轴上拖动（触屏上点一下）来预约，左右滑动看更多天。预约是使用许可，不独占，同一时段可以有多份。北京时间。</span>
         <span className="flex-1" />
         <Button variant="primary" disabled={nodes.length === 0} onClick={() => setDraft({ node: keyOf(nodes[0]), start: first, end: first + Math.max(2 * g, HOUR) })}>
           预约节点
@@ -511,23 +559,31 @@ export function ReservationsPage() {
           <EmptyState title="没有你能预约的机器" hint={me.admin ? "在「节点」页把节点设为可预约；谁需要预约由「访问控制」的规则决定。" : "还没有向你开放预约的机器。"} />
         ) : (
           <div>
-            <div className="flex border-b border-line text-[11px] text-muted">
-              <div className="w-52 shrink-0 border-r border-line px-2 py-1">节点</div>
-              <div className="relative h-6 min-w-0 flex-1">
-                {Array.from({ length: days }, (_, i) => (
-                  <span key={i} className="absolute top-1 truncate pl-1" style={{ left: `${(i / days) * 100}%`, width: `${100 / days}%` }}>
+          <div ref={scrollerRef} data-timeline className="relative overflow-x-auto">
+            <div className="flex w-max min-w-full border-b border-line text-[11px] text-muted">
+              <div ref={nameCol} className="sticky left-0 z-10 w-28 shrink-0 border-r border-line bg-surface px-2 py-1 sm:w-52">
+                节点
+              </div>
+              <div className={`relative h-6 ${trackW > 0 ? "shrink-0" : "min-w-0 flex-1"}`} style={trackW > 0 ? { width: trackW } : undefined}>
+                {Array.from({ length: spanDays }, (_, i) => (
+                  <span key={i} className="absolute top-1 truncate pl-1" style={{ left: `${(i / spanDays) * 100}%`, width: `${100 / spanDays}%` }}>
                     {fmtDay(from + i * DAY)}
                   </span>
                 ))}
               </div>
             </div>
             <div
-              className={drag ? "select-none" : undefined}
+              className={`w-max min-w-full ${drag ? "select-none" : ""}`}
               onPointerDown={(e) => {
                 const target = e.target as HTMLElement;
                 const track = target.closest<HTMLElement>("[data-track]");
                 const row = target.closest<HTMLElement>("[data-row]");
                 if (target.closest("button") || !track || !row) return;
+                if (e.pointerType === "touch") {
+                  // the browser pans on a swipe; a tap (no move) reserves there
+                  tap.current = { x: e.clientX, y: e.clientY, track, row: Number(row.dataset.row) };
+                  return;
+                }
                 e.preventDefault(); // a drag, not the start of a text selection
                 e.currentTarget.setPointerCapture?.(e.pointerId);
                 dragTrack.current = track;
@@ -536,18 +592,32 @@ export function ReservationsPage() {
                 setDrag({ a: t, b: t, r0: r, r1: r });
               }}
               onPointerMove={(e) => {
+                if (tap.current && Math.hypot(e.clientX - tap.current.x, e.clientY - tap.current.y) > 8) tap.current = null; // a swipe
                 if (!drag || !dragTrack.current) return;
                 const over = rowAt(e.clientX, e.clientY);
                 setDrag({ ...drag, b: timeAt(dragTrack.current, e.clientX), r1: over ? Number(over.dataset.row) : drag.r1 });
               }}
-              onPointerUp={() => {
+              onPointerUp={(e) => {
+                if (e.pointerType === "touch") {
+                  const t = tap.current;
+                  tap.current = null;
+                  if (t && Math.hypot(e.clientX - t.x, e.clientY - t.y) <= 8 && nodes[t.row]) {
+                    const at = Math.max(first, slotStart(timeAt(t.track, t.x), g));
+                    const k = keyOf(nodes[t.row]);
+                    setDraft({ node: k, nodes: [k], start: at, end: at + Math.max(2 * g, HOUR) });
+                  }
+                  return;
+                }
                 if (dragSel && !dragBad) {
                   const picked = nodes.slice(rowsOf[0], rowsOf[1] + 1).map(keyOf);
                   setDraft({ node: picked[0], nodes: picked, start: dragSel[0], end: dragSel[1] });
                 }
                 setDrag(null);
               }}
-              onPointerCancel={() => setDrag(null)}
+              onPointerCancel={() => {
+                tap.current = null;
+                setDrag(null);
+              }}
             >
               {nodes.map((n, i) => (
                 <Row
@@ -562,11 +632,13 @@ export function ReservationsPage() {
                   sel={dragSel && i >= rowsOf[0] && i <= rowsOf[1] ? dragSel : null}
                   bad={dragBad}
                   label={i === rowsOf[0]}
+                  trackW={trackW}
                   onPick={setPicked}
                 />
               ))}
             </div>
-            <div className="flex flex-wrap gap-x-4 gap-y-1 px-2 py-1.5 text-[11px] text-muted">
+          </div>
+            <div className="flex flex-wrap gap-x-4 gap-y-1 border-t border-line px-2 py-1.5 text-[11px] text-muted">
               <span className="inline-flex items-center gap-1">
                 <span className="h-2.5 w-4 rounded border border-accent bg-accent-soft" /> 我的预约
               </span>

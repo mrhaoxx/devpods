@@ -69,8 +69,8 @@ describe("ReservationsPage", () => {
     });
     renderWithProviders(<ReservationsPage />, { me: me() });
     const tracks = await Promise.all(["g206", "g207", "g208"].map((n) => screen.findByRole("group", { name: `${n} 的预约` })));
-    // the page is not laid out here: say where each row is, 1000 px for the 3 days shown
-    tracks.forEach((t, i) => (t.getBoundingClientRect = () => ({ left: 0, width: 1000, top: i * 50, height: 50, right: 1000, bottom: (i + 1) * 50, x: 0, y: i * 50, toJSON: () => ({}) })));
+    // the page is not laid out here: say where each row is — the track holds the whole bookable window (15 days here), 3 days a 1000 px as the 3-day zoom shows it
+    tracks.forEach((t, i) => (t.getBoundingClientRect = () => ({ left: 0, width: 5000, top: i * 50, height: 50, right: 5000, bottom: (i + 1) * 50, x: 0, y: i * 50, toJSON: () => ({}) })));
     const elementFromPoint = (_x: number, y: number) => tracks[Math.min(2, Math.floor(y / 50))];
     if (!("PointerEvent" in window)) {
       // jsdom: pointer events as mouse events, so they carry their coordinates
@@ -85,7 +85,7 @@ describe("ReservationsPage", () => {
     }
     Object.defineProperty(document, "elementFromPoint", { value: elementFromPoint, configurable: true });
     try {
-      // 3 days from 11/12 00:00 Shanghai over 1000 px: 166.7 px ≈ 12:00, 194.4 px ≈ 13:59
+      // 15 days from 11/12 00:00 Shanghai over 5000 px (3 days a 1000 px): 166.7 px ≈ 12:00, 194.4 px ≈ 13:59
       // a press there starts no text selection
       expect(fireEvent.pointerDown(tracks[0], { clientX: 166.7, clientY: 10, pointerId: 1, cancelable: true })).toBe(false);
       fireEvent.pointerMove(tracks[0], { clientX: 194.4, clientY: 120, pointerId: 1 });
@@ -112,7 +112,7 @@ describe("ReservationsPage", () => {
     });
     renderWithProviders(<ReservationsPage />, { me: me() });
     const track = await screen.findByRole("group", { name: "g206 的预约" });
-    track.getBoundingClientRect = () => ({ left: 0, width: 1000, top: 0, height: 50, right: 1000, bottom: 50, x: 0, y: 0, toJSON: () => ({}) });
+    track.getBoundingClientRect = () => ({ left: 0, width: 5000, top: 0, height: 50, right: 5000, bottom: 50, x: 0, y: 0, toJSON: () => ({}) });
     if (!("PointerEvent" in window)) {
       class PointerEvent extends MouseEvent {
         pointerId: number;
@@ -125,7 +125,7 @@ describe("ReservationsPage", () => {
     }
     Object.defineProperty(document, "elementFromPoint", { value: () => track, configurable: true });
     try {
-      // 3 days over 1000 px: 111.1 px ≈ 08:00, 125 px ≈ 09:00, 194.4 px ≈ 13:59; now is 10:1x
+      // 15 days over 5000 px (3 days a 1000 px): 111.1 px ≈ 08:00, 125 px ≈ 09:00, 194.4 px ≈ 13:59; now is 10:1x
       fireEvent.pointerDown(track, { clientX: 111.2, clientY: 10, pointerId: 1, cancelable: true });
       fireEvent.pointerMove(track, { clientX: 125.1, clientY: 10, pointerId: 1 });
       expect(screen.getByText(/不可预约/)).toBeTruthy();
@@ -330,5 +330,69 @@ describe("ReservationsPage", () => {
     renderWithProviders(<ReservationsPage />, { me: me() });
     const table = await screen.findByRole("table");
     expect(await within(table).findByText("训练 7B")).toBeTruthy();
+  });
+
+  // the page is not laid out in jsdom: these say the sizes a browser would
+  const pointerEvents = () => {
+    if (!("PointerEvent" in window)) {
+      class PointerEvent extends MouseEvent {
+        pointerId: number;
+        pointerType: string;
+        constructor(type: string, init: PointerEventInit = {}) {
+          super(type, init);
+          this.pointerId = init.pointerId ?? 0;
+          this.pointerType = init.pointerType ?? "mouse";
+        }
+      }
+      vi.stubGlobal("PointerEvent", PointerEvent);
+    }
+  };
+
+  it("zoom: 3 days of a 15-day window make the track 5 screens wide, 14 days about one", async () => {
+    at();
+    stubFetch({ "/api/reservations/rules": rules, "/api/nodes": { items: [node("g206")] }, "/api/reservations": { items: [] } });
+    const was = Object.getOwnPropertyDescriptor(HTMLElement.prototype, "clientWidth");
+    Object.defineProperty(HTMLElement.prototype, "clientWidth", {
+      configurable: true,
+      get(this: HTMLElement) {
+        return this.hasAttribute("data-timeline") ? 600 : 0;
+      },
+    });
+    try {
+      renderWithProviders(<ReservationsPage />, { me: me() });
+      const track = await screen.findByRole("group", { name: "g206 的预约" });
+      await waitFor(() => expect(track.style.width).toBe("3000px"));
+      fireEvent.click(screen.getByRole("radio", { name: "14 天" }));
+      await waitFor(() => expect(track.style.width).toBe("643px"));
+    } finally {
+      if (was) Object.defineProperty(HTMLElement.prototype, "clientWidth", was);
+    }
+  });
+
+  it("touch: a drag never selects (it scrolls); a tap opens the form at that machine and slot", async () => {
+    at();
+    stubFetch({ "/api/reservations/rules": rules, "/api/nodes": { items: [node("g206"), node("g207")] }, "/api/reservations": { items: [] } });
+    renderWithProviders(<ReservationsPage />, { me: me() });
+    const tracks = await Promise.all(["g206", "g207"].map((n) => screen.findByRole("group", { name: `${n} 的预约` })));
+    tracks.forEach((t, i) => (t.getBoundingClientRect = () => ({ left: 0, width: 5000, top: i * 50, height: 50, right: 5000, bottom: (i + 1) * 50, x: 0, y: i * 50, toJSON: () => ({}) })));
+    pointerEvents();
+    Object.defineProperty(document, "elementFromPoint", { value: (_x: number, y: number) => tracks[Math.min(1, Math.floor(y / 50))], configurable: true });
+    try {
+      // a swipe: the browser scrolls; no selection, no form
+      fireEvent.pointerDown(tracks[1], { clientX: 166.7, clientY: 60, pointerId: 2, pointerType: "touch" });
+      fireEvent.pointerMove(tracks[1], { clientX: 400, clientY: 62, pointerId: 2, pointerType: "touch" });
+      expect(screen.queryAllByText(/12:00–/)).toHaveLength(0);
+      fireEvent.pointerUp(tracks[1], { clientX: 400, clientY: 62, pointerId: 2, pointerType: "touch" });
+      expect(screen.queryByRole("dialog")).toBeNull();
+      // a tap: the form, for g207, from the tapped slot
+      fireEvent.pointerDown(tracks[1], { clientX: 166.7, clientY: 60, pointerId: 3, pointerType: "touch" });
+      fireEvent.pointerUp(tracks[1], { clientX: 168, clientY: 61, pointerId: 3, pointerType: "touch" });
+      const dialog = within(await screen.findByRole("dialog"));
+      expect((dialog.getByLabelText("g207") as HTMLInputElement).checked).toBe(true);
+      expect((dialog.getByLabelText("g206") as HTMLInputElement).checked).toBe(false);
+      expect(input(dialog, "开始").value).toBe("2026-11-12T12:00");
+    } finally {
+      Reflect.deleteProperty(document, "elementFromPoint");
+    }
   });
 });

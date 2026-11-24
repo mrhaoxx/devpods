@@ -105,7 +105,7 @@ const me = (u) => ({
   nameBudget: 30,
   quota: { maxDevPods: 10, compute: { cpu: "64", memory: "256Gi" } },
   usage: { devpods: 3, running: 3, compute: { cpu: "24", memory: "96Gi" }, storage: "0" },
-  features: { pubkeySelfService: true, kore: false, passwordAuth: true, audit: true, telemetry: true, reservations: false },
+  features: { pubkeySelfService: true, kore: false, passwordAuth: true, audit: true, telemetry: true, reservations: true },
   hasPassword: true,
   ssh: { host: "gw.example.com", port: 2222 },
 });
@@ -232,6 +232,17 @@ const server = http.createServer((req, res) => {
       setTimeout(() => json(res, 200, config), 2500);
       return;
     }
+    // node reservations: the rules, six reservable machines, one of bob's
+    if (p === "/api/reservations/rules")
+      return json(res, 200, { granularitySeconds: 600, maxDurationSeconds: 0, maxAdvanceSeconds: 14 * 86400, clearNoticeSeconds: 1800, timezone: "Asia/Shanghai", now: iso() });
+    if (p === "/api/nodes")
+      return json(res, 200, {
+        items: nodes.slice(0, 6).map((n) => ({ name: n.name, ready: n.ready, cpu: n.cpu, mem: n.mem, gpuModel: n.gpu.model, gpuTotal: n.gpu.total, gpuUsed: n.gpu.used,
+          reservable: true, access: "ok", reservationRequired: false, pending: 0, mine: null, selectable: true })),
+      });
+    if (p === "/api/reservations")
+      return json(res, 200, { items: [{ id: "rb", node: "g200", user: "bob", start: new Date(Date.now() + 3600e3).toISOString(), end: new Date(Date.now() + 3 * 3600e3).toISOString(),
+        phase: "Upcoming", mine: false, canManage: false, purpose: "跑基准" }] });
     if (p === "/api/admin/nodes") return json(res, 200, { items: nodes, live: true });
     // stored history for the CPU curves (before the node route: "recent" is no node)
     if (p === "/api/admin/nodes/recent") return json(res, 200, { step: 60, ts: [], items: {} });
