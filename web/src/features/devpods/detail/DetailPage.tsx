@@ -34,7 +34,8 @@ import { CopyBlock, CopyField, copyText } from "../../../design/Copy";
 import { Panel } from "../../../design/Panel";
 import { EmptyState } from "../../../design/EmptyState";
 import { ConfirmDialog } from "../../../design/ConfirmDialog";
-import { BulkDialog } from "../BulkDialog";
+import { BulkDialog, type BulkKind } from "../BulkDialog";
+import { sharedWithMe } from "../columns";
 import { useUrlState, type Schema } from "../../../lib/urlState";
 import { useNow } from "../../../lib/useNow";
 import { fmtAge } from "../../../lib/format";
@@ -86,8 +87,9 @@ export function DetailPage() {
   const [deleted, setDeleted] = useState(false);
   const [events, setEvents] = useState<Record<string, K8sEvent>>({});
   const [confirmDelete, setConfirmDelete] = useState(false);
-  const { setRunning, patchSpec, remove } = useDevPodMutations();
-  const [collabOpen, setCollabOpen] = useState(false);
+  const { setRunning, patchSpec, remove, redeploy } = useDevPodMutations();
+  // the list's actions that need input, for this DevPod alone
+  const [bulkKind, setBulkKind] = useState<BulkKind | null>(null);
 
   useEffect(() => {
     setDetail(null);
@@ -227,9 +229,22 @@ export function DetailPage() {
           存为配置
         </Button>
         <Button onClick={() => setUrl({ tab: "yaml" }, "push")}>编辑</Button>
-        <Button onClick={() => setCollabOpen(true)} title="添加、移除或替换协作者（不会重建 DevPod）">
+        <Button onClick={() => setBulkKind("collaborators")} title="添加、移除或替换协作者（不会重建 DevPod）">
           协作者
         </Button>
+        {!sharedWithMe({ owner }, { admin: !!me?.admin, me }) && (
+          <>
+            <Button onClick={() => setBulkKind("migrate")} title="换到别的节点，或取消固定节点交给调度器">
+              迁移
+            </Button>
+            <Button onClick={() => setBulkKind("image")} title="换镜像：运行中的会用新镜像重建">
+              设置镜像
+            </Button>
+            <Button onClick={() => setBulkKind("redeploy")} title="删除并重建 Pod：进程和 SSH 会话会中断，home 保留">
+              重新部署
+            </Button>
+          </>
+        )}
         <Button onClick={() => setRunning.mutate({ ref: r, running: !dp.spec.running })}>{dp.spec.running ? "休眠" : "启动"}</Button>
         <Button variant="danger" onClick={() => setConfirmDelete(true)}>
           删除
@@ -312,16 +327,18 @@ export function DetailPage() {
       )}
 
       <BulkDialog
-        key={collabOpen ? "collaborators" : "none"}
-        kind={collabOpen ? "collaborators" : null}
+        key={bulkKind ?? "none"}
+        kind={bulkKind}
         targets={[{ cluster: r.cluster, name: dp.metadata.name, collaborators: dp.spec.collaborators ?? [] }]}
-        onClose={() => setCollabOpen(false)}
+        onClose={() => setBulkKind(null)}
         onRun={(plan) => {
-          setCollabOpen(false);
-          patchSpec.mutate({ ref: r, body: plan.patch!({ cluster: r.cluster, name: dp.metadata.name, collaborators: dp.spec.collaborators ?? [] }, 0) });
+          setBulkKind(null);
+          if (plan.redeploy) redeploy.mutate(r);
+          else patchSpec.mutate({ ref: r, body: plan.patch!({ cluster: r.cluster, name: dp.metadata.name, collaborators: dp.spec.collaborators ?? [] }, 0) });
         }}
       />
-      {patchSpec.isError && <Notice>修改协作者失败：{String(patchSpec.error)}</Notice>}
+      {patchSpec.isError && <Notice>修改失败：{String(patchSpec.error)}</Notice>}
+      {redeploy.isError && <Notice>重新部署失败：{String(redeploy.error)}</Notice>}
       <ConfirmDialog
         open={confirmDelete}
         onOpenChange={setConfirmDelete}

@@ -21,6 +21,7 @@ import {
   me,
   patchDevPod,
   patchDevPodSpec,
+  redeployDevPod,
   watchDevPods,
   type DevPodList,
   type MetricRange,
@@ -176,5 +177,9 @@ export function useDevPodMutations() {
     mutationFn: (ref: Ref) => deleteDevPod(ref),
     onSettled: (_d, _e, ref) => invalidateDevPods(qc, ref),
   });
-  return { setRunning, patchSpec, remove };
+  const redeploy = useMutation({
+    mutationFn: (ref: Ref) => redeployDevPod(ref),
+    onSettled: (_d, _e, ref) => invalidateDevPods(qc, ref),
+  });
+  return { setRunning, patchSpec, remove, redeploy };
 }

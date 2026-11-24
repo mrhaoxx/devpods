@@ -20,11 +20,12 @@ function Where() {
 
 let calls: ReturnType<typeof stubFetch> = [];
 
-function setup(opts: { route?: string; admin?: boolean; live?: boolean } = {}) {
+function setup(opts: { route?: string; admin?: boolean; live?: boolean; user?: string } = {}) {
   const cs = stubFetch({
     "/api/devpods/alice-x": { devpod: dp, pod: { node: "g206", ip: "10.1.2.3", startedAt: "2026-11-10T10:00:00Z" } },
     "/api/audit/sessions": { items: [], next: "" },
     "/api/nodes": { items: [{ name: "g206", ready: true, cpu: { allocatable: 64, allocated: 0 }, mem: { allocatable: 512 * 1024 ** 3, allocated: 0 }, gpuTotal: 0, gpuUsed: 0, reservable: false, pending: 0, access: "ok", mine: null, selectable: true }] },
+    "POST /api/devpods/alice-x/redeploy": {},
     "/api/devpods/alice-x/metrics": (u: URL) => ({ step: u.searchParams.get("range") === "15m" ? 1 : 5, ts: [Math.floor(Date.now() / 1000) - 60], series: { cpu: [2.5] } }),
   });
   calls = cs;
@@ -35,7 +36,7 @@ function setup(opts: { route?: string; admin?: boolean; live?: boolean } = {}) {
       return () => {};
     },
   });
-  const me = stubMe({ admin: !!opts.admin, user: opts.admin ? "root" : "alice" });
+  const me = stubMe({ admin: !!opts.admin, user: opts.user ?? (opts.admin ? "root" : "alice") });
   me.features.telemetry = opts.live !== false;
   renderWithProviders(
     <Routes>
@@ -105,6 +106,43 @@ describe("DevPod detail", () => {
     fireEvent.click(dialog.getByRole("button", { name: "应用" }));
     await waitFor(() => expect(calls.some((c) => c.method === "PATCH")).toBe(true));
     expect(JSON.parse(calls.find((c) => c.method === "PATCH")!.body!)).toEqual({ collaborators: ["bob", "carol"] });
+  });
+
+  it("设置镜像 sets this DevPod's image", async () => {
+    setup({ route: "/devpods/-/alice-x" });
+    await screen.findByRole("heading", { name: "alice-x" });
+    fireEvent.click(screen.getByRole("button", { name: "设置镜像" }));
+    const dialog = within(await screen.findByRole("dialog"));
+    fireEvent.change(dialog.getByLabelText("镜像"), { target: { value: "ubuntu:26.04" } });
+    fireEvent.click(dialog.getByRole("button", { name: "应用" }));
+    await waitFor(() => expect(calls.some((c) => c.method === "PATCH")).toBe(true));
+    expect(JSON.parse(calls.find((c) => c.method === "PATCH")!.body!)).toEqual({ image: "ubuntu:26.04" });
+  });
+
+  it("迁移 can hand this DevPod back to the scheduler", async () => {
+    setup({ route: "/devpods/-/alice-x" });
+    await screen.findByRole("heading", { name: "alice-x" });
+    fireEvent.click(screen.getByRole("button", { name: "迁移" }));
+    const dialog = within(await screen.findByRole("dialog"));
+    fireEvent.click(dialog.getByRole("checkbox", { name: /取消固定节点/ }));
+    fireEvent.click(dialog.getByRole("button", { name: "应用" }));
+    await waitFor(() => expect(calls.some((c) => c.method === "PATCH")).toBe(true));
+    expect(JSON.parse(calls.find((c) => c.method === "PATCH")!.body!)).toEqual({ node: "" });
+  });
+
+  it("重新部署 redeploys this DevPod once confirmed", async () => {
+    setup({ route: "/devpods/-/alice-x" });
+    await screen.findByRole("heading", { name: "alice-x" });
+    fireEvent.click(screen.getByRole("button", { name: "重新部署" }));
+    const dialog = within(await screen.findByRole("dialog"));
+    fireEvent.click(dialog.getByRole("button", { name: "确认重新部署" }));
+    await waitFor(() => expect(calls.some((c) => c.method === "POST" && c.url.pathname.endsWith("/api/devpods/alice-x/redeploy"))).toBe(true));
+  });
+
+  it("a DevPod shared with me has no 迁移, 设置镜像 or 重新部署", async () => {
+    setup({ route: "/devpods/-/alice-x", user: "bob" });
+    await screen.findByRole("heading", { name: "alice-x" });
+    for (const name of ["迁移", "设置镜像", "重新部署"]) expect(screen.queryByRole("button", { name })).toBeNull();
   });
 
   it("编辑 opens the YAML tab", async () => {
