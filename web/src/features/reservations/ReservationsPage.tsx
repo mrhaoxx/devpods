@@ -34,7 +34,7 @@ import { Field, Input, Notice, Select } from "../../design/Form";
 import { Panel } from "../../design/Panel";
 import { useNow } from "../../lib/useNow";
 import { LoadMore } from "../audit/common";
-import { dayStart, fmtClock, fmtDay, fmtSpan, fmtTime, fromInput, fromNow, periodError, selection, slotStart, toInput } from "../../lib/reservations";
+import { dayStart, fmtAmount, fmtClock, fmtDay, fmtSpan, fmtTime, fromInput, fromNow, periodError, selection, slotStart, toInput } from "../../lib/reservations";
 import * as Dialog from "@radix-ui/react-dialog";
 
 const DAY = 86_400_000;
@@ -83,6 +83,7 @@ function mineColumns(user: () => string, actions: (b: Reservation) => React.Reac
       meta: { priority: 3, width: 110 },
       cell: ({ getValue }) => fmtSpan(getValue() as number),
     },
+    { id: "amount", header: "资源", accessorFn: (b) => fmtAmount(b), meta: { priority: 2, width: 120 } },
     {
       id: "phase",
       header: "状态",

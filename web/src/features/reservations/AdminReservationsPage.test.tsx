@@ -33,6 +33,20 @@ describe("预约管理", () => {
     await vi.waitFor(() => expect(calls.some((c) => c.method === "DELETE" && c.url.pathname === "/api/reservations/r2")).toBe(true));
   });
 
+  it("says what each holds, and marks those over the machine (made before shares)", async () => {
+    stubFetch({
+      "GET /api/reservations/rules": rules,
+      "GET /api/reservations": { items: [{ ...res("r1", "alice", "g1", "Active", -1, 2), overbooked: true }, { ...res("r2", "bob", "g2", "Upcoming", 5, 9), gpu: 4, cpu: 96 }] },
+    });
+    renderWithProviders(<AdminReservationsPage />);
+    const alice = (await screen.findByText("alice")).closest("tr") as HTMLElement;
+    expect(within(alice).getByText("整台")).toBeTruthy();
+    expect(within(alice).getByText("超额")).toBeTruthy();
+    const bob = screen.getByText("bob").closest("tr") as HTMLElement;
+    expect(within(bob).getByText("4 卡 · 96 核")).toBeTruthy();
+    expect(within(bob).queryByText("超额")).toBeNull();
+  });
+
   it("cancels several at once: the picked ones still on, after a confirm; the outcome is said", async () => {
     const calls = stubFetch({
       "GET /api/reservations/rules": rules,

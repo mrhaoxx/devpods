@@ -574,6 +574,11 @@ export type Reservation = {
   purpose?: string;
   /** I may change or end it: mine, an admin, or a 管理预约 grant on its machine */
   canManage?: boolean;
+  /** the cards and cores it holds; both absent: the whole machine */
+  gpu?: number;
+  cpu?: number;
+  /** it does not fit beside the machine's other reservations (made before reservations held shares) */
+  overbooked?: boolean;
 };
 export type ReservationRules = { granularitySeconds: number; maxDurationSeconds: number; maxAdvanceSeconds: number; clearNoticeSeconds: number; timezone: string; now: string };
 export const getReservationRules = () => req<ReservationRules>("GET", "/api/reservations/rules");
@@ -581,11 +586,21 @@ export const listReservations = (from: string, to: string) => req<{ items: Reser
 /** listMyReservations: a page of mine, of any time, the latest start first; `next` asks for the page after. */
 export const listMyReservations = (cursor?: string, limit = 50) =>
   req<{ items: Reservation[]; next?: string }>("GET", `/api/reservations?mine=1&limit=${limit}${cursor ? `&cursor=${encodeURIComponent(cursor)}` : ""}`);
-type Period = { node: string; start: string; end: string; purpose?: string; /** for someone else (an admin, or a 管理预约 grant) */ user?: string };
+type Period = {
+  node: string;
+  start: string;
+  end: string;
+  purpose?: string;
+  /** for someone else (an admin, or a 管理预约 grant) */
+  user?: string;
+  /** part of the machine: cards (with their share of the cores unless cpu says) and cores; neither: all of it */
+  gpu?: number;
+  cpu?: number;
+};
 /** ResRef names a reservation: its id and cluster. */
 export type ResRef = { id: string; cluster?: string };
 export const createReservation = (cluster: string | undefined, p: Period) => req<Reservation>("POST", apiIn(cluster, "/api/reservations"), p);
-export const patchReservation = (r: ResRef, body: { start?: string; end?: string; purpose?: string }) => req<Reservation>("PATCH", apiIn(r.cluster, `/api/reservations/${r.id}`), body);
+export const patchReservation = (r: ResRef, body: { start?: string; end?: string; purpose?: string; gpu?: number; cpu?: number; whole?: boolean }) => req<Reservation>("PATCH", apiIn(r.cluster, `/api/reservations/${r.id}`), body);
 export const deleteReservation = (r: ResRef) => req<void>("DELETE", apiIn(r.cluster, `/api/reservations/${r.id}`));
 /** a machine one may switch reservable (a grant, or an admin) */
 export type ManagedNode = { cluster?: string; name: string; reservable: boolean; ready: boolean; gpuModel?: string; gpuTotal: number };

@@ -1,6 +1,6 @@
 // Time math for node reservations (reservation spec §3.1). Times align
 // to the granularity in Asia/Shanghai, which is also how they are shown.
-import type { ReservationRules } from "../data/api";
+import type { NodeChoice, Reservation, ReservationRules } from "../data/api";
 
 export const TZ = "Asia/Shanghai";
 const TZ_OFFSET_MS = 8 * 3600_000; // no daylight saving
@@ -71,3 +71,94 @@ export function toInput(t: number): string {
   return `${p.y}-${two(p.mo)}-${two(p.d)}T${two(p.h)}:${two(p.mi)}`;
 }
 export const fromInput = (v: string): number => (v ? Date.parse(`${v}:00+08:00`) : NaN);
+
+// Amounts (reservations v2, design 2026-11-26): a reservation holds some of
+// a machine's cards and cores, or — neither said — all of it. Memory is
+// not reserved.
+
+/** Amount: cards and cores. */
+export type Amount = { gpu: number; cpu: number };
+
+/** capOf: what a machine has to reserve. */
+export const capOf = (n: NodeChoice): Amount => ({ gpu: n.gpuTotal, cpu: n.cpu.allocatable });
+
+/** isWhole: the reservation is the whole machine. */
+export const isWhole = (b: Pick<Reservation, "gpu" | "cpu">) => b.gpu == null && b.cpu == null;
+
+/** amountOf: what b holds of a machine that has cap. */
+export const amountOf = (b: Pick<Reservation, "gpu" | "cpu">, cap: Amount): Amount => ({ gpu: b.gpu ?? cap.gpu, cpu: b.cpu ?? cap.cpu });
+
+/** cpuShare: the cores that go with gpu of cap's cards (whole cores, rounded down, as the console). */
+export const cpuShare = (gpu: number, cap: Amount) => (cap.gpu > 0 ? Math.floor((cap.cpu * gpu) / cap.gpu) : 0);
+
+const span = (b: Reservation) => [Date.parse(b.start), Date.parse(b.end)] as const;
+
+/** bookedAt: what blocks hold together at t. */
+export function bookedAt(blocks: Reservation[], t: number, cap: Amount): Amount {
+  const sum = { gpu: 0, cpu: 0 };
+  for (const b of blocks) {
+    const [s, e] = span(b);
+    if (s <= t && t < e) {
+      const a = amountOf(b, cap);
+      sum.gpu += a.gpu;
+      sum.cpu += a.cpu;
+    }
+  }
+  return sum;
+}
+
+/** freeIn: the least that is free in [from, to) beside blocks (skipId: the one being changed, left out) — nothing beside a whole one. */
+export function freeIn(blocks: Reservation[], from: number, to: number, cap: Amount, skipId?: string): Amount {
+  const over = blocks.filter((b) => b.id !== skipId && span(b)[0] < to && from < span(b)[1] && span(b)[0] < span(b)[1]);
+  if (over.some(isWhole)) return { gpu: 0, cpu: 0 };
+  let peak = bookedAt(over, from, cap);
+  for (const b of over) {
+    const s = span(b)[0];
+    if (s > from && s < to) {
+      const a = bookedAt(over, s, cap);
+      peak = { gpu: Math.max(peak.gpu, a.gpu), cpu: Math.max(peak.cpu, a.cpu) };
+    }
+  }
+  return { gpu: Math.max(0, cap.gpu - peak.gpu), cpu: Math.max(0, cap.cpu - peak.cpu) };
+}
+
+/** stackBand: where each block sits in a band of cap units (pick: its units) — from the bottom, by start, at the lowest place free all its time; with none, at the top, over. */
+export function stackBand(blocks: Reservation[], cap: number, pick: (b: Reservation) => number): Map<string, { y0: number; y1: number; over: boolean }> {
+  const out = new Map<string, { y0: number; y1: number; over: boolean }>();
+  const placed: { s: number; e: number; y0: number; y1: number }[] = [];
+  const sorted = [...blocks].sort((x, y) => span(x)[0] - span(y)[0] || (x.id < y.id ? -1 : x.id > y.id ? 1 : 0));
+  for (const b of sorted) {
+    const a = pick(b);
+    const [s, e] = span(b);
+    if (!(a > 0)) {
+      out.set(b.id, { y0: 0, y1: 0, over: false });
+      continue;
+    }
+    const busy = placed.filter((p) => p.s < e && s < p.e);
+    const fits = (y: number) => y + a <= cap && busy.every((p) => y + a <= p.y0 || p.y1 <= y);
+    const y = [0, ...busy.map((p) => p.y1)].sort((m, n) => m - n).find(fits);
+    const pos = y === undefined ? { y0: Math.max(0, cap - a), y1: Math.max(0, cap - a) + a, over: true } : { y0: y, y1: y + a, over: false };
+    out.set(b.id, pos);
+    placed.push({ s, e, y0: pos.y0, y1: pos.y1 });
+  }
+  return out;
+}
+
+/** presets: the amounts offered first — the whole machine, then halves of its cards down to one (with their cores); a CPU machine, halves of its cores. */
+export function presets(cap: Amount): { label: string; gpu?: number; cpu?: number }[] {
+  const out: { label: string; gpu?: number; cpu?: number }[] = [{ label: "整台" }];
+  if (cap.gpu > 0) {
+    for (let n = Math.floor(cap.gpu / 2); n >= 1; n = Math.floor(n / 2)) out.push({ label: `${n} 卡`, gpu: n, cpu: cpuShare(n, cap) });
+    return out;
+  }
+  for (const c of [Math.floor(cap.cpu / 2), Math.floor(cap.cpu / 4)]) if (c >= 1) out.push({ label: `${c} 核`, cpu: c });
+  return out;
+}
+
+/** fmtAmount: 整台, "4 卡 · 96 核", or "16 核". */
+export function fmtAmount(b: Pick<Reservation, "gpu" | "cpu">): string {
+  if (isWhole(b)) return "整台";
+  const cores = b.cpu != null ? `${b.cpu} 核` : "";
+  if (b.gpu) return cores ? `${b.gpu} 卡 · ${cores}` : `${b.gpu} 卡`;
+  return cores;
+}

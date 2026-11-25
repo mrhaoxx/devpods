@@ -1,11 +1,12 @@
 // A reservation's details, for anyone who can see it (design 2026-11-24
-// §1): the machine, who holds it, when, its state and purpose. What can be
+// §1): the machine, who holds it, when, what of it (design 2026-11-26),
+// its state and purpose. What can be
 // done with it — change it, cancel or release it — only for one who may
 // manage it: its holder, an admin, or one granted 管理预约 on its machine.
 import * as Dialog from "@radix-ui/react-dialog";
 import type { Reservation } from "../../data/api";
 import { Button } from "../../design/Button";
-import { fmtSpan, fmtTime } from "../../lib/reservations";
+import { fmtAmount, fmtSpan, fmtTime } from "../../lib/reservations";
 
 export const phaseLabel: Record<Reservation["phase"], string> = { Upcoming: "即将开始", Active: "进行中", Ended: "已结束", Cancelled: "已取消" };
 
@@ -46,6 +47,7 @@ export function ReservationDetails({
                 {fmtTime(b.start)} – {fmtTime(b.end)}（{fmtSpan(Date.parse(b.end) - Date.parse(b.start))}）
               </>,
             )}
+            {row("资源", fmtAmount(b))}
             {row("状态", phaseLabel[b.phase] + (b.phase === "Cancelled" && b.cancelledBy ? `，由 ${b.cancelledBy} 取消` : ""))}
             {row("用途", b.purpose ? b.purpose : <span className="text-faint">—</span>)}
           </dl>

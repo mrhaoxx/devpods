@@ -269,6 +269,23 @@ describe("ReservationsPage", () => {
     for (const name of [/修改/, /取消预约/, /提前释放/, /取消这个预约/]) expect(dialog.queryByRole("button", { name })).toBeNull();
   });
 
+  it("a reservation's details say what it holds: some cards and cores, or the whole machine", async () => {
+    at();
+    stubFetch({
+      "/api/reservations/rules": rules,
+      "/api/nodes": { items: [node("g206")] },
+      "/api/reservations": { items: [block({ id: "b1", user: "bob", mine: false, gpu: 4, cpu: 96 }), block({ id: "b2", user: "carol", mine: false, start: "2026-11-12T08:00:00Z", end: "2026-11-12T09:00:00Z" })] },
+    });
+    renderWithProviders(<ReservationsPage />, { me: me() });
+    const row = await screen.findByRole("group", { name: "g206 的预约" });
+    fireEvent.click((await within(row).findAllByRole("button", { name: /bob/ }))[0]);
+    expect(within(await screen.findByRole("dialog")).getByText("4 卡 · 96 核")).toBeTruthy();
+    fireEvent.click(within(screen.getByRole("dialog")).getByRole("button", { name: "关闭" }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    fireEvent.click((await within(row).findAllByRole("button", { name: /carol/ }))[0]);
+    expect(within(await screen.findByRole("dialog")).getByText("整台")).toBeTruthy();
+  });
+
   it("another's reservation I may manage (a grant) has 修改… and 取消预约", async () => {
     at();
     stubFetch({

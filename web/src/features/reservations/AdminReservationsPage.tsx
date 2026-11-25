@@ -22,6 +22,7 @@ import { Field, Input, Notice } from "../../design/Form";
 import { RefreshControl } from "../../design/RefreshControl";
 import { useAutoRefresh } from "../../lib/autoRefresh";
 import { fmtDuration } from "../../lib/format";
+import { fmtAmount } from "../../lib/reservations";
 import { useUrlState, type Schema } from "../../lib/urlState";
 
 const DAY = 86400e3;
@@ -122,6 +123,22 @@ export function AdminReservationsPage() {
         accessorFn: (r) => Date.parse(r.end) - Date.parse(r.start),
         meta: { priority: 3, width: 80, mono: true },
         cell: ({ getValue }) => fmtDuration(getValue() as number),
+      },
+      {
+        id: "amount",
+        header: "资源",
+        accessorFn: (r) => fmtAmount(r),
+        meta: { priority: 2, width: 130 },
+        cell: ({ row: { original: r } }) => (
+          <span className="inline-flex items-center gap-1.5">
+            <span>{fmtAmount(r)}</span>
+            {r.overbooked && (
+              <span className="text-[11px] font-medium text-fail" title="与其他预约重叠，超出机器容量（v2 之前的预约）">
+                超额
+              </span>
+            )}
+          </span>
+        ),
       },
       {
         id: "phase",
