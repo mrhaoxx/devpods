@@ -185,7 +185,7 @@ func runReserve(e *Env, a *parsed) int {
 			printJSON(e, raw)
 			return ExitOK
 		}
-		fmt.Fprintf(e.Out, "reserved %s %s – %s (id %s)\n", node, v.Start.In(r.loc()).Format("2006-01-02 15:04"), v.End.In(r.loc()).Format("15:04 MST"), joinRef(v.Cluster, v.ID))
+		fmt.Fprintf(e.Out, "reserved %s (%s) %s – %s (id %s)\n", node, amountOf(v), v.Start.In(r.loc()).Format("2006-01-02 15:04"), v.End.In(r.loc()).Format("15:04 MST"), joinRef(v.Cluster, v.ID))
 		return ExitOK
 	case "change":
 		if len(rest) != 1 {
@@ -224,7 +224,7 @@ func runReserve(e *Env, a *parsed) int {
 			printJSON(e, raw)
 			return ExitOK
 		}
-		fmt.Fprintf(e.Out, "%s: now %s – %s\n", rest[0], v.Start.In(r.loc()).Format("2006-01-02 15:04"), v.End.In(r.loc()).Format("15:04 MST"))
+		fmt.Fprintf(e.Out, "%s: now %s – %s, %s\n", rest[0], v.Start.In(r.loc()).Format("2006-01-02 15:04"), v.End.In(r.loc()).Format("15:04 MST"), amountOf(v))
 		return ExitOK
 	case "cancel", "rm":
 		if len(rest) == 0 {

@@ -600,6 +600,34 @@ describe("ReservationsPage", () => {
     await waitFor(() => expect(calls.find((c) => c.method === "PATCH")?.body).toBe('{"gpu":2,"cpu":48}'));
   });
 
+  it("one made before shares that overlaps another can still have its purpose changed or be shortened; not lengthened over the other", async () => {
+    at();
+    const calls = stubFetch({
+      "/api/reservations/rules": rules,
+      "/api/nodes": { items: [node("g206")] },
+      "/api/reservations": {
+        items: [
+          block({ id: "a", start: "2026-11-12T02:00:00Z", end: "2026-11-12T03:00:00Z", phase: "Active", canManage: true, overbooked: true }),
+          block({ id: "b", user: "bob", mine: false, start: "2026-11-12T02:30:00Z", end: "2026-11-12T04:00:00Z", overbooked: true }),
+        ],
+      },
+      "PATCH /api/reservations/a": block({ id: "a" }),
+    });
+    renderWithProviders(<ReservationsPage />, { me: me() });
+    const row = (await screen.findByText("进行中")).closest("tr") as HTMLElement;
+    fireEvent.keyDown(within(row).getByRole("button", { name: /操作$/ }), { key: "Enter" });
+    fireEvent.click(within(await screen.findByRole("menu")).getByRole("menuitem", { name: "修改" }));
+    const dialog = within(screen.getByRole("dialog"));
+    fireEvent.change(input(dialog, "结束"), { target: { value: "2026-11-12T11:30" } }); // past its end, over bob's
+    expect((dialog.getByRole("button", { name: "保存" }) as HTMLButtonElement).disabled).toBe(true);
+    fireEvent.change(input(dialog, "结束"), { target: { value: "2026-11-12T10:40" } }); // shorter
+    fireEvent.change(dialog.getByLabelText("用途"), { target: { value: "新" } });
+    const save = dialog.getByRole("button", { name: "保存" }) as HTMLButtonElement;
+    expect(save.disabled).toBe(false);
+    fireEvent.click(save);
+    await waitFor(() => expect(calls.find((c) => c.method === "PATCH")?.body).toBe('{"end":"2026-11-12T02:40:00.000Z","purpose":"新"}'));
+  });
+
   it("a short reservation is still wide enough to tap", async () => {
     at();
     stubFetch({

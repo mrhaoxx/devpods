@@ -97,9 +97,14 @@ func TestAdmitted(t *testing.T) {
 	if !admitted(rs, cap8, a, at(9, 0)) || admitted(rs, cap8, b, at(9, 0)) {
 		t.Errorf("the earlier keeps it: a %v b %v", admitted(rs, cap8, a, at(9, 0)), admitted(rs, cap8, b, at(9, 0)))
 	}
-	b.CreationTimestamp = a.CreationTimestamp
-	if !admitted(rs, cap8, a, at(9, 0)) || admitted(rs, cap8, b, at(9, 0)) {
-		t.Errorf("made together, the first name keeps it: a %v b %v", admitted(rs, cap8, a, at(9, 0)), admitted(rs, cap8, b, at(9, 0)))
+	// made in the same second, or a second apart (the API server's clock
+	// is to the second, and replicas' clocks differ): neither keeps it — of
+	// two creators, the one that looks second always gives way
+	for _, d := range []time.Duration{0, time.Second} {
+		b.CreationTimestamp = metav1.NewTime(a.CreationTimestamp.Add(d))
+		if admitted(rs, cap8, a, at(9, 0)) || admitted(rs, cap8, b, at(9, 0)) {
+			t.Errorf("made %s apart: a %v b %v", d, admitted(rs, cap8, a, at(9, 0)), admitted(rs, cap8, b, at(9, 0)))
+		}
 	}
 }
 
@@ -166,6 +171,13 @@ func TestToClear(t *testing.T) {
 	}
 	if got := toClear(cap8, held(4, "96"), twins, now); len(got) != 1 || got[0].DP.Name != "x-2" {
 		t.Errorf("started together, the later name goes: %v", dpNames(got))
+	}
+	// a holder's DevPods beyond what they hold are in the way too: alice
+	// holds 1 core and runs 6 cards; bob's 4 cards need 2 of them
+	rs := []*devpodv1alpha1.NodeReservation{rsvOf("r1", "alice", at(10, 0), at(11, 0), 0, "1"), rsvOf("r2", "bob", at(10, 0), at(11, 0), 4, "96")}
+	beyond := []placed{runningOn("a1", "alice", amount{4, 0}, at(8, 0)), runningOn("a2", "alice", amount{2, 0}, at(9, 0))}
+	if got := toClear(cap8, rs, beyond, now); len(got) != 1 || got[0].DP.Name != "a2" {
+		t.Errorf("a holder beyond their share: %v", dpNames(got))
 	}
 }
 

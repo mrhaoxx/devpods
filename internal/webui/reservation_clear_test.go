@@ -11,6 +11,8 @@ import (
 	"testing"
 	"time"
 
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+
 	devpodv1alpha1 "github.com/mrhaoxx/devpod/api/v1alpha1"
 )
 
@@ -135,4 +137,67 @@ func TestClearingOnlyWhatIsShort(t *testing.T) {
 	}
 	p.s.EnforceReservations(ctx)
 	devPodWhen(t, p, "cs-bob-g2", "unmarked when no card is needed", unmarked)
+}
+
+// Another reservation starting meanwhile neither puts the clearing off
+// nor takes it over: the notice given stands.
+func TestClearingKeepsNoticeAcrossStarts(t *testing.T) {
+	p, clock := clearRig(t, "ck")
+	ctx := context.Background()
+	p.createGPU("ck-bob", "g4", 4, p.n1, http.StatusCreated)
+	code, alice := reserveWith(t, p.s, p.as("ck-alice"), p.n1, clock.Add(20*time.Minute), clock.Add(80*time.Minute), map[string]any{"gpu": 6})
+	if code != http.StatusCreated {
+		t.Fatalf("alice: %d %+v", code, alice)
+	}
+	p.s.EnforceReservations(ctx)
+	devPodWhen(t, p, "ck-bob-g4", "marked for 10:40", marked(clock.Add(30*time.Minute), alice.ID))
+	// 10:31: carol reserves a few cores from 10:30 — in force now, started
+	// together with alice's (and named after it)
+	*clock = clock.Add(21 * time.Minute)
+	if code, v := reserveWith(t, p.s, p.as("ck-carol"), p.n1, p.slot.Add(30*time.Minute), p.slot.Add(90*time.Minute), map[string]any{"gpu": 0, "cpu": 8}); code != http.StatusCreated {
+		t.Fatalf("carol: %d %+v", code, v)
+	}
+	p.s.EnforceReservations(ctx)
+	devPodWhen(t, p, "ck-bob-g4", "still marked for 10:40", marked(p.slot.Add(40*time.Minute), alice.ID))
+	*clock = p.slot.Add(40 * time.Minute)
+	p.s.EnforceReservations(ctx)
+	devPodWhen(t, p, "ck-bob-g4", "hibernated at 10:40, for alice's", func(dp *devpodv1alpha1.DevPod) bool {
+		return !dp.Spec.Running && dp.Annotations[devpodv1alpha1.HibernatedByAnnotation] == "reservation/"+alice.ID
+	})
+}
+
+// A DevPod its owner stops after being told loses the mark.
+func TestClearingUnmarkStopped(t *testing.T) {
+	p, clock := clearRig(t, "cx")
+	ctx := context.Background()
+	p.createGPU("cx-bob", "g2", 2, p.n1, http.StatusCreated)
+	code, r := reserveAs(t, p.s, p.as("cx-alice"), p.n1, clock.Add(20*time.Minute), clock.Add(80*time.Minute))
+	if code != http.StatusCreated {
+		t.Fatalf("reserve: %d %+v", code, r)
+	}
+	p.s.EnforceReservations(ctx)
+	devPodWhen(t, p, "cx-bob-g2", "marked", marked(clock.Add(30*time.Minute), r.ID))
+	p.patch("cx-bob", "cx-bob-g2", `{"running":false}`, http.StatusOK)
+	devPodWhen(t, p, "cx-bob-g2", "stopped", func(dp *devpodv1alpha1.DevPod) bool { return !dp.Spec.Running })
+	p.s.EnforceReservations(ctx)
+	devPodWhen(t, p, "cx-bob-g2", "unmarked", func(dp *devpodv1alpha1.DevPod) bool {
+		_, a := dp.Annotations[devpodv1alpha1.ClearAtAnnotation]
+		_, b := dp.Annotations[devpodv1alpha1.ClearForAnnotation]
+		return !dp.Spec.Running && !a && !b
+	})
+}
+
+// Reservations made before shares (permits, then) clear nobody.
+func TestClearingSkipsPreV2(t *testing.T) {
+	p, _ := clearRig(t, "cv")
+	ctx := context.Background()
+	p.createGPU("cv-bob", "g2", 2, p.n1, http.StatusCreated)
+	old := &devpodv1alpha1.NodeReservation{ObjectMeta: metav1.ObjectMeta{Name: "cv-old"}, Spec: devpodv1alpha1.NodeReservationSpec{
+		Node: p.n1, User: "cv-alice", Start: metav1.NewTime(p.slot), End: metav1.NewTime(p.slot.Add(time.Hour))}}
+	if err := k8sClient.Create(ctx, old); err != nil {
+		t.Fatal(err)
+	}
+	p.s.EnforceReservations(ctx)
+	time.Sleep(500 * time.Millisecond)
+	devPodWhen(t, p, "cv-bob-g2", "left alone", unmarked)
 }

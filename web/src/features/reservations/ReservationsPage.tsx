@@ -219,6 +219,21 @@ function ReserveDialog({
     edit && !wholeAsk(ask) && !presets(cap).some((p) => (cap.gpu > 0 ? p.gpu === edit.gpu : p.cpu === edit.cpu)) ? String((cap.gpu > 0 ? edit.gpu : edit.cpu) ?? "") : "",
   );
   const pick = (a: Ask) => (setAsk(a), touch());
+  // the times to check, as the console does: from now; a change only for
+  // the time it adds — all it has left when it asks for more (one made
+  // before shares may overlap another and still be shortened or renamed)
+  const spansOf = (c: Amount): [number, number][] => {
+    const from = Math.max(s, now);
+    if (!edit) return [[from, e]];
+    const was = wholeAsk(edit) ? c : { gpu: edit.gpu ?? 0, cpu: edit.cpu ?? 0 };
+    const want = wholeAsk(ask) ? c : { gpu: ask.gpu ?? 0, cpu: ask.cpu ?? 0 };
+    if (want.gpu > was.gpu || want.cpu > was.cpu || (wholeAsk(ask) && !wholeAsk(edit))) return [[from, e]];
+    const [os, oe] = [Date.parse(edit.start), Date.parse(edit.end)];
+    const out: [number, number][] = [];
+    if (from < os) out.push([from, Math.min(os, e)]);
+    if (e > oe) out.push([Math.max(oe, from), e]);
+    return out.filter(([a, b]) => a < b);
+  };
   // what is free on each machine in that time, beside the others (not the one being changed)
   const rooms = Number.isNaN(e) || problem
     ? []
@@ -226,8 +241,11 @@ function ReserveDialog({
         const n = nodeOf(k);
         if (!n) return [];
         const c = capOf(n);
-        const free = freeIn(blocksOf(k), Math.max(s, now), e, c, edit?.id);
-        const ok = wholeAsk(ask) ? free.gpu === c.gpu && free.cpu === c.cpu : (ask.gpu ?? 0) <= free.gpu && (ask.cpu ?? 0) <= free.cpu;
+        const spans = spansOf(c);
+        if (spans.length === 0) return []; // nothing more asked
+        const frees = spans.map(([a, b]) => freeIn(blocksOf(k), a, b, c, edit?.id));
+        const free = { gpu: Math.min(...frees.map((f) => f.gpu)), cpu: Math.min(...frees.map((f) => f.cpu)) };
+        const ok = frees.every((f) => (wholeAsk(ask) ? f.gpu === c.gpu && f.cpu === c.cpu : (ask.gpu ?? 0) <= f.gpu && (ask.cpu ?? 0) <= f.cpu));
         const what = c.gpu > 0 ? `${free.gpu} 卡 · ${num(free.cpu)} 核` : `${num(free.cpu)} 核`;
         return [{ k, ok, what, full: free.gpu <= 0 && free.cpu <= 0 }];
       });

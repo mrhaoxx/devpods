@@ -76,7 +76,9 @@ func capacityOf(n *corev1.Node) amount {
 }
 
 // isWhole: the reservation is the whole machine (neither amount said).
-func isWhole(nr *devpodv1alpha1.NodeReservation) bool { return nr.Spec.GPU == nil && nr.Spec.CPU == nil }
+func isWhole(nr *devpodv1alpha1.NodeReservation) bool {
+	return nr.Spec.GPU == nil && nr.Spec.CPU == nil
+}
 
 // reservedOf: what nr holds of a machine with capacity c.
 func reservedOf(nr *devpodv1alpha1.NodeReservation, c amount) amount {
@@ -199,21 +201,24 @@ func checkRoom(others []*devpodv1alpha1.NodeReservation, c, ask amount, whole bo
 	return r
 }
 
-// madeBefore: a was made before b (by the API server's clock, then by name).
-func madeBefore(a, b *devpodv1alpha1.NodeReservation) bool {
-	if ta, tb := a.CreationTimestamp.Time, b.CreationTimestamp.Time; !ta.Equal(tb) {
-		return ta.Before(tb)
-	}
-	return a.Name < b.Name
+// madeSkew: how far apart two reservations' making may be and still count
+// as at once — the API server's clock is to the second, and replicas'
+// clocks differ.
+const madeSkew = 2 * time.Second
+
+// madeByThen: a was made before b, or so near it that it may have been.
+func madeByThen(a, b *devpodv1alpha1.NodeReservation) bool {
+	return !a.CreationTimestamp.Time.After(b.CreationTimestamp.Time.Add(madeSkew))
 }
 
-// admitted: nr fits beside those of rs made before it, from from on (what
-// is past does not matter) — of two made at once that do not fit
-// together, the later gives way.
+// admitted: nr fits beside those of rs made by then, from from on (what is
+// past does not matter). Of two made at once that do not fit together,
+// the one whose maker looks second always gives way; if both look after
+// both are made, both do (and are asked for again).
 func admitted(rs []*devpodv1alpha1.NodeReservation, c amount, nr *devpodv1alpha1.NodeReservation, from time.Time) bool {
 	var before []*devpodv1alpha1.NodeReservation
 	for _, o := range rs {
-		if o.Name != nr.Name && madeBefore(o, nr) {
+		if o.Name != nr.Name && madeByThen(o, nr) {
 			before = append(before, o)
 		}
 	}
@@ -317,18 +322,22 @@ func (l nodeLoad) refusal(node, owner string, needsRes bool, ask amount) *server
 }
 
 // toClear: the DevPods to hibernate so that the reservations in force at
-// t get their shares — of those whose owner holds none of them, the
-// newest first (then the later name), only while one makes a shortage
-// smaller.
+// t get their shares — of those beyond their owner's reservations (all of
+// a non-holder's; a holder's past what they hold), the newest first (then
+// the later name), only while one makes a shortage smaller.
 func toClear(c amount, rs []*devpodv1alpha1.NodeReservation, on []placed, t time.Time) []placed {
 	l := loadAt(c, rs, on, t, "")
 	short := l.outside().sub(c.sub(l.Booked))
 	if short.GPU <= 0 && short.CPU <= 0 {
 		return nil
 	}
+	beyond := map[string]amount{} // by owner: what they use past what they hold
+	for u, use := range l.Use {
+		beyond[u] = use.sub(l.Held[u]).clamped()
+	}
 	var cand []placed
 	for _, p := range on {
-		if _, holds := l.Held[p.DP.Spec.Owner]; !holds {
+		if b := beyond[p.DP.Spec.Owner]; b.GPU > 0 || b.CPU > 0 {
 			cand = append(cand, p)
 		}
 	}
@@ -343,9 +352,13 @@ func toClear(c amount, rs []*devpodv1alpha1.NodeReservation, on []placed, t time
 		if short.GPU <= 0 && short.CPU <= 0 {
 			break
 		}
-		if (short.GPU > 0 && p.Ask.GPU > 0) || (short.CPU > 0 && p.Ask.CPU > 0) {
+		// what going frees beyond its owner's reservations
+		b := beyond[p.DP.Spec.Owner]
+		freed := amount{min(p.Ask.GPU, b.GPU), min(p.Ask.CPU, b.CPU)}
+		if (short.GPU > 0 && freed.GPU > 0) || (short.CPU > 0 && freed.CPU > 0) {
 			out = append(out, p)
-			short = short.sub(p.Ask)
+			short = short.sub(freed)
+			beyond[p.DP.Spec.Owner] = b.sub(freed)
 		}
 	}
 	return out

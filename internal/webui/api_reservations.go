@@ -5,12 +5,12 @@
 package webui
 
 import (
-	"log/slog"
-	"math"
 	"context"
 	"crypto/rand"
 	"encoding/json"
 	"fmt"
+	"log/slog"
+	"math"
 	"net/http"
 	"sort"
 	"strconv"
@@ -669,7 +669,7 @@ func (s *Server) handleCreateReservation(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	nr := &devpodv1alpha1.NodeReservation{
-		ObjectMeta: metav1.ObjectMeta{Name: fmt.Sprintf("%s-%s-%s", n.Name, user, randSuffix(6))},
+		ObjectMeta: metav1.ObjectMeta{Name: fmt.Sprintf("%s-%s-%s", n.Name, user, randSuffix(6)), Annotations: map[string]string{devpodv1alpha1.ClearsAnnotation: "true"}},
 		Spec:       devpodv1alpha1.NodeReservationSpec{Cluster: cluster, Node: n.Name, User: user, Start: metav1.NewTime(req.Start.UTC()), End: metav1.NewTime(req.End.UTC()), Purpose: purpose},
 	}
 	nr.Spec.GPU, nr.Spec.CPU = gpu, cpu
@@ -778,8 +778,14 @@ func (s *Server) handlePatchReservation(w http.ResponseWriter, r *http.Request) 
 		}
 		gpu, cpu = nr.Spec.GPU, nr.Spec.CPU
 		if resizes && !whole {
+			// cores alone keep the cards it holds (all of them, for a whole one)
+			cards := req.GPU
+			if cards == nil && req.CPU != nil {
+				held := int(reservedOf(nr, capacityOf(&n)).GPU)
+				cards = &held
+			}
 			var apiErr *serverErr
-			if gpu, cpu, apiErr = shareOf(&n, req.GPU, req.CPU); apiErr != nil {
+			if gpu, cpu, apiErr = shareOf(&n, cards, req.CPU); apiErr != nil {
 				s.writeServerErr(w, apiErr)
 				return
 			}

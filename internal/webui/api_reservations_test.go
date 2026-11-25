@@ -347,6 +347,10 @@ func TestReservationChangeRoom(t *testing.T) {
 	if err := k8sClient.Get(ctx, client_key_cluster(e.ID), &got); err != nil || got.Spec.GPU == nil || *got.Spec.GPU != 6 {
 		t.Fatalf("erin's after a refused change: %+v %v", got.Spec, err)
 	}
+	// cores alone: the cards stay
+	if code, v := patch(erin, e.ID, `{"cpu":100}`); code != http.StatusOK || v.GPU == nil || *v.GPU != 6 || v.CPU == nil || *v.CPU != 100 {
+		t.Fatalf("cores alone: %d %+v", code, v)
+	}
 }
 
 func strp(s string) *string { return &s }

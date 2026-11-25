@@ -19,6 +19,10 @@ const (
 	// ClearForAnnotation names that reservation.
 	ClearAtAnnotation  = "devpod.io/clear-at"
 	ClearForAnnotation = "devpod.io/clear-for"
+	// ClearsAnnotation on a NodeReservation: made since reservations hold
+	// shares, it clears whoever is in its way when it starts. One made
+	// before (a permit then) clears nobody.
+	ClearsAnnotation = "devpod.io/clears"
 
 	// DevPod condition types set by the reservation machinery.
 	ConditionNodeReserved        = "NodeReserved"        // pinned to a node someone else holds: no Pod

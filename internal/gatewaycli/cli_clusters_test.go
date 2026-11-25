@@ -118,7 +118,7 @@ func TestConsoleFeatures(t *testing.T) {
 	}
 	f.routes["GET /api/reservations/rules"] = map[string]any{"granularitySeconds": 1800, "timezone": "Asia/Shanghai"}
 	f.routes["POST /api/reservations"] = map[string]any{"id": "r1", "node": "g1", "start": "2026-11-12T01:00:00Z", "end": "2026-11-12T05:00:00Z"}
-	if code, out, _ := f.runAs("reserve add g1 --start 2026-11-12T09:00 --for 4h", "", false); code != 0 || !strings.Contains(out, "reserved g1 2026-11-12 09:00 – 13:00 CST (id r1)") ||
+	if code, out, _ := f.runAs("reserve add g1 --start 2026-11-12T09:00 --for 4h", "", false); code != 0 || !strings.Contains(out, "reserved g1 (whole) 2026-11-12 09:00 – 13:00 CST (id r1)") ||
 		last() != `POST /api/reservations {"end":"2026-11-12T05:00:00Z","node":"g1","start":"2026-11-12T01:00:00Z"}` {
 		t.Fatalf("reserve add: %d %q %s", code, out, last())
 	}
@@ -183,11 +183,11 @@ func TestReserveAmounts(t *testing.T) {
 	f.routes["GET /api/reservations/rules"] = map[string]any{"granularitySeconds": 1800, "timezone": "Asia/Shanghai"}
 	f.routes["POST /api/reservations"] = map[string]any{"id": "r1", "node": "g1", "start": "2026-11-12T01:00:00Z", "end": "2026-11-12T05:00:00Z", "gpu": 4, "cpu": 96}
 	if code, out, _ := f.runAs("reserve add g1 --start 2026-11-12T09:00 --for 4h --gpus 4", "", false); code != 0 ||
-		last() != `POST /api/reservations {"end":"2026-11-12T05:00:00Z","gpu":4,"node":"g1","start":"2026-11-12T01:00:00Z"}` {
+		last() != `POST /api/reservations {"end":"2026-11-12T05:00:00Z","gpu":4,"node":"g1","start":"2026-11-12T01:00:00Z"}` || !strings.Contains(out, "4 GPU · 96 CPU") {
 		t.Fatalf("reserve add --gpus: %d %q %s", code, out, last())
 	}
 	f.routes["PATCH /api/reservations/r1"] = map[string]any{"id": "r1", "node": "g1", "start": "2026-11-12T01:00:00Z", "end": "2026-11-12T05:00:00Z"}
-	if code, out, _ := f.runAs("reserve change r1 --whole", "", false); code != 0 || last() != `PATCH /api/reservations/r1 {"whole":true}` {
+	if code, out, _ := f.runAs("reserve change r1 --whole", "", false); code != 0 || last() != `PATCH /api/reservations/r1 {"whole":true}` || !strings.Contains(out, "whole") {
 		t.Fatalf("reserve change --whole: %d %q %s", code, out, last())
 	}
 	if code, out, _ := f.runAs("reserve change r1 --gpus 2 --cpus 48", "", false); code != 0 || last() != `PATCH /api/reservations/r1 {"cpu":48,"gpu":2}` {

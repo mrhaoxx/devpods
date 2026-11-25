@@ -157,16 +157,25 @@ func (s *Server) clearIn(ctx context.Context, cluster string, all []devpodv1alph
 		return // away: done when it is back
 	}
 	notice := s.Reservations.ClearNotice
+	// only reservations made since they hold shares clear anyone (one made
+	// before was a permit, and its holder never asked for that)
 	byNode := map[string][]*devpodv1alpha1.NodeReservation{}
 	for i := range all {
-		if nr := &all[i]; nr.Spec.Cluster == cluster {
+		if nr := &all[i]; nr.Spec.Cluster == cluster && nr.Annotations[devpodv1alpha1.ClearsAnnotation] == "true" {
 			byNode[nr.Spec.Node] = append(byNode[nr.Spec.Node], nr)
 		}
 	}
-	on, err := s.devPodsByNode(ctx, cc)
+	on, stopped, err := s.devPodsOn(ctx, cc)
 	if err != nil {
 		slog.Warn("reservation_clear", "cluster", cluster, "err", err)
 		return
+	}
+	stillMarked := false
+	// stopped (by its owner, after the notice): the mark goes with it
+	for _, dp := range stopped {
+		if !s.unmarkClearing(ctx, cc, dp) {
+			stillMarked = true
+		}
 	}
 	type mark struct {
 		at    time.Time
@@ -198,40 +207,48 @@ func (s *Server) clearIn(ctx context.Context, cluster string, all []devpodv1alph
 		for _, t := range moments {
 			id := clearedFor(rs, t)
 			for _, p := range toClear(c, rs, left, t) {
-				want[p.DP.Name] = mark{at: later(t, now.Add(notice)), forID: id}
+				// cleared for the reservation it was marked for, while that
+				// one is in force then
+				forID := id
+				if was := p.DP.Annotations[devpodv1alpha1.ClearForAnnotation]; was != "" && slices.ContainsFunc(rs, func(nr *devpodv1alpha1.NodeReservation) bool { return nr.Name == was && inForce(nr, t) }) {
+					forID = was
+				}
+				want[p.DP.Name] = mark{at: later(t, now.Add(notice)), forID: forID}
 				left = slices.DeleteFunc(left, func(q placed) bool { return q.DP.Name == p.DP.Name })
 			}
 		}
 	}
 	cleared := map[string][]string{} // by reservation
-	stillMarked := false
 	for _, ps := range on {
 		for _, p := range ps {
 			dp := p.DP
 			atText, has := dp.Annotations[devpodv1alpha1.ClearAtAnnotation]
 			forID := dp.Annotations[devpodv1alpha1.ClearForAnnotation]
 			m, listed := want[dp.Name]
-			switch {
-			case !listed:
-				if has || forID != "" {
-					s.unmarkClearing(ctx, cc, dp)
+			if !listed {
+				if (has || forID != "") && !s.unmarkClearing(ctx, cc, dp) {
+					stillMarked = true
 				}
 				continue
-			case has && forID == m.forID:
-				if at, err := time.Parse(time.RFC3339, atText); err == nil {
-					if now.Before(at) {
-						stillMarked = true
-					} else if s.hibernateFor(ctx, cc, dp, "reservation/"+m.forID) {
-						cleared[m.forID] = append(cleared[m.forID], dp.Name)
-					} else {
-						stillMarked = true
-					}
-					continue
-				}
 			}
-			// not marked, or marked for another reservation: a fresh notice
-			s.markClearing(ctx, cc, dp, m.at, m.forID)
-			stillMarked = true
+			at, err := time.Parse(time.RFC3339, atText)
+			switch {
+			case !has || err != nil:
+				// not told yet: the notice
+				s.markClearing(ctx, cc, dp, m.at, m.forID)
+				stillMarked = true
+			case now.Before(at):
+				// told: the time stands (another reservation starting meanwhile
+				// does not put it off); only what it is for may change
+				if forID != m.forID {
+					s.markClearing(ctx, cc, dp, at, m.forID)
+				}
+				stillMarked = true
+			case s.hibernateFor(ctx, cc, dp, "reservation/"+m.forID):
+				cleared[m.forID] = append(cleared[m.forID], dp.Name)
+			default:
+				stillMarked = true
+			}
 		}
 	}
 	if stillMarked {
@@ -333,22 +350,33 @@ func (s *Server) endIn(ctx context.Context, cluster string, rs []*devpodv1alpha1
 // where their Pod is, or, not placed yet, where they are pinned — with
 // what they take and since when (their Pod's, else their own).
 func (s *Server) devPodsByNode(ctx context.Context, cc *clusters.ClusterClients) (map[string][]placed, error) {
+	on, _, err := s.devPodsOn(ctx, cc)
+	return on, err
+}
+
+// devPodsOn: devPodsByNode, and the stopped DevPods still marked to be
+// cleared.
+func (s *Server) devPodsOn(ctx context.Context, cc *clusters.ClusterClients) (map[string][]placed, []*devpodv1alpha1.DevPod, error) {
 	var dps devpodv1alpha1.DevPodList
 	if err := cc.Client.List(ctx, &dps, client.InNamespace(s.NS)); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	var pods corev1.PodList
 	if err := cc.Client.List(ctx, &pods, client.InNamespace(s.NS)); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	podOf := map[string]*corev1.Pod{}
 	for i := range pods.Items {
 		podOf[pods.Items[i].Name] = &pods.Items[i]
 	}
 	out := map[string][]placed{}
+	var stopped []*devpodv1alpha1.DevPod
 	for i := range dps.Items {
 		dp := &dps.Items[i]
 		if !dp.Spec.Running || !dp.DeletionTimestamp.IsZero() {
+			if _, marked := dp.Annotations[devpodv1alpha1.ClearAtAnnotation]; marked && dp.DeletionTimestamp.IsZero() {
+				stopped = append(stopped, dp)
+			}
 			continue
 		}
 		p := placed{DP: dp, Since: dp.CreationTimestamp.Time}
@@ -367,7 +395,7 @@ func (s *Server) devPodsByNode(ctx context.Context, cc *clusters.ClusterClients)
 			out[node] = append(out[node], p)
 		}
 	}
-	return out, nil
+	return out, stopped, nil
 }
 
 // hibernateFor stops dp on behalf of a reservation (by, which the web
