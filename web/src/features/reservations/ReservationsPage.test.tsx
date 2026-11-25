@@ -468,6 +468,67 @@ describe("ReservationsPage", () => {
     }
   });
 
+  it("each machine is a GPU band and a CPU band: a reservation is in both, as tall as its share; hovering one lights both", async () => {
+    at();
+    stubFetch({
+      "/api/reservations/rules": rules,
+      "/api/nodes": { items: [node("g206", { cpu: { allocatable: 192, allocated: 0 } })] },
+      "/api/reservations": { items: [block({ id: "b1", user: "bob", mine: false, start: "2026-11-12T02:00:00Z", end: "2026-11-12T03:00:00Z", gpu: 4, cpu: 96 })] },
+    });
+    renderWithProviders(<ReservationsPage />, { me: me() });
+    const track = await screen.findByRole("group", { name: "g206 的预约" });
+    await within(track).findByRole("button", { name: /bob/ });
+    const row = track.parentElement as HTMLElement;
+    const g = track.querySelector('[data-band="gpu"] [data-res="b1"]') as HTMLElement;
+    const c = track.querySelector('[data-band="cpu"] [data-res="b1"]') as HTMLElement;
+    const band = track.querySelector('[data-band="gpu"]') as HTMLElement;
+    expect(parseFloat(g.style.height)).toBeCloseTo(parseFloat(band.style.height) / 2, 1);
+    expect(within(row).getByText("GPU 4/8")).toBeTruthy(); // now (10:10) is in it
+    expect(within(row).getByText("CPU 96/192")).toBeTruthy();
+    fireEvent.mouseEnter(g);
+    expect(g.dataset.hot).toBe("true");
+    expect(c.dataset.hot).toBe("true");
+    fireEvent.mouseLeave(g);
+    expect(g.dataset.hot).toBeUndefined();
+  });
+
+  it("a whole-machine reservation fills both bands; a CPU machine has only the CPU band; one over the machine is marked", async () => {
+    at();
+    stubFetch({
+      "/api/reservations/rules": rules,
+      "/api/nodes": { items: [node("g206"), node("c101", { gpuTotal: 0, gpuModel: undefined })] },
+      "/api/reservations": {
+        items: [block({ id: "w", user: "bob", mine: false, overbooked: true }), block({ id: "c", node: "c101", user: "carol", mine: false, gpu: 0, cpu: 16 })],
+      },
+    });
+    renderWithProviders(<ReservationsPage />, { me: me() });
+    const g206 = await screen.findByRole("group", { name: "g206 的预约" });
+    await within(g206).findByRole("button", { name: /bob/ });
+    for (const band of ["gpu", "cpu"]) {
+      const el = g206.querySelector(`[data-band="${band}"]`) as HTMLElement;
+      const b = el.querySelector('[data-res="w"]') as HTMLElement;
+      expect(parseFloat(b.style.height)).toBeCloseTo(parseFloat(el.style.height), 1);
+      expect(b.className).toMatch(/border-fail/);
+    }
+    const c101 = screen.getByRole("group", { name: "c101 的预约" });
+    expect(c101.querySelector('[data-band="gpu"]')).toBeNull();
+    expect(within(c101).getByRole("button", { name: /carol/ })).toBeTruthy();
+    expect(within(c101.parentElement as HTMLElement).queryByText(/^GPU/)).toBeNull();
+  });
+
+  it("a machine whose capacity is not known draws without NaN", async () => {
+    at();
+    stubFetch({
+      "/api/reservations/rules": rules,
+      "/api/nodes": { items: [node("z1", { gpuTotal: 0, gpuModel: undefined, cpu: { allocatable: 0, allocated: 0 } })] },
+      "/api/reservations": { items: [block({ id: "w", node: "z1", user: "bob", mine: false }), block({ id: "p", node: "z1", user: "carol", mine: false, gpu: 0, cpu: 16, start: "2026-11-12T06:00:00Z", end: "2026-11-12T07:00:00Z" })] },
+    });
+    renderWithProviders(<ReservationsPage />, { me: me() });
+    const z1 = await screen.findByRole("group", { name: "z1 的预约" });
+    await within(z1).findByRole("button", { name: /bob/ });
+    expect((z1.parentElement as HTMLElement).innerHTML).not.toMatch(/NaN|Infinity/);
+  });
+
   it("a short reservation is still wide enough to tap", async () => {
     at();
     stubFetch({

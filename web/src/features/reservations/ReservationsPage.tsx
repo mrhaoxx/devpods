@@ -34,7 +34,24 @@ import { Field, Input, Notice, Select } from "../../design/Form";
 import { Panel } from "../../design/Panel";
 import { useNow } from "../../lib/useNow";
 import { LoadMore } from "../audit/common";
-import { dayStart, fmtAmount, fmtClock, fmtDay, fmtSpan, fmtTime, fromInput, fromNow, periodError, selection, slotStart, toInput } from "../../lib/reservations";
+import {
+  amountOf,
+  bookedAt,
+  capOf,
+  dayStart,
+  fmtAmount,
+  fmtClock,
+  fmtDay,
+  fmtSpan,
+  fmtTime,
+  fromInput,
+  fromNow,
+  periodError,
+  selection,
+  slotStart,
+  stackBand,
+  toInput,
+} from "../../lib/reservations";
 import * as Dialog from "@radix-ui/react-dialog";
 
 const DAY = 86_400_000;
@@ -328,19 +345,21 @@ function Row({
 }) {
   void gran;
   const pct = (t: number) => `${Math.min(100, Math.max(0, ((t - from) / (to - from)) * 100))}%`;
-  // reservations may overlap: each in the first lane free at its start
-  const { lane, lanes } = useMemo(() => {
-    const ends: number[] = [];
-    const lane = new Map<string, number>();
-    for (const b of [...blocks].sort((x, y) => Date.parse(x.start) - Date.parse(y.start))) {
-      let i = ends.findIndex((e) => e <= Date.parse(b.start));
-      if (i < 0) i = ends.push(0) - 1;
-      ends[i] = Date.parse(b.end);
-      lane.set(b.id, i);
-    }
-    return { lane, lanes: Math.max(1, ends.length) };
-  }, [blocks]);
-  const laneH = lanes === 1 ? 36 : 22;
+  const cap = capOf(node);
+  // each machine is a GPU band (when it has cards) and a CPU band: a
+  // reservation is in each at its share of it, stacked from the bottom
+  const bands = useMemo(() => {
+    const out: { key: "gpu" | "cpu"; label: string; h: number; cap: number; pick: (b: Reservation) => number }[] = [];
+    if (cap.gpu > 0) out.push({ key: "gpu", label: "GPU", h: Math.min(64, Math.max(24, 6 * cap.gpu)), cap: cap.gpu, pick: (b) => amountOf(b, cap).gpu });
+    out.push({ key: "cpu", label: "CPU", h: out.length ? 24 : 36, cap: cap.cpu, pick: (b) => amountOf(b, cap).cpu });
+    return out.map((band) => ({ ...band, stack: band.cap > 0 ? stackBand(blocks, band.cap, band.pick) : null }));
+  }, [blocks, cap.gpu, cap.cpu]); // eslint-disable-line react-hooks/exhaustive-deps
+  // the band a reservation is said (and picked) in: the first it shows in
+  const primary = (b: Reservation) => bands.find((band) => band.cap <= 0 || band.pick(b) > 0)?.key ?? "cpu";
+  const [hot, setHot] = useState<string | null>(null);
+  const [hoverT, setHoverT] = useState<number | null>(null);
+  const booked = bookedAt(blocks, hoverT ?? now, cap);
+  const num = (n: number) => String(Math.round(n * 10) / 10);
   return (
     <div data-row={index} className="flex items-stretch border-b border-line last:border-0">
       <div className="sticky left-0 z-10 w-28 shrink-0 border-r border-line bg-surface px-2 py-1.5 sm:w-52" title={node.name}>
@@ -349,6 +368,12 @@ function Row({
           {node.name}
         </div>
         <div className="truncate text-[11px] text-muted">{node.gpuTotal > 0 ? `${node.gpuModel ?? "GPU"} ×${node.gpuTotal}` : `${Math.round(node.cpu.allocatable)} 核`}</div>
+        {/* what is reserved at now, or at the time under the pointer */}
+        <div className="mono text-[10px] leading-tight text-faint">
+          {bands.map((band) => (
+            <div key={band.key}>{`${band.label} ${num(band.key === "gpu" ? booked.gpu : booked.cpu)}/${num(band.cap)}`}</div>
+          ))}
+        </div>
       </div>
       <div
         data-track
@@ -356,22 +381,58 @@ function Row({
         aria-label={`${node.name} 的预约`}
         // touch: the browser pans (sideways through the days, down the page); a tap reserves
         className={`relative cursor-crosshair touch-pan-x touch-pan-y select-none ${trackW > 0 ? "shrink-0" : "min-w-0 flex-1"}`}
-        style={{ height: 8 + lanes * laneH + (lanes - 1) * 4, ...(trackW > 0 ? { width: trackW } : {}) }}
+        style={{ height: 8 + bands.reduce((h, band) => h + band.h, 0) + (bands.length - 1) * 2, ...(trackW > 0 ? { width: trackW } : {}) }}
+        onMouseMove={(e) => {
+          const r = e.currentTarget.getBoundingClientRect();
+          if (r.width > 0) setHoverT(from + ((e.clientX - r.left) / r.width) * (to - from));
+        }}
+        onMouseLeave={() => setHoverT(null)}
       >
         {/* past time is not reservable */}
         <div className="pointer-events-none absolute inset-y-0 left-0 bg-sunk/70" style={{ width: pct(now) }} />
         {Array.from({ length: Math.round((to - from) / DAY) - 1 }, (_, i) => (
           <div key={i} className="pointer-events-none absolute inset-y-0 w-px bg-line" style={{ left: pct(from + (i + 1) * DAY) }} />
         ))}
-        {blocks.map((b) => {
-          const cls = b.mine ? "border-accent bg-accent-soft text-accent" : "border-line-strong bg-sunk text-muted";
-          const text = `${b.mine ? "我" : b.user} · ${fmtClock(b.start)}–${fmtClock(b.end)}${b.purpose ? ` · ${b.purpose}` : ""}`;
-          const style = { left: pct(Date.parse(b.start)), width: `calc(${pct(Date.parse(b.end))} - ${pct(Date.parse(b.start))})`, minWidth: 16, top: 4 + (lane.get(b.id) ?? 0) * (laneH + 4), height: laneH, lineHeight: `${laneH - 2}px` };
-          const title = `${b.user}：${fmtTime(b.start)} – ${fmtTime(b.end)}（${phaseLabel[b.phase]}）${b.purpose ? `\n${b.purpose}` : ""}`;
+        {bands.map((band, bi) => {
+          const top = 4 + bands.slice(0, bi).reduce((h, x) => h + x.h + 2, 0);
           return (
-            <button key={b.id} type="button" title={title} onClick={() => onPick(b)} style={style} className={`absolute overflow-hidden rounded border px-1 text-left text-[11px] whitespace-nowrap hover:brightness-95 ${cls}`}>
-              {text}
-            </button>
+            <div key={band.key} data-band={band.key} className="pointer-events-none absolute inset-x-0 border-y border-line/40" style={{ top, height: band.h }}>
+              {blocks.map((b) => {
+                const units = band.pick(b);
+                const at = band.stack?.get(b.id);
+                // a machine whose capacity is not known: every one fills the band
+                const [y0, y1, over] = band.cap > 0 && at ? [at.y0 / band.cap, at.y1 / band.cap, at.over] : [0, 1, false];
+                if (band.cap > 0 && !(units > 0)) return null;
+                const h = Math.max(2, (y1 - y0) * band.h);
+                const bad = over || b.overbooked;
+                const cls = `${b.mine ? "border-accent bg-accent-soft text-accent" : "border-line-strong bg-sunk text-muted"} ${bad ? "border-fail" : ""} ${hot === b.id ? "ring-2 ring-accent" : ""}`;
+                const style = {
+                  left: pct(Date.parse(b.start)),
+                  width: `calc(${pct(Date.parse(b.end))} - ${pct(Date.parse(b.start))})`,
+                  minWidth: 16,
+                  bottom: y0 * band.h,
+                  height: h,
+                };
+                const title = `${b.user}：${fmtTime(b.start)} – ${fmtTime(b.end)}（${phaseLabel[b.phase]}）· ${fmtAmount(b)}${bad ? " · 超出机器容量" : ""}${b.purpose ? `\n${b.purpose}` : ""}`;
+                const hover = { onMouseEnter: () => setHot(b.id), onMouseLeave: () => setHot(null) };
+                const common = { "data-res": b.id, "data-hot": hot === b.id ? "true" : undefined, title, style, ...hover };
+                if (primary(b) !== band.key)
+                  return <div key={b.id} aria-hidden {...common} onClick={() => onPick(b)} className={`pointer-events-auto absolute cursor-pointer overflow-hidden rounded border ${cls}`} />;
+                const text = `${b.mine ? "我" : b.user} · ${fmtClock(b.start)}–${fmtClock(b.end)}${b.purpose ? ` · ${b.purpose}` : ""}`;
+                return (
+                  <button
+                    key={b.id}
+                    type="button"
+                    aria-label={text}
+                    {...common}
+                    onClick={() => onPick(b)}
+                    className={`pointer-events-auto absolute overflow-hidden rounded border px-1 text-left text-[11px] leading-[14px] whitespace-nowrap hover:brightness-95 ${cls}`}
+                  >
+                    {h >= 14 ? text : null}
+                  </button>
+                );
+              })}
+            </div>
           );
         })}
         {now > from && now < to && <div className="pointer-events-none absolute inset-y-0 w-px bg-fail" style={{ left: pct(now) }} aria-hidden />}
@@ -585,7 +646,7 @@ export function ReservationsPage() {
                 const target = e.target as HTMLElement;
                 const track = target.closest<HTMLElement>("[data-track]");
                 const row = target.closest<HTMLElement>("[data-row]");
-                if (target.closest("button") || !track || !row) return;
+                if (target.closest("button, [data-res]") || !track || !row) return;
                 if (e.pointerType === "touch" || e.pointerType === "pen") {
                   // the browser pans on a swipe (finger or pen); a tap (no move) reserves there
                   tap.current = { x: e.clientX, y: e.clientY, track, row: Number(row.dataset.row) };
