@@ -169,3 +169,39 @@ func TestReservePurpose(t *testing.T) {
 		t.Fatalf("reserve list:\n%s", out)
 	}
 }
+
+// reserve add and change take --gpus / --cpus (change also --whole);
+// reserve list says what each holds.
+func TestReserveAmounts(t *testing.T) {
+	f := newFakeAPI(t)
+	last := func() string {
+		if len(f.calls) == 0 {
+			return "(no call)"
+		}
+		return f.calls[len(f.calls)-1]
+	}
+	f.routes["GET /api/reservations/rules"] = map[string]any{"granularitySeconds": 1800, "timezone": "Asia/Shanghai"}
+	f.routes["POST /api/reservations"] = map[string]any{"id": "r1", "node": "g1", "start": "2026-11-12T01:00:00Z", "end": "2026-11-12T05:00:00Z", "gpu": 4, "cpu": 96}
+	if code, out, _ := f.runAs("reserve add g1 --start 2026-11-12T09:00 --for 4h --gpus 4", "", false); code != 0 ||
+		last() != `POST /api/reservations {"end":"2026-11-12T05:00:00Z","gpu":4,"node":"g1","start":"2026-11-12T01:00:00Z"}` {
+		t.Fatalf("reserve add --gpus: %d %q %s", code, out, last())
+	}
+	f.routes["PATCH /api/reservations/r1"] = map[string]any{"id": "r1", "node": "g1", "start": "2026-11-12T01:00:00Z", "end": "2026-11-12T05:00:00Z"}
+	if code, out, _ := f.runAs("reserve change r1 --whole", "", false); code != 0 || last() != `PATCH /api/reservations/r1 {"whole":true}` {
+		t.Fatalf("reserve change --whole: %d %q %s", code, out, last())
+	}
+	if code, out, _ := f.runAs("reserve change r1 --gpus 2 --cpus 48", "", false); code != 0 || last() != `PATCH /api/reservations/r1 {"cpu":48,"gpu":2}` {
+		t.Fatalf("reserve change --gpus --cpus: %d %q %s", code, out, last())
+	}
+	calls := len(f.calls)
+	if code, _, _ := f.runAs("reserve add g1 --start 2026-11-12T09:00 --for 4h --gpus x", "", false); code == 0 || len(f.calls) != calls { // refused before any call
+		t.Fatalf("--gpus x: %d, calls %v", code, f.calls[calls:])
+	}
+	f.routes["GET /api/reservations?from=2026-11-10T12%3A00%3A00Z&to=2026-11-25T12%3A00%3A00Z"] = map[string]any{"items": []any{
+		map[string]any{"id": "r1", "node": "g1", "user": "alice", "start": "2026-11-12T01:00:00Z", "end": "2026-11-12T05:00:00Z", "phase": "Upcoming", "mine": true},
+		map[string]any{"id": "r2", "node": "g1", "user": "bob", "start": "2026-11-12T05:00:00Z", "end": "2026-11-12T06:00:00Z", "phase": "Upcoming", "gpu": 4, "cpu": 96},
+	}}
+	if _, out, _ := f.runAs("reserve list", "", false); !strings.Contains(out, "AMOUNT") || !strings.Contains(out, "whole") || !strings.Contains(out, "4 GPU · 96 CPU") {
+		t.Fatalf("reserve list:\n%s", out)
+	}
+}

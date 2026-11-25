@@ -15,30 +15,36 @@ import (
 	"time"
 )
 
-// Node reservations: one user's permit to use a node for a period (the
-// console's 节点预约), where the access rules ask for one. Not exclusive;
-// they may overlap. Reservations are a cluster's, like its nodes.
+// Node reservations: one user's share of a node for a period (the
+// console's 节点预约) — some of its GPUs and cores, or all of it —
+// guaranteed: a node's reservations never add up to more than it has. It
+// is also the permit the access rules ask of some users. Reservations
+// are a cluster's, like its nodes.
 
 const reserveLong = `reserve [list]             reservations from now on (--days N ahead, default 14)
 reserve rules              the steps, the longest period and how far ahead one may reserve
-reserve add <node> --start T (--end T | --for D) [--purpose P]
-                           reserve a reservable node you may use, for yourself
-reserve change <id> [--start T] [--end T] [--purpose P]
+reserve add <node> --start T (--end T | --for D) [--gpus N] [--cpus N] [--purpose P]
+                           reserve a reservable node you may use, for yourself:
+                           the whole node, or --gpus N cards (with their share
+                           of the cores unless --cpus says) / --cpus N cores
+reserve change <id> [--start T] [--end T] [--gpus N] [--cpus N | --whole] [--purpose P]
 reserve cancel <id>
 
 Times: 2026-11-14T09:00 or 09:00 (today) in the console's time zone (reserve
 rules), an RFC 3339 time, now, or +2h / +30m from now. --for 4h instead of
 --end. Periods are in whole steps of the rules' granularity. --purpose says
-what it is for (optional, one line, at most 200 characters; "" clears it).`
+what it is for (optional, one line, at most 200 characters; "" clears it).
+A reservation is refused when the node has not that much free in that time;
+the refusal says how much is, and from when what you asked would be.`
 
 func reserveCommands() []*command {
 	return []*command{
 		{name: "reserve", aliases: []string{"reservations"},
-			args:  "[list [--days N] | rules | add <node> --start T (--end T | --for D) [--purpose P] | change <id> [--start T] [--end T] [--purpose P] | cancel <id>] [--cluster C]",
+			args:  "[list [--days N] | rules | add <node> --start T (--end T | --for D) [--gpus N] [--cpus N] [--purpose P] | change <id> [--start T] [--end T] [--gpus N] [--cpus N | --whole] [--purpose P] | cancel <id>] [--cluster C]",
 			brief: "[list|rules|add|change|cancel …]",
 			short: "node reservations: list, the rules, reserve a node, change or cancel one",
 			long:  reserveLong,
-			vals:  []string{"start", "end", "for", "days", "purpose"}, run: runReserve},
+			vals:  []string{"start", "end", "for", "days", "purpose", "gpus", "cpus"}, bools: []string{"whole"}, run: runReserve},
 	}
 }
 
@@ -53,6 +59,52 @@ type reservation struct {
 	Mine        bool      `json:"mine"`
 	CancelledBy string    `json:"cancelledBy"`
 	Purpose     string    `json:"purpose"`
+	// GPU and CPU: the cards and cores it holds; absent, the whole machine
+	GPU *int     `json:"gpu"`
+	CPU *float64 `json:"cpu"`
+}
+
+// amountOf: what a reservation holds, as reserve list says it.
+func amountOf(v reservation) string {
+	if v.GPU == nil && v.CPU == nil {
+		return "whole"
+	}
+	cpu := ""
+	if v.CPU != nil {
+		cpu = strconv.FormatFloat(*v.CPU, 'f', -1, 64) + " CPU"
+	}
+	if v.GPU != nil && *v.GPU > 0 {
+		return strings.TrimSuffix(fmt.Sprintf("%d GPU · %s", *v.GPU, cpu), " · ")
+	}
+	return cpu
+}
+
+// amounts reads --gpus and --cpus (and, for a change, --whole) into body.
+func amounts(a *parsed, body map[string]any, change bool) error {
+	if s, ok := a.val["gpus"]; ok {
+		n, err := strconv.Atoi(s)
+		if err != nil || n < 0 {
+			return errors.New("--gpus takes a number of cards")
+		}
+		body["gpu"] = n
+	}
+	if s, ok := a.val["cpus"]; ok {
+		f, err := strconv.ParseFloat(s, 64)
+		if err != nil || !(f > 0) {
+			return errors.New("--cpus takes a number of cores")
+		}
+		body["cpu"] = f
+	}
+	if a.has["whole"] {
+		switch _, g := body["gpu"]; {
+		case !change:
+			return errors.New("a new reservation is the whole node unless --gpus or --cpus say otherwise: leave out --whole")
+		case g || body["cpu"] != nil:
+			return errors.New("--whole, or --gpus / --cpus: not both")
+		}
+		body["whole"] = true
+	}
+	return nil
 }
 
 type reserveRules struct {
@@ -103,6 +155,10 @@ func runReserve(e *Env, a *parsed) int {
 		if len(rest) != 1 {
 			return usage(e, c, "reserve add takes one node")
 		}
+		share := map[string]any{}
+		if err := amounts(a, share, false); err != nil {
+			return usage(e, c, err.Error())
+		}
 		cluster, node := splitRef(rest[0])
 		r, _, err := rules(e, cluster)
 		if err != nil {
@@ -114,6 +170,9 @@ func runReserve(e *Env, a *parsed) int {
 		}
 		path := scoped(e, cluster, "/api/reservations")
 		body := map[string]any{"node": node, "start": start.UTC().Format(time.RFC3339), "end": end.UTC().Format(time.RFC3339)}
+		for k, v := range share {
+			body[k] = v
+		}
 		if p, ok := a.val["purpose"]; ok {
 			body["purpose"] = p
 		}
@@ -150,8 +209,11 @@ func runReserve(e *Env, a *parsed) int {
 		if p, ok := a.val["purpose"]; ok {
 			body["purpose"] = p
 		}
+		if err := amounts(a, body, true); err != nil {
+			return usage(e, c, err.Error())
+		}
 		if len(body) == 0 {
-			return usage(e, c, "give --start, --end and/or --purpose")
+			return usage(e, c, "give --start, --end, --gpus, --cpus, --whole and/or --purpose")
 		}
 		var v reservation
 		raw, err := call(e, "PATCH", scoped(e, cluster, "/api/reservations/"+url.PathEscape(id)), body, &v)
@@ -216,14 +278,14 @@ func reserveList(e *Env, a *parsed) int {
 		loc = r.loc()
 	}
 	sort.Slice(items, func(i, j int) bool { return items[i].Start.Before(items[j].Start) })
-	table(e, "ID\tNODE\tUSER\tSTART\tEND\tPHASE\tPURPOSE", func(w io.Writer) {
+	table(e, "ID\tNODE\tUSER\tSTART\tEND\tAMOUNT\tPHASE\tPURPOSE", func(w io.Writer) {
 		for _, v := range items {
 			user := v.User
 			if v.Mine {
 				user += " (you)"
 			}
-			fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\t%s\n", joinRef(v.Cluster, v.ID), joinRef(v.Cluster, v.Node), user,
-				v.Start.In(loc).Format("01-02 15:04"), v.End.In(loc).Format("01-02 15:04"), v.Phase, v.Purpose)
+			fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n", joinRef(v.Cluster, v.ID), joinRef(v.Cluster, v.Node), user,
+				v.Start.In(loc).Format("01-02 15:04"), v.End.In(loc).Format("01-02 15:04"), amountOf(v), v.Phase, v.Purpose)
 		}
 	})
 	return ExitOK
