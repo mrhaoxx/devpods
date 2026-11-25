@@ -53,11 +53,11 @@ describe("ReservationsPage", () => {
     expect(input(dialog, "开始").value).toBe("2026-11-12T10:10");
     expect(input(dialog, "结束").value).toBe("2026-11-12T11:10");
     // not on a ten-minute mark: rounded out, said, not refused
-    fireEvent.change(input(dialog, "结束"), { target: { value: "2026-11-12T12:25" } }); // into bob's: allowed
+    fireEvent.change(input(dialog, "结束"), { target: { value: "2026-11-12T11:55" } }); // up to bob's (his holds the whole machine)
     expect(dialog.queryByRole("alert")).toBeNull();
-    expect(dialog.getByText(/实际预约：11\/12 四 10:10 – 11\/12 四 12:30/)).toBeTruthy();
+    expect(dialog.getByText(/实际预约：11\/12 四 10:10 – 11\/12 四 12:00/)).toBeTruthy();
     fireEvent.click(dialog.getByRole("button", { name: "预约" }));
-    await waitFor(() => expect(calls.find((c) => c.method === "POST")?.body).toBe('{"node":"g206","start":"2026-11-12T02:10:00.000Z","end":"2026-11-12T04:30:00.000Z"}'));
+    await waitFor(() => expect(calls.find((c) => c.method === "POST")?.body).toBe('{"node":"g206","start":"2026-11-12T02:10:00.000Z","end":"2026-11-12T04:00:00.000Z"}'));
   });
 
   it("a drag across rows picks those machines and that time", async () => {
@@ -527,6 +527,77 @@ describe("ReservationsPage", () => {
     const z1 = await screen.findByRole("group", { name: "z1 的预约" });
     await within(z1).findByRole("button", { name: /bob/ });
     expect((z1.parentElement as HTMLElement).innerHTML).not.toMatch(/NaN|Infinity/);
+  });
+
+  it("part of a machine: 4 卡 takes its share of the cores, and that is what is sent", async () => {
+    at();
+    const calls = stubFetch({
+      "/api/reservations/rules": rules,
+      "/api/nodes": { items: [node("g206", { cpu: { allocatable: 192, allocated: 0 } })] },
+      "/api/reservations": { items: [] },
+      "POST /api/reservations": block({ id: "new", gpu: 4, cpu: 96 }),
+    });
+    renderWithProviders(<ReservationsPage />, { me: me() });
+    fireEvent.click(await screen.findByRole("button", { name: "预约节点" }));
+    const dialog = within(screen.getByRole("dialog"));
+    const amounts = within(dialog.getByRole("radiogroup", { name: "要多少" }));
+    expect(amounts.getAllByRole("radio").map((r) => r.textContent)).toEqual(["整台", "4 卡", "2 卡", "1 卡"]);
+    expect(amounts.getByRole("radio", { name: "整台" }).getAttribute("aria-checked")).toBe("true"); // the time is free
+    expect(dialog.getByText(/这段时间 g206 还能约 8 卡 · 192 核/)).toBeTruthy();
+    fireEvent.click(amounts.getByRole("radio", { name: "4 卡" }));
+    expect(dialog.getByText("→ 96 核")).toBeTruthy();
+    fireEvent.click(dialog.getByRole("button", { name: "预约" }));
+    await waitFor(() => expect(JSON.parse(calls.find((c) => c.method === "POST")?.body ?? "{}")).toMatchObject({ node: "g206", gpu: 4, cpu: 96 }));
+  });
+
+  it("with no room in that time it says so, and does not send", async () => {
+    at();
+    stubFetch({
+      "/api/reservations/rules": rules,
+      "/api/nodes": { items: [node("g206")] },
+      "/api/reservations": { items: [block({ id: "w", user: "bob", mine: false, start: "2026-11-12T02:00:00Z", end: "2026-11-12T04:00:00Z" })] },
+    });
+    renderWithProviders(<ReservationsPage />, { me: me() });
+    fireEvent.click(await screen.findByRole("button", { name: "预约节点" }));
+    const dialog = within(screen.getByRole("dialog"));
+    expect(dialog.getByText(/g206 这段时间已约满/)).toBeTruthy();
+    expect((dialog.getByRole("button", { name: "预约" }) as HTMLButtonElement).disabled).toBe(true);
+  });
+
+  it("the console's refusal says what is free and from when; a start within the notice says others are told first", async () => {
+    at();
+    stubFetch({
+      "/api/reservations/rules": rules,
+      "/api/nodes": { items: [node("g206")] },
+      "/api/reservations": { items: [] },
+      "POST /api/reservations": new Response(JSON.stringify({ code: "NO_ROOM", message: "no room", detail: { free: { gpu: 2, cpu: 16 }, earliest: "2026-11-12T06:00:00Z" } }), { status: 409 }),
+    });
+    renderWithProviders(<ReservationsPage />, { me: me() });
+    fireEvent.click(await screen.findByRole("button", { name: "预约节点" }));
+    const dialog = within(screen.getByRole("dialog"));
+    expect(dialog.getByText(/最晚 10:40 前腾出/)).toBeTruthy(); // from now: the notice is 30 minutes
+    fireEvent.click(dialog.getByRole("button", { name: "预约" }));
+    expect(await dialog.findByText(/g206：这段时间最多还能约 2 卡 · 16 核；最早 11-12 14:00 起有空/)).toBeTruthy();
+  });
+
+  it("an edit sends a new amount only when it changed", async () => {
+    at();
+    const calls = stubFetch({
+      "/api/reservations/rules": rules,
+      "/api/nodes": { items: [node("g206", { cpu: { allocatable: 192, allocated: 0 } })] },
+      "/api/reservations": { items: [block({ id: "up", gpu: 4, cpu: 96, canManage: true })] },
+      "PATCH /api/reservations/up": block({ id: "up", gpu: 2, cpu: 48 }),
+    });
+    renderWithProviders(<ReservationsPage />, { me: me() });
+    const row = (await screen.findByText("即将开始")).closest("tr") as HTMLElement;
+    fireEvent.keyDown(within(row).getByRole("button", { name: /操作$/ }), { key: "Enter" });
+    fireEvent.click(within(await screen.findByRole("menu")).getByRole("menuitem", { name: "修改" }));
+    const dialog = within(screen.getByRole("dialog"));
+    const amounts = within(dialog.getByRole("radiogroup", { name: "要多少" }));
+    expect(amounts.getByRole("radio", { name: "4 卡" }).getAttribute("aria-checked")).toBe("true");
+    fireEvent.click(amounts.getByRole("radio", { name: "2 卡" }));
+    fireEvent.click(dialog.getByRole("button", { name: "保存" }));
+    await waitFor(() => expect(calls.find((c) => c.method === "PATCH")?.body).toBe('{"gpu":2,"cpu":48}'));
   });
 
   it("a short reservation is still wide enough to tap", async () => {

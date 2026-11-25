@@ -35,9 +35,13 @@ import { Panel } from "../../design/Panel";
 import { useNow } from "../../lib/useNow";
 import { LoadMore } from "../audit/common";
 import {
+  type Amount,
   amountOf,
   bookedAt,
   capOf,
+  cpuShare,
+  freeIn,
+  presets,
   dayStart,
   fmtAmount,
   fmtClock,
@@ -62,10 +66,24 @@ function apiMessage(e: unknown): string {
   if (e instanceof ApiFailure) {
     if (e.code === "NOT_RESERVABLE") return "这台机器没有开放预约。";
     if (e.code === "ACL_DENIED") return "你没有使用这台机器的权限。";
+    if (e.code === "NO_ROOM") {
+      const d = e.body.detail as { free?: Amount; earliest?: string } | undefined;
+      if (d?.free) {
+        const what = d.free.gpu > 0 ? `${d.free.gpu} 卡 · ${num(d.free.cpu)} 核` : d.free.cpu > 0 ? `${num(d.free.cpu)} 核` : "";
+        return `${what ? `这段时间最多还能约 ${what}` : "这段时间已约满"}${d.earliest ? `；最早 ${fmtTime(d.earliest)} 起有空` : ""}`;
+      }
+    }
     return e.body.message;
   }
   return String(e);
 }
+
+/** num: a count of cores as said — at most one decimal. */
+const num = (n: number) => String(Math.round(n * 10) / 10);
+
+/** Ask: what of a machine a reservation asks for — cards and cores; neither: all of it. */
+type Ask = { gpu?: number; cpu?: number };
+const wholeAsk = (a: Ask) => a.gpu == null && a.cpu == null;
 
 /** node: the node's key, <cluster>/<name> in a console of several clusters */
 type Draft = { node: string; start: number; end: number; edit?: Reservation; nodes?: string[] };
@@ -125,7 +143,24 @@ function mineColumns(user: () => string, actions: (b: Reservation) => React.Reac
 }
 
 /** The form: new reservation, move (not started) or move the end of one that has started. */
-function ReserveDialog({ draft, nodes, rules, now, forOthers, onClose }: { draft: Draft; nodes: NodeChoice[]; rules: ReservationRules; now: number; forOthers: boolean; onClose: () => void }) {
+function ReserveDialog({
+  draft,
+  nodes,
+  blocks,
+  rules,
+  now,
+  forOthers,
+  onClose,
+}: {
+  draft: Draft;
+  nodes: NodeChoice[];
+  /** the reservations on the timeline: what the form says is free from */
+  blocks: Reservation[];
+  rules: ReservationRules;
+  now: number;
+  forOthers: boolean;
+  onClose: () => void;
+}) {
   const qc = useQueryClient();
   const edit = draft.edit;
   const active = edit?.phase === "Active";
@@ -160,6 +195,44 @@ function ReserveDialog({ draft, nodes, rules, now, forOthers, onClose }: { draft
           : null
     : periodError(s, e, rules, now);
   const period = { node: ref.name, start: new Date(s).toISOString(), end: new Date(e).toISOString() };
+  // how much of the machine: the whole of it when that time is free, else
+  // the most offered that fits (an edit: what it holds)
+  const blocksOf = (k: string) => blocks.filter((b) => nodeKey(b) === k);
+  const nodeOf = (k: string) => nodes.find((n) => keyOf(n) === k);
+  const first = nodeOf(edit ? node : (picked[0] ?? draft.node)) ?? nodeOf(draft.node);
+  const cap: Amount = first ? capOf(first) : { gpu: 0, cpu: 0 };
+  const offered = presets(cap);
+  const [ask, setAsk] = useState<Ask>(() => {
+    if (edit) return { gpu: edit.gpu, cpu: edit.cpu };
+    const k = draft.nodes?.[0] ?? draft.node;
+    const n = nodeOf(k);
+    if (!n) return {};
+    const c = capOf(n);
+    const free = freeIn(blocksOf(k), Math.max(draft.start, now), draft.end, c);
+    const p = presets(c).find((p) => (wholeAsk(p) ? free.gpu === c.gpu && free.cpu === c.cpu : (p.gpu ?? 0) <= free.gpu && (p.cpu ?? 0) <= free.cpu));
+    return p ? { gpu: p.gpu, cpu: p.cpu } : {};
+  });
+  // an edit whose cores are not its cards' share: they were set by hand
+  const [ownCpu, setOwnCpu] = useState(() => !!edit && cap.gpu > 0 && edit.gpu != null && edit.cpu != null && edit.cpu !== cpuShare(edit.gpu, cap));
+  // what is typed as another amount (empty while a preset is chosen)
+  const [custom, setCustom] = useState(() =>
+    edit && !wholeAsk(ask) && !presets(cap).some((p) => (cap.gpu > 0 ? p.gpu === edit.gpu : p.cpu === edit.cpu)) ? String((cap.gpu > 0 ? edit.gpu : edit.cpu) ?? "") : "",
+  );
+  const pick = (a: Ask) => (setAsk(a), touch());
+  // what is free on each machine in that time, beside the others (not the one being changed)
+  const rooms = Number.isNaN(e) || problem
+    ? []
+    : (edit ? [node] : picked).flatMap((k) => {
+        const n = nodeOf(k);
+        if (!n) return [];
+        const c = capOf(n);
+        const free = freeIn(blocksOf(k), Math.max(s, now), e, c, edit?.id);
+        const ok = wholeAsk(ask) ? free.gpu === c.gpu && free.cpu === c.cpu : (ask.gpu ?? 0) <= free.gpu && (ask.cpu ?? 0) <= free.cpu;
+        const what = c.gpu > 0 ? `${free.gpu} 卡 · ${num(free.cpu)} 核` : `${num(free.cpu)} 核`;
+        return [{ k, ok, what, full: free.gpu <= 0 && free.cpu <= 0 }];
+      });
+  const short = rooms.some((r) => !r.ok);
+  const noticeMs = rules.clearNoticeSeconds * 1000;
   const done = () => {
     void qc.invalidateQueries({ queryKey: ["reservations"] });
     void qc.invalidateQueries({ queryKey: ["node-choices"] });
@@ -173,15 +246,24 @@ function ReserveDialog({ draft, nodes, rules, now, forOthers, onClose }: { draft
     mutationFn: async () => {
       if (edit) {
         // only what was changed
-        const body: { start?: string; end?: string; purpose?: string } = {};
+        const body: { start?: string; end?: string; purpose?: string; gpu?: number; cpu?: number; whole?: boolean } = {};
         if (!active && s !== Date.parse(edit.start)) body.start = period.start;
         if (e !== Date.parse(edit.end)) body.end = period.end;
         if (purpose.trim() !== (edit.purpose ?? "")) body.purpose = purpose.trim();
+        if ((ask.gpu ?? null) !== (edit.gpu ?? null) || (ask.cpu ?? null) !== (edit.cpu ?? null)) {
+          if (wholeAsk(ask)) body.whole = true;
+          else Object.assign(body, { gpu: ask.gpu ?? 0, ...(ask.cpu != null ? { cpu: ask.cpu } : {}) });
+        }
         if (Object.keys(body).length > 0) await patchReservation(edit, body);
         return { made: 1, failed: [] };
       }
       const keys = picked;
-      const extra = { ...(purpose.trim() ? { purpose: purpose.trim() } : {}), ...(forOthers && forUser.trim() ? { user: forUser.trim() } : {}) };
+      const extra = {
+        ...(purpose.trim() ? { purpose: purpose.trim() } : {}),
+        ...(forOthers && forUser.trim() ? { user: forUser.trim() } : {}),
+        ...(ask.gpu != null ? { gpu: ask.gpu } : {}),
+        ...(ask.cpu != null ? { cpu: ask.cpu } : {}),
+      };
       const results = await Promise.allSettled(keys.map((k) => createReservation(refOfKey(k).cluster, { ...period, ...extra, node: refOfKey(k).name })));
       const failed = results.flatMap((r, i) => (r.status === "rejected" ? [{ key: keys[i], why: apiMessage(r.reason) }] : []));
       return { made: keys.length - failed.length, failed };
@@ -199,13 +281,13 @@ function ReserveDialog({ draft, nodes, rules, now, forOthers, onClose }: { draft
     <Dialog.Root open onOpenChange={(o) => !o && onClose()}>
       <Dialog.Portal>
         <Dialog.Overlay className="fixed inset-0 z-40 bg-black/30" />
-        <Dialog.Content aria-describedby={undefined} className="fixed left-1/2 top-1/4 z-50 w-[min(92vw,440px)] -translate-x-1/2 space-y-3 rounded-lg border border-line bg-surface p-4 shadow-xl">
+        <Dialog.Content aria-describedby={undefined} className="fixed left-1/2 top-4 z-50 max-h-[calc(100dvh-2rem)] w-[min(92vw,440px)] -translate-x-1/2 space-y-3 overflow-y-auto rounded-lg border border-line bg-surface p-4 shadow-xl sm:top-[10vh] sm:max-h-[80vh]">
           <Dialog.Title className="text-sm font-semibold">{edit ? "修改预约" : "预约节点"}</Dialog.Title>
           <form
             className="space-y-3"
             onSubmit={(ev) => {
               ev.preventDefault();
-              if (problem) return;
+              if (problem || short) return;
               save.mutate();
             }}
           >
@@ -261,6 +343,68 @@ function ReserveDialog({ draft, nodes, rules, now, forOthers, onClose }: { draft
                 <Input aria-label="结束" type="datetime-local" value={end} onChange={(ev) => (setEnd(ev.target.value), touch())} />
               </Field>
             </div>
+            <div className="space-y-1">
+              <div className="text-xs font-medium">要多少</div>
+              <div role="radiogroup" aria-label="要多少" className="flex flex-wrap items-center gap-1.5 text-xs">
+                {offered.map((p) => {
+                  const on = (p.gpu ?? null) === (ask.gpu ?? null) && (p.gpu != null || (p.cpu ?? null) === (ask.cpu ?? null));
+                  return (
+                    <button
+                      key={p.label}
+                      type="button"
+                      role="radio"
+                      aria-checked={on}
+                      onClick={() => (setOwnCpu(false), setCustom(""), pick({ gpu: p.gpu, cpu: p.cpu }))}
+                      className={`rounded border px-2 py-0.5 ${on ? "border-accent bg-accent-soft text-accent" : "border-line hover:bg-sunk"}`}
+                    >
+                      {p.label}
+                    </button>
+                  );
+                })}
+                <Input
+                  aria-label={cap.gpu > 0 ? "自定义卡数" : "自定义核数"}
+                  type="number"
+                  min={1}
+                  max={cap.gpu > 0 ? cap.gpu : cap.cpu || undefined}
+                  placeholder={cap.gpu > 0 ? "其他卡数" : "其他核数"}
+                  className="!w-24"
+                  value={custom}
+                  onChange={(ev) => {
+                    setCustom(ev.target.value);
+                    const n = Number(ev.target.value);
+                    if (!Number.isInteger(n) || n < 1) return;
+                    pick(cap.gpu > 0 ? { gpu: n, cpu: ownCpu && ask.cpu != null ? ask.cpu : cpuShare(n, cap) } : { cpu: n });
+                  }}
+                />
+                {cap.gpu > 0 && !wholeAsk(ask) && (
+                  <>
+                    {ownCpu ? (
+                      <Input
+                        aria-label="CPU 核数"
+                        type="number"
+                        min={1}
+                        className="!w-20"
+                        value={String(ask.cpu ?? "")}
+                        onChange={(ev) => {
+                          const n = Number(ev.target.value);
+                          if (n > 0) pick({ gpu: ask.gpu, cpu: n });
+                        }}
+                      />
+                    ) : (
+                      <span className="text-muted">→ {ask.cpu} 核</span>
+                    )}
+                    <button type="button" className="text-accent hover:underline" onClick={() => setOwnCpu((o) => !o)}>
+                      {ownCpu ? "按卡数配 CPU" : "调整 CPU"}
+                    </button>
+                  </>
+                )}
+              </div>
+              {rooms.map((r) => (
+                <p key={r.k} className={`text-[11px] ${r.ok ? "text-run" : "text-fail"}`}>
+                  {r.ok ? `✓ 这段时间 ${nameOf(r.k)} 还能约 ${r.what}` : r.full ? `✗ ${nameOf(r.k)} 这段时间已约满` : `✗ ${nameOf(r.k)} 这段时间最多还能约 ${r.what}`}
+                </p>
+              ))}
+            </div>
             <Field label="用途（选填）">
               <Input aria-label="用途" value={purpose} maxLength={200} placeholder="例如：跑 sglang 基准" onChange={(ev) => (setPurpose(ev.target.value), touch())} />
             </Field>
@@ -291,16 +435,19 @@ function ReserveDialog({ draft, nodes, rules, now, forOthers, onClose }: { draft
                 ))}
               </Notice>
             )}
+            {!edit && !problem && noticeMs > 0 && s < now + noticeMs && (
+              <p className="text-[11px] text-warm">如果机器上有人在用没被预约的部分，他们会先收到通知，最晚 {fmtClock(now + noticeMs)} 前腾出。</p>
+            )}
             {!edit && (
               <p className="text-[11px] text-muted">
-                预约是使用许可，不独占：预约期间你可以在这台机器上运行 DevPod，别人（不需要预约的人、同时段的其他预约人）照样可以用。到期后，你在这台机器上只靠这份预约运行的 DevPod 会被自动休眠。
+                约到的卡和核在预约期间只归你，机器上没被约走的部分别人照样可以用。开始时如果有人占着你约的部分，他们会先收到通知、到时被休眠。到期后，你在这台机器上只靠这份预约运行的 DevPod 会被自动休眠。
               </p>
             )}
             <div className="flex justify-end gap-2">
               <Dialog.Close asChild>
                 <Button type="button">取消</Button>
               </Dialog.Close>
-              <Button type="submit" variant="primary" disabled={!!problem || save.isPending || (!edit && picked.length === 0)}>
+              <Button type="submit" variant="primary" disabled={!!problem || short || save.isPending || (!edit && picked.length === 0)}>
                 {edit ? "保存" : picked.length > 1 ? `预约 ${picked.length} 台` : "预约"}
               </Button>
             </div>
@@ -359,7 +506,6 @@ function Row({
   const [hot, setHot] = useState<string | null>(null);
   const [hoverT, setHoverT] = useState<number | null>(null);
   const booked = bookedAt(blocks, hoverT ?? now, cap);
-  const num = (n: number) => String(Math.round(n * 10) / 10);
   return (
     <div data-row={index} className="flex items-stretch border-b border-line last:border-0">
       <div className="sticky left-0 z-10 w-28 shrink-0 border-r border-line bg-surface px-2 py-1.5 sm:w-52" title={node.name}>
@@ -616,7 +762,7 @@ export function ReservationsPage() {
             </button>
           ))}
         </div>
-        <span className="text-[11px] text-muted">在时间轴上拖动（触屏或手写笔点一下）来预约，左右滑动看更多天。预约是使用许可，不独占，同一时段可以有多份。北京时间。</span>
+        <span className="text-[11px] text-muted">在时间轴上拖动（触屏或手写笔点一下）来预约，左右滑动看更多天。每台机器上面一条是 GPU、下面一条是 CPU：约到的部分在预约期间只归你，可以只约几张卡。北京时间。</span>
         <span className="flex-1" />
         <Button variant="primary" disabled={nodes.length === 0} onClick={() => setDraft({ node: keyOf(nodes[0]), start: first, end: first + Math.max(2 * g, HOUR) })}>
           预约节点
@@ -760,7 +906,7 @@ export function ReservationsPage() {
             : "它们都还没开始，直接取消。")}
       </ConfirmDialog>
       {bulk.toast}
-      {draft && <ReserveDialog key={`${draft.node}-${draft.start}-${draft.edit?.id ?? ""}`} draft={draft} nodes={nodes} rules={rules.data} now={now} forOthers={me.admin || !!me.permissions?.manageReservations} onClose={() => setDraft(null)} />}
+      {draft && <ReserveDialog key={`${draft.node}-${draft.start}-${draft.edit?.id ?? ""}`} draft={draft} nodes={nodes} blocks={live} rules={rules.data} now={now} forOthers={me.admin || !!me.permissions?.manageReservations} onClose={() => setDraft(null)} />}
       {picked && (
         <ReservationDetails
           b={picked}

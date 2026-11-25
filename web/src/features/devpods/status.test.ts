@@ -42,6 +42,14 @@ describe("reservationNotes", () => {
   const rs = (...items: Reservation[]) => ({ items, noticeMs: 30 * 60_000, now: at });
   const labels = (d: DevPod, where: { node?: string }, r?: ReturnType<typeof rs>) => reservationNotes(d, where, r).map((n) => n.label);
 
+  it("tells the owner of a DevPod in a starting reservation's way when it goes; not once it is stopped", () => {
+    const ann = { "devpod.io/clear-at": "2026-11-12T02:40:00Z", "devpod.io/clear-for": "r1" };
+    const n = reservationNotes(dp({ ann, pin: "g1" }), { node: "g1" });
+    expect(n.map((x) => x.label)).toEqual(["将被清场"]);
+    expect(n[0].message).toMatch(/g1 的预约 10:40 起需要这台机器上的资源，届时这个 DevPod 会被自动休眠；休眠后容器内数据丢失/);
+    expect(labels(dp({ ann, running: false, pin: "g1" }), { node: "g1" })).not.toContain("将被清场");
+  });
+
   it("warns the owner that their reservation of the machine is running out, with the loss when it keeps nothing", () => {
     const n = reservationNotes(dp({}), { node: "g1" }, rs(rsv("u", "2026-11-12T02:00:00Z", "2026-11-12T02:30:00Z")));
     expect(n.map((x) => x.label)).toEqual(["预约将到期"]);

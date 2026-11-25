@@ -240,9 +240,26 @@ const server = http.createServer((req, res) => {
         items: nodes.slice(0, 6).map((n) => ({ name: n.name, ready: n.ready, cpu: n.cpu, mem: n.mem, gpuModel: n.gpu.model, gpuTotal: n.gpu.total, gpuUsed: n.gpu.used,
           reservable: true, access: "ok", reservationRequired: false, pending: 0, mine: null, selectable: true })),
       });
+    // a new one on g205 is refused: the machine is full then
+    if (p === "/api/reservations" && req.method === "POST") {
+      let body = "";
+      req.on("data", (c) => (body += c));
+      req.on("end", () => {
+        const r = JSON.parse(body);
+        if (r.node === "g205")
+          return json(res, 409, { code: "NO_ROOM", message: "node g205 has at most 2 GPUs + 32 cores free to reserve in that time", detail: { free: { gpu: 2, cpu: 32 }, earliest: new Date(Date.now() + 6 * 3600e3).toISOString() } });
+        json(res, 201, { id: "new", phase: "Upcoming", user: "alice", mine: true, canManage: true, ...r });
+      });
+      return;
+    }
+    // bob holds g200 whole; carol half of g201
     if (p === "/api/reservations")
-      return json(res, 200, { items: [{ id: "rb", node: "g200", user: "bob", start: new Date(Date.now() + 3600e3).toISOString(), end: new Date(Date.now() + 3 * 3600e3).toISOString(),
-        phase: "Upcoming", mine: false, canManage: false, purpose: "跑基准" }] });
+      return json(res, 200, {
+        items: [
+          { id: "rb", node: "g200", user: "bob", start: new Date(Date.now() + 3600e3).toISOString(), end: new Date(Date.now() + 3 * 3600e3).toISOString(), phase: "Upcoming", mine: false, canManage: false, purpose: "跑基准" },
+          { id: "rc", node: "g201", user: "carol", start: new Date(Date.now() + 3600e3).toISOString(), end: new Date(Date.now() + 3 * 3600e3).toISOString(), phase: "Upcoming", mine: false, canManage: false, gpu: 4, cpu: 64 },
+        ],
+      });
     if (p === "/api/admin/nodes") return json(res, 200, { items: nodes, live: true });
     // stored history for the CPU curves (before the node route: "recent" is no node)
     if (p === "/api/admin/nodes/recent") return json(res, 200, { step: 60, ts: [], items: {} });

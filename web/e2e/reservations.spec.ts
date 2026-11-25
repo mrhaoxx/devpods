@@ -24,6 +24,25 @@ test("reservations: the timeline zooms and scrolls sideways, opens near now, the
   await shot(page, "reservations-14d");
 });
 
+// A reservation of part of a machine is drawn at its share; a refused one
+// says what is free and from when.
+test("reservations: a share is half the GPU band; a refusal says what is free", async ({ page }) => {
+  await page.goto("/reservations");
+  const track = page.getByRole("group", { name: "g201 的预约" });
+  await expect(track).toBeVisible();
+  const band = (await track.locator('[data-band="gpu"]').boundingBox())!;
+  const block = (await track.locator('[data-band="gpu"] [data-res="rc"]').boundingBox())!;
+  expect(Math.abs(block.height - band.height / 2)).toBeLessThan(2);
+  await page.getByRole("button", { name: "预约节点" }).click();
+  const dialog = page.getByRole("dialog");
+  await dialog.getByRole("button", { name: "清空" }).click();
+  await dialog.getByLabel("g205").check();
+  await dialog.getByRole("radio", { name: "4 卡" }).click();
+  await dialog.getByRole("button", { name: "预约" }).click();
+  await expect(dialog).toContainText(/g205：这段时间最多还能约 2 卡 · 32 核；最早 .* 起有空/);
+  await shot(page, "reservations-no-room");
+});
+
 test.describe("on a phone", () => {
   test.use({ hasTouch: true, isMobile: true, viewport: { width: 390, height: 844 } });
 

@@ -34,8 +34,8 @@ const lossWarning = (dp: DevPod) => (dp.spec.persistence ? "" : "；休眠后容
 
 /** reservationNotes: what node reservations mean for a DevPod now — the
  *  owner's reservation of the machine it is on (node: where its Pod is)
- *  running out — and why one was hibernated. Reservations are permits:
- *  other people's keep nobody off, so they are not mentioned. */
+ *  running out, another's that starts and needs what it uses (the
+ *  console marks it), and why one was hibernated. */
 export function reservationNotes(dp: DevPod, where: { node?: string; cluster?: string } = {}, rs?: ReservationsNow): ReservationNote[] {
   const notes: ReservationNote[] = [];
   const owner = dp.spec.owner;
@@ -59,6 +59,15 @@ export function reservationNotes(dp: DevPod, where: { node?: string; cluster?: s
         notes.push({ type: "ReservationEnding", label: "预约将到期", tone: "warm", message: `你对 ${node} 的预约将于 ${fmtClock(end)} 结束；如果这个 DevPod 只能靠预约在这台机器上运行，届时会被自动休眠${lossWarning(dp)}` });
     }
   }
+  // in a starting reservation's way: when it goes (the console's mark)
+  const clearAt = dp.metadata.annotations?.["devpod.io/clear-at"];
+  if (dp.spec.running && clearAt)
+    notes.push({
+      type: "ClearingSoon",
+      label: "将被清场",
+      tone: "warm",
+      message: `${where.node || pinnedNode(dp)} 的预约 ${fmtClock(clearAt)} 起需要这台机器上的资源，届时这个 DevPod 会被自动休眠${lossWarning(dp)}；可以先改到其他机器。`,
+    });
   // the annotation outlives a restart: it only says something while stopped
   const by = dp.metadata.annotations?.["devpod.io/hibernated-by"] ?? "";
   if (!dp.spec.running && by.startsWith("reservation/"))
