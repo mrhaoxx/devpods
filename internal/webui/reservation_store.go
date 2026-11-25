@@ -98,7 +98,13 @@ func (s *Server) reservationHistory(ctx context.Context, nr *devpodv1alpha1.Node
 	row := store.ReservationEventRow{
 		TS: time.Now().UTC(), Cluster: nr.Spec.Cluster, ID: nr.Name, Node: nr.Spec.Node, User: nr.Spec.User,
 		Start: nr.Spec.Start.Time.UTC(), End: nr.Spec.End.Time.UTC(), Event: event, Detail: strings.Join(detail, " "),
-		Purpose: nr.Spec.Purpose,
+		Purpose: nr.Spec.Purpose, GPU: -1, CPU: -1,
+	}
+	if nr.Spec.GPU != nil {
+		row.GPU = *nr.Spec.GPU
+	}
+	if nr.Spec.CPU != nil {
+		row.CPU = float64(nr.Spec.CPU.MilliValue()) / 1000
 	}
 	if nr.Spec.Cancelled != nil {
 		row.CancelledBy = nr.Spec.Cancelled.By

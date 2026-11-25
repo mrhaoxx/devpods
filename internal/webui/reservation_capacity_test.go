@@ -94,23 +94,32 @@ func TestAdmitted(t *testing.T) {
 	b := rsvOf("b", "bob", at(10, 30), at(11, 30), -1, "")
 	b.CreationTimestamp = metav1.NewTime(at(9, 1))
 	rs := []*devpodv1alpha1.NodeReservation{b, a}
-	if !admitted(rs, cap8, a) || admitted(rs, cap8, b) {
-		t.Errorf("the earlier keeps it: a %v b %v", admitted(rs, cap8, a), admitted(rs, cap8, b))
+	if !admitted(rs, cap8, a, at(9, 0)) || admitted(rs, cap8, b, at(9, 0)) {
+		t.Errorf("the earlier keeps it: a %v b %v", admitted(rs, cap8, a, at(9, 0)), admitted(rs, cap8, b, at(9, 0)))
 	}
 	b.CreationTimestamp = a.CreationTimestamp
-	if !admitted(rs, cap8, a) || admitted(rs, cap8, b) {
-		t.Errorf("made together, the first name keeps it: a %v b %v", admitted(rs, cap8, a), admitted(rs, cap8, b))
+	if !admitted(rs, cap8, a, at(9, 0)) || admitted(rs, cap8, b, at(9, 0)) {
+		t.Errorf("made together, the first name keeps it: a %v b %v", admitted(rs, cap8, a, at(9, 0)), admitted(rs, cap8, b, at(9, 0)))
 	}
 }
 
 func TestOverbooked(t *testing.T) {
 	wholes := []*devpodv1alpha1.NodeReservation{rsvOf("a", "alice", at(10, 0), at(11, 0), -1, ""), rsvOf("b", "bob", at(10, 30), at(11, 30), -1, "")}
-	if o := overbooked(wholes, cap8); !o["a"] || !o["b"] {
+	if o := overbooked(wholes, cap8, at(9, 0)); !o["a"] || !o["b"] {
 		t.Errorf("two whole ones overlapping: %v", o)
 	}
 	halves := []*devpodv1alpha1.NodeReservation{rsvOf("a", "alice", at(10, 0), at(11, 0), 4, "96"), rsvOf("b", "bob", at(10, 0), at(11, 0), 4, "96")}
-	if o := overbooked(halves, cap8); o["a"] || o["b"] {
+	if o := overbooked(halves, cap8, at(9, 0)); o["a"] || o["b"] {
 		t.Errorf("two halves: %v", o)
+	}
+	// what is past does not count: a ended early (cancelled at 10:15), b from 10:30
+	wholes[0].Spec.Cancelled = &devpodv1alpha1.ReservationCancel{By: "alice", At: metav1.NewTime(at(10, 15))}
+	wholes[1].Spec.Start = metav1.NewTime(at(10, 0))
+	if o := overbooked(wholes, cap8, at(10, 20)); o["a"] || o["b"] {
+		t.Errorf("overlapping only before now: %v", o)
+	}
+	if !admitted(wholes, cap8, wholes[1], at(10, 20)) {
+		t.Error("b, overlapping a only before now, gives way")
 	}
 }
 

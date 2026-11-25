@@ -141,6 +141,9 @@ func peakIn(rs []*devpodv1alpha1.NodeReservation, c amount, from, to time.Time) 
 // fitsIn: may a reservation of ask (whole: the whole machine) be had in
 // [start, end) beside others — and what is free there, at the least.
 func fitsIn(others []*devpodv1alpha1.NodeReservation, c, ask amount, whole bool, start, end time.Time) (bool, amount) {
+	if !start.Before(end) {
+		return true, c // no time at all (over before from): nothing to fit
+	}
 	var over []*devpodv1alpha1.NodeReservation
 	for _, o := range others {
 		if overlaps(o, start, end) {
@@ -196,22 +199,30 @@ func madeBefore(a, b *devpodv1alpha1.NodeReservation) bool {
 	return a.Name < b.Name
 }
 
-// admitted: nr fits beside those of rs made before it — of two made at
-// once that do not fit together, the later gives way.
-func admitted(rs []*devpodv1alpha1.NodeReservation, c amount, nr *devpodv1alpha1.NodeReservation) bool {
+// admitted: nr fits beside those of rs made before it, from from on (what
+// is past does not matter) — of two made at once that do not fit
+// together, the later gives way.
+func admitted(rs []*devpodv1alpha1.NodeReservation, c amount, nr *devpodv1alpha1.NodeReservation, from time.Time) bool {
 	var before []*devpodv1alpha1.NodeReservation
 	for _, o := range rs {
 		if o.Name != nr.Name && madeBefore(o, nr) {
 			before = append(before, o)
 		}
 	}
-	ok, _ := fitsIn(before, c, reservedOf(nr, c), isWhole(nr), nr.Spec.Start.Time, overAt(nr))
+	ok, _ := fitsIn(before, c, reservedOf(nr, c), isWhole(nr), later(nr.Spec.Start.Time, from), overAt(nr))
 	return ok
 }
 
+func later(a, b time.Time) time.Time {
+	if a.After(b) {
+		return a
+	}
+	return b
+}
+
 // overbooked: by name, those of rs (one machine's) that do not fit beside
-// the others — made before reservations held shares.
-func overbooked(rs []*devpodv1alpha1.NodeReservation, c amount) map[string]bool {
+// the others from from on — made before reservations held shares.
+func overbooked(rs []*devpodv1alpha1.NodeReservation, c amount, from time.Time) map[string]bool {
 	out := map[string]bool{}
 	for _, nr := range rs {
 		var others []*devpodv1alpha1.NodeReservation
@@ -220,7 +231,7 @@ func overbooked(rs []*devpodv1alpha1.NodeReservation, c amount) map[string]bool 
 				others = append(others, o)
 			}
 		}
-		if ok, _ := fitsIn(others, c, reservedOf(nr, c), isWhole(nr), nr.Spec.Start.Time, overAt(nr)); !ok {
+		if ok, _ := fitsIn(others, c, reservedOf(nr, c), isWhole(nr), later(nr.Spec.Start.Time, from), overAt(nr)); !ok {
 			out[nr.Name] = true
 		}
 	}

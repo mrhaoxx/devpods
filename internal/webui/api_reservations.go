@@ -5,6 +5,8 @@
 package webui
 
 import (
+	"log/slog"
+	"math"
 	"context"
 	"crypto/rand"
 	"encoding/json"
@@ -19,6 +21,7 @@ import (
 
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -27,11 +30,14 @@ import (
 	"github.com/mrhaoxx/devpod/internal/access"
 )
 
-// Node reservations (access control design §12): a reservation is one
-// user's permit to use one reservable machine for a while — what the
-// access rules ask of some users on some machines. Not exclusive, and
-// reservations may overlap; when one ends, its holder's DevPods there that
-// only it let run are hibernated (reservation_enforce.go).
+// Node reservations (access control design §12; shares: design
+// 2026-11-26): a reservation is one user's share of one reservable
+// machine for a while — some of its cards and cores, or all of it — and
+// a machine's reservations never add up to more than it has
+// (reservation_capacity.go). It is also the permit the access rules ask
+// of some users on some machines. When one starts, whoever is in its way
+// is cleared after a notice; when one ends, its holder's DevPods there
+// that only it let run are hibernated (reservation_enforce.go).
 
 // ReservationRules are the rule parameters (spec §3.1); nil on Server
 // turns reservations off.
@@ -140,6 +146,12 @@ type reservationView struct {
 	// CanManage: the caller may change or end it — theirs, an admin, or
 	// a 管理预约 grant on its machine
 	CanManage bool `json:"canManage"`
+	// GPU and CPU: the cards and cores it holds; absent, the whole machine
+	GPU *int32   `json:"gpu,omitempty"`
+	CPU *float64 `json:"cpu,omitempty"`
+	// Overbooked: it does not fit beside the machine's other reservations
+	// (made before reservations held shares)
+	Overbooked bool `json:"overbooked,omitempty"`
 }
 
 // mayManageReservation: the caller may run others' reservations of node
@@ -173,8 +185,157 @@ func validPurpose(p string) (string, error) {
 	return p, nil
 }
 
+// shareOf: the share a request asks of n — gpu cards and cpu cores; both
+// absent, the whole machine (nil, nil). Cards alone take their share of
+// the cores (whole cores, rounded down); cores alone take no cards.
+func shareOf(n *corev1.Node, gpu *int, cpu *float64) (*int32, *resource.Quantity, *serverErr) {
+	if gpu == nil && cpu == nil {
+		return nil, nil, nil
+	}
+	bad := func(format string, a ...any) (*int32, *resource.Quantity, *serverErr) {
+		return nil, nil, &serverErr{http.StatusBadRequest, "BAD_REQUEST", fmt.Sprintf(format, a...), nil}
+	}
+	c := capacityOf(n)
+	var share amount
+	if gpu != nil {
+		switch g := int64(*gpu); {
+		case g < 0:
+			return bad("gpu must be 0 or more")
+		case g > 0 && c.GPU == 0:
+			return bad("node %s has no GPUs", n.Name)
+		case g > c.GPU:
+			return bad("node %s has %d GPUs", n.Name, c.GPU)
+		}
+		share.GPU = int64(*gpu)
+	}
+	switch {
+	case cpu != nil:
+		share.CPU = int64(math.Round(*cpu * 1000))
+		if share.CPU <= 0 || math.IsNaN(*cpu) {
+			return bad("cpu must be more than 0 cores")
+		}
+		if share.CPU > c.CPU {
+			return bad("node %s has %s cores", n.Name, coresOf(c.CPU))
+		}
+	case share.GPU > 0:
+		share.CPU = c.CPU * share.GPU / c.GPU / 1000 * 1000
+	}
+	if share.CPU <= 0 {
+		return bad("say how many cores (cpu): %d GPUs take none of node %s's", share.GPU, n.Name)
+	}
+	g := int32(share.GPU)
+	return &g, resource.NewMilliQuantity(share.CPU, resource.DecimalSI), nil
+}
+
+// roomFor: nil when nr fits beside n's other reservations. A change (old:
+// the reservation as it was) is checked only for the time it adds — over
+// all it has left when its share grows: one made before shares may
+// overlap others and still be shortened, renamed or moved within itself.
+func (s *Server) roomFor(ctx context.Context, n *corev1.Node, nr, old *devpodv1alpha1.NodeReservation) *serverErr {
+	all, err := s.nodeReservations(ctx)
+	if err != nil {
+		return &serverErr{http.StatusInternalServerError, "INTERNAL", err.Error(), nil}
+	}
+	cluster := s.resCluster(ctx)
+	var others []*devpodv1alpha1.NodeReservation
+	for i := range all {
+		if o := &all[i]; o.Spec.Cluster == cluster && o.Spec.Node == n.Name && o.Name != nr.Name {
+			others = append(others, o)
+		}
+	}
+	c := capacityOf(n)
+	ask, whole := reservedOf(nr, c), isWhole(nr)
+	start, end := nr.Spec.Start.Time, nr.Spec.End.Time
+	type span struct{ from, to time.Time }
+	// what is past does not matter: a reservation of the current slot
+	// fits beside one that ended (or was cancelled) earlier in it
+	now := s.Reservations.now()
+	start = later(start, now)
+	spans := []span{{start, end}}
+	if old != nil {
+		os, oe := old.Spec.Start.Time, old.Spec.End.Time
+		if !ask.fits(reservedOf(old, c)) || (whole && !isWhole(old)) {
+			spans = []span{{start, end}}
+		} else {
+			spans = nil
+			if start.Before(os) {
+				spans = append(spans, span{start, earlier(os, end)})
+			}
+			if end.After(oe) {
+				spans = append(spans, span{later(oe, start), end})
+			}
+		}
+	}
+	ru := s.Reservations
+	horizon := ru.MaxAdvance
+	if horizon <= 0 {
+		horizon = 14 * 24 * time.Hour
+	}
+	for _, sp := range spans {
+		if !sp.from.Before(sp.to) {
+			continue
+		}
+		r := checkRoom(others, c, ask, whole, sp.from, sp.to, ru.Granularity, horizon)
+		if r == nil {
+			continue
+		}
+		detail := map[string]any{"free": r.Free.view()}
+		msg := fmt.Sprintf("node %s has at most %s free to reserve in that time", n.Name, r.Free)
+		if old == nil && !r.Earliest.IsZero() {
+			detail["earliest"] = r.Earliest.UTC()
+			msg += fmt.Sprintf("; what you ask is free from %s", r.Earliest.In(reservationTZ).Format("2006-01-02 15:04"))
+		}
+		return &serverErr{http.StatusConflict, "NO_ROOM", msg, detail}
+	}
+	return nil
+}
+
+// keptAfterCreate: nil when nr, just made, keeps its place beside the
+// node's reservations as they now are; else the refusal it gives way with.
+func (s *Server) keptAfterCreate(ctx context.Context, n *corev1.Node, nr *devpodv1alpha1.NodeReservation) *serverErr {
+	all, err := s.nodeReservations(ctx)
+	if err != nil {
+		return nil // unread: kept (the check before it was made passed)
+	}
+	cluster := s.resCluster(ctx)
+	var rs []*devpodv1alpha1.NodeReservation
+	var self *devpodv1alpha1.NodeReservation
+	for i := range all {
+		if o := &all[i]; o.Spec.Cluster == cluster && o.Spec.Node == n.Name {
+			rs = append(rs, o)
+			if o.Name == nr.Name {
+				self = o
+			}
+		}
+	}
+	if self == nil || admitted(rs, capacityOf(n), self, s.Reservations.now()) {
+		return nil
+	}
+	if e := s.roomFor(ctx, n, nr, nil); e != nil {
+		return e
+	}
+	return &serverErr{http.StatusConflict, "NO_ROOM", fmt.Sprintf("node %s was reserved by someone else at the same moment", n.Name), map[string]any{"free": amount{}.view()}}
+}
+
+func earlier(a, b time.Time) time.Time {
+	if a.Before(b) {
+		return a
+	}
+	return b
+}
+
 func viewOfReservation(nr *devpodv1alpha1.NodeReservation, me string, now time.Time) reservationView {
 	v := reservationView{ID: nr.Name, Node: nr.Spec.Node, User: nr.Spec.User, Start: nr.Spec.Start.Time.UTC(), End: overAt(nr).UTC(), Mine: nr.Spec.User == me, Purpose: nr.Spec.Purpose, CanManage: nr.Spec.User == me}
+	if !isWhole(nr) {
+		gpu, cpu := int32(0), 0.0
+		if nr.Spec.GPU != nil {
+			gpu = *nr.Spec.GPU
+		}
+		if nr.Spec.CPU != nil {
+			cpu = float64(nr.Spec.CPU.MilliValue()) / 1000
+		}
+		v.GPU, v.CPU = &gpu, &cpu
+	}
 	switch {
 	case nr.Spec.Cancelled != nil:
 		v.Phase, v.CancelledBy = "Cancelled", nr.Spec.Cancelled.By
@@ -320,6 +481,27 @@ func (s *Server) handleListReservations(w http.ResponseWriter, r *http.Request) 
 			allowed[node] = j.on(&n).Allow
 			return allowed[node]
 		}
+		// a machine's reservations that do not fit beside each other (made
+		// before shares), worked out once per machine shown
+		onNode := map[string][]*devpodv1alpha1.NodeReservation{}
+		for i := range all {
+			if all[i].Spec.Cluster == cluster {
+				onNode[all[i].Spec.Node] = append(onNode[all[i].Spec.Node], &all[i])
+			}
+		}
+		overOn := map[string]map[string]bool{}
+		overbookedOn := func(node string) map[string]bool {
+			if o, seen := overOn[node]; seen {
+				return o
+			}
+			var n corev1.Node
+			if err := cc.Client.Get(ctx, types.NamespacedName{Name: node}, &n); err != nil {
+				overOn[node] = nil // unknown capacity: not said
+				return nil
+			}
+			overOn[node] = overbooked(onNode[node], capacityOf(&n), now)
+			return overOn[node]
+		}
 		for i := range all {
 			nr := &all[i]
 			if nr.Spec.Cluster != cluster || (q.Get("node") != "" && q.Get("node") != nr.Spec.Node) {
@@ -335,6 +517,9 @@ func (s *Server) handleListReservations(w http.ResponseWriter, r *http.Request) 
 			}
 			if v.Start.Before(to) && from.Before(v.End) {
 				v.Cluster = s.clusterLabel(cc)
+				if now.Before(overAt(nr)) {
+					v.Overbooked = overbookedOn(nr.Spec.Node)[nr.Name]
+				}
 				items = append(items, v)
 			}
 		}
@@ -437,6 +622,8 @@ func (s *Server) handleCreateReservation(w http.ResponseWriter, r *http.Request)
 		End     time.Time `json:"end"`
 		User    string    `json:"user"`
 		Purpose string    `json:"purpose"`
+		GPU     *int      `json:"gpu"`
+		CPU     *float64  `json:"cpu"`
 	}
 	dec := json.NewDecoder(r.Body)
 	dec.DisallowUnknownFields()
@@ -466,6 +653,11 @@ func (s *Server) handleCreateReservation(w http.ResponseWriter, r *http.Request)
 		s.writeErr(w, http.StatusBadRequest, "BAD_REQUEST", err.Error(), nil)
 		return
 	}
+	gpu, cpu, apiErr := shareOf(n, req.GPU, req.CPU)
+	if apiErr != nil {
+		s.writeServerErr(w, apiErr)
+		return
+	}
 	cluster := s.resCluster(r.Context())
 	d, _, err := s.decide(r.Context(), user, cluster, access.Node{Name: n.Name, Labels: n.Labels})
 	switch {
@@ -480,8 +672,22 @@ func (s *Server) handleCreateReservation(w http.ResponseWriter, r *http.Request)
 		ObjectMeta: metav1.ObjectMeta{Name: fmt.Sprintf("%s-%s-%s", n.Name, user, randSuffix(6))},
 		Spec:       devpodv1alpha1.NodeReservationSpec{Cluster: cluster, Node: n.Name, User: user, Start: metav1.NewTime(req.Start.UTC()), End: metav1.NewTime(req.End.UTC()), Purpose: purpose},
 	}
+	nr.Spec.GPU, nr.Spec.CPU = gpu, cpu
+	if apiErr := s.roomFor(r.Context(), n, nr, nil); apiErr != nil {
+		s.writeServerErr(w, apiErr)
+		return
+	}
 	if err := s.createReservation(r.Context(), nr); err != nil {
 		s.writeErr(w, http.StatusBadRequest, "BAD_REQUEST", rejected("reserve", err), nil)
+		return
+	}
+	// another made at the same time (on another replica) may have taken
+	// the room: of the two, the later gives way
+	if apiErr := s.keptAfterCreate(r.Context(), n, nr); apiErr != nil {
+		if err := s.deleteReservation(r.Context(), nr.Name); err != nil {
+			slog.Warn("reservation_give_way", "reservation", nr.Name, "err", err)
+		}
+		s.writeServerErr(w, apiErr)
 		return
 	}
 	s.reservationHistory(r.Context(), nr, "created")
@@ -526,9 +732,17 @@ func (s *Server) handlePatchReservation(w http.ResponseWriter, r *http.Request) 
 		Start   *time.Time `json:"start"`
 		End     *time.Time `json:"end"`
 		Purpose *string    `json:"purpose"`
+		GPU     *int       `json:"gpu"`
+		CPU     *float64   `json:"cpu"`
+		Whole   *bool      `json:"whole"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || (req.Start == nil && req.End == nil && req.Purpose == nil) {
-		s.writeErr(w, http.StatusBadRequest, "BAD_REQUEST", "send start, end and / or purpose", nil)
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || (req.Start == nil && req.End == nil && req.Purpose == nil && req.GPU == nil && req.CPU == nil && req.Whole == nil) {
+		s.writeErr(w, http.StatusBadRequest, "BAD_REQUEST", "send start, end, purpose and / or the amount (gpu, cpu, or whole)", nil)
+		return
+	}
+	whole := req.Whole != nil && *req.Whole
+	if whole && (req.GPU != nil || req.CPU != nil) {
+		s.writeErr(w, http.StatusBadRequest, "BAD_REQUEST", "the whole machine, or gpu and cpu: not both", nil)
 		return
 	}
 	purpose := ""
@@ -553,6 +767,26 @@ func (s *Server) handlePatchReservation(w http.ResponseWriter, r *http.Request) 
 	}
 	started := !now.Before(nr.Spec.Start.Time)
 	moves := req.Start != nil || req.End != nil // a purpose alone: the times are left as they are
+	resizes := whole || req.GPU != nil || req.CPU != nil
+	var n corev1.Node
+	var gpu *int32
+	var cpu *resource.Quantity
+	if moves || resizes {
+		if err := s.kc(r.Context()).Client.Get(r.Context(), types.NamespacedName{Name: nr.Spec.Node}, &n); err != nil {
+			s.writeErr(w, http.StatusConflict, "NODE_UNAVAILABLE", fmt.Sprintf("node %s cannot be read: %v", nr.Spec.Node, err), nil)
+			return
+		}
+		gpu, cpu = nr.Spec.GPU, nr.Spec.CPU
+		if resizes && !whole {
+			var apiErr *serverErr
+			if gpu, cpu, apiErr = shareOf(&n, req.GPU, req.CPU); apiErr != nil {
+				s.writeServerErr(w, apiErr)
+				return
+			}
+		} else if whole {
+			gpu, cpu = nil, nil
+		}
+	}
 	var err error
 	switch {
 	case !moves:
@@ -567,9 +801,18 @@ func (s *Server) handlePatchReservation(w http.ResponseWriter, r *http.Request) 
 		s.writeErr(w, http.StatusBadRequest, "BAD_REQUEST", err.Error(), nil)
 		return
 	}
+	want := nr.DeepCopy()
+	if moves || resizes {
+		want.Spec.Start, want.Spec.End = metav1.NewTime(start), metav1.NewTime(end)
+		want.Spec.GPU, want.Spec.CPU = gpu, cpu
+		if apiErr := s.roomFor(r.Context(), &n, want, nr); apiErr != nil {
+			s.writeServerErr(w, apiErr)
+			return
+		}
+	}
 	changed, err := s.changeReservation(r.Context(), nr.Name, func(spec *devpodv1alpha1.NodeReservationSpec) bool {
-		if moves {
-			spec.Start, spec.End = metav1.NewTime(start), metav1.NewTime(end)
+		if moves || resizes {
+			spec.Start, spec.End, spec.GPU, spec.CPU = want.Spec.Start, want.Spec.End, want.Spec.GPU, want.Spec.CPU
 		}
 		if req.Purpose != nil {
 			spec.Purpose = purpose
@@ -579,6 +822,20 @@ func (s *Server) handlePatchReservation(w http.ResponseWriter, r *http.Request) 
 	if err != nil {
 		s.writeErr(w, http.StatusInternalServerError, "INTERNAL", err.Error(), nil)
 		return
+	}
+	// a change made at the same time (on another replica) may have taken
+	// the room: checked again, and if it no longer fits, put back
+	if moves || resizes {
+		if apiErr := s.roomFor(r.Context(), &n, changed, nr); apiErr != nil {
+			if _, err := s.changeReservation(r.Context(), nr.Name, func(spec *devpodv1alpha1.NodeReservationSpec) bool {
+				spec.Start, spec.End, spec.GPU, spec.CPU, spec.Purpose = nr.Spec.Start, nr.Spec.End, nr.Spec.GPU, nr.Spec.CPU, nr.Spec.Purpose
+				return true
+			}); err != nil {
+				slog.Warn("reservation_put_back", "reservation", nr.Name, "err", err)
+			}
+			s.writeServerErr(w, apiErr)
+			return
+		}
 	}
 	out := viewOfReservation(changed, sess.User, now)
 	out.CanManage = true // they just changed it

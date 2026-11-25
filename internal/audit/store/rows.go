@@ -209,6 +209,10 @@ type ReservationEventRow struct {
 	Detail      string    `ch:"detail" json:"detail,omitempty"`
 	// Purpose: what it is for, as it was at this change (migration 0010)
 	Purpose string `ch:"purpose" json:"purpose,omitempty"`
+	// GPU and CPU: the cards and cores it held at this change, -1 for
+	// the whole machine (migration 0011)
+	GPU int32   `ch:"gpu" json:"gpu"`
+	CPU float64 `ch:"cpu" json:"cpu"`
 }
 
 // Batch groups rows written together.

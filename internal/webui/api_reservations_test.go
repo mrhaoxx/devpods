@@ -18,11 +18,13 @@ import (
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	devpodv1alpha1 "github.com/mrhaoxx/devpod/api/v1alpha1"
+	"github.com/mrhaoxx/devpod/internal/gpures"
 	"github.com/mrhaoxx/devpod/internal/webui"
 )
 
@@ -37,6 +39,7 @@ func rsvRig(t *testing.T, prefix string) (*webui.Server, *webui.SessionManager, 
 		ClearNotice: 30 * time.Minute, Now: func() time.Time { return now }}
 	ctx := context.Background()
 	node := prefix + "-n1"
+	// n1: reservable, 8 cards and 192 cores; n2: not, 64 cores, no cards
 	for name, reservable := range map[string]bool{node: true, prefix + "-n2": false} {
 		n := &corev1.Node{ObjectMeta: metav1.ObjectMeta{Name: name, Labels: map[string]string{}}}
 		if reservable {
@@ -46,6 +49,14 @@ func rsvRig(t *testing.T, prefix string) (*webui.Server, *webui.SessionManager, 
 			t.Fatal(err)
 		}
 		t.Cleanup(func() { _ = k8sClient.Delete(ctx, n) })
+		n.Status.Allocatable = corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("64")}
+		if reservable {
+			n.Status.Allocatable = corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("192"), gpures.NVIDIA: resource.MustParse("8")}
+		}
+		n.Status.Capacity = n.Status.Allocatable
+		if err := k8sClient.Status().Update(ctx, n); err != nil {
+			t.Fatal(err)
+		}
 	}
 	t.Cleanup(func() {
 		var list devpodv1alpha1.NodeReservationList
@@ -60,7 +71,7 @@ func rsvRig(t *testing.T, prefix string) (*webui.Server, *webui.SessionManager, 
 	deadline := time.Now().Add(10 * time.Second)
 	for {
 		var n corev1.Node
-		if k8sClient.Get(ctx, client_key_cluster(node), &n) == nil || time.Now().After(deadline) {
+		if (k8sClient.Get(ctx, client_key_cluster(node), &n) == nil && len(n.Status.Allocatable) > 0) || time.Now().After(deadline) {
 			break
 		}
 		time.Sleep(50 * time.Millisecond)
@@ -80,7 +91,28 @@ type rsvView struct {
 	Message string    `json:"message"`
 	Purpose string    `json:"purpose"`
 	// CanManage: the caller may change or end it
-	CanManage bool `json:"canManage"`
+	CanManage  bool     `json:"canManage"`
+	GPU        *int     `json:"gpu"`
+	CPU        *float64 `json:"cpu"`
+	Overbooked bool     `json:"overbooked"`
+	Detail     struct {
+		Free     struct{ GPU, CPU float64 }
+		Earliest time.Time
+	} `json:"detail"`
+}
+
+// reserveWith: alice reserves with these extra fields (gpu, cpu, …).
+func reserveWith(t *testing.T, s *webui.Server, c *http.Cookie, node string, start, end time.Time, extra map[string]any) (int, rsvView) {
+	t.Helper()
+	body := map[string]any{"node": node, "start": start, "end": end}
+	for k, v := range extra {
+		body[k] = v
+	}
+	b, _ := json.Marshal(body)
+	rec := doJSON(t, s.HandleCreateReservationForTest(), "POST", "/api/reservations", nil, c, string(b))
+	var v rsvView
+	_ = json.Unmarshal(rec.Body.Bytes(), &v)
+	return rec.Code, v
 }
 
 func rsvBody(node string, start, end time.Time) string {
@@ -143,20 +175,181 @@ func listReservations(t *testing.T, s *webui.Server, c *http.Cookie) []rsvView {
 	return out.Items
 }
 
-// Reservations are permits: two people may hold the same machine at once.
-func TestReservationsOverlap(t *testing.T) {
+// A reservation holds its share: whole machines are exclusive, shares
+// add up to no more than the machine, and a refusal says what is free and
+// when what was asked would be.
+func TestReservationRoom(t *testing.T) {
 	s, sm, _, node := rsvRig(t, "ov")
 	setRules(t, onNode(node, needsReservation))
-	slot := time.Date(2026, 11, 12, 2, 0, 0, 0, time.UTC)
-	for _, u := range []string{"ov-alice", "ov-bob"} {
-		if code, v := reserveAs(t, s, forge(sm, u, false), node, slot, slot.Add(time.Hour)); code != http.StatusCreated {
-			t.Fatalf("%s: %d %+v", u, code, v)
-		}
+	alice, bob, carol := forge(sm, "ov-alice", false), forge(sm, "ov-bob", false), forge(sm, "ov-carol", false)
+	ten := time.Date(2026, 11, 12, 2, 0, 0, 0, time.UTC) // 10:00 +08:00
+	if code, v := reserveAs(t, s, alice, node, ten, ten.Add(time.Hour)); code != http.StatusCreated || v.GPU != nil || v.CPU != nil {
+		t.Fatalf("alice whole: %d %+v", code, v)
 	}
-	if items := listReservations(t, s, forge(sm, "ov-alice", false)); len(items) != 2 {
+	code, v := reserveAs(t, s, bob, node, ten.Add(30*time.Minute), ten.Add(90*time.Minute))
+	if code != http.StatusConflict || v.Code != "NO_ROOM" || v.Detail.Free.GPU != 0 || v.Detail.Free.CPU != 0 || !v.Detail.Earliest.Equal(ten.Add(time.Hour)) {
+		t.Fatalf("bob whole over alice's: %d %+v", code, v)
+	}
+	if code, v := reserveWith(t, s, bob, node, ten.Add(30*time.Minute), ten.Add(90*time.Minute), map[string]any{"gpu": 4}); code != http.StatusConflict {
+		t.Fatalf("bob 4 cards over alice's whole: %d %+v", code, v)
+	}
+	noon := ten.Add(2 * time.Hour)
+	if code, v := reserveWith(t, s, alice, node, noon, noon.Add(time.Hour), map[string]any{"gpu": 4}); code != http.StatusCreated || v.GPU == nil || *v.GPU != 4 || v.CPU == nil || *v.CPU != 96 {
+		t.Fatalf("alice 4 cards (cpu follows): %d %+v", code, v)
+	}
+	if code, v := reserveWith(t, s, bob, node, noon, noon.Add(time.Hour), map[string]any{"gpu": 4}); code != http.StatusCreated {
+		t.Fatalf("bob the other 4: %d %+v", code, v)
+	}
+	code, v = reserveWith(t, s, carol, node, noon, noon.Add(time.Hour), map[string]any{"gpu": 1})
+	if code != http.StatusConflict || v.Code != "NO_ROOM" || v.Detail.Free.GPU != 0 || v.Detail.Free.CPU != 0 {
+		t.Fatalf("carol on a full machine: %d %+v", code, v)
+	}
+	if items := listReservations(t, s, alice); len(items) != 3 {
 		t.Fatalf("listed %d", len(items))
 	}
+	// released at 10:10, the rest of the slot is free: bob may have 10:00-11:00
+	var mine string
+	for _, v := range listReservations(t, s, alice) {
+		if v.Mine && v.Start.Equal(ten) {
+			mine = v.ID
+		}
+	}
+	if rec := doJSON(t, s.HandleDeleteReservationForTest(), "DELETE", "/api/reservations/"+mine, map[string]string{"id": mine}, alice, ""); rec.Code != http.StatusNoContent {
+		t.Fatalf("release: %d %s", rec.Code, rec.Body)
+	}
+	if code, v := reserveAs(t, s, bob, node, ten, ten.Add(time.Hour)); code != http.StatusCreated {
+		t.Fatalf("bob after alice released: %d %+v", code, v)
+	}
+	for _, v := range listReservations(t, s, bob) {
+		if v.Overbooked {
+			t.Errorf("overbooked only in the past: %+v", v)
+		}
+	}
 }
+
+// Amounts are checked against what the machine has.
+func TestReservationAmountsInvalid(t *testing.T) {
+	s, sm, _, node := rsvRig(t, "ai")
+	n2 := "ai-n2"
+	var n corev1.Node
+	if err := k8sClient.Get(context.Background(), client_key_cluster(n2), &n); err != nil {
+		t.Fatal(err)
+	}
+	if n.Labels == nil {
+		n.Labels = map[string]string{}
+	}
+	n.Labels[devpodv1alpha1.ReservableNodeLabel] = "true"
+	if err := k8sClient.Update(context.Background(), &n); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, func() bool {
+		var got corev1.Node
+		return k8sClient.Get(context.Background(), client_key_cluster(n2), &got) == nil && got.Labels[devpodv1alpha1.ReservableNodeLabel] == "true"
+	})
+	alice := forge(sm, "ai-alice", false)
+	slot := time.Date(2026, 11, 12, 4, 0, 0, 0, time.UTC)
+	for _, c := range []struct {
+		node  string
+		extra map[string]any
+		want  int
+		msg   string
+	}{
+		{node, map[string]any{"gpu": 9}, http.StatusBadRequest, ""},
+		{n2, map[string]any{"gpu": 1}, http.StatusBadRequest, "has no GPUs"},
+		{node, map[string]any{"gpu": 0, "cpu": 0}, http.StatusBadRequest, ""},
+		{n2, map[string]any{"cpu": 65}, http.StatusBadRequest, ""},
+		{node, map[string]any{"gpu": -1}, http.StatusBadRequest, ""},
+	} {
+		code, v := reserveWith(t, s, alice, c.node, slot, slot.Add(time.Hour), c.extra)
+		if code != c.want || !strings.Contains(v.Message, c.msg) {
+			t.Errorf("%s %v: %d %q", c.node, c.extra, code, v.Message)
+		}
+	}
+	code, v := reserveWith(t, s, alice, n2, slot, slot.Add(time.Hour), map[string]any{"cpu": 16})
+	if code != http.StatusCreated || v.GPU == nil || *v.GPU != 0 || v.CPU == nil || *v.CPU != 16 {
+		t.Fatalf("16 cores of a CPU machine: %d %+v", code, v)
+	}
+}
+
+// Reservations made before shares (whole, overlapping) are shown as
+// overbooked; a change is checked only for what it adds.
+func TestReservationChangeRoom(t *testing.T) {
+	s, sm, _, node := rsvRig(t, "cr")
+	ctx := context.Background()
+	ten := time.Date(2026, 11, 12, 2, 0, 0, 0, time.UTC) // 10:00 +08:00; the clock says 10:10
+	for _, r := range []struct {
+		name, user string
+		start      time.Time
+	}{{"cr-a", "cr-alice", ten}, {"cr-b", "cr-bob", ten.Add(30 * time.Minute)}, {"cr-c", "cr-carol", ten.Add(3 * time.Hour)}} {
+		nr := &devpodv1alpha1.NodeReservation{ObjectMeta: metav1.ObjectMeta{Name: r.name}, Spec: devpodv1alpha1.NodeReservationSpec{
+			Node: node, User: r.user, Start: metav1.NewTime(r.start), End: metav1.NewTime(r.start.Add(time.Hour))}}
+		if err := k8sClient.Create(ctx, nr); err != nil {
+			t.Fatal(err)
+		}
+	}
+	alice, carol, dave, erin := forge(sm, "cr-alice", false), forge(sm, "cr-carol", false), forge(sm, "cr-dave", false), forge(sm, "cr-erin", false)
+	over := map[string]bool{}
+	for _, v := range listReservations(t, s, alice) {
+		over[v.ID] = v.Overbooked
+	}
+	if !over["cr-a"] || !over["cr-b"] || over["cr-c"] {
+		t.Fatalf("overbooked: %v", over)
+	}
+	patch := func(c *http.Cookie, id, body string) (int, rsvView) {
+		t.Helper()
+		rec := doJSON(t, s.HandlePatchReservationForTest(), "PATCH", "/api/reservations/"+id, map[string]string{"id": id}, c, body)
+		var v rsvView
+		_ = json.Unmarshal(rec.Body.Bytes(), &v)
+		return rec.Code, v
+	}
+	at := func(d time.Duration) string { return `"` + ten.Add(d).Format(time.RFC3339) + `"` }
+	for _, c := range []struct {
+		who  *http.Cookie
+		id   *string
+		body string
+		want int
+	}{
+		// alice's, under way and over bob's: a purpose, an earlier end — yes; a later end, over bob's — no
+		{alice, strp("cr-a"), `{"purpose":"x"}`, http.StatusOK},
+		{alice, strp("cr-a"), `{"end":` + at(30*time.Minute) + `}`, http.StatusOK},
+		{alice, strp("cr-a"), `{"end":` + at(90*time.Minute) + `}`, http.StatusConflict},
+		// carol's, 13:00-14:00: a later end into free time — yes; an earlier start over bob's — no
+		{carol, strp("cr-c"), `{"end":` + at(5*time.Hour) + `}`, http.StatusOK},
+		{carol, strp("cr-c"), `{"start":` + at(time.Hour) + `}`, http.StatusConflict},
+	} {
+		if code, v := patch(c.who, *c.id, c.body); code != c.want {
+			t.Errorf("%s %s: %d %+v", *c.id, c.body, code, v)
+		}
+	}
+	// shares, 16:00-17:00: dave 4, erin 2
+	four := ten.Add(6 * time.Hour)
+	code, d := reserveWith(t, s, dave, node, four, four.Add(time.Hour), map[string]any{"gpu": 4})
+	code2, e := reserveWith(t, s, erin, node, four, four.Add(time.Hour), map[string]any{"gpu": 2})
+	if code != http.StatusCreated || code2 != http.StatusCreated {
+		t.Fatalf("shares: %d %d", code, code2)
+	}
+	for _, c := range []struct {
+		who  *http.Cookie
+		id   string
+		body string
+		want int
+	}{
+		{dave, d.ID, `{"gpu":2,"cpu":48}`, http.StatusOK},
+		{dave, d.ID, `{"whole":true}`, http.StatusConflict},
+		{erin, e.ID, `{"gpu":6,"cpu":144}`, http.StatusOK},
+		{erin, e.ID, `{"gpu":7,"cpu":144}`, http.StatusConflict},
+	} {
+		if code, v := patch(c.who, c.id, c.body); code != c.want {
+			t.Errorf("%s %s: %d %+v", c.id, c.body, code, v)
+		}
+	}
+	var got devpodv1alpha1.NodeReservation
+	if err := k8sClient.Get(ctx, client_key_cluster(e.ID), &got); err != nil || got.Spec.GPU == nil || *got.Spec.GPU != 6 {
+		t.Fatalf("erin's after a refused change: %+v %v", got.Spec, err)
+	}
+}
+
+func strp(s string) *string { return &s }
 
 // Only on reservable machines, by someone the rules let use them — whether
 // or not they need a reservation there.
@@ -225,9 +418,20 @@ func TestReservationEnd(t *testing.T) {
 		users[u] = forge(sm, u, false)
 	}
 	// reserved first: without one, alice and bob may not run there at all
-	reserveAs(t, s, users["re-alice"], node, slot, slot.Add(time.Hour))
-	reserveAs(t, s, users["re-bob"], node, slot, slot.Add(time.Hour))
-	reserveAs(t, s, users["re-bob"], node, slot.Add(30*time.Minute), slot.Add(2*time.Hour)) // still covers bob after 11:00
+	// (shares of it: 4 + 2 + 2 cards at most at once)
+	for _, r := range []struct {
+		who        string
+		gpu        int
+		start, end time.Time
+	}{
+		{"re-alice", 4, slot, slot.Add(time.Hour)},
+		{"re-bob", 2, slot, slot.Add(time.Hour)},
+		{"re-bob", 2, slot.Add(30 * time.Minute), slot.Add(2 * time.Hour)}, // still covers bob after 11:00
+	} {
+		if code, v := reserveWith(t, s, users[r.who], node, r.start, r.end, map[string]any{"gpu": r.gpu}); code != http.StatusCreated {
+			t.Fatalf("reserve %s: %d %+v", r.who, code, v)
+		}
+	}
 	for _, u := range []string{"re-alice", "re-bob", "re-carol"} {
 		if rec := doJSON(t, s.HandleCreateDevPodForTest(), "POST", "/api/devpods", nil, users[u], createBody); rec.Code != http.StatusCreated {
 			t.Fatalf("create %s: %d %s", u, rec.Code, rec.Body)
@@ -709,5 +913,28 @@ func TestReservationHistoryKeepsPurpose(t *testing.T) {
 	}
 	if got["created"] != "跑基准" || got["changed"] != "改了" {
 		t.Fatalf("history purposes: %v", got)
+	}
+}
+
+// A reservation's history keeps what it held: -1 for the whole machine.
+func TestReservationHistoryAmounts(t *testing.T) {
+	s, sm, _, node := rsvRig(t, "ha")
+	st := &fakeAuditStore{}
+	s.Audit = &webui.AuditDeps{Store: st}
+	t.Cleanup(func() { s.Audit = nil })
+	alice := forge(sm, "ha-alice", false)
+	slot := time.Date(2026, 11, 12, 4, 0, 0, 0, time.UTC)
+	_, part := reserveWith(t, s, alice, node, slot, slot.Add(time.Hour), map[string]any{"gpu": 4})
+	_, whole := reserveAs(t, s, alice, node, slot.Add(time.Hour), slot.Add(2*time.Hour))
+	st.mu.Lock()
+	defer st.mu.Unlock()
+	got := map[string][2]float64{}
+	for _, r := range st.resv {
+		if r.Event == "created" {
+			got[r.ID] = [2]float64{float64(r.GPU), r.CPU}
+		}
+	}
+	if got[part.ID] != [2]float64{4, 96} || got[whole.ID] != [2]float64{-1, -1} {
+		t.Fatalf("history amounts: %v (part %s, whole %s)", got, part.ID, whole.ID)
 	}
 }
