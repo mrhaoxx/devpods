@@ -1227,6 +1227,16 @@ func (in *NodeReservationSpec) DeepCopyInto(out *NodeReservationSpec) {
 	*out = *in
 	in.Start.DeepCopyInto(&out.Start)
 	in.End.DeepCopyInto(&out.End)
+	if in.GPU != nil {
+		in, out := &in.GPU, &out.GPU
+		*out = new(int32)
+		**out = **in
+	}
+	if in.CPU != nil {
+		in, out := &in.CPU, &out.CPU
+		x := (*in).DeepCopy()
+		*out = &x
+	}
 	if in.Cancelled != nil {
 		in, out := &in.Cancelled, &out.Cancelled
 		*out = new(ReservationCancel)
@@ -1249,6 +1259,11 @@ func (in *NodeReservationStatus) DeepCopyInto(out *NodeReservationStatus) {
 	*out = *in
 	if in.HibernatedAtEnd != nil {
 		in, out := &in.HibernatedAtEnd, &out.HibernatedAtEnd
+		*out = make([]string, len(*in))
+		copy(*out, *in)
+	}
+	if in.Cleared != nil {
+		in, out := &in.Cleared, &out.Cleared
 		*out = make([]string, len(*in))
 		copy(*out, *in)
 	}

@@ -5,12 +5,14 @@
 package v1alpha1
 
 import (
+	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
-// NodeReservationSpec is one user's permit to use one machine (of one of
-// the console's clusters) for a while: needed where the access rules say
-// so. Not exclusive; reservations may overlap.
+// NodeReservationSpec is one user's share of one machine (of one of the
+// console's clusters) for a while — some of its cards and cores, or all of
+// it — guaranteed: a machine's reservations never add up to more than it
+// has. Where the access rules say so, it is also the permit to use it.
 type NodeReservationSpec struct {
 	// Cluster: the node's cluster ("" in a console of one cluster).
 	//
@@ -22,6 +24,16 @@ type NodeReservationSpec struct {
 	User  string      `json:"user"`
 	Start metav1.Time `json:"start"`
 	End   metav1.Time `json:"end"`
+	// GPU: the cards reserved; absent, all the machine has.
+	//
+	// +optional
+	// +kubebuilder:validation:Minimum=0
+	GPU *int32 `json:"gpu,omitempty"`
+	// CPU: the cores reserved; absent, all the machine has. Both absent:
+	// the whole machine, which overlaps no other reservation.
+	//
+	// +optional
+	CPU *resource.Quantity `json:"cpu,omitempty"`
 	// Purpose: what it is for, as its holder says — one line.
 	//
 	// +optional
@@ -43,10 +55,15 @@ type NodeReservationStatus struct {
 	//
 	// +optional
 	HibernatedAtEnd []string `json:"hibernatedAtEnd,omitempty"`
+	// Cleared: other users' DevPods hibernated to give it its share.
+	//
+	// +optional
+	Cleared []string `json:"cleared,omitempty"`
 }
 
-// NodeReservation is one user's permit to use one machine for a period,
-// kept by the console in its own cluster; when it ends the console
+// NodeReservation is one user's share of one machine for a period, kept
+// by the console in its own cluster: when it starts the console clears
+// whoever is in its way (after a notice); when it ends the console
 // hibernates the holder's DevPods there that only it let run.
 //
 // +kubebuilder:object:root=true

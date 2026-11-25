@@ -36,8 +36,9 @@ spec:
     schema:
       openAPIV3Schema:
         description: |-
-          NodeReservation is one user's permit to use one machine for a period,
-          kept by the console in its own cluster; when it ends the console
+          NodeReservation is one user's share of one machine for a period, kept
+          by the console in its own cluster: when it starts the console clears
+          whoever is in its way (after a notice); when it ends the console
           hibernates the holder's DevPods there that only it let run.
         properties:
           apiVersion:
@@ -59,9 +60,10 @@ spec:
             type: object
           spec:
             description: |-
-              NodeReservationSpec is one user's permit to use one machine (of one of
-              the console's clusters) for a while: needed where the access rules say
-              so. Not exclusive; reservations may overlap.
+              NodeReservationSpec is one user's share of one machine (of one of the
+              console's clusters) for a while — some of its cards and cores, or all of
+              it — guaranteed: a machine's reservations never add up to more than it
+              has. Where the access rules say so, it is also the permit to use it.
             properties:
               cancelled:
                 description: 'Cancelled: ended early (or never started) — by whom,
@@ -80,9 +82,23 @@ spec:
                 description: 'Cluster: the node''s cluster ("" in a console of one
                   cluster).'
                 type: string
+              cpu:
+                anyOf:
+                - type: integer
+                - type: string
+                description: |-
+                  CPU: the cores reserved; absent, all the machine has. Both absent:
+                  the whole machine, which overlaps no other reservation.
+                pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                x-kubernetes-int-or-string: true
               end:
                 format: date-time
                 type: string
+              gpu:
+                description: 'GPU: the cards reserved; absent, all the machine has.'
+                format: int32
+                minimum: 0
+                type: integer
               node:
                 minLength: 1
                 type: string
@@ -106,6 +122,12 @@ spec:
             description: NodeReservationStatus is the console's record of a reservation's
               end.
             properties:
+              cleared:
+                description: 'Cleared: other users'' DevPods hibernated to give it
+                  its share.'
+                items:
+                  type: string
+                type: array
               ended:
                 description: 'Ended: its end was carried out.'
                 type: boolean

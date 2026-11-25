@@ -14,6 +14,11 @@ const (
 	// HibernatedByAnnotation on a DevPod names what hibernated it,
 	// e.g. "reservation/<name>".
 	HibernatedByAnnotation = "devpod.io/hibernated-by"
+	// ClearAtAnnotation on a running DevPod: when the console will
+	// hibernate it to give a reservation its share (RFC 3339);
+	// ClearForAnnotation names that reservation.
+	ClearAtAnnotation  = "devpod.io/clear-at"
+	ClearForAnnotation = "devpod.io/clear-for"
 
 	// DevPod condition types set by the reservation machinery.
 	ConditionNodeReserved        = "NodeReserved"        // pinned to a node someone else holds: no Pod
