@@ -15,6 +15,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
@@ -75,6 +76,11 @@ type Server struct {
 	cliHostErr     error
 	// Reservations: node reservation rules; nil = off.
 	Reservations *ReservationRules
+	// clearMarked: clusters where this replica has marked DevPods to be
+	// cleared (visited until none is); clearSwept: every cluster with
+	// reservations has been visited once since it started
+	clearMarked sync.Map
+	clearSwept  atomic.Bool
 	// Snapshots: saving a DevPod as an image; nil = off.
 	Snapshots *Snapshots
 	// HTTPProxy: DevPod ports published through the gateway; nil = off.
