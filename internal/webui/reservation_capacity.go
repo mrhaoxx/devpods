@@ -5,6 +5,7 @@
 package webui
 
 import (
+	"context"
 	"fmt"
 	"net/http"
 	"sort"
@@ -91,15 +92,22 @@ func reservedOf(nr *devpodv1alpha1.NodeReservation, c amount) amount {
 
 // askOfPod: what a Pod takes of a machine, as the scheduler counts it —
 // its containers' together, or its largest init container's if more.
-// GPUs by their limits, CPU by its requests.
+// GPUs by their limits; CPU by its requests (a limit with no request: the
+// API server makes the request the limit).
 func askOfPod(spec *corev1.PodSpec) amount {
-	var a amount
-	for _, c := range spec.Containers {
-		a.GPU += int64(gpures.Count(c.Resources.Limits))
-		a.CPU += c.Resources.Requests.Cpu().MilliValue()
+	one := func(c *corev1.Container) amount {
+		cpu, ok := c.Resources.Requests[corev1.ResourceCPU]
+		if !ok {
+			cpu = c.Resources.Limits[corev1.ResourceCPU]
+		}
+		return amount{int64(gpures.Count(c.Resources.Limits)), cpu.MilliValue()}
 	}
-	for _, c := range spec.InitContainers {
-		a = higher(a, amount{int64(gpures.Count(c.Resources.Limits)), c.Resources.Requests.Cpu().MilliValue()})
+	var a amount
+	for i := range spec.Containers {
+		a = a.add(one(&spec.Containers[i]))
+	}
+	for i := range spec.InitContainers {
+		a = higher(a, one(&spec.InitContainers[i]))
 	}
 	return a
 }
@@ -341,4 +349,72 @@ func toClear(c amount, rs []*devpodv1alpha1.NodeReservation, on []placed, t time
 		}
 	}
 	return out
+}
+
+// rooms: the reservable machines of one cluster now — their capacity,
+// reservations and running DevPods — for judging starts there.
+type rooms struct {
+	cap map[string]amount
+	rs  map[string][]*devpodv1alpha1.NodeReservation
+	on  map[string][]placed
+	now time.Time
+}
+
+// roomsIn: ctx's cluster's reservable machines among nodes; nil when
+// reservations are off.
+func (s *Server) roomsIn(ctx context.Context, nodes []corev1.Node) (*rooms, error) {
+	if s.Reservations == nil {
+		return nil, nil
+	}
+	r := &rooms{cap: map[string]amount{}, rs: map[string][]*devpodv1alpha1.NodeReservation{}, now: s.Reservations.now()}
+	for i := range nodes {
+		if nodes[i].Labels[devpodv1alpha1.ReservableNodeLabel] == "true" {
+			r.cap[nodes[i].Name] = capacityOf(&nodes[i])
+		}
+	}
+	if len(r.cap) == 0 {
+		return r, nil
+	}
+	all, err := s.nodeReservations(ctx)
+	if err != nil {
+		return nil, err
+	}
+	cluster := s.resCluster(ctx)
+	for i := range all {
+		if nr := &all[i]; nr.Spec.Cluster == cluster {
+			if _, ok := r.cap[nr.Spec.Node]; ok {
+				r.rs[nr.Spec.Node] = append(r.rs[nr.Spec.Node], nr)
+			}
+		}
+	}
+	if r.on, err = s.devPodsByNode(ctx, s.kc(ctx)); err != nil {
+		return nil, err
+	}
+	return r, nil
+}
+
+// refusal: why owner may not add a DevPod (named skip, if it is there
+// already) taking ask on n now — nil on a machine that is not reservable.
+func (r *rooms) refusal(n *corev1.Node, owner string, needsRes bool, skip string, ask amount) *serverErr {
+	if r == nil {
+		return nil
+	}
+	c, ok := r.cap[n.Name]
+	if !ok {
+		return nil
+	}
+	return loadAt(c, r.rs[n.Name], r.on[n.Name], r.now, skip).refusal(n.Name, owner, needsRes, ask)
+}
+
+// reservedNow: a reservation of n is in force.
+func (r *rooms) reservedNow(node string) bool {
+	if r == nil {
+		return false
+	}
+	for _, nr := range r.rs[node] {
+		if inForce(nr, r.now) {
+			return true
+		}
+	}
+	return false
 }

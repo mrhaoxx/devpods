@@ -133,7 +133,8 @@ func (s *Server) endIn(ctx context.Context, cluster string, rs []*devpodv1alpha1
 				slog.Warn("reservation_end", "reservation", nr.Name, "err", err)
 				continue
 			}
-			for _, dp := range on[nr.Spec.Node] {
+			for _, p := range on[nr.Spec.Node] {
+				dp := p.DP
 				if dp.Spec.Owner != nr.Spec.User || covered(all, cluster, nr.Spec.Node, nr.Spec.User, now) {
 					continue
 				}
@@ -159,8 +160,9 @@ func (s *Server) endIn(ctx context.Context, cluster string, rs []*devpodv1alpha1
 }
 
 // devPodsByNode: a cluster's running DevPods by the node they are on —
-// where their Pod is, or, not placed yet, where they are pinned.
-func (s *Server) devPodsByNode(ctx context.Context, cc *clusters.ClusterClients) (map[string][]*devpodv1alpha1.DevPod, error) {
+// where their Pod is, or, not placed yet, where they are pinned — with
+// what they take and since when (their Pod's, else their own).
+func (s *Server) devPodsByNode(ctx context.Context, cc *clusters.ClusterClients) (map[string][]placed, error) {
 	var dps devpodv1alpha1.DevPodList
 	if err := cc.Client.List(ctx, &dps, client.InNamespace(s.NS)); err != nil {
 		return nil, err
@@ -169,22 +171,30 @@ func (s *Server) devPodsByNode(ctx context.Context, cc *clusters.ClusterClients)
 	if err := cc.Client.List(ctx, &pods, client.InNamespace(s.NS)); err != nil {
 		return nil, err
 	}
-	podNode := map[string]string{}
+	podOf := map[string]*corev1.Pod{}
 	for i := range pods.Items {
-		podNode[pods.Items[i].Name] = pods.Items[i].Spec.NodeName
+		podOf[pods.Items[i].Name] = &pods.Items[i]
 	}
-	out := map[string][]*devpodv1alpha1.DevPod{}
+	out := map[string][]placed{}
 	for i := range dps.Items {
 		dp := &dps.Items[i]
 		if !dp.Spec.Running || !dp.DeletionTimestamp.IsZero() {
 			continue
 		}
-		node := podNode[render.PodName(dp)]
+		p := placed{DP: dp, Since: dp.CreationTimestamp.Time}
+		if dp.Spec.Pod != nil {
+			p.Ask = askOfPod(&dp.Spec.Pod.Spec)
+		}
+		node := ""
+		if pod := podOf[render.PodName(dp)]; pod != nil {
+			// what holds the machine is its Pod, as it was made
+			node, p.Since, p.Ask = pod.Spec.NodeName, pod.CreationTimestamp.Time, askOfPod(&pod.Spec)
+		}
 		if node == "" {
 			node = pinnedNode(dp)
 		}
 		if node != "" {
-			out[node] = append(out[node], dp)
+			out[node] = append(out[node], p)
 		}
 	}
 	return out, nil

@@ -113,6 +113,11 @@ func (s *Server) nodeErr(ctx context.Context, owner, node string, forRun bool) *
 // to it, never by the scheduler's choice, reservation held or not: an
 // unpinned DevPod may still be pending when the reservation ends, or have
 // its Pod remade later, and would then land there with nothing to end it.
+// On a reservable machine a DevPod also gets only the room reservations
+// leave it (reservation_capacity.go): pinned, it is refused without; not
+// pinned, a machine whose reservations now leave none is left out of its
+// allow-list — an admin's or an unrestricted owner's too, which then get
+// an allow-list they otherwise would not.
 func (s *Server) placeDevPod(ctx context.Context, dp *devpodv1alpha1.DevPod) *serverErr {
 	if dp.Spec.Pod == nil {
 		return nil
@@ -121,26 +126,63 @@ func (s *Server) placeDevPod(ctx context.Context, dp *devpodv1alpha1.DevPod) *se
 	if err != nil {
 		return &serverErr{http.StatusInternalServerError, "INTERNAL", err.Error(), nil}
 	}
-	if j.admin {
-		access.SetAllowed(dp, nil)
-		return nil
-	}
 	needs := access.NeedsOf(&dp.Spec.Pod.Spec)
+	ask := askOfPod(&dp.Spec.Pod.Spec)
 	if node := pinnedNode(dp); node != "" {
 		access.SetAllowed(dp, nil)
 		var n corev1.Node
 		if err := s.kc(ctx).Client.Get(ctx, types.NamespacedName{Name: node}, &n); err != nil {
 			return badRequest("node %q not found", node)
 		}
-		return j.refusal(&n, &needs, true)
-	}
-	if j.policy.Unrestricted(j.owner, j.groups, j.cluster, needs) {
-		access.SetAllowed(dp, nil)
-		return nil
+		if e := j.refusal(&n, &needs, true); e != nil {
+			return e
+		}
+		// what is reserved there is held to, an admin's DevPod too: it is
+		// room, not access
+		rm, err := s.roomsIn(ctx, []corev1.Node{n})
+		if err != nil {
+			return &serverErr{http.StatusServiceUnavailable, "CLUSTER_UNAVAILABLE", err.Error(), nil}
+		}
+		return rm.refusal(&n, dp.Spec.Owner, !j.admin && j.on(&n).NeedsReservation, dp.Name, ask)
 	}
 	var nodes corev1.NodeList
 	if err := s.kc(ctx).Client.List(ctx, &nodes); err != nil {
 		return &serverErr{http.StatusServiceUnavailable, "CLUSTER_UNAVAILABLE", err.Error(), nil}
+	}
+	rm, err := s.roomsIn(ctx, nodes.Items)
+	if err != nil {
+		return &serverErr{http.StatusServiceUnavailable, "CLUSTER_UNAVAILABLE", err.Error(), nil}
+	}
+	// full: a reservable machine whose reservations now leave no room for
+	// it (one nobody holds is left to the scheduler, as before)
+	full := func(n *corev1.Node) *serverErr {
+		if !rm.reservedNow(n.Name) {
+			return nil
+		}
+		return rm.refusal(n, dp.Spec.Owner, false, dp.Name, ask)
+	}
+	if j.admin || j.policy.Unrestricted(j.owner, j.groups, j.cluster, needs) {
+		// anywhere — but where it does not fit beside the reservations
+		var in []string
+		var why *serverErr
+		for i := range nodes.Items {
+			if e := full(&nodes.Items[i]); e != nil {
+				if why == nil {
+					why = e
+				}
+				continue
+			}
+			in = append(in, nodes.Items[i].Name)
+		}
+		switch {
+		case why == nil:
+			access.SetAllowed(dp, nil)
+		case len(in) == 0:
+			return noRoomAnywhere(dp)
+		default:
+			access.SetAllowed(dp, in)
+		}
+		return nil
 	}
 	var in []string
 	var why *serverErr // the refusal of a machine the owner may use at all
@@ -149,6 +191,9 @@ func (s *Server) placeDevPod(ctx context.Context, dp *devpodv1alpha1.DevPod) *se
 		e := j.refusal(n, &needs, true)
 		if d := j.on(n); e == nil && d.NeedsReservation {
 			e = &serverErr{http.StatusConflict, "RESERVATION_REQUIRED", fmt.Sprintf("node %s may be used under a reservation only by pinning the DevPod to it", n.Name), map[string]any{"node": n.Name, "rule": d.Rule}}
+		}
+		if e == nil {
+			e = full(n)
 		}
 		if e == nil {
 			in = append(in, n.Name)
@@ -167,6 +212,11 @@ func (s *Server) placeDevPod(ctx context.Context, dp *devpodv1alpha1.DevPod) *se
 	}
 	access.SetAllowed(dp, in)
 	return nil
+}
+
+// noRoomAnywhere: every machine dp could run on is held by reservations.
+func noRoomAnywhere(dp *devpodv1alpha1.DevPod) *serverErr {
+	return &serverErr{http.StatusConflict, "NO_ROOM", fmt.Sprintf("no machine in this cluster has room for this DevPod of %s's outside reservations", dp.Spec.Owner), nil}
 }
 
 // accessOf: what a node is to the caller in the node choices — "ok",

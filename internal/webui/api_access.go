@@ -407,7 +407,8 @@ func (s *Server) handleAccessCheck(w http.ResponseWriter, r *http.Request) {
 			if err := cc.Client.Get(ctx, types.NamespacedName{Name: node}, &n); err != nil {
 				continue // gone: nothing runs there
 			}
-			for _, dp := range dps {
+			for _, p := range dps {
+				dp := p.DP
 				j := judges[dp.Spec.Owner]
 				if j == nil {
 					if j, err = s.judgeFor(ctx, dp.Spec.Owner); err != nil {

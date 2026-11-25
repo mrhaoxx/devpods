@@ -189,6 +189,12 @@ func TestAskOfPod(t *testing.T) {
 	if got := askOfPod(spec); got != (amount{2, 1500}) {
 		t.Errorf("askOfPod: %+v", got)
 	}
+	// a limit without a request: the API server makes the request the limit
+	limitOnly := &corev1.PodSpec{Containers: []corev1.Container{{Name: "dev", Resources: corev1.ResourceRequirements{
+		Limits: corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("4"), gpures.NVIDIA: resource.MustParse("1")}}}}}
+	if got := askOfPod(limitOnly); got != (amount{1, 4000}) {
+		t.Errorf("askOfPod, limits only: %+v", got)
+	}
 }
 
 func TestAmountString(t *testing.T) {

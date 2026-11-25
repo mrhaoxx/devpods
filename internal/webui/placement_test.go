@@ -379,3 +379,146 @@ func TestReservationsHideDeniedMachines(t *testing.T) {
 		t.Fatalf("bob sees %v", got)
 	}
 }
+
+// createGPU makes user's DevPod name asking gpus cards, pinned to node
+// ("": unpinned), and returns the error code ("" when made).
+func (p *placeRig) createGPU(user, name string, gpus int, node string, want int) string {
+	p.t.Helper()
+	body := fmt.Sprintf(`{"name":%q,"image":"ubuntu:24.04","cpu":"2","memory":"4Gi","gpu":"%d","node":%q}`, name, gpus, node)
+	rec := doJSON(p.t, p.s.HandleCreateDevPodForTest(), "POST", "/api/devpods", nil, p.as(user), body)
+	if rec.Code != want {
+		p.t.Fatalf("create %s-%s (%d GPUs on %q): %d %s", user, name, gpus, node, rec.Code, rec.Body)
+	}
+	var e struct {
+		Code   string
+		Detail struct{ Free struct{ GPU, CPU float64 } }
+	}
+	_ = json.Unmarshal(rec.Body.Bytes(), &e)
+	if want == http.StatusCreated {
+		waitDevPod(p.t, user+"-"+name)
+	}
+	return e.Code
+}
+
+// One who may use a machine only under a reservation uses no more of it
+// than they reserved; a redeploy counts the DevPod once.
+func TestStartWithinReservation(t *testing.T) {
+	p := newPlaceRig(t, "sw")
+	setRules(t, devpodv1alpha1.AccessRule{Machines: []string{p.n1}, Subject: &devpodv1alpha1.AccessSubject{Kind: "some", Users: []string{"sw-alice"}}, Effect: needsReservation})
+	if code, v := reserveWith(t, p.s, p.as("sw-alice"), p.n1, p.slot, p.slot.Add(time.Hour), map[string]any{"gpu": 4}); code != http.StatusCreated {
+		t.Fatalf("reserve: %d %+v", code, v)
+	}
+	if code := p.createGPU("sw-alice", "g8", 8, p.n1, http.StatusConflict); code != "RESERVATION_TOO_SMALL" {
+		t.Fatalf("8 cards in a 4-card reservation: %q", code)
+	}
+	p.createGPU("sw-alice", "g4", 4, p.n1, http.StatusCreated)
+	if code := p.createGPU("sw-alice", "g1", 1, p.n1, http.StatusConflict); code != "RESERVATION_TOO_SMALL" {
+		t.Fatalf("a fifth card: %q", code)
+	}
+	// redeployed: it is counted once
+	ctx := context.Background()
+	dp := "sw-alice-g4"
+	pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: dp, Namespace: "devpods"}, Spec: corev1.PodSpec{Containers: []corev1.Container{{Name: "dev", Image: "ubuntu:24.04"}}}}
+	if err := k8sClient.Create(ctx, pod); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = k8sClient.Delete(ctx, pod) })
+	got := p.get(dp)
+	got.Status.WorkloadRef = &devpodv1alpha1.WorkloadRef{APIVersion: "v1", Kind: "Pod", Name: dp}
+	if err := k8sClient.Status().Update(ctx, &got); err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		rec := doJSON(t, p.s.HandleRedeployDevPodForTest(), "POST", "/api/devpods/"+dp+"/redeploy", map[string]string{"name": dp}, p.as("sw-alice"), "")
+		if rec.Code == http.StatusNoContent {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("redeploy: %d %s", rec.Code, rec.Body)
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+}
+
+// Everyone else — an admin too — uses what no reservation holds.
+func TestStartOutsideReservations(t *testing.T) {
+	p := newPlaceRig(t, "so")
+	alice := p.as("so-alice")
+	code, whole := reserveAs(t, p.s, alice, p.n1, p.slot, p.slot.Add(time.Hour))
+	if code != http.StatusCreated {
+		t.Fatalf("reserve: %d", code)
+	}
+	if code := p.createGPU("so-bob", "g1", 1, p.n1, http.StatusConflict); code != "NO_ROOM" {
+		t.Fatalf("bob on a machine reserved whole: %q", code)
+	}
+	root := forge(p.sm, "so-root", true)
+	rec := doJSON(t, p.s.HandleCreateDevPodForTest(), "POST", "/api/devpods", nil, root, fmt.Sprintf(`{"name":"g1","image":"ubuntu:24.04","cpu":"2","memory":"4Gi","gpu":"1","node":%q}`, p.n1))
+	if rec.Code != http.StatusConflict || !strings.Contains(rec.Body.String(), "NO_ROOM") {
+		t.Fatalf("an admin on a machine reserved whole: %d %s", rec.Code, rec.Body)
+	}
+	// alice gives back the whole machine and keeps half of it
+	if rec := doJSON(t, p.s.HandleDeleteReservationForTest(), "DELETE", "/api/reservations/"+whole.ID, map[string]string{"id": whole.ID}, alice, ""); rec.Code != http.StatusNoContent {
+		t.Fatalf("release: %d %s", rec.Code, rec.Body)
+	}
+	if code, v := reserveWith(t, p.s, alice, p.n1, p.slot, p.slot.Add(time.Hour), map[string]any{"gpu": 4}); code != http.StatusCreated {
+		t.Fatalf("reserve half: %d %+v", code, v)
+	}
+	p.createGPU("so-bob", "g4", 4, p.n1, http.StatusCreated)
+	if code := p.createGPU("so-bob", "g1", 1, p.n1, http.StatusConflict); code != "NO_ROOM" {
+		t.Fatalf("bob past the unreserved half: %q", code)
+	}
+}
+
+// A DevPod not pinned is kept off reservable machines that have no room
+// for it now — and only then gets an allow-list it would not have had.
+func TestUnpinnedKeptOffFullMachines(t *testing.T) {
+	p := newPlaceRig(t, "uk")
+	root := forge(p.sm, "uk-root", true)
+	create := func(c *http.Cookie, owner, name string, want int) devpodv1alpha1.DevPod {
+		t.Helper()
+		rec := doJSON(t, p.s.HandleCreateDevPodForTest(), "POST", "/api/devpods", nil, c, fmt.Sprintf(`{"name":%q,"image":"ubuntu:24.04","cpu":"2","memory":"4Gi","gpu":"1"}`, name))
+		if rec.Code != want {
+			t.Fatalf("create %s: %d %s", name, rec.Code, rec.Body)
+		}
+		if want != http.StatusCreated {
+			return devpodv1alpha1.DevPod{}
+		}
+		waitDevPod(t, owner+"-"+name)
+		return p.get(owner + "-" + name)
+	}
+	if in := allowedOf(create(root, "uk-root", "u1", http.StatusCreated)); in != nil {
+		t.Fatalf("nothing reserved, yet an allow-list: %v", in)
+	}
+	if code, _ := reserveAs(t, p.s, p.as("uk-alice"), p.n1, p.slot, p.slot.Add(time.Hour)); code != http.StatusCreated {
+		t.Fatalf("reserve n1: %d", code)
+	}
+	if in := allowedOf(create(root, "uk-root", "u2", http.StatusCreated)); slices.Contains(in, p.n1) || !slices.Contains(in, p.n2) {
+		t.Fatalf("admin's, n1 reserved whole: %v", in)
+	}
+	// bob, whom some rule restricts
+	setRules(t, devpodv1alpha1.AccessRule{Machines: []string{"uk-elsewhere"}, Subject: &devpodv1alpha1.AccessSubject{Kind: "some", Users: []string{"uk-bob"}}, Effect: denied})
+	if in := allowedOf(create(p.as("uk-bob"), "uk-bob", "u3", http.StatusCreated)); slices.Contains(in, p.n1) || !slices.Contains(in, p.n2) {
+		t.Fatalf("bob's, n1 reserved whole: %v", in)
+	}
+	// n2 reservable and reserved too: nowhere left
+	var n corev1.Node
+	if err := k8sClient.Get(context.Background(), types.NamespacedName{Name: p.n2}, &n); err != nil {
+		t.Fatal(err)
+	}
+	if n.Labels == nil {
+		n.Labels = map[string]string{}
+	}
+	n.Labels[devpodv1alpha1.ReservableNodeLabel] = "true"
+	if err := k8sClient.Update(context.Background(), &n); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, func() bool {
+		var got corev1.Node
+		return k8sClient.Get(context.Background(), types.NamespacedName{Name: p.n2}, &got) == nil && got.Labels[devpodv1alpha1.ReservableNodeLabel] == "true"
+	})
+	if code, v := reserveAs(t, p.s, p.as("uk-alice"), p.n2, p.slot, p.slot.Add(time.Hour)); code != http.StatusCreated {
+		t.Fatalf("reserve n2: %d %+v", code, v)
+	}
+	create(root, "uk-root", "u4", http.StatusConflict)
+}
