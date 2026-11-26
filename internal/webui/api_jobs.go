@@ -413,6 +413,7 @@ func (s *Server) handleSubmitJob(w http.ResponseWriter, r *http.Request) {
 		s.writeServerErr(w, apiErr)
 		return
 	}
+	s.recordJob(ctx, eventFrom(r, sess), job, "submit", jobSummary(job))
 	v := viewOfJob(job, sess.User, sess.Admin)
 	v.Cluster = s.clusterLabel(s.kc(ctx))
 	s.writeJSON(w, http.StatusCreated, v)
@@ -802,6 +803,7 @@ func (s *Server) handleCancelJob(w http.ResponseWriter, r *http.Request) {
 		s.writeErr(w, http.StatusInternalServerError, "INTERNAL", err.Error(), nil)
 		return
 	}
+	s.recordJob(r.Context(), eventFrom(r, sess), j, "cancel", "")
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -843,6 +845,7 @@ func (s *Server) handleResubmitJob(w http.ResponseWriter, r *http.Request) {
 		s.writeServerErr(w, apiErr)
 		return
 	}
+	s.recordJob(ctx, eventFrom(r, sess), again, "resubmit", "again of "+j.Name+"; "+jobSummary(again))
 	v := viewOfJob(again, sess.User, sess.Admin)
 	v.Cluster = again.Spec.Cluster
 	s.writeJSON(w, http.StatusCreated, v)

@@ -167,6 +167,7 @@ func (s *Server) queueIn(ctx context.Context, cluster string, jobs, ended []*dev
 	}
 	plan := planQueue(v)
 	for _, victim := range plan.Preempt {
+		s.recordJob(ctx, systemEvent("system:queue"), victim, "preempted", "for "+preemptedFor(plan, victim.Name))
 		s.requeueJob(ctx, cc, victim, "preempted")
 	}
 	// the port blocks running jobs have, by machine
@@ -378,6 +379,7 @@ func (s *Server) endJob(ctx context.Context, cc *clusters.ClusterClients, j *dev
 		return // it changed meanwhile: the next round sees it as it is
 	}
 	slog.Info("queue_job_end", "job", j.Name, "owner", j.Spec.Owner, "phase", phase, "reason", reason)
+	s.recordJob(ctx, systemEvent("system:queue"), j, "end", jobEnd(phase, reason, detail))
 	s.cleanUpJob(ctx, cc, j)
 }
 
@@ -414,6 +416,9 @@ func (s *Server) requeueJob(ctx context.Context, cc *clusters.ClusterClients, j 
 	if !s.writeJobStatus(ctx, j) {
 		return // it changed meanwhile: the next round sees it as it is
 	}
+	ev := systemEvent("system:queue")
+	ev.Reason = reason
+	s.recordJob(ctx, ev, j, "requeue", "")
 	// its ranks go, their output kept as this start's; the job waits for
 	// them to be gone
 	attempt := j.Status.Attempts
@@ -477,6 +482,11 @@ func (s *Server) startJob(ctx context.Context, cc *clusters.ClusterClients, j *d
 	written := s.writeJobStatus(ctx, j)
 	if written {
 		slog.Info("queue_job_start", "job", j.Name, "owner", j.Spec.Owner, "machines", machines)
+		ev := systemEvent("system:queue")
+		if len(machines) > 0 {
+			ev.Node = machines[0]
+		}
+		s.recordJob(ctx, ev, j, "start", strings.Join(machines, ","))
 	}
 	for _, m := range ranksMachines(ranks) {
 		if ports[m] == nil {
@@ -882,4 +892,15 @@ func keptBesideReservations(v queueView, st qStart, fresh []devpodv1alpha1.NodeR
 		}
 	}
 	return true
+}
+
+// preemptedFor: the job a plan stops victim for — the one waiting with
+// reason "preempting" that names it.
+func preemptedFor(plan queuePlan, victim string) string {
+	for id, w := range plan.Waits {
+		if w.Reason == "preempting" && slices.Contains(strings.Split(w.Detail["jobs"], ","), victim) {
+			return id
+		}
+	}
+	return ""
 }

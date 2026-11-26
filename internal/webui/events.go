@@ -7,6 +7,7 @@ package webui
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"log/slog"
 	"maps"
 	"net"
@@ -351,4 +352,47 @@ func httpPortChanges(before, after *devpodv1alpha1.DevPod) string {
 		parts = append(parts, "new link")
 	}
 	return strings.Join(parts, "; ")
+}
+
+// recordJob records action on the queue's job j, as ev says who and how.
+func (s *Server) recordJob(ctx context.Context, ev store.EventRow, j *devpodv1alpha1.Job, action, detail string) {
+	ev.Cluster, ev.Kind, ev.Object, ev.Owner = j.Spec.Cluster, "job", j.Name, j.Spec.Owner
+	ev.Action, ev.Detail = action, detail
+	s.record(ctx, ev)
+}
+
+// jobSummary: what a job asks, in a line.
+func jobSummary(j *devpodv1alpha1.Job) string {
+	parts := []string{
+		fmt.Sprintf("%d×%d GPU", j.Spec.Nodes, j.Spec.GPUsPerNode),
+		j.Spec.CPUsPerNode.String() + " cores",
+		"at most " + j.Spec.TimeLimit.Duration.String(),
+		fmt.Sprintf("priority %d", j.Spec.Priority),
+	}
+	if j.Spec.Preemptible {
+		parts = append(parts, "preemptible")
+	}
+	if j.Spec.Title != "" {
+		parts = append(parts, "title "+j.Spec.Title)
+	}
+	return strings.Join(parts, "; ")
+}
+
+// jobEnd: how a job ended, in a line.
+func jobEnd(phase devpodv1alpha1.JobPhase, reason string, detail map[string]string) string {
+	parts := []string{string(phase)}
+	if reason != "" {
+		parts = append(parts, reason)
+	}
+	for _, k := range slices.Sorted(maps.Keys(detail)) {
+		parts = append(parts, k+" "+detail[k])
+	}
+	return strings.Join(parts, "; ")
+}
+
+// recordMachine records action on machine node, as ev says who and how.
+func (s *Server) recordMachine(ctx context.Context, cluster string, ev store.EventRow, node, action, detail string) {
+	ev.Cluster, ev.Kind, ev.Object, ev.Node = cluster, "machine", node, node
+	ev.Action, ev.Detail = action, detail
+	s.record(ctx, ev)
 }

@@ -966,7 +966,9 @@ func (s *Server) handleSetReservable(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	cluster, now := s.resCluster(r.Context()), ru.now()
+	action, detail := "reservable-on", ""
 	if !*req.Reservable {
+		action = "reservable-off"
 		// closed: every reservation on it that is not over ends, as its owner would end it
 		for i := range all {
 			nr := &all[i]
@@ -977,9 +979,11 @@ func (s *Server) handleSetReservable(w http.ResponseWriter, r *http.Request) {
 				s.writeErr(w, http.StatusInternalServerError, "INTERNAL", err.Error(), nil)
 				return
 			}
+			detail += nr.Name + " cancelled; "
 		}
 		all = nil
 	}
+	s.recordMachine(r.Context(), cluster, eventFrom(r, sess), name, action, strings.TrimSuffix(detail, "; "))
 	s.writeJSON(w, http.StatusOK, map[string]any{"reservable": *req.Reservable, "pending": pendingOn(all, cluster, name, now)})
 }
 
