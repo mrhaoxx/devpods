@@ -172,6 +172,16 @@ func (s *Server) queueIn(ctx context.Context, cluster string, jobs, ended []*dev
 		slog.Warn("queue", "cluster", cluster, "err", err)
 		return
 	}
+	var pods corev1.PodList
+	if err := cc.Client.List(ctx, &pods, client.InNamespace(s.NS)); err != nil {
+		slog.Warn("queue", "cluster", cluster, "err", err)
+		return
+	}
+	podOf := map[string]*corev1.Pod{}
+	for i := range pods.Items {
+		podOf[pods.Items[i].Name] = &pods.Items[i]
+	}
+	s.sweepAutoPins(ctx, cc, dps.Items, podOf, now)
 	var waiting []qEntry
 	for i := range dps.Items {
 		dp := &dps.Items[i]

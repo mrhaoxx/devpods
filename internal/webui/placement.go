@@ -241,6 +241,11 @@ func (s *Server) placeOnChange(ctx context.Context, before, dp *devpodv1alpha1.D
 	moved := pinnedNode(dp) != pinnedNode(before)
 	remade := !equality.Semantic.DeepEqual(before.Spec.Pod, dp.Spec.Pod) || before.Spec.Shell != dp.Spec.Shell
 	switch {
+	case dp.Spec.Running && before.Spec.Running && remade && !moved:
+		if e := s.fitsWhereItIs(ctx, before, dp); e != nil {
+			return e
+		}
+		return s.placeDevPod(ctx, dp)
 	case dp.Spec.Running && (!before.Spec.Running || moved || remade):
 		return s.placeDevPod(ctx, dp)
 	case !dp.Spec.Running && moved && pinnedNode(dp) != "":

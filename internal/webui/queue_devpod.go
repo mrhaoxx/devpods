@@ -437,3 +437,95 @@ func (s *Server) startQueuedDevPod(ctx context.Context, cc *clusters.ClusterClie
 	slog.Info("queue_devpod_start", "devpod", dp.Name, "owner", dp.Spec.Owner, "machine", machine, "auto", auto)
 	return true
 }
+
+// unschedulableFor: how long a DevPod's Pod may stay unschedulable on the
+// machine the queue gave it before it goes back in line.
+const unschedulableFor = 5 * time.Minute
+
+// avoidPeriod: how long a machine its Pod would not schedule on is kept
+// from a DevPod.
+const avoidPeriod = time.Hour
+
+// sweepAutoPins carries out the queue's pins' lifetime, each round: a
+// DevPod found stopped (whoever stopped it) loses the pin the queue gave
+// it; one running whose Pod has not scheduled on that machine for
+// unschedulableFor goes back in line — at its old place — kept off that
+// machine for avoidPeriod. A pin its user set is never touched.
+func (s *Server) sweepAutoPins(ctx context.Context, cc *clusters.ClusterClients, dps []devpodv1alpha1.DevPod, pods map[string]*corev1.Pod, now time.Time) {
+	for i := range dps {
+		dp := &dps[i]
+		node, since, ok := autoPin(dp)
+		if !ok || dp.DeletionTimestamp != nil {
+			continue
+		}
+		cp := dp.DeepCopy()
+		action, reason := "", ""
+		switch {
+		case !dp.Spec.Running:
+			unpinAuto(cp)
+			action = "auto-unpin"
+		default:
+			why, stuck := unschedulableSince(pods[render.PodName(dp)], now)
+			if !stuck {
+				continue
+			}
+			unpinAuto(cp)
+			cp.Spec.Running = false
+			markQueued(cp, since, 0)
+			avoidFor(cp, node, now.Add(avoidPeriod))
+			action, reason = "requeue-unschedulable", why
+		}
+		if err := cc.Client.Update(ctx, cp); err != nil {
+			if !apierrors.IsConflict(err) {
+				slog.Warn("queue_auto_pin", "devpod", dp.Name, "err", err)
+			}
+			continue
+		}
+		ev := systemEvent("system:queue")
+		ev.Node, ev.Reason = node, reason
+		s.recordDevPod(ctx, s.clusterLabel(cc), ev, cp, action, node)
+		slog.Info("queue_auto_pin", "devpod", dp.Name, "action", action, "node", node, "reason", reason)
+	}
+}
+
+// unschedulableSince: pod has been unschedulable for unschedulableFor at
+// now — and the scheduler's word for why.
+func unschedulableSince(pod *corev1.Pod, now time.Time) (string, bool) {
+	if pod == nil || pod.Status.Phase != corev1.PodPending {
+		return "", false
+	}
+	for _, c := range pod.Status.Conditions {
+		if c.Type == corev1.PodScheduled && c.Status == corev1.ConditionFalse && c.Reason == corev1.PodReasonUnschedulable {
+			return c.Message, now.Sub(c.LastTransitionTime.Time) >= unschedulableFor
+		}
+	}
+	return "", false
+}
+
+// fitsWhereItIs: dp, running on the machine the queue gave it, may be
+// remade as after only if after fits there now — the machine's free room
+// with what before takes given back (nil: it does, or what the machine
+// has cannot be told).
+func (s *Server) fitsWhereItIs(ctx context.Context, before, after *devpodv1alpha1.DevPod) *serverErr {
+	node, _, ok := autoPin(after)
+	if !ok || before.Spec.Pod == nil || after.Spec.Pod == nil {
+		return nil
+	}
+	now := time.Now()
+	e := devPodEntry(after, now, 0, node, "")
+	v, _, err := s.queueViewFor(ctx, s.kc(ctx), nil, []qEntry{e}, now)
+	if err != nil {
+		return nil
+	}
+	for _, m := range v.Machines {
+		if m.Name != node || (m.Cap.GPU == 0 && m.Cap.CPU == 0) {
+			continue
+		}
+		free := freeFor(m, v.Running, now, v.Horizon).add(askOfPod(&before.Spec.Pod.Spec))
+		if !askOfPod(&after.Spec.Pod.Spec).fits(free) {
+			return &serverErr{http.StatusConflict, "NO_ROOM_HERE",
+				fmt.Sprintf("it does not fit on %s as it is now: stop it and start it again to wait for room", node), map[string]any{"node": node}}
+		}
+	}
+	return nil
+}

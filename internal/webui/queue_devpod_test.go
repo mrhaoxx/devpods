@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 
@@ -248,5 +249,126 @@ func TestRoundQueuedDevPodChangedMeanwhile(t *testing.T) {
 	time.Sleep(500 * time.Millisecond)
 	if dp := p.get(name); dp.Spec.Running || pinnedOf(&dp) != "" {
 		t.Fatalf("started after leaving the line: running %v pin %q", dp.Spec.Running, pinnedOf(&dp))
+	}
+}
+
+// startedByRound: user's DevPod name, made and started by a round
+// (pinned by the queue); it as the cache has it then.
+func startedByRound(t *testing.T, p *placeRig, user string) (string, devpodv1alpha1.DevPod) {
+	t.Helper()
+	name := p.create(user, http.StatusCreated)
+	p.s.QueueRound(context.Background())
+	return name, devPodWhen(t, p, name, "started by the round", func(dp *devpodv1alpha1.DevPod) bool { return dp.Spec.Running && pinnedOf(dp) != "" })
+}
+
+// Stopped outside the console, a DevPod loses the queue's pin at the next
+// round — the system's doing, recorded.
+func TestAutoPinRemovedWhenStopped(t *testing.T) {
+	p := jobRig(t, "ap", "")
+	f := &fakeAuditStore{}
+	p.s.Audit = &webui.AuditDeps{Store: f}
+	name, dp := startedByRound(t, p, "ap-alice")
+	dp.Spec.Running = false
+	if err := k8sClient.Update(context.Background(), &dp); err != nil {
+		t.Fatal(err)
+	}
+	devPodWhen(t, p, name, "stopped", func(dp *devpodv1alpha1.DevPod) bool { return !dp.Spec.Running })
+	p.s.QueueRound(context.Background())
+	devPodWhen(t, p, name, "unpinned", func(dp *devpodv1alpha1.DevPod) bool {
+		return pinnedOf(dp) == "" && dp.Annotations[devpodv1alpha1.AutoPinAnnotation] == ""
+	})
+	eventsOf(t, f, name, "create", "queue-start", "auto-unpin")
+}
+
+// A pin its user set stays, stopped or not.
+func TestUserPinKept(t *testing.T) {
+	p := jobRig(t, "up", "")
+	p.createGPU("up-alice", "c", 0, p.n2, http.StatusCreated) // pinned by its user, in line
+	p.s.QueueRound(context.Background())
+	devPodWhen(t, p, "up-alice-c", "started", func(dp *devpodv1alpha1.DevPod) bool { return dp.Spec.Running })
+	patchAs(t, p, "up-alice", "up-alice-c", `{"running":false}`)
+	devPodWhen(t, p, "up-alice-c", "stopped", func(dp *devpodv1alpha1.DevPod) bool { return !dp.Spec.Running })
+	p.s.QueueRound(context.Background())
+	time.Sleep(300 * time.Millisecond)
+	if dp := p.get("up-alice-c"); pinnedOf(&dp) != p.n2 {
+		t.Fatalf("the user's pin went: %q", pinnedOf(&dp))
+	}
+}
+
+// A DevPod running unpinned from before is left as it is.
+func TestRunningUnpinnedUntouched(t *testing.T) {
+	p := jobRig(t, "ru", "")
+	ctx := context.Background()
+	old := &devpodv1alpha1.DevPod{ObjectMeta: metav1.ObjectMeta{Name: "ru-alice-old", Namespace: "devpods"}, Spec: devpodv1alpha1.DevPodSpec{Owner: "ru-alice", Running: true,
+		Pod: &devpodv1alpha1.PodWorkloadSpec{Spec: corev1.PodSpec{Containers: []corev1.Container{{Name: "dev", Image: "x"}}}}}}
+	if err := k8sClient.Create(ctx, old); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = k8sClient.Delete(ctx, old) })
+	before := waitDevPod(t, old.Name).ResourceVersion
+	p.s.QueueRound(ctx)
+	time.Sleep(300 * time.Millisecond)
+	if dp := p.get(old.Name); dp.ResourceVersion != before || !dp.Spec.Running || pinnedOf(&dp) != "" {
+		t.Fatalf("touched: rv %s->%s running %v pin %q", before, dp.ResourceVersion, dp.Spec.Running, pinnedOf(&dp))
+	}
+}
+
+// A Pod that does not schedule where the queue put it for five minutes:
+// back in line at its old place, that machine kept from it a while; the
+// next round puts it elsewhere.
+func TestUnschedulableRequeuesAndAvoids(t *testing.T) {
+	p := jobRig(t, "us", "")
+	f := &fakeAuditStore{}
+	p.s.Audit = &webui.AuditDeps{Store: f}
+	name, dp := startedByRound(t, p, "us-alice")
+	first := pinnedOf(&dp)
+	auto := dp.Annotations[devpodv1alpha1.AutoPinAnnotation]
+	ctx := context.Background()
+	pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "devpods"}, Spec: corev1.PodSpec{Containers: []corev1.Container{{Name: "dev", Image: "x"}}}}
+	if err := k8sClient.Create(ctx, pod); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = k8sClient.Delete(ctx, pod) })
+	pod.Status.Phase = corev1.PodPending
+	pod.Status.Conditions = []corev1.PodCondition{{Type: corev1.PodScheduled, Status: corev1.ConditionFalse, Reason: corev1.PodReasonUnschedulable,
+		Message: "0/2 nodes are available: insufficient memory", LastTransitionTime: metav1.NewTime(time.Now().Add(-6 * time.Minute))}}
+	if err := k8sClient.Status().Update(ctx, pod); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, func() bool {
+		var got corev1.Pod
+		return k8sClient.Get(ctx, client_key(name), &got) == nil && len(got.Status.Conditions) == 1
+	})
+	p.s.QueueRound(ctx)
+	back := devPodWhen(t, p, name, "back in line", func(dp *devpodv1alpha1.DevPod) bool { return !dp.Spec.Running && queuedNow(*dp) })
+	if at := back.Annotations[devpodv1alpha1.QueuedAtAnnotation]; auto[len(first)+1:] != at {
+		t.Fatalf("its place %q, was %q", at, auto[len(first)+1:])
+	}
+	if avoid := back.Annotations[devpodv1alpha1.QueueAvoidAnnotation]; len(avoid) <= len(first) || avoid[:len(first)+1] != first+" " {
+		t.Fatalf("avoid %q", avoid)
+	}
+	if rows := eventsOf(t, f, name, "create", "queue-start", "requeue-unschedulable"); rows[2].Reason != "0/2 nodes are available: insufficient memory" {
+		t.Fatalf("requeue %+v", rows[2])
+	}
+	p.s.QueueRound(ctx)
+	if dp := devPodWhen(t, p, name, "started again", func(dp *devpodv1alpha1.DevPod) bool { return dp.Spec.Running }); pinnedOf(&dp) == first {
+		t.Fatalf("put on %q again", first)
+	}
+}
+
+// Made bigger while running where the queue put it, it must fit there.
+func TestEditAutoPinnedTooBigRefused(t *testing.T) {
+	p := newPlaceRig(t, "eb") // the queue off: pinned at its start
+	p.createGPU("eb-bob", "g6", 6, p.n1, http.StatusCreated)
+	p.createGPU("eb-alice", "g1", 1, "", http.StatusCreated)
+	dp := p.get("eb-alice-g1")
+	if pinnedOf(&dp) != p.n1 || dp.Annotations[devpodv1alpha1.AutoPinAnnotation] == "" {
+		t.Fatalf("pin %q annotations %v", pinnedOf(&dp), dp.Annotations)
+	}
+	if code, _, ec := patchAs(t, p, "eb-alice", "eb-alice-g1", `{"gpu":"4"}`); code != http.StatusConflict || ec != "NO_ROOM_HERE" {
+		t.Fatalf("4 cards where 2 are free: %d %q", code, ec)
+	}
+	if code, _, ec := patchAs(t, p, "eb-alice", "eb-alice-g1", `{"gpu":"2"}`); code != http.StatusOK {
+		t.Fatalf("2 cards: %d %q", code, ec)
 	}
 }
