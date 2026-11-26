@@ -95,6 +95,10 @@ rules:
 - apiGroups: [""]
   resources: ["pods"]
   verbs: ["delete"]
+# Job logs: the console reads a job rank's Pod log, to show and keep it.
+- apiGroups: [""]
+  resources: ["pods/log"]
+  verbs: ["get"]
 ---
 # Source: devpod/templates/agent-rbac.yaml
 # The agent's own key: made on its first start, kept in one Secret, read

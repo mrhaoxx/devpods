@@ -23,16 +23,26 @@ const TelemetryPath = "/ingest/v1/batch"
 // MaxTelemetryBatch bounds one forwarded batch.
 const MaxTelemetryBatch = 16 << 20
 
+// DPPrefix: where dp, the command inside every DevPod, posts its calls
+// (the console runs them as the DevPod's owner).
+const DPPrefix = "/dp/v1/"
+
 // TelemetryForward passes telemetry batches posted in the cluster on to
 // the console's receiver at target: the DevPods of a managed cluster have
 // no way out of it of their own, the agent has. The batch, who it says it
 // is from (the receiver checks that) and the receiver's answer pass; no
-// other path, method or header does.
+// other path, method or header does. dp's calls (DPPrefix) pass the same
+// way to the same console, their answers as they come.
 func TelemetryForward(target string, hc *http.Client) http.Handler {
 	if hc == nil {
 		hc = &http.Client{Timeout: 30 * time.Second}
 	}
+	dp := dpForward(strings.TrimSuffix(target, TelemetryPath), hc)
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasPrefix(r.URL.Path, DPPrefix) {
+			dp.ServeHTTP(w, r)
+			return
+		}
 		if r.URL.Path != TelemetryPath {
 			http.NotFound(w, r)
 			return
@@ -77,6 +87,66 @@ func TelemetryForward(target string, hc *http.Client) http.Handler {
 		_, _ = io.Copy(w, io.LimitReader(resp.Body, 1<<20))
 	})
 }
+
+// dpForward passes a dp call to the console at base: what it posts and
+// who it says it is from (the console checks that), and the answer as it
+// comes, a frame at a time — a call may follow a log for long, so no
+// total time bounds it, only the caller staying.
+func dpForward(base string, hc *http.Client) http.Handler {
+	streaming := *hc
+	streaming.Timeout = 0
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.Error(w, "POST only", http.StatusMethodNotAllowed)
+			return
+		}
+		body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, MaxTelemetryBatch))
+		if err != nil {
+			http.Error(w, "cannot read the call", http.StatusRequestEntityTooLarge)
+			return
+		}
+		out, err := http.NewRequestWithContext(r.Context(), http.MethodPost, base+r.URL.Path, bytes.NewReader(body))
+		if err != nil {
+			http.Error(w, "bad console address", http.StatusInternalServerError)
+			return
+		}
+		for name, vals := range r.Header {
+			if name == "Authorization" || name == "Content-Type" || strings.HasPrefix(name, "X-Devpod-") {
+				out.Header[name] = vals
+			}
+		}
+		resp, err := streaming.Do(out)
+		if err != nil {
+			http.Error(w, "the console cannot be reached", http.StatusBadGateway)
+			return
+		}
+		defer func() { _ = resp.Body.Close() }()
+		if v := resp.Header.Get("Content-Type"); v != "" {
+			w.Header().Set("Content-Type", v)
+		}
+		w.WriteHeader(resp.StatusCode)
+		fl, _ := w.(http.Flusher)
+		buf := make([]byte, 32<<10)
+		for {
+			n, err := resp.Body.Read(buf)
+			if n > 0 {
+				if _, werr := w.Write(buf[:n]); werr != nil {
+					return
+				}
+				if fl != nil {
+					fl.Flush()
+				}
+			}
+			if err != nil {
+				return
+			}
+		}
+	})
+}
+
+// CapJobs is the capability of a cluster whose controller runs job ranks
+// (DevPods with spec.job): the console's queue places jobs there.
+const CapJobs = "jobs"
 
 // CapTelemetryLink is the capability of an agent that takes its cluster's
 // telemetry to the console over its link: the console then opens telemetry

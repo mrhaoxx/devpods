@@ -265,6 +265,12 @@ webui:
     maxDevPods: 3
     compute: {cpu: "8", memory: "16Gi"}
     storage: "50Gi"
+# Queue jobs (job ranks: run-to-completion DevPods). On a cluster whose
+# controller runs them, the agent says so (capability "jobs") and the
+# console's queue places jobs there.
+jobs:
+  enabled: false
+
 # Node reservations: a user holds a whole node for a time slot; only
 # their DevPods run on it meanwhile, others' are hibernated at the start
 # and the holder's at the end. Nodes are made reservable by label

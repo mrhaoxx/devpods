@@ -172,3 +172,12 @@ func TestDecode_RefusesHugeWindow(t *testing.T) {
 		t.Fatalf("allocated %d MiB for a refused frame", grew>>20)
 	}
 }
+
+// A DevPod's dp credential is its own: not its ingest token.
+func TestDPToken(t *testing.T) {
+	key := []byte("k")
+	a, b := DPToken(key, "uid-1"), DPToken(key, "uid-1")
+	if a != b || len(a) != 64 || a == Token(key, "uid-1") || a == DPToken(key, "uid-2") {
+		t.Fatalf("dp token %q / %q / ingest %q", a, b, Token(key, "uid-1"))
+	}
+}

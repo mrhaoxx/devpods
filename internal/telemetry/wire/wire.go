@@ -479,3 +479,12 @@ func Token(key []byte, devpodUID string) string {
 	m.Write([]byte(devpodUID))
 	return hex.EncodeToString(m.Sum(nil))
 }
+
+// DPToken is a DevPod's credential for dp, the command inside it that
+// reaches the console as its owner: hex(HMAC-SHA256(key, "dp\n"+uid)) —
+// of the same key as its ingest token, but not that token.
+func DPToken(key []byte, devpodUID string) string {
+	m := hmac.New(sha256.New, key)
+	m.Write([]byte("dp\n" + devpodUID))
+	return hex.EncodeToString(m.Sum(nil))
+}

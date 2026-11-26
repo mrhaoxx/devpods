@@ -70,3 +70,16 @@ func TestOwnerAllowNetPol_IngestEgress(t *testing.T) {
 		t.Fatalf("ingest egress rule must exist only when enabled")
 	}
 }
+
+// With the telemetry key, a DevPod also gets its dp credential.
+func TestTelemetrySecretDataDPToken(t *testing.T) {
+	dp := &devpodv1alpha1.DevPod{ObjectMeta: metav1.ObjectMeta{Name: "d", UID: "uid-9"}, Spec: devpodv1alpha1.DevPodSpec{Owner: "alice"}}
+	s := &render.TelemetrySettings{IngestURL: "http://in/ingest/v1/batch", Key: []byte("k"), Defaults: config.DefaultConfig()}
+	data, err := render.TelemetrySecretData(dp, s)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(data[render.SecretKeyDPToken]) != wire.DPToken([]byte("k"), "uid-9") {
+		t.Fatalf("dp-token %q", data[render.SecretKeyDPToken])
+	}
+}

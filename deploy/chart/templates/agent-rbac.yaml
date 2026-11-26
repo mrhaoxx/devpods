@@ -37,6 +37,10 @@ rules:
 - apiGroups: [""]
   resources: ["pods"]
   verbs: ["delete"]
+# Job logs: the console reads a job rank's Pod log, to show and keep it.
+- apiGroups: [""]
+  resources: ["pods/log"]
+  verbs: ["get"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding

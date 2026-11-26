@@ -401,6 +401,10 @@ docHas member Deployment devpod-agent "- --console=https://console.example.com"
 docHas member Deployment devpod-agent "- --namespace=devpod-system"
 docHas member Deployment devpod-agent "- --join-token-file=/etc/devpod/agent/join/token"
 docHas member Deployment devpod-agent "- --capabilities=reservations"
+# job logs: the console reads a rank's Pod log through the agent
+docHas member Role devpod-agent "pods/log"
+render memberjobs "${MEMBER[@]}" --set reservation.enabled=true --set jobs.enabled=true
+docHas memberjobs Deployment devpod-agent "- --capabilities=reservations,jobs"
 docHas member Deployment devpod-agent 'image: "ghcr.io/mrhaoxx/devpod-agent:dev"'
 docHas member Deployment devpod-agent "serviceAccountName: devpod-agent"
 docHas member Secret devpod-agent-join "token: \"ZHBqX3g=\""

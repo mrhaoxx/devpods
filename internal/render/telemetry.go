@@ -19,6 +19,8 @@ import (
 const (
 	SecretKeyIngestToken     = "ingest-token"
 	SecretKeyTelemetryConfig = "telemetry.json"
+	// SecretKeyDPToken: the DevPod's credential for dp (wire.DPToken).
+	SecretKeyDPToken = "dp-token"
 )
 
 // IngestPort is the webui's ingest listener.
@@ -51,5 +53,6 @@ func TelemetrySecretData(dp *devpodv1alpha1.DevPod, s *TelemetrySettings) (map[s
 	return map[string][]byte{
 		SecretKeyIngestToken:     []byte(wire.Token(s.Key, string(dp.UID))),
 		SecretKeyTelemetryConfig: b,
+		SecretKeyDPToken:         []byte(wire.DPToken(s.Key, string(dp.UID))),
 	}, nil
 }

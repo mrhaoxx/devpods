@@ -10,6 +10,7 @@
 {{- if dig "enabled" false (.Values.snapshot | default dict) }}{{ $caps = append $caps "snapshots" }}{{ end }}
 {{- if dig "enabled" false (.Values.reservation | default dict) }}{{ $caps = append $caps "reservations" }}{{ end }}
 {{- if include "devpod.telemetry.on" . }}{{ $caps = append $caps "telemetry" }}{{ end }}
+{{- if dig "enabled" false (.Values.jobs | default dict) }}{{ $caps = append $caps "jobs" }}{{ end }}
 {{- end }}
 {{- $joinSecret := $a.joinTokenSecret | default (ternary "devpod-agent-join" "" (not (empty $a.joinToken))) }}
 # The agent dials out to the console that manages this cluster and

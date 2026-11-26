@@ -5,7 +5,9 @@
 package agent_test
 
 import (
+	"bufio"
 	"bytes"
+	"fmt"
 	"io"
 	"net"
 	"net/http"
@@ -146,5 +148,54 @@ func TestTelemetryLink(t *testing.T) {
 	_ = resp.Body.Close()
 	if resp.StatusCode != http.StatusBadGateway {
 		t.Fatalf("no stream: %d", resp.StatusCode)
+	}
+}
+
+// dp's calls pass to the console as they come back: frame by frame, with
+// only the DevPod's own headers; nothing else passes.
+func TestForwardDP(t *testing.T) {
+	var auth, uid, cookie string
+	central := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/dp/v1/cli" {
+			http.NotFound(w, r)
+			return
+		}
+		auth, uid, cookie = r.Header.Get("Authorization"), r.Header.Get("X-DevPod-UID"), r.Header.Get("Cookie")
+		for i := 0; i < 3; i++ {
+			_, _ = fmt.Fprintf(w, "{\"o\":\"%d\"}\n", i)
+			w.(http.Flusher).Flush()
+			time.Sleep(150 * time.Millisecond)
+		}
+	}))
+	defer central.Close()
+	fwd := httptest.NewServer(agent.TelemetryForward(central.URL+"/ingest/v1/batch", nil))
+	defer fwd.Close()
+	req, _ := http.NewRequest(http.MethodPost, fwd.URL+"/dp/v1/cli", strings.NewReader(`{"argv":["whoami"]}`))
+	req.Header.Set("Authorization", "Bearer t")
+	req.Header.Set("X-DevPod-UID", "uid-1")
+	req.Header.Set("Cookie", "session=x")
+	start := time.Now()
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	line, err := bufio.NewReader(resp.Body).ReadString('\n')
+	if err != nil || line != "{\"o\":\"0\"}\n" || time.Since(start) > 300*time.Millisecond {
+		t.Fatalf("first frame %q after %s (%v)", line, time.Since(start), err)
+	}
+	if auth != "Bearer t" || uid != "uid-1" || cookie != "" {
+		t.Fatalf("headers passed: %q %q %q", auth, uid, cookie)
+	}
+	for path, method := range map[string]string{"/dp/v1/cli": http.MethodGet, "/other": http.MethodPost} {
+		req, _ := http.NewRequest(method, fwd.URL+path, nil)
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		_ = resp.Body.Close()
+		if resp.StatusCode != http.StatusMethodNotAllowed && resp.StatusCode != http.StatusNotFound {
+			t.Fatalf("%s %s: %d", method, path, resp.StatusCode)
+		}
 	}
 }
