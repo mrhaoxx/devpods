@@ -575,3 +575,63 @@ func (c *CH) Presence(ctx context.Context, devpodUIDs []string) (map[string][]st
 	}
 	return out, rows.Err()
 }
+
+// EventFilter: which events — the viewer's scope, and what to narrow to
+// ("" any); a time range is required.
+type EventFilter struct {
+	Scope                                                  *Scope // nil = every event
+	Kind, Cluster, Owner, Actor, Object, ObjectUID, Action string
+	From, To                                               time.Time
+	Cursor                                                 string
+	Limit                                                  int
+}
+
+// eventKey orders events of one moment, for paging.
+const eventKey = "concat(kind, '|', object, '|', action, '|', actor)"
+
+// InsertEvent records one thing done to a DevPod, a job or a machine.
+func (c *CH) InsertEvent(ctx context.Context, r EventRow) error {
+	ctx = clickhouse.Context(ctx, clickhouse.WithSettings(clickhouse.Settings{"insert_deduplicate": 0}))
+	batch, err := c.conn.PrepareBatch(ctx, fmt.Sprintf("INSERT INTO %s.events (%s)", c.db, c.known(ctx, "events", columns[EventRow]())))
+	if err != nil {
+		return err
+	}
+	if err := batch.AppendStruct(&r); err != nil {
+		return err
+	}
+	return batch.Send()
+}
+
+// SearchEvents lists events, newest first.
+func (c *CH) SearchEvents(ctx context.Context, f EventFilter) ([]EventRow, string, error) {
+	if f.From.IsZero() || f.To.IsZero() {
+		return nil, "", ErrRangeRequired
+	}
+	w := &where{}
+	w.add("ts >= ? AND ts < ?", f.From, f.To)
+	w.addScope(f.Scope, scopeEvents, c.db)
+	for _, eq := range []struct{ col, v string }{
+		{"kind", f.Kind}, {"cluster", f.Cluster}, {"owner", f.Owner}, {"actor", f.Actor},
+		{"object", f.Object}, {"object_uid", f.ObjectUID}, {"action", f.Action},
+	} {
+		if eq.v != "" {
+			w.add(eq.col+" = ?", eq.v)
+		}
+	}
+	if err := w.cursor(f.Cursor, "ts", eventKey); err != nil {
+		return nil, "", err
+	}
+	limit := limitOf(f.Limit)
+	var rows []EventRow
+	q := fmt.Sprintf("SELECT %s FROM %s.events WHERE %s ORDER BY ts DESC, %s DESC LIMIT %d", columns[EventRow](), c.db, w.sql(), eventKey, limit+1)
+	if err := c.conn.Select(c.readCtx(ctx), &rows, q, w.args...); err != nil {
+		return nil, "", fmt.Errorf("search events: %w", err)
+	}
+	next := ""
+	if len(rows) > limit {
+		rows = rows[:limit]
+		l := rows[limit-1]
+		next = encodeCursor(l.TS, l.Kind+"|"+l.Object+"|"+l.Action+"|"+l.Actor)
+	}
+	return rows, next, nil
+}

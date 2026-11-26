@@ -58,7 +58,7 @@ func openTestCH(t *testing.T, db string) *CH {
 	return c
 }
 
-var auditTables = []string{"sessions", "channels", "commands", "file_events", "policy_events", "raw_segments", "alerts", "access_log", "reservations", "http_requests"}
+var auditTables = []string{"sessions", "channels", "commands", "file_events", "policy_events", "raw_segments", "alerts", "access_log", "reservations", "http_requests", "events"}
 
 func TestMigrate_Idempotent(t *testing.T) {
 	ctx := context.Background()
@@ -93,6 +93,10 @@ func TestReservationEvents(t *testing.T) {
 	if err := Migrate(ctx, c, DefaultRetention(180)); err != nil {
 		t.Fatal(err)
 	}
+	// the test database outlives a run: start from an empty table
+	if err := c.conn.Exec(ctx, "TRUNCATE TABLE audit_rsv.reservations"); err != nil {
+		t.Fatal(err)
+	}
 	now := time.Now().UTC().Truncate(time.Millisecond)
 	row := ReservationEventRow{TS: now, Cluster: "st", ID: "g1-alice-abc", Node: "g1", User: "alice", Start: now, End: now.Add(time.Hour), Event: "created"}
 	for _, ev := range []string{"created", "created", "hibernated"} {
@@ -122,6 +126,60 @@ func TestReservationEvents_Purpose(t *testing.T) {
 	var got string
 	if err := c.conn.QueryRow(ctx, "SELECT purpose FROM audit_rsv_purpose.reservations WHERE id = ?", "g1-alice-p").Scan(&got); err != nil || got != purpose {
 		t.Fatalf("purpose = %q (%v)", got, err)
+	}
+}
+
+// What is done to DevPods, jobs and machines: found by object, by kind,
+// newest first, and only one's own for one without audit rights.
+func TestEvents(t *testing.T) {
+	ctx := context.Background()
+	c := openTestCH(t, "audit_events")
+	if err := Migrate(ctx, c, DefaultRetention(180)); err != nil {
+		t.Fatal(err)
+	}
+	// the test database outlives a run: start from an empty table
+	if err := c.conn.Exec(ctx, "TRUNCATE TABLE audit_events.events"); err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().UTC().Truncate(time.Millisecond)
+	for _, r := range []EventRow{
+		{TS: now.Add(-2 * time.Second), Cluster: "st", Kind: "devpod", Object: "al-dev", ObjectUID: "uid-1", Owner: "al", Actor: "al", Via: "web", Action: "create"},
+		{TS: now.Add(-time.Second), Cluster: "st", Kind: "devpod", Object: "al-dev", ObjectUID: "uid-1", Owner: "al", Actor: "root", Via: "web", Action: "stop", Detail: "测试"},
+		{TS: now, Cluster: "st", Kind: "job", Object: "abc12", Owner: "bo", Actor: "system:queue", Via: "system", Action: "start", Node: "g1"},
+	} {
+		if err := c.InsertEvent(ctx, r); err != nil {
+			t.Fatal(err)
+		}
+	}
+	span := EventFilter{From: now.Add(-time.Hour), To: now.Add(time.Hour)}
+	f := span
+	f.ObjectUID = "uid-1"
+	rows, _, err := c.SearchEvents(ctx, f)
+	if err != nil || len(rows) != 2 || rows[0].Action != "stop" || rows[0].Detail != "测试" || rows[1].Action != "create" {
+		t.Fatalf("by object: %+v %v", rows, err)
+	}
+	f = span
+	f.Kind = "job"
+	if rows, _, err = c.SearchEvents(ctx, f); err != nil || len(rows) != 1 || rows[0].Node != "g1" {
+		t.Fatalf("by kind: %+v %v", rows, err)
+	}
+	f = span
+	f.Scope = &Scope{User: "root"}
+	if rows, _, err = c.SearchEvents(ctx, f); err != nil || len(rows) != 1 || rows[0].Actor != "root" {
+		t.Fatalf("what root did: %+v %v", rows, err)
+	}
+	f = span
+	f.Limit = 1
+	rows, next, err := c.SearchEvents(ctx, f)
+	if err != nil || len(rows) != 1 || next == "" {
+		t.Fatalf("page 1: %+v %q %v", rows, next, err)
+	}
+	f.Cursor = next
+	if rows, _, err = c.SearchEvents(ctx, f); err != nil || len(rows) != 1 || rows[0].Action != "stop" {
+		t.Fatalf("page 2: %+v %v", rows, err)
+	}
+	if _, _, err := c.SearchEvents(ctx, EventFilter{}); err != ErrRangeRequired {
+		t.Fatalf("no range: %v", err)
 	}
 }
 

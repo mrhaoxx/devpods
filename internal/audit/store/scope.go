@@ -33,6 +33,9 @@ const (
 	// scopeAlerts: rows with a cluster, on a machine through their
 	// session, and no user — never one's own
 	scopeAlerts
+	// scopeEvents: rows with an owner and an actor (one's own: what one
+	// owns or did), a cluster and a node
+	scopeEvents
 )
 
 // scopeCond: s as one condition with its args; "" for no condition.
@@ -42,7 +45,10 @@ func scopeCond(s *Scope, k scopeKind, db string) (string, []any) {
 	}
 	var parts []string
 	var args []any
-	if s.User != "" && k != scopeAlerts {
+	switch {
+	case s.User != "" && k == scopeEvents:
+		parts, args = append(parts, "owner = ?", "actor = ?"), append(args, s.User, s.User)
+	case s.User != "" && k != scopeAlerts:
 		parts, args = append(parts, "user = ?"), append(args, s.User)
 	}
 	if len(s.Clusters) > 0 {
@@ -54,7 +60,7 @@ func scopeCond(s *Scope, k scopeKind, db string) (string, []any) {
 			keys[i] = m.Cluster + "/" + m.Node
 		}
 		on := "concat(cluster, '/', node) IN ?"
-		if k != scopeSessions {
+		if k != scopeSessions && k != scopeEvents {
 			on = fmt.Sprintf("session_id IN (SELECT session_id FROM %s.sessions WHERE %s)", db, on)
 		}
 		parts, args = append(parts, on), append(args, keys)

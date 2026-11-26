@@ -258,3 +258,28 @@ func (b *Batch) SetCluster(cluster string) {
 		b.Alerts[i].Cluster = cluster
 	}
 }
+
+// EventRow is one thing done to a DevPod, a job or a machine, through the
+// console or by it (migration 0012).
+type EventRow struct {
+	TS      time.Time `ch:"ts" json:"ts"`
+	Cluster string    `ch:"cluster" json:"cluster,omitempty"`
+	// Kind: devpod, job or machine; Object its name (a job's id, a
+	// machine's node name); ObjectUID a DevPod's UID — one deleted and made
+	// again under its name is another
+	Kind      string `ch:"kind" json:"kind"`
+	Object    string `ch:"object" json:"object"`
+	ObjectUID string `ch:"object_uid" json:"object_uid,omitempty"`
+	Owner     string `ch:"owner" json:"owner,omitempty"`
+	// Actor: who did it — a user, or system:<what> (system:queue, …);
+	// Via: how — web, cli, dp, token:<name> or system
+	Actor  string `ch:"actor" json:"actor"`
+	Via    string `ch:"via" json:"via"`
+	Action string `ch:"action" json:"action"`
+	Node   string `ch:"node" json:"node,omitempty"`
+	// Reason: why, for what the system did; Detail: what changed
+	Reason    string `ch:"reason" json:"reason,omitempty"`
+	Detail    string `ch:"detail" json:"detail,omitempty"`
+	ClientIP  string `ch:"client_ip" json:"client_ip,omitempty"`
+	RequestID string `ch:"request_id" json:"request_id,omitempty"`
+}
