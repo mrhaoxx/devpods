@@ -626,9 +626,10 @@ func (s *Server) queueViewFor(ctx context.Context, cc *clusters.ClusterClients, 
 	for i := range nodes.Items {
 		n := &nodes.Items[i]
 		byName[n.Name] = n
-		if n.Labels[devpodv1alpha1.ReservableNodeLabel] != "true" || !readyOrUnknown(n) || n.Spec.Unschedulable {
+		if !readyOrUnknown(n) || n.Spec.Unschedulable {
 			continue
 		}
+		reservable := n.Labels[devpodv1alpha1.ReservableNodeLabel] == "true"
 		var rs []*devpodv1alpha1.NodeReservation
 		for k := range all {
 			if all[k].Spec.Cluster == cluster && all[k].Spec.Node == n.Name {
@@ -647,7 +648,7 @@ func (s *Server) queueViewFor(ctx context.Context, cc *clusters.ClusterClients, 
 			interactive = append(interactive, p)
 		}
 		c := capacityOf(n)
-		machines = append(machines, qMachine{Name: n.Name, Cap: c, Interactive: loadAt(c, rs, interactive, now, "").with(others[n.Name]).outside(), Rs: rs})
+		machines = append(machines, qMachine{Name: n.Name, Cap: c, Interactive: loadAt(c, rs, interactive, now, "").with(others[n.Name]).outside(), Rs: rs, Reservable: reservable})
 	}
 	var running []qRun
 	for _, j := range active {
@@ -671,28 +672,36 @@ func (s *Server) queueViewFor(ctx context.Context, cc *clusters.ClusterClients, 
 	// machine in memory
 	owners := map[string]*ownerAccessOf{}
 	allowed := map[string]bool{}
+	// a job's ranks run only on reservable machines, where its source's
+	// placement and the rules let them; a DevPod on any machine its own
+	// spec fits that its owner may use without a reservation
 	mayRun := func(e qEntry, machine string) bool {
-		j := e.Job
-		if j == nil {
-			return false // a DevPod: not yet in the line
-		}
 		key := e.Key + "/" + machine
 		if v, seen := allowed[key]; seen {
 			return v
 		}
-		oa, seen := owners[j.Spec.Owner]
+		oa, seen := owners[e.Owner]
 		if !seen {
 			var err error
-			if oa, err = s.ownerAccess(ctx, j.Spec.Owner); err != nil {
-				slog.Warn("queue_access", "owner", j.Spec.Owner, "err", err)
+			if oa, err = s.ownerAccess(ctx, e.Owner); err != nil {
+				slog.Warn("queue_access", "owner", e.Owner, "err", err)
 			}
-			owners[j.Spec.Owner] = oa
+			owners[e.Owner] = oa
 		}
 		n := byName[machine]
 		ok := false
-		if n != nil && oa != nil && machineFits(j, n) {
-			d, admin := oa.decide(cluster, access.Node{Name: n.Name, Labels: n.Labels})
-			ok = admin || (d.Allow && d.Admits(access.NeedsOf(&j.Spec.Template.Spec)) == nil)
+		switch {
+		case n == nil || oa == nil:
+		case e.Job != nil:
+			if j := e.Job; n.Labels[devpodv1alpha1.ReservableNodeLabel] == "true" && machineFits(j, n) {
+				d, admin := oa.decide(cluster, access.Node{Name: n.Name, Labels: n.Labels})
+				ok = admin || (d.Allow && d.Admits(access.NeedsOf(&j.Spec.Template.Spec)) == nil)
+			}
+		case e.DevPod != nil && e.DevPod.Spec.Pod != nil:
+			if spec := &e.DevPod.Spec.Pod.Spec; podFits(spec, n) {
+				d, admin := oa.decide(cluster, access.Node{Name: n.Name, Labels: n.Labels})
+				ok = admin || (d.Allow && !d.NeedsReservation && d.Admits(access.NeedsOf(spec)) == nil)
+			}
 		}
 		allowed[key] = ok
 		return ok
@@ -702,13 +711,13 @@ func (s *Server) queueViewFor(ctx context.Context, cc *clusters.ClusterClients, 
 		return queueView{}, nil, err
 	}
 	quotaOK := func(e qEntry, planned []qEntry) bool {
-		j := e.Job
-		if j == nil {
-			return false // a DevPod: not yet in the line
-		}
-		if s.ownerIsAdmin(ctx, j.Spec.Owner) {
+		if s.ownerIsAdmin(ctx, e.Owner) {
 			return true
 		}
+		if e.DevPod != nil {
+			return s.devPodQuotaOK(ctx, cc, e.DevPod, dps.Items, planned)
+		}
+		j := e.Job
 		var u devpodv1alpha1.User
 		var up *devpodv1alpha1.User
 		if s.Client.Get(ctx, types.NamespacedName{Name: j.Spec.Owner}, &u) == nil {
@@ -829,9 +838,13 @@ func (s *Server) handleJobsFree(w http.ResponseWriter, r *http.Request) {
 			slog.Warn("queue_free", "cluster", cluster, "err", err)
 			continue
 		}
-		f := queueFree{Cluster: s.clusterLabel(cc), Machines: len(v.Machines)}
+		f := queueFree{Cluster: s.clusterLabel(cc)}
 		var sum amount
 		for _, m := range v.Machines {
+			if !m.Reservable {
+				continue // the queue's jobs run only on reservable machines
+			}
+			f.Machines++
 			free := freeFor(m, v.Running, now, time.Minute).clamped()
 			sum = sum.add(free)
 			f.MaxGPU = max(f.MaxGPU, free.GPU)

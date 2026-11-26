@@ -12,12 +12,14 @@ import (
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 
 	devpodv1alpha1 "github.com/mrhaoxx/devpod/api/v1alpha1"
 	"github.com/mrhaoxx/devpod/internal/access"
 	"github.com/mrhaoxx/devpod/internal/agent"
+	"github.com/mrhaoxx/devpod/internal/render"
 )
 
 // Handler accessors for the external test package. Test-only file.
@@ -216,3 +218,25 @@ func (s *Server) EventFromForTest(r *http.Request, sess Session) store.EventRow 
 }
 
 func (s *Server) HandlePutDevPodYAMLForTest() http.HandlerFunc { return s.handlePutDevPodYAML }
+
+// QueueAllowedForTest: the queue's view of the console's own cluster would
+// give owner's entry — a DevPod with spec, or a one-rank job of spec — machine.
+func (s *Server) QueueAllowedForTest(ctx context.Context, owner string, devpod bool, spec *corev1.PodSpec, machine string) bool {
+	var e qEntry
+	if devpod {
+		dp := &devpodv1alpha1.DevPod{ObjectMeta: metav1.ObjectMeta{Name: "probe"}, Spec: devpodv1alpha1.DevPodSpec{Owner: owner, Pod: &devpodv1alpha1.PodWorkloadSpec{Spec: *spec}}}
+		e = devPodEntry(dp, time.Now(), 0, "", "")
+	} else {
+		j := &devpodv1alpha1.Job{ObjectMeta: metav1.ObjectMeta{Name: "probe"}, Spec: devpodv1alpha1.JobSpec{Owner: owner, Nodes: 1,
+			GPUsPerNode: int32(askOfPod(spec).GPU), Template: devpodv1alpha1.PodWorkloadSpec{Spec: *spec}}}
+		e = jobEntry(j)
+	}
+	v, _, err := s.queueViewFor(ctx, s.kc(ctx), nil, []qEntry{e}, time.Now())
+	return err == nil && v.Allowed(e, machine)
+}
+
+func (s *Server) HomeNodeForTest(ctx context.Context, dp *devpodv1alpha1.DevPod) string {
+	return s.homeNode(ctx, s.kc(ctx), dp)
+}
+
+func (s *Server) HomePVCNameForTest(dp *devpodv1alpha1.DevPod) string { return render.HomePVCName(dp) }

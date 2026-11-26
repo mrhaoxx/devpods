@@ -276,6 +276,26 @@ func machineFits(job *devpodv1alpha1.Job, n *corev1.Node) bool {
 	return true
 }
 
+// podFits: n could take a Pod of spec at all — not cordoned, spec's own
+// placement admits it (but for the machine it names), its taints are
+// tolerated, and it has spec's kind of card, enough of them.
+func podFits(spec *corev1.PodSpec, n *corev1.Node) bool {
+	if n.Spec.Unschedulable || !placementAdmits(spec, n) {
+		return false
+	}
+	gpus := askOfPod(spec).GPU
+	if !taintsTolerated(spec, gpus > 0, n) {
+		return false
+	}
+	if gpus > 0 && len(spec.Containers) > 0 {
+		q := n.Status.Allocatable[gpuKindOf(&spec.Containers[0])]
+		if q.Value() < gpus {
+			return false
+		}
+	}
+	return true
+}
+
 // placementAdmits: spec's own placement lets it on n — its nodeSelector
 // and its required node affinity, but for the machine they name (each
 // rank is given its own: its hostname is not the source's to say).

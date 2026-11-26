@@ -23,12 +23,14 @@ import (
 // by then (EASY backfill), so it never delays the head. A head blocked
 // by lower-priority preemptible jobs has the fewest of them stopped.
 
-// qMachine: a reservable machine — what it has, what interactive DevPods
-// take of it outside their owners' reservations, its reservations.
+// qMachine: a machine — what it has, what interactive DevPods (and other
+// workloads) take of it outside their owners' reservations, its
+// reservations, and whether it is reservable (jobs run only on those).
 type qMachine struct {
 	Name             string
 	Cap, Interactive amount
 	Rs               []*devpodv1alpha1.NodeReservation
+	Reservable       bool
 }
 
 // qEntry: something waiting in the line — a job, or a DevPod to start.
