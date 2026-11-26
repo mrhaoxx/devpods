@@ -6,6 +6,7 @@ package webui_test
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"encoding/json"
 	"net/http"
@@ -134,5 +135,36 @@ func TestHandleDPOriginCommands(t *testing.T) {
 	_, frames := dpCall(t, s, uids["dpa"], wire.DPToken(s.IngestKey, uids["dpa"]), "", "delete", "x", "--yes")
 	if exitOf(frames) != 2 || !strings.Contains(said(frames, "e"), "not available from inside a DevPod") {
 		t.Fatalf("delete: %v", frames)
+	}
+}
+
+// dp is bound to the DevPod's owner and never carries admin rights, the
+// console's own sessions judging it: an admin's DevPod's dp is no admin,
+// while the same admin's command line (no DevPod) is.
+func TestHandleDPNeverAdmin(t *testing.T) {
+	setupSuite(t)
+	s, _ := newServer(t)
+	s.Admins = map[string]bool{"dpadm": true}
+	s.CLIKey = []byte("gateway-shared-key")
+	s.IngestKey = []byte("ingest-key")
+	api := httptest.NewServer(s.Routes())
+	t.Cleanup(api.Close)
+	s.CLI = &gatewaycli.Server{API: gatewaycli.NewAPI(api.URL, "gateway-shared-key")}
+	ctx := context.Background()
+	dp := &devpodv1alpha1.DevPod{ObjectMeta: metav1.ObjectMeta{Name: "dpadm-dev", Namespace: "devpods"}, Spec: devpodv1alpha1.DevPodSpec{Owner: "dpadm",
+		Pod: &devpodv1alpha1.PodWorkloadSpec{Spec: corev1.PodSpec{Containers: []corev1.Container{{Name: "dev", Image: "x"}}}}}}
+	if err := k8sClient.Create(ctx, dp); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = k8sClient.Delete(ctx, dp) })
+	waitFor(t, func() bool { _, _, ok := s.DevPodByUID(ctx, string(dp.UID)); return ok })
+	code, frames := dpCall(t, s, string(dp.UID), wire.DPToken(s.IngestKey, string(dp.UID)), "", "whoami")
+	if out := said(frames, "o"); code != http.StatusOK || !strings.Contains(out, "dpadm") || !strings.Contains(out, "admin:    false") {
+		t.Fatalf("dp whoami from an admin's DevPod: %d %q", code, out)
+	}
+	var out, errw bytes.Buffer
+	s.CLI.Exec(ctx, gatewaycli.Meta{User: "dpadm"}, []string{"whoami"}, nil, nil, &out, &errw)
+	if !strings.Contains(out.String(), "admin:    true") {
+		t.Fatalf("the admin's own command line: %q %q", out.String(), errw.String())
 	}
 }
