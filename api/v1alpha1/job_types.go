@@ -153,6 +153,11 @@ type JobStatus struct {
 	Attempts int32 `json:"attempts,omitempty"`
 	// +optional
 	Preemptions int32 `json:"preemptions,omitempty"`
+	// GangTimeouts: how many times its ranks did not all start in time.
+	// After a few it fails (it is not going to start); after one it no
+	// longer has others stopped for it.
+	// +optional
+	GangTimeouts int32 `json:"gangTimeouts,omitempty"`
 	// +optional
 	Ranks []JobRank `json:"ranks,omitempty"`
 }

@@ -8333,6 +8333,13 @@ spec:
               finishedAt:
                 format: date-time
                 type: string
+              gangTimeouts:
+                description: |-
+                  GangTimeouts: how many times its ranks did not all start in time.
+                  After a few it fails (it is not going to start); after one it no
+                  longer has others stopped for it.
+                format: int32
+                type: integer
               phase:
                 description: JobPhase is where a queue job is.
                 enum:
