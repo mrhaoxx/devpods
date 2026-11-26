@@ -47,6 +47,7 @@ export function SubmitDialog({ onClose }: { onClose(): void }) {
   const [hours, setHours] = useState("");
   const [priority, setPriority] = useState("0");
   const [preemptible, setPreemptible] = useState(false);
+  const [requeue, setRequeue] = useState(true);
   const [hostNetwork, setHostNetwork] = useState(false);
   const [privileged, setPrivileged] = useState(false);
   const [error, setError] = useState("");
@@ -107,11 +108,12 @@ export function SubmitDialog({ onClose }: { onClose(): void }) {
     };
     if (c !== undefined) b.cpus = c;
     if (preemptible) b.preemptible = true;
+    if (!requeue) b.requeue = false;
     if (hostNetwork || privileged) b.privileges = { ...(hostNetwork ? { hostNetwork: true } : {}), ...(privileged ? { privileged: true } : {}) };
     if (workdir.trim()) b.workdir = workdir.trim();
     if (title.trim()) b.title = title.trim();
     return b;
-  }, [from, kind, source, ref, vars, command, n, g, c, h, p, preemptible, hostNetwork, privileged, workdir, title]);
+  }, [from, kind, source, ref, vars, command, n, g, c, h, p, preemptible, requeue, hostNetwork, privileged, workdir, title]);
 
   // where it would stand: asked again a moment after the form settles
   const [estimate, setEstimate] = useState<JobEstimate | undefined>();
@@ -263,6 +265,13 @@ export function SubmitDialog({ onClose }: { onClose(): void }) {
               <span>
                 可被抢占
                 <span className="block text-[11px] text-faint">通常更早开始；但更高优先级的任务或节点预约需要这些资源时，它会被停下并重新排队。</span>
+              </span>
+            </label>
+            <label className="flex items-start gap-2 text-xs">
+              <input type="checkbox" className="mt-0.5" checked={requeue} onChange={(e) => setRequeue(e.target.checked)} />
+              <span>
+                被停时重新排队
+                <span className="block text-[11px] text-faint">被抢占、被预约清场或机器关闭时：勾选则回到队列原来的位置再跑，不勾则直接结束。</span>
               </span>
             </label>
             <details className="text-xs">

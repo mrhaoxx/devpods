@@ -92,5 +92,29 @@ describe("QueuePage", () => {
     await waitFor(() => expect(calls.some((c) => c.method === "POST" && !JSON.parse(c.body ?? "{}").dryRun)).toBe(true));
     const sent = JSON.parse(calls.filter((c) => c.method === "POST" && !JSON.parse(c.body ?? "{}").dryRun)[0].body!);
     expect(sent).toMatchObject({ from: { devpod: "u-dev" }, nodes: 2, gpus: 8, timeLimitSeconds: 43200, priority: 0, preemptible: true, command: "torchrun t.py" });
+    expect(sent.requeue).toBeUndefined(); // waiting again is the default: not said
+  });
+
+  it("unchecking 被停时重新排队 submits a job that ends when stopped", async () => {
+    const calls = stubFetch({
+      "/api/jobs": { items: [] },
+      "/api/jobs/limits": { maxPriority: 0, unlimitedPriority: false, defaultTimeLimitSeconds: 86400, maxTimeLimitSeconds: 259200 },
+      "/api/devpods": { items: [{ metadata: { name: "u-dev" }, spec: { owner: "u", running: true }, status: {} }] },
+      "/api/configs": { items: [] },
+      "POST /api/jobs": (_u: URL, init?: RequestInit) => (JSON.parse(String(init?.body)).dryRun ? { position: 1, reason: "capacity", cpus: 24 } : { id: "new02", phase: "Queued" }),
+    });
+    page();
+    fireEvent.click(await screen.findByRole("button", { name: "提交任务…" }));
+    const dialog = within(await screen.findByRole("dialog"));
+    await dialog.findByRole("option", { name: "DevPod：u-dev" });
+    fireEvent.change(dialog.getByLabelText("来自"), { target: { value: "devpod:u-dev" } });
+    fireEvent.change(dialog.getByLabelText("命令"), { target: { value: "true" } });
+    const box = dialog.getByLabelText(/被停时重新排队/) as HTMLInputElement;
+    expect(box.checked).toBe(true);
+    fireEvent.click(box);
+    fireEvent.click(dialog.getByRole("button", { name: "提交" }));
+    await waitFor(() => expect(calls.some((c) => c.method === "POST" && !JSON.parse(c.body ?? "{}").dryRun)).toBe(true));
+    const sent = JSON.parse(calls.filter((c) => c.method === "POST" && !JSON.parse(c.body ?? "{}").dryRun)[0].body!);
+    expect(sent.requeue).toBe(false);
   });
 });

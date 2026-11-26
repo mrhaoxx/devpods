@@ -743,6 +743,7 @@ export type Job = {
   timeLimitSeconds: number;
   priority: number;
   preemptible?: boolean;
+  requeue?: boolean; // stopped for another, it waits again (false: it ends)
   mine: boolean;
   canManage: boolean;
   submitted: string;
@@ -771,6 +772,7 @@ export type JobRequest = {
   timeLimitSeconds?: number;
   priority?: number;
   preemptible?: boolean;
+  requeue?: boolean; // false: stopped for another, it ends (unset: it waits again)
   privileges?: { hostNetwork?: boolean; privileged?: boolean; capAdd?: string[] };
   env?: Record<string, string>;
   dryRun?: boolean;

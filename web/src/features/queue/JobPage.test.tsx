@@ -44,6 +44,15 @@ describe("JobPage", () => {
     expect(screen.getByRole("link", { name: "下载" }).getAttribute("href")).toBe("/api/jobs/abc12/logs?rank=1");
   });
 
+  it("a job that ends when stopped says so", async () => {
+    stubFetch({
+      "/api/jobs/abc12": { ...ended, requeue: false },
+      "/api/jobs/abc12/logs": () => new Response("", { status: 200, headers: { "Content-Type": "text/plain" } }),
+    });
+    page();
+    expect(await screen.findByText("结束，不再排队")).toBeTruthy();
+  });
+
   it("记录 lists what was done to the job", async () => {
     stubFetch({
       "/api/jobs/abc12": ended,

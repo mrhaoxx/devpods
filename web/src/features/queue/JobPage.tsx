@@ -59,6 +59,7 @@ export function JobPage() {
   const meta: [string, string][] = [
     ["规模", sizeText(j) + (j.gpus > 0 ? ` · 每台 ${j.cpus} 核` : "")],
     ["优先级", `${j.priority}${j.preemptible ? " · ⚡ 可被抢占" : ""}`],
+    ["被停时", j.requeue === false ? "结束，不再排队" : "重新排队"],
     ["时长上限", fmtHours(j.timeLimitSeconds * 1000)],
     ["提交", fmtTime(j.submitted)],
     ...(j.startedAt ? ([["开始", fmtTime(j.startedAt)]] as [string, string][]) : []),
