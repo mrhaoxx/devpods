@@ -11,6 +11,13 @@ import (
 const (
 	// ReservableNodeLabel marks a node users may reserve.
 	ReservableNodeLabel = "devpod.io/reservable"
+	// ReservableSeenAnnotation on a Node: the console has seen it
+	// reservable — the label gone later, the machine was closed (a Node
+	// made anew without the label has none: it was not)
+	ReservableSeenAnnotation = "devpod.io/reservable-seen"
+	// ClosedByAnnotation on a Node: who closed it through the console
+	// (none: its label was taken off by hand)
+	ClosedByAnnotation = "devpod.io/closed-by"
 	// HibernatedByAnnotation on a DevPod names what hibernated it,
 	// e.g. "reservation/<name>".
 	HibernatedByAnnotation = "devpod.io/hibernated-by"

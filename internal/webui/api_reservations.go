@@ -907,7 +907,11 @@ func (s *Server) cancelReservation(ctx context.Context, nr *devpodv1alpha1.NodeR
 
 // handleSetReservable serves PUT /api/admin/nodes/{name}/reservable
 // {reservable}: the node label that opens a node for reservation.
-// Turning it off leaves reservations already made to run their course.
+// Turning it off cancels the machine's reservations not over, and the
+// next round of the reservations ends what relied on it being reservable
+// (sweepClosed): its queue jobs stop, and the DevPods there only by a
+// reservation are hibernated. Who turned it off is kept on the Node for
+// that round's record.
 func (s *Server) handleSetReservable(w http.ResponseWriter, r *http.Request) {
 	sess, ok := s.sessionFrom(w, r)
 	if !ok {
@@ -946,11 +950,14 @@ func (s *Server) handleSetReservable(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	name := r.PathValue("name")
-	var value any // null removes the label
+	var value, closedBy any = nil, sess.User // null removes the label; who closed it, for the record
 	if *req.Reservable {
-		value = "true"
+		value, closedBy = "true", nil
 	}
-	patch, _ := json.Marshal(map[string]any{"metadata": map[string]any{"labels": map[string]any{devpodv1alpha1.ReservableNodeLabel: value}}})
+	patch, _ := json.Marshal(map[string]any{"metadata": map[string]any{
+		"labels":      map[string]any{devpodv1alpha1.ReservableNodeLabel: value},
+		"annotations": map[string]any{devpodv1alpha1.ClosedByAnnotation: closedBy},
+	}})
 	node := &corev1.Node{ObjectMeta: metav1.ObjectMeta{Name: name}}
 	if err := s.k(r).Client.Patch(r.Context(), node, client.RawPatch(types.MergePatchType, patch)); err != nil {
 		if apierrors.IsNotFound(err) {

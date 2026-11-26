@@ -9,16 +9,19 @@ import (
 	"encoding/json"
 	"log/slog"
 	"slices"
+	"strings"
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/util/retry"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	devpodv1alpha1 "github.com/mrhaoxx/devpod/api/v1alpha1"
 	"github.com/mrhaoxx/devpod/internal/access"
+	"github.com/mrhaoxx/devpod/internal/audit/store"
 	"github.com/mrhaoxx/devpod/internal/render"
 	"github.com/mrhaoxx/devpod/internal/webui/clusters"
 )
@@ -88,6 +91,11 @@ func (s *Server) EnforceReservations(ctx context.Context) {
 		return
 	}
 	now := s.Reservations.now()
+	// machines closed first: what relied on them goes now, not by the
+	// ends and clearings below (which read the reservations as they were)
+	for _, cluster := range s.knownClusters(ctx) {
+		s.sweepClosed(ctx, cluster, all, now)
+	}
 	ended := map[string][]*devpodv1alpha1.NodeReservation{} // by cluster
 	for i := range all {
 		nr := &all[i]
@@ -468,6 +476,14 @@ func (s *Server) devPodsOn(ctx context.Context, cc *clusters.ClusterClients) (ma
 // hibernateFor stops dp on behalf of a reservation (by, which the web
 // reads to say why); false when it could not.
 func (s *Server) hibernateFor(ctx context.Context, cc *clusters.ClusterClients, dp *devpodv1alpha1.DevPod, by string) bool {
+	ev := systemEvent("system:reservation")
+	ev.Reason = by
+	return s.hibernateWith(ctx, cc, dp, by, ev)
+}
+
+// hibernateWith stops dp as by (which the web reads to say why), and
+// records it as ev says; false when it could not.
+func (s *Server) hibernateWith(ctx context.Context, cc *clusters.ClusterClients, dp *devpodv1alpha1.DevPod, by string, ev store.EventRow) bool {
 	before := dp.DeepCopy()
 	dp.Spec.Running = false
 	if dp.Annotations == nil {
@@ -481,8 +497,6 @@ func (s *Server) hibernateFor(ctx context.Context, cc *clusters.ClusterClients, 
 		return false
 	}
 	slog.Info("reservation_hibernate", "cluster", cc.Name, "devpod", dp.Name, "owner", dp.Spec.Owner, "by", by)
-	ev := systemEvent("system:reservation")
-	ev.Reason = by
 	s.recordDevPod(ctx, cc.Name, ev, dp, "hibernate", "")
 	return true
 }
@@ -516,4 +530,135 @@ func (s *Server) setReservationStatus(ctx context.Context, name string, names []
 	if len(names) > 0 {
 		s.reservationHistory(ctx, done, event, names...)
 	}
+}
+
+// knownClusters: the console's clusters ("" alone, in a console of one).
+func (s *Server) knownClusters(ctx context.Context) []string {
+	if s.Clusters == nil {
+		return []string{""}
+	}
+	return s.clusterNames(ctx)
+}
+
+// sweepClosed stamps cluster's reservable machines as seen so, and on a
+// machine stamped but reservable no more — closed, by the console's
+// switch or its label taken off by hand — ends what relied on it being
+// reservable (closeMachine), then takes the stamp off. A machine never
+// stamped (a Node made anew, or unlabelled before the console looked) is
+// not closed; nor is anything done in a cluster whose machines cannot be
+// read.
+func (s *Server) sweepClosed(ctx context.Context, cluster string, all []devpodv1alpha1.NodeReservation, now time.Time) {
+	cc := s.clientsOf(cluster)
+	if cc == nil {
+		return // away: done when it is back
+	}
+	ctx = s.in(ctx, cc)
+	var nodes corev1.NodeList
+	if err := cc.Client.List(ctx, &nodes); err != nil {
+		slog.Warn("machine_sweep", "cluster", cluster, "err", err)
+		return
+	}
+	for i := range nodes.Items {
+		n := &nodes.Items[i]
+		reservable := n.Labels[devpodv1alpha1.ReservableNodeLabel] == "true"
+		_, seen := n.Annotations[devpodv1alpha1.ReservableSeenAnnotation]
+		switch {
+		case reservable && !seen:
+			s.annotateNode(ctx, cc, n.Name, map[string]any{devpodv1alpha1.ReservableSeenAnnotation: "true"})
+		case !reservable && seen:
+			if s.closeMachine(ctx, cc, cluster, n, all, now) {
+				s.annotateNode(ctx, cc, n.Name, map[string]any{devpodv1alpha1.ReservableSeenAnnotation: nil, devpodv1alpha1.ClosedByAnnotation: nil})
+			}
+		}
+	}
+}
+
+// annotateNode merges ann into the annotations of the machine name (a
+// null takes one off).
+func (s *Server) annotateNode(ctx context.Context, cc *clusters.ClusterClients, name string, ann map[string]any) {
+	patch, _ := json.Marshal(map[string]any{"metadata": map[string]any{"annotations": ann}})
+	if err := cc.Client.Patch(ctx, &corev1.Node{ObjectMeta: metav1.ObjectMeta{Name: name}}, client.RawPatch(types.MergePatchType, patch)); err != nil {
+		slog.Warn("node_annotate", "node", name, "err", err)
+	}
+}
+
+// closeMachine ends what relied on n being reservable, n closed: its
+// reservations not over are cancelled; queue jobs with a rank there stop
+// (waiting again, or ended, as each was submitted); a DevPod there whose
+// owner may have the machine only under a reservation (or not at all) is
+// hibernated — one whose owner may use it anyway runs on. True when all
+// of it was done (else the next round tries again).
+func (s *Server) closeMachine(ctx context.Context, cc *clusters.ClusterClients, cluster string, n *corev1.Node, all []devpodv1alpha1.NodeReservation, now time.Time) bool {
+	closer := n.Annotations[devpodv1alpha1.ClosedByAnnotation]
+	if closer == "" {
+		closer = "system:label-removed"
+	}
+	done := true
+	var cancelled, stopped, hibernated []string
+	for i := range all {
+		nr := &all[i]
+		if nr.Spec.Cluster != cluster || nr.Spec.Node != n.Name || !now.Before(overAt(nr)) {
+			continue
+		}
+		if err := s.cancelReservation(ctx, nr, "machine-closed", now); err != nil {
+			slog.Warn("machine_closed_reservation", "node", n.Name, "reservation", nr.Name, "err", err)
+			done = false
+			continue
+		}
+		cancelled = append(cancelled, nr.Name)
+	}
+	on, _, err := s.devPodsOn(ctx, cc)
+	if err != nil {
+		slog.Warn("machine_closed", "node", n.Name, "err", err)
+		return false
+	}
+	jobs := s.jobsByID(ctx)
+	owners := map[string]*ownerAccessOf{}
+	ev := store.EventRow{Actor: closer, Via: "system", Reason: "machine-closed"}
+	for _, p := range on[n.Name] {
+		if p.Job != nil {
+			if j := jobs[p.Job.ID]; j != nil && j.Spec.Cluster == cluster && isRankOf(p.DP, j) {
+				if (j.Status.Phase == devpodv1alpha1.JobStarting || j.Status.Phase == devpodv1alpha1.JobRunning) && !slices.Contains(stopped, j.Name) {
+					s.stopForOthers(ctx, cc, j, "machine-closed")
+					stopped = append(stopped, j.Name)
+				}
+				continue
+			}
+		}
+		owner := p.DP.Spec.Owner
+		oa, seen := owners[owner]
+		if !seen {
+			if oa, err = s.ownerAccess(ctx, owner); err != nil {
+				slog.Warn("machine_closed_access", "owner", owner, "err", err)
+			}
+			owners[owner] = oa
+		}
+		if oa == nil {
+			done = false // what the owner may cannot be told now
+			continue
+		}
+		if d, admin := oa.decide(cluster, access.Node{Name: n.Name, Labels: n.Labels}); admin || (d.Allow && !d.NeedsReservation) {
+			continue
+		}
+		if !s.hibernateWith(ctx, cc, p.DP, "machine-closed", ev) {
+			done = false
+			continue
+		}
+		hibernated = append(hibernated, p.DP.Name)
+	}
+	if !done {
+		return false
+	}
+	var detail []string
+	for _, part := range []struct {
+		what  string
+		names []string
+	}{{"reservations cancelled", cancelled}, {"jobs stopped", stopped}, {"DevPods hibernated", hibernated}} {
+		if len(part.names) > 0 {
+			detail = append(detail, part.what+": "+strings.Join(part.names, ","))
+		}
+	}
+	s.recordMachine(ctx, s.clusterLabel(cc), store.EventRow{Actor: closer, Via: "system"}, n.Name, "closed", strings.Join(detail, "; "))
+	slog.Info("machine_closed", "cluster", cluster, "node", n.Name, "by", closer, "reservations", cancelled, "jobs", stopped, "devpods", hibernated)
+	return true
 }
