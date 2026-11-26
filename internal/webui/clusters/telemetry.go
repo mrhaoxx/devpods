@@ -30,12 +30,28 @@ func (r *Registry) SetTelemetry(h http.Handler, leading func() bool) {
 	r.sink.Store(&telemetrySink{h: h, leading: leading})
 }
 
+// linkKey: the cluster whose agent's link a request came over.
+type linkKey struct{}
+
+// WithLinkCluster says ctx's request came over cluster's agent link.
+func WithLinkCluster(ctx context.Context, cluster string) context.Context {
+	return context.WithValue(ctx, linkKey{}, cluster)
+}
+
+// LinkCluster: the cluster whose agent's link ctx's request came over —
+// false for one that came another way (the console's own listener).
+func LinkCluster(ctx context.Context) (string, bool) {
+	c, ok := ctx.Value(linkKey{}).(string)
+	return c, ok
+}
+
 // telemetry keeps the telemetry streams to a connected cluster's agent
 // while they are wanted; it ends with the cluster's connection (ctx).
+// What comes over them carries the cluster (LinkCluster).
 func (r *Registry) telemetry(ctx context.Context, cluster string) {
 	handler := http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
 		if s := r.sink.Load(); s != nil {
-			s.h.ServeHTTP(w, req)
+			s.h.ServeHTTP(w, req.WithContext(WithLinkCluster(req.Context(), cluster)))
 			return
 		}
 		http.Error(w, "this console takes no telemetry", http.StatusServiceUnavailable)

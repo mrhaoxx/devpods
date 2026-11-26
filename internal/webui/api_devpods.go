@@ -65,6 +65,9 @@ type Server struct {
 	// CLI is the DevPod CLI, run here for the gateways (cli_ssh.go); nil
 	// leaves it to gateways that still run it themselves.
 	CLI *gatewaycli.Server
+	// IngestKey: the telemetry key, of which each DevPod's dp credential is
+	// made (wire.DPToken); nil: dp is off.
+	IngestKey []byte
 	// CLIUser is the CLI's SSH login name (the gateways' --cli-user), told
 	// to the page to show how to reach it; "" = not told.
 	CLIUser string

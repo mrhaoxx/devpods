@@ -61,7 +61,22 @@ type Env struct {
 	Cluster string
 	// Interactive: the command came from the devpod> prompt.
 	Interactive bool
+	// Origin: the DevPod the command was asked from (dp inside it); nil
+	// over SSH. Files: the files it named there (a script), by path.
+	Origin *Origin
+	Files  map[string]string
 }
+
+// Origin is where a command was asked from inside a DevPod: its cluster,
+// its name, the working directory there.
+type Origin struct {
+	Cluster, DevPod, Cwd string
+}
+
+// OriginCommands are the commands dp may run from inside a DevPod: the
+// queue's, the reservations' and the harmless — not what touches the
+// owner's DevPods or keys (a DevPod's collaborators can call dp too).
+var OriginCommands = []string{"job", "jobs", "sbatch", "squeue", "scancel", "reserve", "reservations", "help", "whoami"}
 
 type parsed struct {
 	cluster string // --cluster, taken by every command
@@ -331,6 +346,10 @@ func Run(e *Env, argv []string) int {
 		return ExitOK
 	}
 	c := find(name)
+	if c != nil && e.Origin != nil && !slices.Contains(OriginCommands, c.name) {
+		fmt.Fprintf(e.Err, "error: %s is not available from inside a DevPod; use it over SSH\n", name)
+		return ExitUsage
+	}
 	if c != nil && c.admin && !isAdmin(e) {
 		c = nil // not shown to them, not theirs to run
 	}
@@ -347,6 +366,9 @@ func Run(e *Env, argv []string) int {
 		return usage(e, c, err.Error())
 	}
 	e.Cluster = a.cluster
+	if e.Cluster == "" && e.Origin != nil {
+		e.Cluster = e.Origin.Cluster // asked from a DevPod: about its cluster
+	}
 	return c.run(e, a)
 }
 

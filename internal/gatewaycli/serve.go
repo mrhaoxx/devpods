@@ -239,6 +239,30 @@ func (s *Server) run(ctx context.Context, m Meta, line string, out, errw io.Writ
 	return code
 }
 
+// Exec runs one command line for m.User asked from a DevPod (o; see
+// Origin), with the files it named there: what the command writes goes to
+// out and errw as it is written. The caller's going (ctx) ends it.
+func (s *Server) Exec(ctx context.Context, m Meta, argv []string, o *Origin, files map[string]string, out, errw io.Writer) int {
+	s.init()
+	start := time.Now()
+	cctx, cancel := context.WithTimeout(ctx, s.CommandTimeout)
+	defer cancel()
+	env := &Env{Ctx: cctx, User: m.User, API: s.API, Out: out, Err: errw, Session: ctx, Interrupt: ctx.Done(),
+		FollowBudget: s.FollowBudget, FollowIdle: s.FollowIdle, Origin: o, Files: files}
+	code := Run(env, argv)
+	name := ""
+	if len(argv) > 0 {
+		name = argv[0]
+	}
+	from := ""
+	if o != nil {
+		from = o.Cluster + "/" + o.DevPod
+	}
+	s.Log.Info("cli_command", "user", m.User, "command", name, "args", strings.Join(redactArgs(argv), " "), "exit", code,
+		"duration_ms", time.Since(start).Milliseconds(), "remote", m.Remote, "auth_path", m.AuthKind, "devpod", from)
+	return code
+}
+
 // interactive is the prompt a terminal gets from a bare `ssh <user>+devpod@gateway`.
 func (s *Server) interactive(ctx context.Context, ch ssh.Channel, in *input, m Meta, running *atomic.Int32, last *atomic.Int64) int {
 	t := term.NewTerminal(struct {

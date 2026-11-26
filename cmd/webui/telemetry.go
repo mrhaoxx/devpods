@@ -160,10 +160,18 @@ func (tf *telemetryFlags) startTelemetry(ctx context.Context, cfg *rest.Config, 
 		},
 	}
 
+	// dp, the command inside DevPods, reaches the console the way their
+	// telemetry does (internal/webui/dp.go); its credential is made of
+	// the same key
+	srv.IngestKey = key
+	link := http.NewServeMux()
+	link.Handle("POST /dp/v1/cli", http.HandlerFunc(srv.HandleDP))
+	link.Handle("/", h)
+
 	// the telemetry of the clusters that join: over their agents' links,
 	// into this receiver, while this replica leads
 	if srv.Clusters != nil {
-		srv.Clusters.SetTelemetry(h, el.IsLeader)
+		srv.Clusters.SetTelemetry(link, el.IsLeader)
 	}
 
 	token := wire.Token(key, "internal-live")
@@ -195,6 +203,7 @@ func (tf *telemetryFlags) startTelemetry(ctx context.Context, cfg *rest.Config, 
 
 	mux := http.NewServeMux()
 	mux.Handle("POST /ingest/v1/batch", h)
+	mux.Handle("POST /dp/v1/cli", http.HandlerFunc(srv.HandleDP))
 	mux.Handle("GET "+live.LivePath, live.LiveHandler(hub, token, el.IsLeader))
 	mux.Handle("GET "+live.DevPodPath, live.DevPodHandler(state, token, el.IsLeader))
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write([]byte("ok")) })
