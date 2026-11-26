@@ -247,7 +247,14 @@ func (s *Server) Exec(ctx context.Context, m Meta, argv []string, o *Origin, fil
 	start := time.Now()
 	cctx, cancel := context.WithTimeout(ctx, s.CommandTimeout)
 	defer cancel()
-	env := &Env{Ctx: cctx, User: m.User, API: s.API, Out: out, Err: errw, Session: ctx, Interrupt: ctx.Done(),
+	api := s.API
+	if o != nil && api != nil {
+		// from inside a DevPod: its owner's own rights, never an admin's
+		dropped := *api
+		dropped.DropAdmin = true
+		api = &dropped
+	}
+	env := &Env{Ctx: cctx, User: m.User, API: api, Out: out, Err: errw, Session: ctx, Interrupt: ctx.Done(),
 		FollowBudget: s.FollowBudget, FollowIdle: s.FollowIdle, Origin: o, Files: files}
 	code := Run(env, argv)
 	name := ""

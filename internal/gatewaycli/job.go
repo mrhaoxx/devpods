@@ -419,6 +419,12 @@ func jobState(j jobView, now time.Time) string {
 		if j.Reason == "rank-stopped" {
 			return "failed (a rank was stopped)"
 		}
+		if j.Reason == "gang-timeout" {
+			if why := j.Detail["why"]; why != "" {
+				return "failed (its ranks never all started: " + why + ")"
+			}
+			return "failed (its ranks never all started)"
+		}
 		return "failed"
 	case "TimedOut":
 		return "out of time"

@@ -24,12 +24,19 @@ const KeyPrefix = "gwk_"
 // UserHeader names the user the gateway authenticated by SSH key.
 const UserHeader = "X-DevPod-User"
 
+// DropAdminHeader ("1") asks the console to treat the user as no admin:
+// a command from inside a DevPod (dp) acts with its owner's own rights,
+// never an admin's — anyone using the DevPod could otherwise use them.
+const DropAdminHeader = "X-DevPod-Drop-Admin"
+
 // API calls the console's REST API on a user's behalf.
 type API struct {
 	BaseURL string // e.g. http://devpod-webui.devpod-system.svc:80
 	Key     string // shared with the console
 	HTTP    *http.Client
 	MaxBody int64 // response size cap; default 8 MiB
+	// DropAdmin: every request asks to be no admin (DropAdminHeader)
+	DropAdmin bool
 }
 
 // NewAPI returns an API with a 10 s request timeout.
@@ -76,6 +83,9 @@ func (a *API) Do(ctx context.Context, user, method, path string, body any) ([]by
 	}
 	req.Header.Set("Authorization", "Bearer "+KeyPrefix+a.Key)
 	req.Header.Set(UserHeader, user)
+	if a.DropAdmin {
+		req.Header.Set(DropAdminHeader, "1")
+	}
 	req.Header.Set("Accept", "application/json")
 	if body != nil {
 		req.Header.Set("Content-Type", "application/json")
@@ -131,6 +141,9 @@ func (a *API) Stream(ctx context.Context, user, path string, idle time.Duration,
 	}
 	req.Header.Set("Authorization", "Bearer "+KeyPrefix+a.Key)
 	req.Header.Set(UserHeader, user)
+	if a.DropAdmin {
+		req.Header.Set(DropAdminHeader, "1")
+	}
 	req.Header.Set("Accept", "text/event-stream")
 	hc := &http.Client{} // a.HTTP's total timeout would cut the stream
 	if a.HTTP != nil {
