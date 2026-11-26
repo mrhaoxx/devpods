@@ -22,6 +22,9 @@ const (
 	LabelOwner   = "devpod.io/owner"
 	LabelDevPod  = "devpod.io/devpod"
 	LabelManaged = "app.kubernetes.io/managed-by"
+	// JobLabel and RankLabel: on a job rank's Pod, its job and rank.
+	JobLabel  = "devpod.io/job"
+	RankLabel = "devpod.io/rank"
 )
 
 // Names reserved by the v2 render injection. User PodSpecs may not
@@ -115,3 +118,7 @@ func ObjectMeta(name, namespace string, dp *devpodv1alpha1.DevPod) metav1.Object
 		Labels:    DevPodLabels(dp),
 	}
 }
+
+// JobGraceSeconds: how long a job rank's command has to stop once told
+// to (preempted, out of time, cancelled) — unless its spec says.
+const JobGraceSeconds = 120

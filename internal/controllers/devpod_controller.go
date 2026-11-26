@@ -255,12 +255,23 @@ func (r *DevPodReconciler) applyAll(ctx context.Context, dp *devpodv1alpha1.DevP
 	// delete it and let the next reconcile recreate it on the new
 	// spec. (Active SSH sessions on the Pod drop — same semantics as
 	// hibernate.)
+	//
+	// A job rank that has ended keeps how it ended: no new Pod, ever.
+	if jobEnded(dp) {
+		return nil
+	}
 	pod, err := render.Pod(dp, r.GwConfig)
 	if err != nil {
+		if dp.Spec.Job != nil {
+			return r.jobInvalid(ctx, dp, err)
+		}
 		return fmt.Errorf("render pod: %w", err)
 	}
 	if err := r.applyPodWithDriftRecreate(ctx, dp, pod); err != nil {
 		return fmt.Errorf("apply pod: %w", err)
+	}
+	if jobEnded(dp) {
+		return nil // it ended just now: its status says how
 	}
 
 	// 4. Service.
@@ -395,6 +406,9 @@ func (r *DevPodReconciler) applyPVC(ctx context.Context, dp *devpodv1alpha1.DevP
 
 // updateStatus reads the rendered Pod and patches DevPod.status.{phase,endpoint,workloadRef,...}.
 func (r *DevPodReconciler) updateStatus(ctx context.Context, dp *devpodv1alpha1.DevPod) error {
+	if jobEnded(dp) {
+		return nil // how a job rank ended stays as it was written
+	}
 	desired := devpodv1alpha1.DevPodStatus{
 		Conditions: dp.Status.Conditions,
 	}
@@ -676,6 +690,14 @@ func (r *DevPodReconciler) applyPodWithDriftRecreate(ctx context.Context, dp *de
 	err := r.Get(ctx, key, &live)
 	switch {
 	case err == nil:
+		if dp.Spec.Job != nil {
+			// a job rank runs once: its Pod ending ends it; nor is it made
+			// again for a changed spec
+			if live.Status.Phase == corev1.PodSucceeded || live.Status.Phase == corev1.PodFailed {
+				return r.jobFinished(ctx, dp, &live)
+			}
+			return nil
+		}
 		if live.Status.Phase == corev1.PodFailed {
 			return r.handleFailedPod(ctx, dp, &live)
 		}
@@ -822,6 +844,63 @@ func (r *DevPodReconciler) handleFailedPod(ctx context.Context, dp *devpodv1alph
 	log.Info("pod failed, backing off", "retryCount", retryCount, "backoff", backoff, "message", msg)
 	r.requeueAfter = backoff
 	return nil
+}
+
+// jobEnded: dp is a job rank that has ended (or could not start).
+func jobEnded(dp *devpodv1alpha1.DevPod) bool {
+	return dp.Spec.Job != nil && (dp.Status.Phase == devpodv1alpha1.DevPodSucceeded || dp.Status.Phase == devpodv1alpha1.DevPodFailed)
+}
+
+// jobFinished records how a job rank's Pod ended — Succeeded or Failed,
+// the command's exit code and when — and leaves the Pod as it is.
+func (r *DevPodReconciler) jobFinished(ctx context.Context, dp *devpodv1alpha1.DevPod, pod *corev1.Pod) error {
+	patch := client.MergeFrom(dp.DeepCopy())
+	dp.Status.Phase = devpodv1alpha1.DevPodSucceeded
+	dp.Status.Message = ""
+	if pod.Status.Phase == corev1.PodFailed {
+		dp.Status.Phase = devpodv1alpha1.DevPodFailed
+		dp.Status.Message = podFailureMessage(pod)
+	}
+	dp.Status.Endpoint = ""
+	dp.Status.WorkloadRef = &devpodv1alpha1.WorkloadRef{APIVersion: "v1", Kind: "Pod", Name: pod.Name}
+	dp.Status.ExitCode = nil
+	finished := metav1.Now()
+	target := pod.Spec.Containers[0].Name
+	for _, c := range pod.Spec.Containers {
+		if len(c.Command) > 0 && c.Command[0] == "/opt/devpod/devpod-supervisor" {
+			target = c.Name
+		}
+	}
+	for _, cs := range pod.Status.ContainerStatuses {
+		if cs.Name != target {
+			continue
+		}
+		t := cs.State.Terminated
+		if t == nil {
+			t = cs.LastTerminationState.Terminated
+		}
+		if t != nil {
+			code := t.ExitCode
+			dp.Status.ExitCode = &code
+			if !t.FinishedAt.IsZero() {
+				finished = t.FinishedAt
+			}
+		}
+	}
+	dp.Status.FinishedAt = &finished
+	return r.Status().Patch(ctx, dp, patch)
+}
+
+// jobInvalid: a job rank that cannot be rendered (no command) fails at
+// once — it is never tried again.
+func (r *DevPodReconciler) jobInvalid(ctx context.Context, dp *devpodv1alpha1.DevPod, cause error) error {
+	log.FromContext(ctx).Info("job rank cannot run", "devpod", dp.Name, "reason", cause.Error())
+	patch := client.MergeFrom(dp.DeepCopy())
+	dp.Status.Phase = devpodv1alpha1.DevPodFailed
+	dp.Status.Message = cause.Error()
+	now := metav1.Now()
+	dp.Status.FinishedAt = &now
+	return r.Status().Patch(ctx, dp, patch)
 }
 
 func failureBackoff(retryCount int) time.Duration {

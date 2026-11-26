@@ -70,11 +70,25 @@ func Pod(dp *devpodv1alpha1.DevPod, cfg *devpodv1alpha1.GatewayConfig) (*corev1.
 		user.InitContainers...,
 	)
 
+	// A job rank runs its command once: never restarted, with a grace
+	// for its command to stop when it is preempted or out of time.
+	if dp.Spec.Job != nil {
+		user.RestartPolicy = corev1.RestartPolicyNever
+		if user.TerminationGracePeriodSeconds == nil {
+			grace := int64(JobGraceSeconds)
+			user.TerminationGracePeriodSeconds = &grace
+		}
+	}
+
 	pod := &corev1.Pod{
 		ObjectMeta: ObjectMeta(PodName(dp), cfg.Spec.DevPodNamespace, dp),
 		Spec:       *user,
 	}
 	mergeStrings(pod.Labels, dp.Spec.Pod.Metadata.Labels)
+	if dp.Spec.Job != nil {
+		pod.Labels[JobLabel] = dp.Spec.Job.Name
+		pod.Labels[RankLabel] = strconv.Itoa(int(dp.Spec.Job.Rank))
+	}
 	pod.Annotations = mergeStringsCopy(pod.Annotations, dp.Spec.Pod.Metadata.Annotations)
 	return pod, nil
 }
@@ -105,6 +119,9 @@ func wrapTargetWithSupervisor(spec *corev1.PodSpec, dp *devpodv1alpha1.DevPod, c
 		var orig []string
 		orig = append(orig, c.Command...)
 		orig = append(orig, c.Args...)
+		if dp.Spec.Job != nil && len(orig) == 0 {
+			return fmt.Errorf("job rank: container %q has no command to run", c.Name)
+		}
 
 		c.Command = []string{"/opt/devpod/devpod-supervisor"}
 		c.Args = orig
@@ -119,10 +136,14 @@ func wrapTargetWithSupervisor(spec *corev1.PodSpec, dp *devpodv1alpha1.DevPod, c
 		c.Env = append(c.Env,
 			corev1.EnvVar{Name: "SUPERVISOR_SSHD_PORT", Value: strconv.Itoa(int(port))},
 		)
-		if dp.Spec.ExitOnUserCommandExit {
+		if dp.Spec.ExitOnUserCommandExit || dp.Spec.Job != nil {
 			c.Env = append(c.Env,
 				corev1.EnvVar{Name: "SUPERVISOR_EXIT_ON_USER_CMD", Value: "true"},
 			)
+		}
+		if dp.Spec.Job != nil {
+			// the job is the command: sshd ending does not end it
+			c.Env = append(c.Env, corev1.EnvVar{Name: "SUPERVISOR_JOB", Value: "true"})
 		}
 		if dp.Spec.Shell != "" {
 			c.Env = append(c.Env,

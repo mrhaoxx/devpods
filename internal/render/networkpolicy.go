@@ -87,6 +87,12 @@ func OwnerAllowNetworkPolicy(ns, owner, gatewayNS string, backendPort, ingestPor
 					}},
 					Ports: []networkingv1.NetworkPolicyPort{udp53, tcp53},
 				},
+				// the owner's own DevPods (a job's ranks talk to each other)
+				{
+					To: []networkingv1.NetworkPolicyPeer{{
+						PodSelector: &metav1.LabelSelector{MatchLabels: map[string]string{LabelOwner: owner}},
+					}},
+				},
 				{
 					To: []networkingv1.NetworkPolicyPeer{{
 						IPBlock: &networkingv1.IPBlock{
