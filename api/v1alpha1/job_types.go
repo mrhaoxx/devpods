@@ -158,6 +158,11 @@ type JobStatus struct {
 	// longer has others stopped for it.
 	// +optional
 	GangTimeouts int32 `json:"gangTimeouts,omitempty"`
+	// PortBase: the first of the 16 ports its ranks may listen on
+	// (MASTER_PORT), chosen when it starts so that no job running on the
+	// same machines has them.
+	// +optional
+	PortBase int32 `json:"portBase,omitempty"`
 	// +optional
 	Ranks []JobRank `json:"ranks,omitempty"`
 }

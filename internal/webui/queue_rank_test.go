@@ -65,7 +65,7 @@ func TestRankDevPod(t *testing.T) {
 	if !slices.Equal(c.Command, []string{"/opt/devpod/bin/bash", "-lc", "python t.py", "train", "--lr", "1"}) || c.Args != nil || c.WorkingDir != "/home/alice/x" {
 		t.Fatalf("command %q args %q dir %q", c.Command, c.Args, c.WorkingDir)
 	}
-	lo, hi := jobPorts("abc12")
+	lo, hi := jobPortsOf(job)
 	for k, want := range map[string]string{"RANK": "1", "NODE_RANK": "1", "LOCAL_RANK": "0", "WORLD_SIZE": "2", "MASTER_ADDR": "alice-abc12-0.devpods.svc",
 		"MASTER_PORT": itoa(lo), "DEVPOD_JOB": "abc12", "DEVPOD_JOB_PORTS": itoa(lo) + "-" + itoa(hi), "FOO": "bar", "KEEP": "1"} {
 		if got := envValue(c, k); got != want {
@@ -92,11 +92,37 @@ func TestRankDevPod(t *testing.T) {
 	if n := rankName(strings.Repeat("u", 16), "abc12", 10); len(n) <= 22 {
 		t.Errorf("%q fits 22", n)
 	}
-	if lo < 20000 || hi != lo+15 || hi > 51999 {
+	if lo < 20000 || hi != lo+15 || hi > 29999 {
 		t.Errorf("ports %d-%d", lo, hi)
 	}
-	if lo2, _ := jobPorts("abc12"); lo2 != lo {
+	if lo2, _ := jobPortsOf(job); lo2 != lo {
 		t.Error("ports not stable")
+	}
+	// the block the scheduler chose, once chosen
+	job.Status.PortBase = 20160
+	if r := rankDevPod(job, 0, "g1", "devpods", ""); envValue(r.Spec.Pod.Spec.Containers[0], "MASTER_PORT") != "20160" ||
+		envValue(r.Spec.Pod.Spec.Containers[0], "DEVPOD_JOB_PORTS") != "20160-20175" {
+		t.Errorf("chosen block: %s", envValue(r.Spec.Pod.Spec.Containers[0], "DEVPOD_JOB_PORTS"))
+	}
+}
+
+// Port blocks lie below the NodePort range, and a job takes one no job
+// running on its machines has.
+func TestPickPorts(t *testing.T) {
+	for _, id := range []string{"a", "b", "zz9", "q1w2e", "abc12", "kkkkk"} {
+		lo, hi := jobPorts(id)
+		if lo < 20000 || hi > 29999 || (lo-20000)%16 != 0 {
+			t.Errorf("%s: %d-%d", id, lo, hi)
+		}
+	}
+	j := testJob()
+	home, _ := jobPorts(j.Name)
+	if got := pickPorts(j, []string{"g1", "g2"}, map[string]map[int32]bool{"g3": {home: true}}); got != home {
+		t.Errorf("free elsewhere: %d, want %d", got, home)
+	}
+	used := map[string]map[int32]bool{"g2": {home: true, home + 16: true}}
+	if got := pickPorts(j, []string{"g1", "g2"}, used); got == home || got == home+16 || got < 20000 || got > 29984 {
+		t.Errorf("taken on g2: %d", got)
 	}
 }
 

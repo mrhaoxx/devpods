@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"reflect"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -168,8 +169,19 @@ func (s *Server) queueIn(ctx context.Context, cluster string, jobs, ended []*dev
 	for _, victim := range plan.Preempt {
 		s.requeueJob(ctx, cc, victim, "preempted")
 	}
+	// the port blocks running jobs have, by machine
+	ports := map[string]map[int32]bool{}
+	for _, j := range active {
+		lo, _ := jobPortsOf(j)
+		for _, r := range j.Status.Ranks {
+			if ports[r.Node] == nil {
+				ports[r.Node] = map[int32]bool{}
+			}
+			ports[r.Node][lo] = true
+		}
+	}
 	for _, st := range plan.Starts {
-		s.startJob(ctx, cc, st.Job, st.Machines, nodes, now)
+		s.startJob(ctx, cc, st.Job, st.Machines, nodes, ports, now)
 	}
 	for _, j := range queued {
 		w, ok := plan.Waits[j.Name]
@@ -377,7 +389,9 @@ func (s *Server) requeueJob(ctx context.Context, cc *clusters.ClusterClients, j 
 // startJob makes j's ranks on machines and marks it Starting. A rank
 // found made already (a round that did not get to say so) is taken as
 // it is; any other failure takes back what was made.
-func (s *Server) startJob(ctx context.Context, cc *clusters.ClusterClients, j *devpodv1alpha1.Job, machines []string, nodes map[string]*corev1.Node, now time.Time) {
+func (s *Server) startJob(ctx context.Context, cc *clusters.ClusterClients, j *devpodv1alpha1.Job, machines []string, nodes map[string]*corev1.Node, ports map[string]map[int32]bool, now time.Time) {
+	// a port block no job on these machines has
+	j.Status.PortBase = pickPorts(j, machines, ports)
 	rank0 := rankName(j.Spec.Owner, j.Name, 0)
 	master := masterAddr(j, rank0, s.NS, j.Spec.Template.Spec.HostNetwork, internalIP(nodes[machines[0]]))
 	ranks := make([]devpodv1alpha1.JobRank, 0, len(machines))
@@ -409,6 +423,13 @@ func (s *Server) startJob(ctx context.Context, cc *clusters.ClusterClients, j *d
 			if pinnedNode(&cur) != "" {
 				m = pinnedNode(&cur)
 			}
+			if r == 0 { // made by a round that did not get to say so: its block is the job's
+				for _, e := range cur.Spec.Pod.Spec.Containers[0].Env {
+					if b, err := strconv.Atoi(e.Value); e.Name == "MASTER_PORT" && err == nil {
+						j.Status.PortBase = int32(b)
+					}
+				}
+			}
 		} else {
 			made = append(made, dp)
 		}
@@ -420,6 +441,12 @@ func (s *Server) startJob(ctx context.Context, cc *clusters.ClusterClients, j *d
 	j.Status.Reason, j.Status.Detail, j.Status.Position, j.Status.ExpectedStart, j.Status.StartedAt = "", nil, 0, nil, nil
 	if s.writeJobStatus(ctx, j) {
 		slog.Info("queue_job_start", "job", j.Name, "owner", j.Spec.Owner, "machines", machines)
+	}
+	for _, m := range ranksMachines(ranks) {
+		if ports[m] == nil {
+			ports[m] = map[int32]bool{}
+		}
+		ports[m][j.Status.PortBase] = true
 	}
 	// not written (cancelled meanwhile): its ranks are cleaned up by the
 	// rounds that find them, as an ended job's
@@ -784,5 +811,14 @@ func (s *Server) jobHoldViews(ctx context.Context, cluster, label, user string, 
 	slices.SortFunc(out, func(a, b jobHoldView) int {
 		return cmp.Or(strings.Compare(a.Node, b.Node), a.Start.Compare(b.Start), strings.Compare(a.ID, b.ID))
 	})
+	return out
+}
+
+// ranksMachines: the machines ranks are on.
+func ranksMachines(ranks []devpodv1alpha1.JobRank) []string {
+	out := make([]string, 0, len(ranks))
+	for _, r := range ranks {
+		out = append(out, r.Node)
+	}
 	return out
 }

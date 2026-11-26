@@ -10,6 +10,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -381,5 +382,25 @@ func TestGatewayDropAdmin(t *testing.T) {
 	}
 	if admin(true) {
 		t.Fatal("dropped, still an admin")
+	}
+}
+
+// A job's port block is chosen when it starts and kept in its status:
+// two jobs on one machine have different blocks.
+func TestQueueChoosesPortBlocks(t *testing.T) {
+	p, _ := queueRig(t, "qo2", "qo2-alice")
+	a := submit(t, p, "qo2-alice", 1, 4, nil)
+	b := submit(t, p, "qo2-alice", 1, 4, nil)
+	roundUntil(t, p, a, devpodv1alpha1.JobStarting)
+	jb := roundUntil(t, p, b, devpodv1alpha1.JobStarting)
+	ja := jobNow(t, a)
+	if ja.Status.PortBase == 0 || jb.Status.PortBase == 0 || ja.Status.PortBase == jb.Status.PortBase {
+		t.Fatalf("blocks %d and %d", ja.Status.PortBase, jb.Status.PortBase)
+	}
+	r := ranksBecome(t, a, 1)[0]
+	for _, e := range r.Spec.Pod.Spec.Containers[0].Env {
+		if e.Name == "MASTER_PORT" && e.Value != strconv.Itoa(int(ja.Status.PortBase)) {
+			t.Fatalf("MASTER_PORT %s, block %d", e.Value, ja.Status.PortBase)
+		}
 	}
 }

@@ -68,12 +68,39 @@ func rankName(owner, id string, rank int32) string {
 	return owner + "-" + id + "-" + itoa(rank)
 }
 
-// jobPorts: the block of ports a job's ranks may listen on.
+// jobPortBlocks: how many blocks there are, from port 20000 — below the
+// NodePort range (30000-32767), where a host-network rank's port would
+// meet a Service's.
+const jobPortBlocks = 625
+
+// jobPorts: the block a job named id takes unless it is taken.
 func jobPorts(id string) (lo, hi int32) {
 	h := fnv.New32a()
 	_, _ = h.Write([]byte(id))
-	lo = 20000 + jobPortBlock*int32(h.Sum32()%2000)
+	lo = 20000 + jobPortBlock*int32(h.Sum32()%jobPortBlocks)
 	return lo, lo + jobPortBlock - 1
+}
+
+// jobPortsOf: job's block — the one chosen when it started, else its own.
+func jobPortsOf(job *devpodv1alpha1.Job) (lo, hi int32) {
+	if b := job.Status.PortBase; b >= 20000 {
+		return b, b + jobPortBlock - 1
+	}
+	return jobPorts(job.Name)
+}
+
+// pickPorts: the block job takes on machines — its own if no job there
+// has it (used: by machine), else the next free one.
+func pickPorts(job *devpodv1alpha1.Job, machines []string, used map[string]map[int32]bool) int32 {
+	home, _ := jobPorts(job.Name)
+	start := (home - 20000) / jobPortBlock
+	for i := int32(0); i < jobPortBlocks; i++ {
+		b := 20000 + jobPortBlock*((start+i)%jobPortBlocks)
+		if !slices.ContainsFunc(machines, func(m string) bool { return used[m][b] }) {
+			return b
+		}
+	}
+	return home // every block taken: as it was
 }
 
 // masterAddr: where the ranks find rank 0 — on the host's network its
@@ -106,7 +133,7 @@ func rankDevPod(job *devpodv1alpha1.Job, rank int32, node, ns, master string) *d
 	if job.Spec.Workdir != "" {
 		c.WorkingDir = job.Spec.Workdir
 	}
-	lo, hi := jobPorts(job.Name)
+	lo, hi := jobPortsOf(job)
 	env := append([]corev1.EnvVar{}, c.Env...)
 	env = append(env, job.Spec.Env...)
 	for _, kv := range [][2]string{
