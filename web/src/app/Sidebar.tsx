@@ -70,6 +70,7 @@ export function Sidebar({ me, onNavigate }: { me: Me; onNavigate?: () => void })
     ...(me.features.snapshots ? [{ to: "/images", label: "我的镜像", icon: "◫" }] : []),
     { to: "/configs", label: "配置", icon: "▧" },
     ...(me.features.reservations ? [{ to: "/reservations", label: "节点预约", icon: "▥" }] : []),
+    ...(me.features.queue ? [{ to: "/queue", label: "队列", icon: "☰" }] : []),
     ...(audit ? [{ to: "/sessions", label: "我的会话", icon: "◷" }] : []),
   ];
   const settings: Item[] = [{ to: "/settings", label: "密钥与凭证", icon: "⚙", hint: "SSH 公钥、访问令牌、镜像仓库凭证" }];

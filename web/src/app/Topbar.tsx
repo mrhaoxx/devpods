@@ -10,6 +10,8 @@ const titles: [RegExp, string][] = [
   [/^\/sessions\/./, "会话详情"],
   [/^\/sessions/, "我的会话"],
   [/^\/settings/, "设置"],
+  [/^\/queue\/./, "任务"],
+  [/^\/queue/, "队列"],
   [/^\/admin\/devpods/, "全部 DevPod"],
   [/^\/admin\/nodes/, "节点"],
   [/^\/admin\/users/, "用户与配额"],

@@ -56,7 +56,7 @@ export interface Me {
   usage: { devpods: number; running: number; compute: Record<string, string>; storage: string };
   /** the kinds of GPU here, the default first */
   gpuTypes?: { resource: string; label: string }[];
-  features: { pubkeySelfService: boolean; kore: boolean; passwordAuth: boolean; audit?: boolean; telemetry?: boolean; reservations?: boolean; clusters?: boolean; webshell?: boolean; httpProxy?: boolean; snapshots?: boolean; snapshotDefaultRegistry?: boolean };
+  features: { pubkeySelfService: boolean; kore: boolean; passwordAuth: boolean; audit?: boolean; telemetry?: boolean; reservations?: boolean; clusters?: boolean; webshell?: boolean; httpProxy?: boolean; snapshots?: boolean; snapshotDefaultRegistry?: boolean; queue?: boolean };
   hasPassword: boolean;
   ssh: { host: string; port: number; loginSuffix?: string };
   /** the DevPod CLI's SSH login name (ssh <user>+<cli>@gateway), while it is on */
@@ -204,6 +204,8 @@ export type DevPod = {
     shell?: string;
     collaborators?: string[];
     persistence?: { size: string; mountPath?: string };
+    /** set on a job's rank: the job and which rank */
+    job?: { name: string; rank: number };
     pod?: { spec?: { containers?: ContainerSpec[]; nodeSelector?: Record<string, string> } };
   };
   status?: {
@@ -693,3 +695,74 @@ export const listRegistries = () => req<{ items: RegistryView[] }>("GET", "/api/
 export const putRegistry = (host: string, body: { username: string; password: string }) =>
   req<{ clusters?: Record<string, string> } | undefined>("PUT", `/api/me/registries/${encodeURIComponent(host)}`, body);
 export const deleteRegistry = (host: string) => req<void>("DELETE", `/api/me/registries/${encodeURIComponent(host)}`);
+
+// The queue (design 2026-11-26): jobs that wait for the reservable
+// machines' unreserved capacity and run as one DevPod per rank.
+export type JobPhase = "Queued" | "Starting" | "Running" | "Succeeded" | "Failed" | "TimedOut" | "Cancelled";
+export type JobRank = { rank: number; node?: string; devpod?: string; phase?: string; exitCode?: number; log?: string };
+export type Job = {
+  cluster?: string;
+  id: string;
+  title?: string;
+  owner: string;
+  phase: JobPhase;
+  /** why it waits (capacity, behind, quota, preempting, preempted, gang-timeout) or how it ended */
+  reason?: string;
+  detail?: Record<string, string>;
+  /** its place among the waiting, from 1 */
+  position?: number;
+  nodes: number;
+  gpus: number;
+  cpus: number;
+  timeLimitSeconds: number;
+  priority: number;
+  preemptible?: boolean;
+  mine: boolean;
+  canManage: boolean;
+  submitted: string;
+  expectedStart?: string;
+  startedAt?: string;
+  finishedAt?: string;
+  attempts?: number;
+  preemptions?: number;
+  ranks?: JobRank[];
+  /** what it runs: its owner's and admins' only */
+  command?: string;
+  args?: string[];
+  workdir?: string;
+  source?: { devpod?: string; config?: string; vars?: Record<string, string> };
+};
+export type JobRequest = {
+  title?: string;
+  command?: string;
+  script?: string;
+  args?: string[];
+  workdir?: string;
+  from: { devpod?: string; config?: string; vars?: Record<string, string> };
+  nodes: number;
+  gpus: number;
+  cpus?: number;
+  timeLimitSeconds?: number;
+  priority?: number;
+  preemptible?: boolean;
+  privileges?: { hostNetwork?: boolean; privileged?: boolean; capAdd?: string[] };
+  env?: Record<string, string>;
+  dryRun?: boolean;
+};
+export type JobEstimate = { position?: number; startsNow?: boolean; expectedStart?: string; reason?: string; detail?: Record<string, string>; cpus: number };
+export type JobLimits = { maxPriority: number; unlimitedPriority: boolean; defaultTimeLimitSeconds: number; maxTimeLimitSeconds: number };
+export const listJobs = (q: { mine?: boolean; ended?: boolean } = {}) => {
+  const p = new URLSearchParams();
+  if (q.mine) p.set("mine", "1");
+  if (q.ended) p.set("ended", "1");
+  const qs = p.toString();
+  return req<{ items: Job[] }>("GET", `/api/jobs${qs ? `?${qs}` : ""}`);
+};
+export const getJob = (id: string) => req<Job>("GET", `/api/jobs/${id}`);
+export const submitJob = (cluster: string | undefined, body: JobRequest) => req<Job & JobEstimate>("POST", apiIn(cluster, "/api/jobs"), body);
+export const cancelJob = (id: string) => req<void>("DELETE", `/api/jobs/${id}`);
+export const resubmitJob = (id: string) => req<Job>("POST", `/api/jobs/${id}/resubmit`);
+export const jobLimits = (cluster: string | undefined) => req<JobLimits>("GET", apiIn(cluster, "/api/jobs/limits"));
+export type PriorityRule = { condition: string; maxPriority: number };
+export const getPriorityRules = () => req<{ items: PriorityRule[] }>("GET", "/api/admin/job-priority-rules");
+export const putPriorityRules = (items: PriorityRule[]) => req<{ items: PriorityRule[] }>("PUT", "/api/admin/job-priority-rules", { items });

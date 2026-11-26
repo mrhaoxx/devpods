@@ -1,6 +1,6 @@
 // Phase as a colored dot AND its name (color never stands alone).
-const labels: Record<string, string> = { Running: "运行中", Pending: "启动中", Stopped: "已休眠", Failed: "失败" };
-const tones: Record<string, string> = { Running: "bg-run", Pending: "bg-warm", Stopped: "bg-idle", Failed: "bg-fail" };
+const labels: Record<string, string> = { Running: "运行中", Pending: "启动中", Stopped: "已休眠", Failed: "失败", Succeeded: "已完成" };
+const tones: Record<string, string> = { Running: "bg-run", Pending: "bg-warm", Stopped: "bg-idle", Failed: "bg-fail", Succeeded: "bg-idle" };
 
 export function phaseLabel(phase?: string): string {
   if (!phase) return "未知";

@@ -19,6 +19,7 @@ import { NodesPage } from "../features/nodes/NodesPage";
 import { ManagedNodesPage } from "../features/nodes/ManagedNodesPage";
 import { HttpAuthPage } from "../features/devpods/HttpAuthPage";
 import { ReservationsPage } from "../features/reservations/ReservationsPage";
+import { QueuePage } from "../features/queue/QueuePage";
 import { AccessPage } from "../features/access/AccessPage";
 import { GroupsPage } from "../features/access/GroupsPage";
 import { AdminReservationsPage } from "../features/reservations/AdminReservationsPage";
@@ -44,6 +45,7 @@ export function AppRoutes() {
         <Route path="devpods/:cluster/:name" element={<DetailPage />} />
         <Route path="http-auth" element={<HttpAuthPage />} />
         <Route path="reservations" element={<ReservationsPage />} />
+        <Route path="queue" element={<QueuePage />} />
         <Route path="images" element={<ImagesPage />} />
         <Route path="configs" element={<ConfigsPage />} />
         <Route path="configs/new" element={<ConfigEditor key="new" />} />

@@ -25,4 +25,15 @@ describe("Sidebar", () => {
     expect(screen.queryByRole("link", { name: /会话 \/ 回放/ })).toBeNull();
     expect(screen.queryByRole("link", { name: /我管理的机器/ })).toBeNull();
   });
+
+  it("队列 only where the queue is on", async () => {
+    stubFetch({});
+    const off = stubMe();
+    const { unmount } = renderWithProviders(<Sidebar me={off} />, { me: off });
+    expect(screen.queryByRole("link", { name: /队列/ })).toBeNull();
+    unmount();
+    const on = stubMe({ features: { ...stubMe().features, queue: true } });
+    renderWithProviders(<Sidebar me={on} />, { me: on });
+    expect(screen.getByRole("link", { name: /队列/ })).toBeTruthy();
+  });
 });
