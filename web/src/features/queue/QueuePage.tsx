@@ -59,7 +59,7 @@ export function QueuePage() {
         id: "job",
         header: "任务",
         accessorFn: (j) => j.id,
-        meta: { priority: 1, width: 200 },
+        meta: { priority: 1, width: 220, pin: "left" },
         cell: ({ row }) => (
           <span className="inline-flex min-w-0 items-center gap-1">
             <span className="mono truncate">{`${row.original.id}${row.original.title ? ` · ${row.original.title}` : ""}`}</span>
@@ -75,7 +75,7 @@ export function QueuePage() {
       { id: "size", header: "规模", accessorFn: (j) => j.nodes * Math.max(j.gpus, 1), meta: { priority: 1, width: 100 }, cell: ({ row }) => sizeText(row.original) },
       { id: "priority", header: "优先级", accessorKey: "priority", meta: { priority: 2, width: 64 } },
       { id: "limit", header: "时长上限", accessorKey: "timeLimitSeconds", meta: { priority: 2, width: 80 }, cell: ({ row }) => fmtHours(row.original.timeLimitSeconds * 1000) },
-      { id: "state", header: "状态", accessorFn: (j) => j.phase, meta: { priority: 1, width: 320 }, cell: ({ row }) => stateText(row.original, now) },
+      { id: "state", header: "状态", accessorFn: (j) => j.phase, meta: { priority: 1, width: 400 }, cell: ({ row }) => stateText(row.original, now) },
     ],
     [several, now],
   );

@@ -204,9 +204,13 @@ export function SubmitDialog({ onClose }: { onClose(): void }) {
                 <Textarea aria-label="变量" rows={2} className="mono text-xs" value={vars} onChange={(e) => setVars(e.target.value)} />
               </Field>
             )}
-            <Field label="命令" hint="每台都在登录 bash 里运行，带 RANK、WORLD_SIZE、MASTER_ADDR、MASTER_PORT">
+            <Field label="命令">
               <Textarea aria-label="命令" rows={2} className="mono text-xs" placeholder="torchrun --nnodes $WORLD_SIZE --node-rank $RANK … train.py" value={command} onChange={(e) => setCommand(e.target.value)} />
             </Field>
+            <p className="-mt-2 text-[11px] text-faint">
+              每台都在登录 bash 里运行，带 <span className="mono">RANK</span>、<span className="mono">WORLD_SIZE</span>、<span className="mono">MASTER_ADDR</span>、
+              <span className="mono">MASTER_PORT</span>；所有台都结束任务才结束。
+            </p>
             <div className="grid grid-cols-2 gap-3">
               <Field label="台数">
                 <Input aria-label="台数" type="number" min={1} value={nodes} onChange={(e) => setNodes(e.target.value)} />
@@ -232,7 +236,7 @@ export function SubmitDialog({ onClose }: { onClose(): void }) {
                     </button>
                   ))}
                 </div>
-                <Input aria-label="每台卡数（自填）" type="number" min={0} value={gpus} onChange={(e) => setGpus(e.target.value)} className="!h-7 w-16 text-xs" />
+                <Input aria-label="每台卡数（自填）" type="number" min={0} value={gpus} onChange={(e) => setGpus(e.target.value)} className="!h-7 !w-16 text-xs" />
                 <Input
                   aria-label="每台核数"
                   type="number"
@@ -241,7 +245,7 @@ export function SubmitDialog({ onClose }: { onClose(): void }) {
                   value={cpus}
                   placeholder={estimate?.cpus ? `${estimate.cpus} 核` : "核数"}
                   onChange={(e) => setCpus(e.target.value)}
-                  className="!h-7 w-24 text-xs"
+                  className="!h-7 !w-24 text-xs"
                 />
               </div>
               <p className="mt-1 text-[11px] text-faint">核数留空时按卡数占机器的比例给。</p>

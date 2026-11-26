@@ -105,7 +105,7 @@ const me = (u) => ({
   nameBudget: 30,
   quota: { maxDevPods: 10, compute: { cpu: "64", memory: "256Gi" } },
   usage: { devpods: 3, running: 3, compute: { cpu: "24", memory: "96Gi" }, storage: "0" },
-  features: { pubkeySelfService: true, kore: false, passwordAuth: true, audit: true, telemetry: true, reservations: true },
+  features: { pubkeySelfService: true, kore: false, passwordAuth: true, audit: true, telemetry: true, reservations: true, queue: true },
   hasPassword: true,
   ssh: { host: "gw.example.com", port: 2222 },
 });
@@ -127,6 +127,17 @@ function sse(req, res, frame, every = 1000) {
   req.on("close", () => clearInterval(timer));
 }
 
+// the queue: bob's job running on two machines, carol's waiting for
+// cards, one of alice's behind it; submitted ones are added
+const jobs = [
+  { id: "run01", title: "sft", owner: "bob", phase: "Running", nodes: 2, gpus: 8, cpus: 96, timeLimitSeconds: 43200, priority: 200, preemptible: true, submitted: iso(7200e3), startedAt: iso(3600e3),
+    ranks: [{ rank: 0, node: "g200", devpod: "bob-run01-0", phase: "Running" }, { rank: 1, node: "g201", devpod: "bob-run01-1", phase: "Running" }] },
+  { id: "wait1", title: "pretrain-with-a-rather-long-name", owner: "carol", phase: "Queued", nodes: 4, gpus: 8, cpus: 96, timeLimitSeconds: 86400, priority: 500, submitted: iso(1800e3),
+    position: 1, reason: "capacity", detail: { need: "32", free: "18" }, expectedStart: new Date(Date.now() + 5 * 3600e3).toISOString(), ranks: [] },
+  { id: "eval2", title: "eval", owner: "alice", phase: "Queued", nodes: 1, gpus: 4, cpus: 48, timeLimitSeconds: 3600, priority: 0, submitted: iso(600e3),
+    position: 2, reason: "behind", detail: { head: "wait1" }, ranks: [], command: "python eval.py", workdir: "/home/alice" },
+];
+const jobView = (j, u) => ({ ...j, mine: j.owner === u, canManage: j.owner === u || u === "admin", ...(j.owner === u || u === "admin" ? {} : { command: undefined, workdir: undefined }) });
 const userOf = (req) => /(?:^|;\s*)s=([a-z]+)/.exec(req.headers.cookie ?? "")?.[1];
 const visible = (u, scope) => devpods.filter((d) => (scope === "all" && u === "admin") || d.spec.owner === u);
 
@@ -231,6 +242,31 @@ const server = http.createServer((req, res) => {
         updatedAt: iso(), content: "apiVersion: devpod.io/v1alpha1\nkind: DevPod\nspec:\n  image: ubuntu:24.04 # from-the-config\n" };
       setTimeout(() => json(res, 200, config), 2500);
       return;
+    }
+    if (p === "/api/jobs" && req.method === "POST") {
+      let body = "";
+      req.on("data", (c) => (body += c));
+      req.on("end", () => {
+        const r = JSON.parse(body);
+        const waiting = jobs.filter((j) => j.phase === "Queued").length;
+        if (r.dryRun) return json(res, 200, { position: waiting + 1, reason: "behind", expectedStart: new Date(Date.now() + 8 * 3600e3).toISOString(), cpus: 12 * (r.gpus || 1) });
+        const j = { id: `new${String(jobs.length).padStart(2, "0")}`, title: r.title, owner: u, phase: "Queued", nodes: r.nodes, gpus: r.gpus, cpus: r.cpus ?? 12 * r.gpus,
+          timeLimitSeconds: r.timeLimitSeconds ?? 86400, priority: r.priority ?? 0, preemptible: !!r.preemptible, submitted: iso(), position: waiting + 1, reason: "behind",
+          detail: { head: "wait1" }, ranks: [], command: r.command, workdir: r.workdir, source: r.from };
+        jobs.push(j);
+        json(res, 201, jobView(j, u));
+      });
+      return;
+    }
+    if (p === "/api/jobs") {
+      const mine = url.searchParams.get("mine") === "1";
+      return json(res, 200, { items: jobs.filter((j) => !mine || j.owner === u).map((j) => jobView(j, u)) });
+    }
+    if (p === "/api/jobs/limits") return json(res, 200, { maxPriority: 100, unlimitedPriority: u === "admin", defaultTimeLimitSeconds: 86400, maxTimeLimitSeconds: 259200 });
+    if ((m = /^\/api\/jobs\/([^/]+)$/.exec(p))) {
+      const j = jobs.find((x) => x.id === m[1]);
+      if (!j) return json(res, 404, { code: "NOT_FOUND", message: "no such job" });
+      return json(res, 200, jobView(j, u));
     }
     // node reservations: the rules, six reservable machines, one of bob's
     if (p === "/api/reservations/rules")

@@ -15,6 +15,8 @@ import { BulkToast, type BulkOutcome, type BulkProgress } from "../../design/Bul
 import { runBulk } from "../../lib/bulk";
 import { RuleDrawer } from "./RuleDrawer";
 import { GrantsPanel } from "./GrantsPanel";
+import { PriorityRulesPanel } from "../queue/PriorityRulesPanel";
+import { useMe } from "../../data/queries";
 import { checkRunning, effectText, getAccess, listGroups, putAccess, type AccessPolicy, type AccessRule, type Violation } from "./api";
 
 const newRule = (): AccessRule => ({ match: "", effect: { allow: false } });
@@ -30,6 +32,7 @@ const violationColumns: ColumnDef<Violation, unknown>[] = [
 
 export function AccessPage() {
   const qc = useQueryClient();
+  const me = useMe().data;
   const q = useQuery({ queryKey: ["access"], queryFn: getAccess });
   const groups = useQuery({ queryKey: ["groups"], queryFn: listGroups }).data?.items ?? [];
   // the rules as being edited (null: as saved)
@@ -214,6 +217,7 @@ export function AccessPage() {
         />
       )}
       <GrantsPanel groups={groups} />
+      {me?.features.queue && <PriorityRulesPanel />}
     </div>
   );
 }
