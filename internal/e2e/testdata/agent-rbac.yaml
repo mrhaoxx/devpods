@@ -30,6 +30,11 @@ rules:
 - apiGroups: [""]
   resources: ["nodes"]
   verbs: ["get", "list", "watch"]
+# the volume a DevPod's home is bound to, read only (its machine, when on
+# a machine's own disk)
+- apiGroups: [""]
+  resources: ["persistentvolumes"]
+  verbs: ["get"]
 # every pod, to read only: what workloads other than DevPods hold on each
 # node, which the agent tells the console (the console counts it as taken)
 - apiGroups: [""]
@@ -78,6 +83,11 @@ rules:
 - apiGroups: [""]
   resources: ["pods", "events"]
   verbs: ["get", "list", "watch"]
+# A DevPod's home volume, read only: one on a machine's own disk keeps its
+# DevPod on that machine when the queue places it.
+- apiGroups: [""]
+  resources: ["persistentvolumeclaims"]
+  verbs: ["get"]
 # Events on DevPods (telemetry alerts), written in the DevPod's cluster.
 - apiGroups: [""]
   resources: ["events"]

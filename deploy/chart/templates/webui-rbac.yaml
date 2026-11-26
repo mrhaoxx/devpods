@@ -20,6 +20,11 @@ rules:
 - apiGroups: [""]
   resources: ["pods", "events"]
   verbs: ["get", "list", "watch"]
+# A DevPod's home volume, read only: one on a machine's own disk keeps its
+# DevPod on that machine when the queue places it.
+- apiGroups: [""]
+  resources: ["persistentvolumeclaims"]
+  verbs: ["get"]
 # Snapshot progress: follow the snapshot Job's output.
 - apiGroups: [""]
   resources: ["pods/log"]
@@ -71,6 +76,11 @@ rules:
 - apiGroups: [""]
   resources: ["nodes"]
   verbs: ["get", "list", "watch"]
+# the volume a DevPod's home is bound to, read only (its machine, when on
+# a machine's own disk)
+- apiGroups: [""]
+  resources: ["persistentvolumes"]
+  verbs: ["get"]
 {{- if dig "enabled" false (.Values.reservation | default dict) }}
 # Node reservations: users reserve through the webui; the 可预约 switch
 # patches the node's devpod.io/reservable label. The console keeps them

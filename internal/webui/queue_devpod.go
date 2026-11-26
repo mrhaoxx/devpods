@@ -44,16 +44,19 @@ func devPodEntry(dp *devpodv1alpha1.DevPod, since time.Time, prio int32, only, a
 
 // homeNode: the one machine dp's home volume is bound to — a PV with a
 // required node affinity naming one hostname (a local disk) — or "".
+// Read straight from the cluster, not a cache: one the console may not
+// read (an older role) fails at once rather than waiting on a cache that
+// never fills.
 func (s *Server) homeNode(ctx context.Context, cc *clusters.ClusterClients, dp *devpodv1alpha1.DevPod) string {
-	if dp.Spec.Persistence == nil {
+	if dp.Spec.Persistence == nil || cc.Reader == nil {
 		return ""
 	}
 	var pvc corev1.PersistentVolumeClaim
-	if err := cc.Client.Get(ctx, types.NamespacedName{Name: render.HomePVCName(dp), Namespace: s.NS}, &pvc); err != nil || pvc.Spec.VolumeName == "" {
+	if err := cc.Reader.Get(ctx, types.NamespacedName{Name: render.HomePVCName(dp), Namespace: s.NS}, &pvc); err != nil || pvc.Spec.VolumeName == "" {
 		return ""
 	}
 	var pv corev1.PersistentVolume
-	if err := cc.Client.Get(ctx, types.NamespacedName{Name: pvc.Spec.VolumeName}, &pv); err != nil || pv.Spec.NodeAffinity == nil || pv.Spec.NodeAffinity.Required == nil {
+	if err := cc.Reader.Get(ctx, types.NamespacedName{Name: pvc.Spec.VolumeName}, &pv); err != nil || pv.Spec.NodeAffinity == nil || pv.Spec.NodeAffinity.Required == nil {
 		return ""
 	}
 	terms := pv.Spec.NodeAffinity.Required.NodeSelectorTerms
