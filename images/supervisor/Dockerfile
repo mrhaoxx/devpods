@@ -1,9 +1,15 @@
 # syntax=docker/dockerfile:1.7
+#
+# Mirrors, optional (unset: the upstream ones): APK_MIRROR (an Alpine
+# mirror's base, e.g. https://mirrors.zju.edu.cn/alpine), DEBIAN_MIRROR
+# (e.g. https://mirrors.zju.edu.cn), GOPROXY (e.g. https://goproxy.cn,direct).
 
 # --- Stage 1: static-pie OpenSSH from source (musl) -----------------------
 FROM alpine:3.20 AS sshd-build
 ARG OPENSSH_VERSION=10.3p1
-RUN apk add --no-cache build-base linux-headers \
+ARG APK_MIRROR
+RUN if [ -n "$APK_MIRROR" ]; then sed -i -e "s#https://dl-cdn.alpinelinux.org/alpine#$APK_MIRROR#" -e "s#http://dl-cdn.alpinelinux.org/alpine#$APK_MIRROR#" /etc/apk/repositories; fi && \
+    apk add --no-cache build-base linux-headers \
     openssl-dev openssl-libs-static \
     zlib-dev zlib-static \
     autoconf wget
@@ -35,6 +41,8 @@ RUN mkdir -p /out/sbin /out/libexec && \
 # --- Stage 2: build supervisor (static Go) ------------------------------
 # on the build machine, cross-compiled (no cgo): not under emulation
 FROM --platform=$BUILDPLATFORM golang:1.26-alpine AS supervisor-build
+# GOPROXY: a module proxy nearer than proxy.golang.org (unset: go's own)
+ARG GOPROXY
 WORKDIR /src
 COPY go.mod go.sum ./
 RUN go mod download
@@ -49,7 +57,9 @@ RUN CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} \
 # at /bin/bash-static. Alpine has no equivalent prebuilt package (its `bash`
 # is dynamically linked to musl), so we pull from Debian here.
 FROM debian:trixie-slim AS bash-build
-RUN apt-get update && \
+ARG DEBIAN_MIRROR
+RUN if [ -n "$DEBIAN_MIRROR" ]; then sed -i "s#http://deb.debian.org#$DEBIAN_MIRROR#g" /etc/apt/sources.list.d/debian.sources; fi && \
+    apt-get update && \
     apt-get install -y --no-install-recommends bash-static binutils && \
     rm -rf /var/lib/apt/lists/*
 RUN mkdir -p /out && cp /bin/bash-static /out/bash && strip /out/bash
@@ -57,7 +67,9 @@ RUN mkdir -p /out && cp /bin/bash-static /out/bash && strip /out/bash
 # --- Stage 4: zsh static (musl + ncurses-static) -----------------------
 FROM alpine:3.20 AS zsh-build
 ARG ZSH_VERSION=5.9.1
-RUN apk add --no-cache build-base ncurses-static ncurses-dev autoconf wget xz
+ARG APK_MIRROR
+RUN if [ -n "$APK_MIRROR" ]; then sed -i -e "s#https://dl-cdn.alpinelinux.org/alpine#$APK_MIRROR#" -e "s#http://dl-cdn.alpinelinux.org/alpine#$APK_MIRROR#" /etc/apk/repositories; fi && \
+    apk add --no-cache build-base ncurses-static ncurses-dev autoconf wget xz
 WORKDIR /src
 # zsh.org moves superseded releases into pub/old/; fall back through
 # the mirrors so a new upstream release doesn't break this build.
@@ -91,7 +103,9 @@ ARG FISH_VERSION=4.7.1
 ARG FISH_SHA256_x86_64=345388add316b94a847b08cef01f1b46e85b98215328271ee22a21555a3204df
 ARG FISH_SHA256_aarch64=72957265b8629fbb3cdb215260c302f6154403dbaf35d38103aac6af689fb7f6
 ARG TARGETARCH
-RUN apk add --no-cache wget xz binutils busybox-static
+ARG APK_MIRROR
+RUN if [ -n "$APK_MIRROR" ]; then sed -i -e "s#https://dl-cdn.alpinelinux.org/alpine#$APK_MIRROR#" -e "s#http://dl-cdn.alpinelinux.org/alpine#$APK_MIRROR#" /etc/apk/repositories; fi && \
+    apk add --no-cache wget xz binutils busybox-static
 WORKDIR /src
 # Upstream fish ships prebuilt binaries only for x86_64/aarch64. On riscv64
 # there is no release binary (and a Rust source build is ~10min under qemu),
@@ -119,7 +133,9 @@ RUN mkdir -p /out && \
 # overlapping symlinks so GNU wins on its own ground.
 FROM alpine:3.20 AS coreutils-build
 ARG COREUTILS_VERSION=9.7
-RUN apk add --no-cache build-base wget xz busybox-static
+ARG APK_MIRROR
+RUN if [ -n "$APK_MIRROR" ]; then sed -i -e "s#https://dl-cdn.alpinelinux.org/alpine#$APK_MIRROR#" -e "s#http://dl-cdn.alpinelinux.org/alpine#$APK_MIRROR#" /etc/apk/repositories; fi && \
+    apk add --no-cache build-base wget xz busybox-static
 
 # GNU coreutils source build (static musl)
 WORKDIR /src
@@ -153,7 +169,9 @@ RUN mkdir -p /out/busybox-bin && cp /bin/busybox.static /out/busybox-bin/busybox
 
 # --- Stage 7: terminfo database ----------------------------------------
 FROM alpine:3.20 AS terminfo-build
-RUN apk add --no-cache ncurses-terminfo
+ARG APK_MIRROR
+RUN if [ -n "$APK_MIRROR" ]; then sed -i -e "s#https://dl-cdn.alpinelinux.org/alpine#$APK_MIRROR#" -e "s#http://dl-cdn.alpinelinux.org/alpine#$APK_MIRROR#" /etc/apk/repositories; fi && \
+    apk add --no-cache ncurses-terminfo
 RUN mkdir -p /out && cp -r /usr/share/terminfo /out/terminfo
 
 # --- Final stage: scratch image for the initContainer -----------------
