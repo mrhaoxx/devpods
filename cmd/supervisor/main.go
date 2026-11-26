@@ -137,6 +137,10 @@ func main() {
 	// it from spec.exitOnUserCommandExit) to revert to first-death-
 	// wins, useful for service-style workloads.
 	exitOnUserCmd := os.Getenv("SUPERVISOR_EXIT_ON_USER_CMD") == "true"
+	// jobMode: this DevPod is a queue job's rank (the controller sets it
+	// with spec.job) — its command is the point, and sshd ending does
+	// not end it.
+	jobMode := os.Getenv("SUPERVISOR_JOB") == "true"
 
 	// Telemetry runs only when the controller handed out a config
 	// (spec §5.5), inside this process rather than as a child of its own;
@@ -167,7 +171,7 @@ func main() {
 		}
 	}()
 
-	code := waitForChildren(children, &shuttingDown, exitOnUserCmd)
+	code := waitForChildren(children, &shuttingDown, exitOnUserCmd, jobMode)
 	tel.stop()
 	os.Exit(code)
 }
@@ -182,7 +186,9 @@ func main() {
 //     ssh in and investigate.
 //   - During shutdown (we forwarded a terminal signal), wait for all
 //     tracked children and prefer the user command's exit code.
-func waitForChildren(children []*child, shuttingDown *atomic.Bool, exitOnUserCmd bool) int {
+//   - In a job (jobMode) sshd's death is logged and the command runs on:
+//     only its exit (or a signal) ends the supervisor.
+func waitForChildren(children []*child, shuttingDown *atomic.Bool, exitOnUserCmd, jobMode bool) int {
 	var firstTrackedExit *int
 	for {
 		var ws syscall.WaitStatus
@@ -230,6 +236,8 @@ func waitForChildren(children []*child, shuttingDown *atomic.Bool, exitOnUserCmd
 		// Non-shutdown: decide based on which child died and whether
 		// the user opted into following user-cmd exits.
 		switch {
+		case hit.name == "sshd" && jobMode && !userReaped(children):
+			fmt.Fprintf(os.Stderr, "supervisor: sshd exited with %d; the job's command runs on (no new SSH logins to this rank)\n", code)
 		case hit.name == "sshd":
 			// sshd is the load-bearing process; always exit so kubelet
 			// restarts the container.
