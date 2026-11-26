@@ -74,6 +74,15 @@ func TestDPArgvAndFiles(t *testing.T) {
 	if _, _, err := dpArgs("sbatch", []string{"missing.sh"}, "/w", read); err == nil {
 		t.Fatal("a script that cannot be read is sent")
 	}
+	// all of sbatch's value flags skip their value
+	if _, files, err := dpArgs("sbatch", []string{"--ntasks", "2", "train.sh"}, "/w", read); err != nil || files["train.sh"] == "" {
+		t.Fatalf("--ntasks: %v %v", files, err)
+	}
+	// an option sbatch does not have goes to the console as it is (it
+	// says which): its value is not taken for the script
+	if argv, files, err := dpArgs("sbatch", []string{"--mem", "4G", "train.sh"}, "/w", read); err != nil || len(files) != 0 || len(argv) != 4 {
+		t.Fatalf("--mem: %v %v %v", argv, files, err)
+	}
 }
 
 func TestDPBase(t *testing.T) {

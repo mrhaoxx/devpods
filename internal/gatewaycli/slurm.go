@@ -188,31 +188,26 @@ func outputWrapper(out, errFile, title string) string {
 		p = strings.ReplaceAll(p, "%j", "${DEVPOD_JOB}")
 		return strings.ReplaceAll(p, "%x", title)
 	}
+	// the first rank writes the files, as the one batch host does; every
+	// rank's own output is in its log all the same
 	if errFile == "" || errFile == out {
-		return fmt.Sprintf("exec > >(tee -a \"%s\") 2>&1\n", expand(out))
+		return fmt.Sprintf("if [ \"${RANK:-0}\" = 0 ]; then exec > >(tee -a \"%s\") 2>&1; fi\n", expand(out))
 	}
-	return fmt.Sprintf("exec > >(tee -a \"%s\") 2> >(tee -a \"%s\" >&2)\n", expand(out), expand(errFile))
+	return fmt.Sprintf("if [ \"${RANK:-0}\" = 0 ]; then exec > >(tee -a \"%s\") 2> >(tee -a \"%s\" >&2); fi\n", expand(out), expand(errFile))
 }
 
 func runSbatch(e *Env, a *parsed) int {
 	c := find("sbatch")
 	argv := a.pos
-	// the script, as dp sent it (or on standard input)
-	name := ""
-	for i := 0; i < len(argv); i++ {
-		w := argv[i]
-		if !strings.HasPrefix(w, "-") {
-			name = w
-			break
-		}
-		n, _, inline := strings.Cut(strings.TrimLeft(w, "-"), "=")
-		if inline {
-			continue
-		}
-		if _, short := sbatchShort[n]; (strings.HasPrefix(w, "--") && sbatchValue[n]) || (!strings.HasPrefix(w, "--") && short) {
-			i++ // its value
-		}
+	// the options first: one sbatch does not have is refused by name
+	// (before its value could be taken for the script)
+	pre, err := parseSbatch("", argv)
+	if err != nil {
+		fmt.Fprintf(e.Err, "%v\n", err)
+		return ExitUsage
 	}
+	// the script, as dp sent it (or on standard input)
+	name := pre.script
 	script := ""
 	switch text, ok := e.Files[name]; {
 	case name != "" && ok:
@@ -333,9 +328,10 @@ func runScancel(e *Env, a *parsed) int {
 		return usage(e, c, "scancel takes job ids")
 	}
 	status := ExitOK
-	for _, id := range a.pos {
+	for _, ref := range a.pos {
+		_, id := splitRef(ref) // st/abc12, as job list says it
 		if _, err := call(e, "DELETE", "/api/jobs/"+url.PathEscape(id), nil, nil); err != nil {
-			fmt.Fprintf(e.Err, "scancel: %s: %v\n", id, err)
+			fmt.Fprintf(e.Err, "scancel: %s: %v\n", ref, err)
 			status = ExitAPI
 		}
 	}

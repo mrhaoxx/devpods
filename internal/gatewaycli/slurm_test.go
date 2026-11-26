@@ -44,7 +44,7 @@ func TestSbatchSubmits(t *testing.T) {
 	}
 	b := lastBody(t, f, "POST", "/api/clusters/st/jobs")
 	script, _ := b["script"].(string)
-	if !strings.HasPrefix(script, `exec > >(tee -a "slurm-${DEVPOD_JOB}.out") 2>&1`+"\n") || !strings.HasSuffix(script, trainScript) || b["workdir"] != "/home/alice/x" ||
+	if !strings.HasPrefix(script, `if [ "${RANK:-0}" = 0 ]; then exec > >(tee -a "slurm-${DEVPOD_JOB}.out") 2>&1; fi`+"\n") || !strings.HasSuffix(script, trainScript) || b["workdir"] != "/home/alice/x" ||
 		b["nodes"] != float64(2) || b["title"] != "train" {
 		t.Fatalf("body %v", b)
 	}
@@ -82,5 +82,26 @@ func TestScancel(t *testing.T) {
 	f.status["DELETE /api/jobs/abc12"] = 204
 	if code, _, errs := f.run("scancel abc12"); code != 0 || f.calls[len(f.calls)-1] != "DELETE /api/jobs/abc12" {
 		t.Fatalf("scancel: %d %q %v", code, errs, f.calls)
+	}
+}
+
+// What sbatch does not have is refused by name, before any script is
+// looked for; a job ID as job list prints it is cancelled as well.
+func TestSlurmEdges(t *testing.T) {
+	f := newFakeAPI(t)
+	if code, _, errs := f.runFrom("sbatch --mem 4G train.sh", origin, nil); code != ExitUsage || !strings.Contains(errs, "--mem is not supported") {
+		t.Fatalf("--mem: %d %q", code, errs)
+	}
+	f.status["DELETE /api/jobs/abc12"] = 204
+	f.routes["DELETE /api/jobs/abc12"] = nil
+	if code, _, errs := f.run("scancel st/abc12"); code != 0 || f.calls[len(f.calls)-1] != "DELETE /api/jobs/abc12" {
+		t.Fatalf("scancel st/abc12: %d %q %v", code, errs, f.calls)
+	}
+	// another cluster than the DevPod's: its DevPod is not there
+	if code, _, errs := f.runFrom("sbatch -p st2 train.sh", origin, map[string]string{"train.sh": trainScript}); code != ExitUsage || !strings.Contains(errs, "st2") {
+		t.Fatalf("sbatch -p st2 from st: %d %q", code, errs)
+	}
+	if code, _, errs := f.runFrom("job submit --cluster st2 --gpus 1 -- true", origin, nil); code != ExitUsage || !strings.Contains(errs, "--from-config") {
+		t.Fatalf("job submit --cluster st2 from st: %d %q", code, errs)
 	}
 }

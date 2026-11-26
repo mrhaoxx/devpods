@@ -195,6 +195,10 @@ func submitOptsOf(a *parsed) (submitOpts, error) {
 // submitBody: the cluster a job goes to and what is posted (inside a
 // DevPod its source, working directory and cluster default to it).
 func submitBody(e *Env, o submitOpts) (string, map[string]any, error) {
+	cluster := e.Cluster
+	if o.partition != "" {
+		cluster = o.partition
+	}
 	from := map[string]any{}
 	switch {
 	case o.fromDevPod != "" && o.fromConfig != "":
@@ -206,6 +210,8 @@ func submitBody(e *Env, o submitOpts) (string, map[string]any, error) {
 		if len(o.vars) > 0 {
 			from["vars"] = o.vars
 		}
+	case e.Origin != nil && cluster != "" && e.Origin.Cluster != "" && cluster != e.Origin.Cluster:
+		return "", nil, fmt.Errorf("this DevPod is in %s, the job would run in %s: say what it is made from there (--from-config NAME, or --from-devpod NAME of a DevPod there)", e.Origin.Cluster, cluster)
 	case e.Origin != nil:
 		from["devpod"] = e.Origin.DevPod
 	default:
@@ -265,10 +271,6 @@ func submitBody(e *Env, o submitOpts) (string, map[string]any, error) {
 	}
 	if o.dryRun {
 		body["dryRun"] = true
-	}
-	cluster := e.Cluster
-	if o.partition != "" {
-		cluster = o.partition
 	}
 	return cluster, body, nil
 }

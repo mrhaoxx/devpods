@@ -34,8 +34,11 @@ var dpNames = []string{"dp", "sbatch", "squeue", "scancel"}
 // sbatchValueFlags: sbatch's flags that take the next word as their value
 // (so it is not the script).
 var sbatchValueFlags = map[string]bool{"-N": true, "-n": true, "-t": true, "-J": true, "-o": true, "-e": true, "-p": true, "-c": true, "-G": true,
-	"--nodes": true, "--gpus": true, "--gpus-per-node": true, "--cpus-per-task": true, "--time": true, "--job-name": true,
+	"--nodes": true, "--ntasks": true, "--gpus": true, "--gpus-per-node": true, "--cpus-per-task": true, "--time": true, "--job-name": true,
 	"--output": true, "--error": true, "--partition": true, "--priority": true}
+
+// sbatchBoolFlags: sbatch's flags that take no value.
+var sbatchBoolFlags = map[string]bool{"--preemptible": true}
 
 // dpMaxFile bounds a script dp sends.
 const dpMaxFile = 1 << 20
@@ -83,17 +86,22 @@ func dpArgs(name string, args []string, cwd string, read func(string) ([]byte, e
 	script := ""
 	switch {
 	case len(argv) > 0 && argv[0] == "sbatch":
+	scan:
 		for i := 1; i < len(argv); i++ {
 			a := argv[i]
-			if sbatchValueFlags[a] {
+			switch {
+			case sbatchValueFlags[a]:
 				i++ // its value
-				continue
+			case sbatchBoolFlags[a], strings.Contains(a, "="), len(a) > 2 && a[0] == '-' && a[1] != '-' && sbatchValueFlags[a[:2]]:
+				// a flag and its value in one word (-N2, --nodes=2)
+			case strings.HasPrefix(a, "-"):
+				// one sbatch does not have: the console says so; what
+				// follows may be its value, not the script
+				break scan
+			default:
+				script = a
+				break scan
 			}
-			if strings.HasPrefix(a, "-") {
-				continue
-			}
-			script = a
-			break
 		}
 	case len(argv) > 1 && (argv[0] == "job" || argv[0] == "jobs") && argv[1] == "submit":
 		for i := 2; i < len(argv); i++ {
