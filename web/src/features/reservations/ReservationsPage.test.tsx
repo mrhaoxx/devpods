@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { fireEvent, screen, waitFor, within } from "@testing-library/react";
+import { Route, Routes } from "react-router-dom";
 import { ReservationsPage } from "./ReservationsPage";
 import { renderWithProviders, stubFetch, stubMe } from "../../test/render";
 
@@ -58,6 +59,30 @@ describe("ReservationsPage", () => {
     expect(dialog.getByText(/实际预约：11\/12 四 10:10 – 11\/12 四 12:00/)).toBeTruthy();
     fireEvent.click(dialog.getByRole("button", { name: "预约" }));
     await waitFor(() => expect(calls.find((c) => c.method === "POST")?.body).toBe('{"node":"g206","start":"2026-11-12T02:10:00.000Z","end":"2026-11-12T04:00:00.000Z"}'));
+  });
+
+  it("draws what a running queue job holds, until when at most; it opens the job", async () => {
+    at();
+    stubFetch({
+      "/api/reservations/rules": rules,
+      "/api/nodes": { items: [node("g206")] },
+      "/api/reservations": {
+        items: [],
+        jobs: [{ id: "abc12", owner: "bob", mine: false, rank: 0, node: "g206", gpu: 4, cpu: 48, start: "2026-11-12T01:00:00Z", end: "2026-11-12T13:00:00Z" }],
+      },
+    });
+    renderWithProviders(
+      <Routes>
+        <Route path="/" element={<ReservationsPage />} />
+        <Route path="/queue/:cluster/:id" element={<div>job page</div>} />
+      </Routes>,
+      { me: me() },
+    );
+    const row = await screen.findByRole("group", { name: "g206 的预约" });
+    const hold = await within(row).findByRole("button", { name: "队列 abc12 · bob · 至 21:00" });
+    expect(hold.getAttribute("title")).toMatch(/不可抢占：预约要给它留出空间/);
+    fireEvent.click(hold);
+    expect(await screen.findByText("job page")).toBeTruthy();
   });
 
   it("a drag across rows picks those machines and that time", async () => {

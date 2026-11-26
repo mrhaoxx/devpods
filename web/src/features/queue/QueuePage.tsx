@@ -5,7 +5,7 @@ import { useMemo, useState } from "react";
 import { keepPreviousData, useQuery } from "@tanstack/react-query";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import type { ColumnDef, SortingState } from "@tanstack/react-table";
-import { listJobs, type Job } from "../../data/api";
+import { jobsFree, listJobs, type Job } from "../../data/api";
 import { clusterSeg } from "../../data/cluster";
 import { useClusterFilter } from "../../data/clusterFilter";
 import { Button } from "../../design/Button";
@@ -22,12 +22,16 @@ export function QueuePage() {
   const [params, setParams] = useSearchParams();
   const mine = params.get("mine") === "1";
   const ended = params.get("ended") === "1";
-  const set = (k: string, on: boolean) =>
+  // one update for all the keys: two in a row would each start from the
+  // same (stale) params
+  const set = (keys: Record<string, boolean>) =>
     setParams(
       (p) => {
         const next = new URLSearchParams(p);
-        if (on) next.set(k, "1");
-        else next.delete(k);
+        for (const [k, on] of Object.entries(keys)) {
+          if (on) next.set(k, "1");
+          else next.delete(k);
+        }
         return next;
       },
       { replace: true },
@@ -38,6 +42,12 @@ export function QueuePage() {
   const now = useNow(30_000).getTime();
   const { matches, several } = useClusterFilter();
   const q = useQuery({ queryKey: ["jobs", { mine, ended }], queryFn: () => listJobs({ mine, ended }), refetchInterval: 5_000, placeholderData: keepPreviousData });
+  // what the queue can use now (by cluster): not shown when it cannot be said
+  const free = useQuery({ queryKey: ["jobs-free"], queryFn: jobsFree, refetchInterval: 15_000 });
+  const freeText = (free.data?.items ?? [])
+    .filter((f) => matches(f))
+    .map((f) => `${several && f.cluster ? `${f.cluster} ` : ""}${f.gpu} 卡 · ${f.cpu} 核${f.gpu > 0 ? `（单台最多 ${f.maxGPU} 卡）` : ""}`)
+    .join("；");
 
   const rows = useMemo(() => {
     const items = (q.data?.items ?? []).filter(matches);
@@ -83,15 +93,16 @@ export function QueuePage() {
   return (
     <div className="flex h-full min-h-0 flex-col">
       <div className="flex flex-wrap items-center gap-2 border-b border-line px-3 py-2">
-        <Chip active={!mine && !ended} onClick={() => (set("mine", false), set("ended", false))}>
+        <Chip active={!mine && !ended} onClick={() => set({ mine: false, ended: false })}>
           全部
         </Chip>
-        <Chip active={mine} onClick={() => set("mine", !mine)}>
+        <Chip active={mine} onClick={() => set({ mine: !mine })}>
           我的
         </Chip>
-        <Chip active={ended} onClick={() => set("ended", !ended)}>
+        <Chip active={ended} onClick={() => set({ ended: !ended })}>
           已结束
         </Chip>
+        {freeText && <span className="text-xs text-muted">队列现在可用：{freeText}</span>}
         <span className="flex-1" />
         <Button variant="primary" onClick={() => setSubmitting(true)}>
           提交任务…

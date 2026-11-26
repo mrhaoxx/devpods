@@ -27,8 +27,9 @@ describe("QueuePage", () => {
   it("lists the queue: place, job, user, size, priority, limit, state; 我的 filters; a row opens the job", async () => {
     vi.useFakeTimers({ toFake: ["Date"] });
     vi.setSystemTime(new Date("2026-11-27T04:00:00Z"));
-    const calls = stubFetch({ "/api/jobs": { items: jobs } });
+    const calls = stubFetch({ "/api/jobs": { items: jobs }, "/api/jobs/free": { items: [{ gpu: 4, cpu: 188, maxGPU: 4, machines: 1 }] } });
     page();
+    expect(await screen.findByText("队列现在可用：4 卡 · 188 核（单台最多 4 卡）")).toBeTruthy();
     await screen.findByText(/run01 · sft/);
     const table = screen.getByRole("table");
     for (const h of ["排位", "任务", "用户", "规模", "优先级", "时长上限", "状态"]) expect(within(table).getByText(h)).toBeTruthy();
@@ -39,6 +40,13 @@ describe("QueuePage", () => {
     expect(within(table).getByText("○ 等待 · 排在 run01 后")).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "我的" }));
     await waitFor(() => expect(calls.some((c) => c.url.pathname === "/api/jobs" && c.url.searchParams.get("mine") === "1")).toBe(true));
+    // 全部 clears both at once
+    fireEvent.click(screen.getByRole("button", { name: "已结束" }));
+    await waitFor(() => expect(screen.getByRole("button", { name: "已结束" }).getAttribute("aria-pressed")).toBe("true"));
+    fireEvent.click(screen.getByRole("button", { name: "全部" }));
+    await waitFor(() => expect(screen.getByRole("button", { name: "全部" }).getAttribute("aria-pressed")).toBe("true"));
+    expect(screen.getByRole("button", { name: "我的" }).getAttribute("aria-pressed")).toBe("false");
+    expect(screen.getByRole("button", { name: "已结束" }).getAttribute("aria-pressed")).toBe("false");
     fireEvent.click(await screen.findByText(/run01 · sft/));
     expect(await screen.findByText("job page")).toBeTruthy();
   });

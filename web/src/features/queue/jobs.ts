@@ -41,6 +41,7 @@ export function stateText(j: Job, now: number): string {
     case "Failed":
       if (d.exit) return `失败（退出码 ${d.exit}）`;
       if (j.reason === "rank-stopped") return "失败（有一台被停止）";
+      if (j.reason === "gang-timeout") return `失败（几次都没能全部启动${d.why ? `：${d.why}` : ""}）`;
       return "失败";
     case "TimedOut":
       return "超时";

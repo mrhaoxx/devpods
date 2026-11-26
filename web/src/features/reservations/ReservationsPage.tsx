@@ -3,7 +3,8 @@
 // reserve, click a block of your own to change or release it — plus the
 // list of my reservations and a plain form (the keyboard path). A
 // reservation is a permit, not a hold: they may overlap, drawn in lanes.
-import { keyOf, refOfKey } from "../../data/cluster";
+import { clusterSeg, keyOf, refOfKey } from "../../data/cluster";
+import { useNavigate } from "react-router-dom";
 import { useClusterFilter } from "../../data/clusterFilter";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
@@ -585,20 +586,30 @@ function Row({
                 if (band.cap > 0 && !(units > 0)) return null;
                 const h = Math.max(2, (y1 - y0) * band.h);
                 const bad = over || b.overbooked;
-                const cls = `${b.mine ? "border-accent bg-accent-soft text-accent" : "border-line-strong bg-sunk text-muted"} ${bad ? "border-fail" : ""} ${hot === b.id ? "ring-2 ring-accent" : ""}`;
+                // a queue job's rank: light, striped, dashed (lighter still when it may be stopped)
+                const cls = b.job
+                  ? `border-dashed bg-surface ${b.job.preemptible ? "border-line text-faint" : "border-line-strong text-muted"} ${hot === b.id ? "ring-2 ring-accent" : ""}`
+                  : `${b.mine ? "border-accent bg-accent-soft text-accent" : "border-line-strong bg-sunk text-muted"} ${bad ? "border-fail" : ""} ${hot === b.id ? "ring-2 ring-accent" : ""}`;
                 const style = {
                   left: pct(Date.parse(b.start)),
                   width: `calc(${pct(Date.parse(b.end))} - ${pct(Date.parse(b.start))})`,
                   minWidth: 16,
                   bottom: y0 * band.h,
                   height: h,
+                  ...(b.job ? { backgroundImage: "repeating-linear-gradient(135deg, var(--color-line) 0 2px, transparent 2px 7px)" } : {}),
                 };
-                const title = `${b.user}：${fmtTime(b.start)} – ${fmtTime(b.end)}（${phaseLabel[b.phase]}）· ${fmtAmount(b)}${bad ? " · 超出机器容量" : ""}${b.purpose ? `\n${b.purpose}` : ""}`;
+                const title = b.job
+                  ? `队列任务 ${b.job.id}${b.job.title ? ` · ${b.job.title}` : ""}：${b.user} · ${fmtAmount(b)} · 最晚到 ${fmtTime(b.end)}${
+                      b.job.preemptible ? "\n可被抢占：预约开始时它会重新排队" : "\n不可抢占：预约要给它留出空间"
+                    }`
+                  : `${b.user}：${fmtTime(b.start)} – ${fmtTime(b.end)}（${phaseLabel[b.phase]}）· ${fmtAmount(b)}${bad ? " · 超出机器容量" : ""}${b.purpose ? `\n${b.purpose}` : ""}`;
                 const hover = { onMouseEnter: () => setHot(b.id), onMouseLeave: () => setHot(null) };
                 const common = { "data-res": b.id, "data-hot": hot === b.id ? "true" : undefined, title, style, ...hover };
                 if (primary(b) !== band.key)
                   return <div key={b.id} aria-hidden {...common} onClick={() => onPick(b)} className={`pointer-events-auto absolute cursor-pointer overflow-hidden rounded border ${cls}`} />;
-                const text = `${b.mine ? "我" : b.user} · ${fmtClock(b.start)}–${fmtClock(b.end)}${b.purpose ? ` · ${b.purpose}` : ""}`;
+                const text = b.job
+                  ? `${b.job.preemptible ? "⚡" : ""}队列 ${b.job.id} · ${b.mine ? "我" : b.user} · 至 ${fmtClock(b.end)}`
+                  : `${b.mine ? "我" : b.user} · ${fmtClock(b.start)}–${fmtClock(b.end)}${b.purpose ? ` · ${b.purpose}` : ""}`;
                 return (
                   <button
                     key={b.id}
@@ -637,6 +648,7 @@ function Row({
 export function ReservationsPage() {
   const me = useMe().data;
   const qc = useQueryClient();
+  const nav = useNavigate();
   const tick = useNow(30_000).getTime();
   const [days, setDays] = useState<(typeof RANGES)[number]>(3);
   const rules = useQuery({ queryKey: ["reservation-rules"], queryFn: getReservationRules, staleTime: 300_000, retry: false });
@@ -737,6 +749,22 @@ export function ReservationsPage() {
   const g = rules.data.granularitySeconds * 1000;
   const all = (q.data?.items ?? []).filter(matches);
   const live = all.filter((b) => b.phase !== "Cancelled");
+  // what running queue jobs hold, drawn beside the reservations; one that
+  // may not be stopped also leaves less to reserve
+  const holds: Reservation[] = (q.data?.jobs ?? []).filter(matches).map((h) => ({
+    cluster: h.cluster,
+    id: `job-${h.id}-${h.rank}`,
+    node: h.node,
+    user: h.owner,
+    start: h.start,
+    end: h.end,
+    phase: "Active",
+    mine: h.mine,
+    gpu: h.gpu,
+    cpu: h.cpu,
+    job: { id: h.id, title: h.title, preemptible: h.preemptible },
+  }));
+  const pick = (b: Reservation) => (b.job ? nav(`/queue/${clusterSeg(b.cluster)}/${b.job.id}`) : setPicked(b));
   // the reservable machines I may use, whether I need a reservation there or not
   const nodes = (nodesQ.data?.items ?? []).filter((n) => n.reservable && (n.access !== "denied" || n.manageReservations) && matches(n));
   const mine = (mineQ.data?.pages.flatMap((p) => p.items) ?? []).filter((b) => b.mine && matches(b));
@@ -871,7 +899,7 @@ export function ReservationsPage() {
                 <Row
                   key={keyOf(n)}
                   node={n}
-                  blocks={live.filter((b) => nodeKey(b) === keyOf(n))}
+                  blocks={[...live, ...holds].filter((b) => nodeKey(b) === keyOf(n))}
                   from={from}
                   to={to}
                   now={now}
@@ -881,7 +909,7 @@ export function ReservationsPage() {
                   bad={dragBad}
                   label={i === rowsOf[0]}
                   trackW={trackW}
-                  onPick={setPicked}
+                  onPick={pick}
                 />
               ))}
             </div>
@@ -940,7 +968,7 @@ export function ReservationsPage() {
             : "它们都还没开始，直接取消。")}
       </ConfirmDialog>
       {bulk.toast}
-      {draft && <ReserveDialog key={`${draft.node}-${draft.start}-${draft.edit?.id ?? ""}`} draft={draft} nodes={nodes} blocks={live} rules={rules.data} now={now} forOthers={me.admin || !!me.permissions?.manageReservations} onClose={() => setDraft(null)} />}
+      {draft && <ReserveDialog key={`${draft.node}-${draft.start}-${draft.edit?.id ?? ""}`} draft={draft} nodes={nodes} blocks={[...live, ...holds.filter((h) => !h.job?.preemptible)]} rules={rules.data} now={now} forOthers={me.admin || !!me.permissions?.manageReservations} onClose={() => setDraft(null)} />}
       {picked && (
         <ReservationDetails
           b={picked}

@@ -581,10 +581,14 @@ export type Reservation = {
   cpu?: number;
   /** it does not fit beside the machine's other reservations (made before reservations held shares) */
   overbooked?: boolean;
+  /** not a reservation: a queue job's rank, drawn on the timeline (what it holds, until when at most) */
+  job?: { id: string; title?: string; preemptible?: boolean };
 };
+/** a running queue job's rank on a machine, as the timeline draws it */
+export type JobHold = { cluster?: string; id: string; title?: string; owner: string; mine: boolean; rank: number; node: string; gpu: number; cpu: number; start: string; end: string; preemptible?: boolean };
 export type ReservationRules = { granularitySeconds: number; maxDurationSeconds: number; maxAdvanceSeconds: number; clearNoticeSeconds: number; timezone: string; now: string };
 export const getReservationRules = () => req<ReservationRules>("GET", "/api/reservations/rules");
-export const listReservations = (from: string, to: string) => req<{ items: Reservation[] }>("GET", `/api/reservations?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}`);
+export const listReservations = (from: string, to: string) => req<{ items: Reservation[]; jobs?: JobHold[] }>("GET", `/api/reservations?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}`);
 /** listMyReservations: a page of mine, of any time, the latest start first; `next` asks for the page after. */
 export const listMyReservations = (cursor?: string, limit = 50) =>
   req<{ items: Reservation[]; next?: string }>("GET", `/api/reservations?mine=1&limit=${limit}${cursor ? `&cursor=${encodeURIComponent(cursor)}` : ""}`);
@@ -766,3 +770,6 @@ export const jobLimits = (cluster: string | undefined) => req<JobLimits>("GET", 
 export type PriorityRule = { condition: string; maxPriority: number };
 export const getPriorityRules = () => req<{ items: PriorityRule[] }>("GET", "/api/admin/job-priority-rules");
 export const putPriorityRules = (items: PriorityRule[]) => req<{ items: PriorityRule[] }>("PUT", "/api/admin/job-priority-rules", { items });
+/** what the queue can use now in a cluster: free cards and cores, the most cards one machine has */
+export type QueueFree = { cluster?: string; gpu: number; cpu: number; maxGPU: number; machines: number };
+export const jobsFree = () => req<{ items: QueueFree[] }>("GET", "/api/jobs/free");
