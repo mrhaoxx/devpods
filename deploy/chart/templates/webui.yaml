@@ -127,6 +127,7 @@ spec:
         {{- if dig "enabled" false (.Values.queue | default dict) }}
         - --queue=true
         - --job-max-time-limit={{ .Values.queue.maxTimeLimit }}
+        - --job-max-per-user={{ .Values.queue.maxJobsPerUser | default 20 }}
         {{- if not (or (include "devpod.telemetry.on" $) (dig "enabled" false (.Values.reservation | default dict))) }}
         # the replica that schedules holds a Lease there
         - --leader-election-namespace={{ .Values.namespaces.system }}

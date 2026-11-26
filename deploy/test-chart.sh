@@ -361,6 +361,7 @@ lacks defaults "--queue"
 render queue "${WEBUI[@]}" --set queue.enabled=true
 docHas queue Deployment devpod-webui "- --queue=true"
 docHas queue Deployment devpod-webui "- --job-max-time-limit=72h"
+docHas queue Deployment devpod-webui "- --job-max-per-user=20"
 docHas queue ClusterRole devpod-webui 'resources: ["jobs", "jobs/status", "jobpriorityrules"]'
 docHas queue Role devpod-webui-leader 'resources: ["leases"]'
 

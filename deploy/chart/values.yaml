@@ -271,6 +271,7 @@ webui:
 queue:
   enabled: false
   maxTimeLimit: 72h        # longest time limit a job may ask (a cluster may say less)
+  maxJobsPerUser: 20       # jobs one person may have waiting or running (admins are not held to it)
 
 # Queue jobs (job ranks: run-to-completion DevPods). On a cluster whose
 # controller runs them, the agent says so (capability "jobs") and the

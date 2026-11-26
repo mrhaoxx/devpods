@@ -276,3 +276,34 @@ func TestJobSubmitPlacementNowhere(t *testing.T) {
 		t.Fatalf("arm64 only, no such machine: %d %+v", code, v)
 	}
 }
+
+// One person has at most so many jobs waiting or running; an admin is not
+// held to it, and an ended or cancelled job frees its place.
+func TestJobCountCap(t *testing.T) {
+	p := jobRig(t, "jn", "jn-alice")
+	p.s.Queue.MaxJobsPerUser = 2
+	alice := p.as("jn-alice")
+	body := map[string]any{"from": map[string]any{"devpod": "jn-alice-dev1"}, "nodes": 1, "gpus": 1, "command": "true"}
+	var ids []string
+	for range 2 {
+		code, v := submitJob(t, p.s, alice, body)
+		if code != http.StatusCreated {
+			t.Fatalf("submit: %d %+v", code, v)
+		}
+		ids = append(ids, v.ID)
+	}
+	if code, v := submitJob(t, p.s, alice, body); code != http.StatusTooManyRequests || v.Code != "JOB_LIMIT" {
+		t.Fatalf("a third: %d %+v", code, v)
+	}
+	dry := map[string]any{"dryRun": true}
+	for k, v := range body {
+		dry[k] = v
+	}
+	if code, v := submitJob(t, p.s, alice, dry); code != http.StatusOK {
+		t.Fatalf("a dry run is not held to it: %d %+v", code, v)
+	}
+	if rec := doJSON(t, p.s.HandleCancelJobForTest(), "DELETE", "/api/jobs/"+ids[0], map[string]string{"id": ids[0]}, alice, ""); rec.Code != http.StatusNoContent {
+		t.Fatalf("cancel: %d", rec.Code)
+	}
+	waitFor(t, func() bool { code, _ := submitJob(t, p.s, alice, body); return code == http.StatusCreated })
+}

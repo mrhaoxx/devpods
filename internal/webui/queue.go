@@ -30,6 +30,7 @@ type QueueRules struct {
 	PreemptGrace     time.Duration // a stopped rank's time to finish
 	Tick             time.Duration // how often the scheduler goes round
 	KeepEnded        time.Duration // an ended job's object is kept so long
+	MaxJobsPerUser   int           // jobs one person may have waiting or running (0: no cap; admins none)
 	Now              func() time.Time
 }
 

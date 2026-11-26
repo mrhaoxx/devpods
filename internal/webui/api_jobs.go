@@ -586,6 +586,9 @@ func (s *Server) jobQuota(ctx context.Context, job *devpodv1alpha1.Job) *serverE
 
 // createJob keeps job, Queued.
 func (s *Server) createJob(ctx context.Context, job *devpodv1alpha1.Job) *serverErr {
+	if apiErr := s.jobCountErr(ctx, job.Spec.Owner); apiErr != nil {
+		return apiErr
+	}
 	id, err := s.newJobID(ctx)
 	if err != nil {
 		return &serverErr{http.StatusInternalServerError, "INTERNAL", err.Error(), nil}
@@ -597,6 +600,31 @@ func (s *Server) createJob(ctx context.Context, job *devpodv1alpha1.Job) *server
 	job.Status.Phase = devpodv1alpha1.JobQueued
 	if err := s.Client.Status().Update(ctx, job); err != nil {
 		return &serverErr{http.StatusInternalServerError, "INTERNAL", err.Error(), nil}
+	}
+	return nil
+}
+
+// jobCountErr: owner may not have another job — they have the most jobs
+// waiting or running one person may (nil: they may; an admin always).
+// Two submitted at once may both pass: the cap is a guard, not an account.
+func (s *Server) jobCountErr(ctx context.Context, owner string) *serverErr {
+	if s.Queue == nil || s.Queue.MaxJobsPerUser <= 0 || s.ownerIsAdmin(ctx, owner) {
+		return nil
+	}
+	var all devpodv1alpha1.JobList
+	if err := s.Reader.List(ctx, &all); err != nil {
+		return &serverErr{http.StatusInternalServerError, "INTERNAL", err.Error(), nil}
+	}
+	n := 0
+	for i := range all.Items {
+		if j := &all.Items[i]; j.Spec.Owner == owner && !jobEnded(j.Status.Phase) && j.DeletionTimestamp == nil {
+			n++
+		}
+	}
+	if n >= s.Queue.MaxJobsPerUser {
+		return &serverErr{http.StatusTooManyRequests, "JOB_LIMIT",
+			fmt.Sprintf("you have %d jobs waiting or running, the most one person may: wait for one to end, or cancel one", n),
+			map[string]any{"jobs": n, "max": s.Queue.MaxJobsPerUser}}
 	}
 	return nil
 }

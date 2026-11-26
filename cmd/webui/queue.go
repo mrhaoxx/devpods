@@ -24,6 +24,7 @@ import (
 type queueFlags struct {
 	enabled                bool
 	defaultLimit, maxLimit time.Duration
+	maxJobsPerUser         int
 }
 
 func addQueueFlags(fs *flag.FlagSet) *queueFlags {
@@ -31,6 +32,7 @@ func addQueueFlags(fs *flag.FlagSet) *queueFlags {
 	fs.BoolVar(&f.enabled, "queue", false, "enable the job queue (needs the Job and JobPriorityRule CRDs in the console's cluster; clusters take jobs when their agent says \"jobs\")")
 	fs.DurationVar(&f.defaultLimit, "job-default-time-limit", 24*time.Hour, "a job's time limit when it says none")
 	fs.DurationVar(&f.maxLimit, "job-max-time-limit", 72*time.Hour, "the longest time limit a job may ask (a Cluster's spec.jobMaxTimeLimit may say less)")
+	fs.IntVar(&f.maxJobsPerUser, "job-max-per-user", 20, "jobs one person may have waiting or running at once (0: no cap; admins are not held to it)")
 	return f
 }
 
@@ -43,7 +45,7 @@ func (f *queueFlags) build() (*webui.QueueRules, error) {
 		return nil, fmt.Errorf("invalid job time limits: default %s, max %s", f.defaultLimit, f.maxLimit)
 	}
 	return &webui.QueueRules{DefaultTimeLimit: f.defaultLimit, MaxTimeLimit: f.maxLimit, GangTimeout: 5 * time.Minute,
-		PreemptGrace: 2 * time.Minute, Tick: 5 * time.Second, KeepEnded: 30 * 24 * time.Hour}, nil
+		PreemptGrace: 2 * time.Minute, Tick: 5 * time.Second, KeepEnded: 30 * 24 * time.Hour, MaxJobsPerUser: f.maxJobsPerUser}, nil
 }
 
 // podLogs reads a Pod's log: in the console's own cluster ("") through
