@@ -110,8 +110,8 @@ export function QueuePage() {
         </Button>
       </div>
       <p className="border-b border-line px-3 py-1.5 text-[11px] text-muted">
-        任务排队等开放预约的机器上没被预约的卡和核：优先级高的先运行，同级按提交先后；一个任务的几台一起开始。在 DevPod 里也可以用 <span className="mono">dp job submit</span> 或{" "}
-        <span className="mono">sbatch</span> 提交，SSH 命令行里是 <span className="mono">job submit</span>。
+        任务排队等开放预约的机器上没被预约的卡和核：优先级高的先运行，同级按提交先后；一个任务的几台一起开始。在 DevPod 里也可以用 <span className="mono">dp job submit</span>（像 srun：跟着输出直到结束，Ctrl-C 取消；加{" "}
+        <span className="mono">-d</span> 提交完就返回）或 <span className="mono">sbatch</span> 提交，SSH 命令行里是 <span className="mono">job submit</span>。
       </p>
       {q.isError && q.data && (
         <div className="border-b border-line px-3 py-1.5">

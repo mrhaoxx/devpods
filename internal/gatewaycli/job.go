@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net/http"
 	"net/url"
 	"slices"
 	"sort"
@@ -47,9 +48,11 @@ submit options:
   --env K=V  --workdir DIR  --title T  --dry-run (where it would stand)
   --export ALL|NONE take the shell's environment along (inside a DevPod;
                     ALL, as sbatch's): PATH goes in front of the ranks' own
-  --wait            as srun: wait, print every rank's output as it comes
-                    (marked by rank when several), end with the job's exit
-                    code (124 out of time); Ctrl-C cancels the job
+  -d, --detach      submit and be done (as sbatch). Without it, as srun:
+                    wait, print every rank's output as it comes (marked by
+                    rank when several), end with the job's exit code (124
+                    out of time); Ctrl-C, or the connection lost, cancels
+                    the job
 Each rank runs the command in a login bash with RANK, WORLD_SIZE, MASTER_ADDR,
 MASTER_PORT (and DEVPOD_JOB_PORTS) set; the job ends when every rank has.`
 
@@ -63,7 +66,7 @@ func jobCommands() []*command {
 		short: "the queue: submit jobs, see the queue, cancel, read a job's output",
 		long:  jobLong,
 		vals:  []string{"title", "from-devpod", "from-config", "var", "N", "nodes", "gpus", "cpus", "t", "time", "priority", "cap-add", "env", "workdir", "script", "rank", "attempt", "export"},
-		bools: []string{"preemptible", "host-network", "privileged", "dry-run", "mine", "ended", "f", "follow", "wait"}, run: runJob}}
+		bools: []string{"preemptible", "host-network", "privileged", "dry-run", "mine", "ended", "f", "follow", "d", "detach"}, run: runJob}}
 }
 
 type jobView struct {
@@ -133,7 +136,7 @@ type submitOpts struct {
 	cpus                                           *float64
 	limit                                          time.Duration
 	preemptible, hostNetwork, privileged, dryRun   bool
-	wait                                           bool // job submit --wait: as srun
+	detach                                         bool // job submit -d: submit and be done (else as srun)
 	capAdd                                         []string
 	command                                        []string
 	scriptText                                     string
@@ -204,7 +207,7 @@ func submitOptsOf(a *parsed) (submitOpts, error) {
 		return o, errors.New("--export takes ALL or NONE")
 	}
 	o.preemptible, o.hostNetwork, o.privileged, o.dryRun = a.has["preemptible"], a.has["host-network"], a.has["privileged"], a.has["dry-run"]
-	o.wait = a.has["wait"]
+	o.detach = a.has["d"] || a.has["detach"]
 	o.command = a.pos
 	return o, nil
 }
@@ -328,7 +331,7 @@ func jobSubmit(e *Env, a *parsed, c *command) int {
 	if err != nil {
 		return usage(e, c, err.Error())
 	}
-	if o.wait && !o.dryRun {
+	if !o.detach && !o.dryRun {
 		var v jobView
 		if _, err := call(e, "POST", scoped(e, cluster, "/api/jobs"), body, &v); err != nil {
 			return fail(e, err)
@@ -340,10 +343,10 @@ func jobSubmit(e *Env, a *parsed, c *command) int {
 	return postJob(e, a, scoped(e, cluster, "/api/jobs"), body)
 }
 
-// waitPoll: how often job submit --wait looks at its job.
+// waitPoll: how often a waiting job submit looks at its job.
 var waitPoll = 2 * time.Second
 
-// waitJob is job submit --wait (srun's way): it says on standard error
+// waitJob is job submit without -d (srun's way): it says on standard error
 // where the job is, prints every rank's output on standard output as it
 // comes (each line marked "<rank>: " when there are several; a rank's
 // log is followed from its start, so nothing is missed), and returns the
@@ -420,7 +423,12 @@ func waitJob(e *Env, ref, id string, nodes int) int {
 	said, following := "", false
 	for {
 		var j jobView
-		if raw, err := e.API.Do(ctx, e.User, "GET", "/api/jobs/"+url.PathEscape(id), nil); err == nil {
+		raw, err := e.API.Do(ctx, e.User, "GET", "/api/jobs/"+url.PathEscape(id), nil)
+		if apiErr := (*APIError)(nil); errors.As(err, &apiErr) && apiErr.Status == http.StatusNotFound {
+			fmt.Fprintf(e.Err, "job %s: gone\n", ref)
+			return 1
+		}
+		if err == nil {
 			if json.Unmarshal(raw, &j) == nil {
 				if s := waitState(j, e.Now()); s != said {
 					fmt.Fprintf(e.Err, "job %s: %s\n", ref, s)
@@ -492,7 +500,7 @@ func jobExit(j jobView) int {
 	return 1
 }
 
-// cancelWaited cancels the job --wait waited for (its caller interrupted
+// cancelWaited cancels the job a submit waited for (its caller interrupted
 // or gone), as srun does, and returns 130 (a Ctrl-C's).
 func cancelWaited(e *Env, ref, id string) int {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)

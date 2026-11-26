@@ -192,7 +192,7 @@ func TestHandleDPPassesEnv(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = k8sClient.Delete(ctx, dp) })
 	waitFor(t, func() bool { _, _, ok := s.DevPodByUID(ctx, string(dp.UID)); return ok })
-	body, _ := json.Marshal(map[string]any{"argv": []string{"job", "submit", "--", "true"}, "cwd": "/home/x", "env": map[string]string{"OMP_NUM_THREADS": "8"}})
+	body, _ := json.Marshal(map[string]any{"argv": []string{"job", "submit", "-d", "--", "true"}, "cwd": "/home/x", "env": map[string]string{"OMP_NUM_THREADS": "8"}})
 	r := httptest.NewRequest(http.MethodPost, "/dp/v1/cli", strings.NewReader(string(body)))
 	r.Header.Set("Authorization", "Bearer "+wire.DPToken(s.IngestKey, string(dp.UID)))
 	r.Header.Set("X-DevPod-UID", string(dp.UID))

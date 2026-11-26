@@ -46,13 +46,18 @@ func lastBody(t *testing.T, f *fakeAPI, method, path string) map[string]any {
 var origin = &Origin{Cluster: "st", DevPod: "alice-dev", Cwd: "/home/alice/x"}
 
 // From a DevPod a job is made from it, runs where dp was asked, in its
-// cluster.
+// cluster. Detached (-d), the submit says what it made and is done.
 func TestJobSubmit(t *testing.T) {
 	f := newFakeAPI(t)
 	f.routes["POST /api/clusters/st/jobs"] = map[string]any{"id": "abc12", "cluster": "st", "phase": "Queued"}
-	code, out, errs := f.runFrom("job submit -N 2 --gpus 8 -t 1-00:00 --priority 5 --preemptible -- torchrun t.py", origin, nil)
+	code, out, errs := f.runFrom("job submit --detach -N 2 --gpus 8 -t 1-00:00 --priority 5 --preemptible -- torchrun t.py", origin, nil)
 	if code != 0 || !strings.Contains(out, "abc12") {
 		t.Fatalf("submit: %d %q %q", code, out, errs)
+	}
+	for _, c := range f.calls {
+		if strings.HasPrefix(c, "GET /api/jobs/abc12") {
+			t.Fatalf("detached, it waited: %v", f.calls)
+		}
 	}
 	b := lastBody(t, f, "POST", "/api/clusters/st/jobs")
 	from, _ := b["from"].(map[string]any)
@@ -61,7 +66,7 @@ func TestJobSubmit(t *testing.T) {
 		t.Fatalf("body %v", b)
 	}
 	// a script named on the command line goes with it
-	f.runFrom("job submit --gpus 1 --script train.sh", origin, map[string]string{"train.sh": "#!/bin/bash\necho hi\n"})
+	f.runFrom("job submit -d --gpus 1 --script train.sh", origin, map[string]string{"train.sh": "#!/bin/bash\necho hi\n"})
 	if b := lastBody(t, f, "POST", "/api/clusters/st/jobs"); b["script"] != "#!/bin/bash\necho hi\n" || b["title"] != "train.sh" {
 		t.Fatalf("script body %v", b)
 	}
@@ -152,14 +157,14 @@ func TestJobSubmitExportsEnv(t *testing.T) {
 	f := newFakeAPI(t)
 	f.routes["POST /api/clusters/st/jobs"] = map[string]any{"id": "abc12", "cluster": "st"}
 	o := &Origin{Cluster: "st", DevPod: "alice-dev", Cwd: "/home/alice/x", Env: map[string]string{"PATH": "/opt/conda/bin:/usr/bin", "OMP_NUM_THREADS": "8", "FOO": "shell"}}
-	if code, _, errs := f.runFrom("job submit --env FOO=flag -- python t.py", o, nil); code != 0 {
+	if code, _, errs := f.runFrom("job submit -d --env FOO=flag -- python t.py", o, nil); code != 0 {
 		t.Fatalf("submit: %d %q", code, errs)
 	}
 	env, _ := lastBody(t, f, "POST", "/api/clusters/st/jobs")["env"].(map[string]any)
 	if env["DEVPOD_SUBMIT_PATH"] != "/opt/conda/bin:/usr/bin" || env["OMP_NUM_THREADS"] != "8" || env["FOO"] != "flag" || env["PATH"] != nil {
 		t.Fatalf("env %v", env)
 	}
-	if code, _, errs := f.runFrom("job submit --export NONE --env FOO=flag -- true", o, nil); code != 0 {
+	if code, _, errs := f.runFrom("job submit -d --export NONE --env FOO=flag -- true", o, nil); code != 0 {
 		t.Fatalf("submit NONE: %d %q", code, errs)
 	}
 	if env, _ := lastBody(t, f, "POST", "/api/clusters/st/jobs")["env"].(map[string]any); len(env) != 1 || env["FOO"] != "flag" {
@@ -192,8 +197,8 @@ func (f *fakeAPI) runWait(line string, interrupt <-chan struct{}) (int, string, 
 	return code, out.String(), errw.String()
 }
 
-// job submit --wait is srun's: it waits, prints every rank's output as it
-// comes (marked by rank when several), and ends with the job's exit code.
+// job submit is srun's (unless -d): it waits, prints every rank's output as
+// it comes (marked by rank when several), and ends with the job's exit code.
 func TestJobSubmitWait(t *testing.T) {
 	saved := waitPoll
 	waitPoll = 20 * time.Millisecond
@@ -213,16 +218,16 @@ func TestJobSubmitWait(t *testing.T) {
 	}
 	f.raw["GET /api/jobs/abc12/logs?rank=0&follow=1"] = "data: hello from 0\n\n"
 	f.raw["GET /api/jobs/abc12/logs?rank=1&follow=1"] = "data: hello from 1\n\n"
-	code, out, errs := f.runWait("job submit --wait -N 2 --gpus 1 -- torchrun t.py", nil)
+	code, out, errs := f.runWait("job submit -N 2 --gpus 1 -- torchrun t.py", nil)
 	if code != 3 || !strings.Contains(out, "0: hello from 0\n") || !strings.Contains(out, "1: hello from 1\n") {
-		t.Fatalf("--wait: %d out %q err %q", code, out, errs)
+		t.Fatalf("attached: %d out %q err %q", code, out, errs)
 	}
 	if !strings.Contains(errs, "abc12") || !strings.Contains(errs, "m700") {
 		t.Fatalf("progress: %q", errs)
 	}
 }
 
-// Interrupted (Ctrl-C, or dp's caller gone), --wait cancels the job.
+// Interrupted (Ctrl-C, or dp's caller gone), a waiting submit cancels the job.
 func TestJobSubmitWaitInterrupted(t *testing.T) {
 	saved := waitPoll
 	waitPoll = 20 * time.Millisecond
@@ -236,7 +241,7 @@ func TestJobSubmitWaitInterrupted(t *testing.T) {
 	f.routes["DELETE /api/jobs/abc12"] = nil
 	stop := make(chan struct{})
 	time.AfterFunc(300*time.Millisecond, func() { close(stop) })
-	code, _, errs := f.runWait("job submit --wait --gpus 1 -- sleep 100", stop)
+	code, _, errs := f.runWait("job submit --gpus 1 -- sleep 100", stop)
 	if code != 130 || !strings.Contains(errs, "cancelled") {
 		t.Fatalf("interrupted: %d %q", code, errs)
 	}
@@ -247,7 +252,7 @@ func TestJobSubmitWaitInterrupted(t *testing.T) {
 	}
 }
 
-// Requeued (preempted, say), --wait follows the next attempt's output too.
+// Requeued (preempted, say), a waiting submit follows the next attempt's output too.
 func TestJobSubmitWaitRequeued(t *testing.T) {
 	saved := waitPoll
 	waitPoll = 20 * time.Millisecond
@@ -264,14 +269,14 @@ func TestJobSubmitWaitRequeued(t *testing.T) {
 		return map[string]any{"id": "abc12", "cluster": "st", "phase": phase, "nodes": 1, "ranks": []any{map[string]any{"rank": 0, "node": "m700"}}}
 	}
 	f.raw["GET /api/jobs/abc12/logs?rank=0&follow=1"] = "data: an attempt's line\n\n"
-	code, out, errs := f.runWait("job submit --wait --gpus 1 -- true", nil)
+	code, out, errs := f.runWait("job submit --gpus 1 -- true", nil)
 	if code != 0 || strings.Count(out, "an attempt's line\n") != 2 {
 		t.Fatalf("requeued: %d out %q err %q", code, out, errs)
 	}
 }
 
 // A job that ended without ever running (cancelled while waiting) ends
-// --wait at once: there is no output to look for.
+// the wait at once: there is no output to look for.
 func TestJobSubmitWaitNeverRan(t *testing.T) {
 	saved := waitPoll
 	waitPoll = 20 * time.Millisecond
@@ -282,7 +287,7 @@ func TestJobSubmitWaitNeverRan(t *testing.T) {
 		return map[string]any{"id": "abc12", "cluster": "st", "phase": "Cancelled", "nodes": 2, "reason": "cancelled"}
 	}
 	start := time.Now()
-	code, _, errs := f.runWait("job submit --wait -N 2 --gpus 1 -- true", nil)
+	code, _, errs := f.runWait("job submit -N 2 --gpus 1 -- true", nil)
 	if code != 1 || time.Since(start) > 2*time.Second {
 		t.Fatalf("never ran: %d after %s, %q", code, time.Since(start), errs)
 	}
@@ -292,5 +297,28 @@ func TestJobSubmitWaitNeverRan(t *testing.T) {
 		if strings.Contains(c, "/logs") {
 			t.Fatalf("looked for output: %v", f.calls)
 		}
+	}
+}
+
+// A job gone while waited for (deleted by an admin, say) ends the wait.
+func TestJobSubmitWaitJobGone(t *testing.T) {
+	saved := waitPoll
+	waitPoll = 20 * time.Millisecond
+	t.Cleanup(func() { waitPoll = saved })
+	f := newFakeAPI(t)
+	f.routes["POST /api/clusters/st/jobs"] = map[string]any{"id": "abc12", "cluster": "st", "phase": "Queued", "nodes": 1}
+	f.status["GET /api/jobs/abc12"] = 404
+	f.routes["GET /api/jobs/abc12"] = map[string]any{"code": "NOT_FOUND", "message": "no such job"}
+	done := make(chan struct{})
+	var code int
+	var errs string
+	go func() { code, _, errs = f.runWait("job submit --gpus 1 -- true", nil); close(done) }()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("still waiting for a job that is gone")
+	}
+	if code != 1 || !strings.Contains(errs, "gone") {
+		t.Fatalf("gone: %d %q", code, errs)
 	}
 }
