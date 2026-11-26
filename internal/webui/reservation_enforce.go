@@ -176,6 +176,19 @@ func (s *Server) clearIn(ctx context.Context, cluster string, all []devpodv1alph
 		slog.Warn("reservation_clear", "cluster", cluster, "err", err)
 		return
 	}
+	// queue jobs' ranks: whether their job may be stopped
+	jobs := s.jobsByID(ctx)
+	for _, ps := range on {
+		for i := range ps {
+			if ps[i].Job != nil {
+				if j := jobs[ps[i].Job.ID]; j != nil {
+					ps[i].Job.Preemptible = j.Spec.Preemptible
+				} else {
+					ps[i].Job = nil // its job is gone: as any DevPod
+				}
+			}
+		}
+	}
 	stillMarked := false
 	// stopped (by its owner, after the notice): the mark goes with it
 	for _, dp := range stopped {
@@ -187,8 +200,9 @@ func (s *Server) clearIn(ctx context.Context, cluster string, all []devpodv1alph
 		at    time.Time
 		forID string
 	}
-	want := map[string]mark{} // by DevPod name
-	hold := map[string]bool{} // on a machine not judged now: left as they are
+	want := map[string]mark{}    // by DevPod name
+	requeue := map[string]bool{} // preemptible jobs in the way, by id
+	hold := map[string]bool{}    // on a machine not judged now: left as they are
 	for node, rs := range byNode {
 		var moments []time.Time
 		for _, nr := range rs {
@@ -223,6 +237,12 @@ func (s *Server) clearIn(ctx context.Context, cluster string, all []devpodv1alph
 		for _, t := range moments {
 			id := clearedFor(rs, t)
 			for _, p := range toClear(c, rs, left, t) {
+				if p.Job != nil {
+					// a preemptible job's rank: its job stops at once and waits again
+					requeue[p.Job.ID] = true
+					left = slices.DeleteFunc(left, func(q placed) bool { return q.Job != nil && q.Job.ID == p.Job.ID })
+					continue
+				}
 				// cleared for the reservation it was marked for, while that
 				// one is in force then
 				forID := id
@@ -232,6 +252,11 @@ func (s *Server) clearIn(ctx context.Context, cluster string, all []devpodv1alph
 				want[p.DP.Name] = mark{at: later(t, now.Add(notice)), forID: forID}
 				left = slices.DeleteFunc(left, func(q placed) bool { return q.DP.Name == p.DP.Name })
 			}
+		}
+	}
+	for id := range requeue {
+		if j := jobs[id]; j != nil {
+			s.requeueJob(ctx, cc, j, "preempted")
 		}
 	}
 	cleared := map[string][]string{} // by reservation
@@ -245,6 +270,9 @@ func (s *Server) clearIn(ctx context.Context, cluster string, all []devpodv1alph
 					stillMarked = true
 				}
 				continue
+			}
+			if p.Job != nil && requeue[p.Job.ID] {
+				continue // gone with its job
 			}
 			m, listed := want[dp.Name]
 			if !listed {
@@ -412,6 +440,9 @@ func (s *Server) devPodsOn(ctx context.Context, cc *clusters.ClusterClients) (ma
 			continue
 		}
 		p := placed{DP: dp, Since: dp.CreationTimestamp.Time}
+		if dp.Spec.Job != nil {
+			p.Job = &jobRef{ID: dp.Spec.Job.Name}
+		}
 		if dp.Spec.Pod != nil {
 			p.Ask = askOfPod(&dp.Spec.Pod.Spec)
 		}

@@ -243,6 +243,8 @@ func (s *Server) roomFor(ctx context.Context, n *corev1.Node, nr, old *devpodv1a
 			others = append(others, o)
 		}
 	}
+	// running jobs that may not be stopped hold their share there too
+	others = append(others, s.jobHolds(ctx, cluster, n.Name, s.Reservations.now())...)
 	c := capacityOf(n)
 	ask, whole := reservedOf(nr, c), isWhole(nr)
 	start, end := nr.Spec.Start.Time, nr.Spec.End.Time

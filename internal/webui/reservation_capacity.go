@@ -317,11 +317,19 @@ func overbooked(rs []*devpodv1alpha1.NodeReservation, c amount, from time.Time) 
 	return out
 }
 
-// placed: a running DevPod on a machine — what it takes, and since when.
+// placed: a running DevPod on a machine — what it takes, and since when;
+// Job when it is a queue job's rank.
 type placed struct {
 	DP    *devpodv1alpha1.DevPod
 	Ask   amount
 	Since time.Time
+	Job   *jobRef
+}
+
+// jobRef: the queue job a rank is of, and whether it may be stopped.
+type jobRef struct {
+	ID          string
+	Preemptible bool
 }
 
 // nodeLoad: one machine at one time — its capacity, what its reservations
@@ -387,10 +395,12 @@ func (l nodeLoad) refusal(node, owner string, needsRes bool, ask amount) *server
 		map[string]any{"node": node, "free": free.clamped().view(), "ask": ask.view()}}
 }
 
-// toClear: the DevPods to hibernate so that the reservations in force at
-// t get their shares — of those beyond their owner's reservations (all of
-// a non-holder's; a holder's past what they hold), the newest first (then
-// the later name), only while one makes a shortage smaller.
+// toClear: the DevPods to hibernate (or, a preemptible job's rank, to
+// requeue) so that the reservations in force at t get their shares — of
+// those beyond their owner's reservations (all of a non-holder's; a
+// holder's past what they hold), preemptible jobs' ranks first, then the
+// newest first (then the later name), only while one makes a shortage
+// smaller; never a rank of a job that may not be stopped.
 func toClear(c amount, rs []*devpodv1alpha1.NodeReservation, on []placed, t time.Time) []placed {
 	l := loadAt(c, rs, on, t, "")
 	short := l.outside().sub(c.sub(l.Booked))
@@ -403,11 +413,18 @@ func toClear(c amount, rs []*devpodv1alpha1.NodeReservation, on []placed, t time
 	}
 	var cand []placed
 	for _, p := range on {
+		if p.Job != nil && !p.Job.Preemptible {
+			continue // a job that may not be stopped is never in a reservation's way
+		}
 		if b := beyond[p.DP.Spec.Owner]; b.GPU > 0 || b.CPU > 0 {
 			cand = append(cand, p)
 		}
 	}
+	// preemptible jobs' ranks first; then the newest first (the later name)
 	sort.SliceStable(cand, func(i, j int) bool {
+		if (cand[i].Job != nil) != (cand[j].Job != nil) {
+			return cand[i].Job != nil
+		}
 		if !cand[i].Since.Equal(cand[j].Since) {
 			return cand[i].Since.After(cand[j].Since)
 		}

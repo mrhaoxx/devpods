@@ -232,3 +232,20 @@ func TestAmountString(t *testing.T) {
 		}
 	}
 }
+
+// Of jobs, only the preemptible are cleared — before anyone else.
+func TestToClearJobs(t *testing.T) {
+	now := at(10, 30)
+	rs := []*devpodv1alpha1.NodeReservation{rsvOf("r1", "alice", at(10, 0), at(11, 0), 4, "96")}
+	job := runningOn("j-0", "bob", amount{4, 0}, at(8, 0))
+	job.Job = &jobRef{ID: "j", Preemptible: true}
+	newer := runningOn("carol-1", "carol", amount{4, 0}, at(9, 30))
+	if got := toClear(cap8, rs, []placed{job, newer}, now); len(got) != 1 || got[0].DP.Name != "j-0" {
+		t.Fatalf("preemptible first: %v", dpNames(got))
+	}
+	stuck := runningOn("k-0", "bob", amount{4, 0}, at(9, 50))
+	stuck.Job = &jobRef{ID: "k"}
+	if got := toClear(cap8, rs, []placed{stuck, newer}, now); len(got) != 1 || got[0].DP.Name != "carol-1" {
+		t.Fatalf("a job not preemptible is never taken: %v", dpNames(got))
+	}
+}

@@ -447,3 +447,53 @@ func (s *Server) queueViewFor(ctx context.Context, cc *clusters.ClusterClients, 
 	}
 	return queueView{Now: now, Machines: machines, Running: running, Queued: queued, Allowed: mayRun, QuotaOK: quotaOK, Horizon: 14 * 24 * time.Hour}, byName, nil
 }
+
+// jobsByID: the queue's jobs not ended, by id (none with the queue off).
+func (s *Server) jobsByID(ctx context.Context) map[string]*devpodv1alpha1.Job {
+	out := map[string]*devpodv1alpha1.Job{}
+	if s.Queue == nil {
+		return out
+	}
+	var all devpodv1alpha1.JobList
+	if err := s.Reader.List(ctx, &all); err != nil {
+		slog.Warn("queue", "err", err)
+		return out
+	}
+	for i := range all.Items {
+		if !jobEnded(all.Items[i].Status.Phase) {
+			out[all.Items[i].Name] = &all.Items[i]
+		}
+	}
+	return out
+}
+
+// jobHolds: in-memory reservations for what cluster's running (or
+// starting) jobs that may not be stopped hold on node, until their time
+// limit — a reservation there and then must leave them room.
+func (s *Server) jobHolds(ctx context.Context, cluster, node string, now time.Time) []*devpodv1alpha1.NodeReservation {
+	var out []*devpodv1alpha1.NodeReservation
+	for _, j := range s.jobsByID(ctx) {
+		if j.Spec.Cluster != cluster || j.Spec.Preemptible || (j.Status.Phase != devpodv1alpha1.JobStarting && j.Status.Phase != devpodv1alpha1.JobRunning) {
+			continue
+		}
+		since := now
+		switch {
+		case j.Status.StartedAt != nil:
+			since = j.Status.StartedAt.Time
+		case j.Status.AttemptAt != nil:
+			since = j.Status.AttemptAt.Time
+		}
+		for _, r := range j.Status.Ranks {
+			if r.Node != node {
+				continue
+			}
+			gpu, cpu := j.Spec.GPUsPerNode, j.Spec.CPUsPerNode.DeepCopy()
+			out = append(out, &devpodv1alpha1.NodeReservation{
+				ObjectMeta: metav1.ObjectMeta{Name: "job-" + j.Name + "-" + itoa(r.Rank)},
+				Spec: devpodv1alpha1.NodeReservationSpec{Cluster: cluster, Node: node, User: j.Spec.Owner,
+					Start: metav1.NewTime(since), End: metav1.NewTime(since.Add(j.Spec.TimeLimit.Duration)), GPU: &gpu, CPU: &cpu},
+			})
+		}
+	}
+	return out
+}
