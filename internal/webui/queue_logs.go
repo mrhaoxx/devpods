@@ -14,7 +14,6 @@ import (
 	"strconv"
 
 	devpodv1alpha1 "github.com/mrhaoxx/devpod/api/v1alpha1"
-	"github.com/mrhaoxx/devpod/internal/audit/store"
 	"github.com/mrhaoxx/devpod/internal/webui/clusters"
 )
 
@@ -34,15 +33,15 @@ func rankContainer(j *devpodv1alpha1.Job) string {
 	return j.Spec.Template.Spec.Containers[0].Name
 }
 
-// saveRankLogs keeps j's ranks' output and says where in its status
-// (best effort: a log that cannot be read or kept is left out).
+// saveRankLogs keeps the ended job j's ranks' output where its status
+// says (best effort: a log that cannot be read or kept is left out; ctx
+// bounds it all).
 func (s *Server) saveRankLogs(ctx context.Context, _ *clusters.ClusterClients, j *devpodv1alpha1.Job) {
-	if s.PodLogs == nil || s.Audit == nil || s.Audit.Objects == nil {
+	if !s.keepsRankLogs() {
 		return
 	}
-	for i := range j.Status.Ranks {
-		rk := &j.Status.Ranks[i]
-		if rk.Log != "" {
+	for _, rk := range j.Status.Ranks {
+		if rk.Log == "" {
 			continue
 		}
 		name := rankName(j.Spec.Owner, j.Name, rk.Rank)
@@ -51,14 +50,11 @@ func (s *Server) saveRankLogs(ctx context.Context, _ *clusters.ClusterClients, j
 			slog.Warn("queue_logs", "job", j.Name, "rank", rk.Rank, "err", err)
 			continue
 		}
-		key := store.JobLogKey(j.Spec.Cluster, j.Name, rk.Rank)
-		err = s.Audit.Objects.Put(context.WithoutCancel(ctx), key, io.LimitReader(rc, maxRankLog), -1)
+		err = s.Audit.Objects.Put(ctx, rk.Log, io.LimitReader(rc, maxRankLog), -1)
 		_ = rc.Close()
 		if err != nil {
 			slog.Warn("queue_logs", "job", j.Name, "rank", rk.Rank, "err", err)
-			continue
 		}
-		rk.Log = key
 	}
 }
 
@@ -113,21 +109,59 @@ func (s *Server) handleJobLogs(w http.ResponseWriter, r *http.Request) {
 	_, _ = io.Copy(w, rc)
 }
 
+// maxEventLine: a line of output longer than this goes as several events.
+const maxEventLine = 64 << 10
+
 // sseLines streams rc as server-sent events, one line each, until it or
-// the caller ends.
+// the caller ends. A line ends at \n, \r\n or a lone \r (a progress bar
+// drawn again); one longer than maxEventLine goes in pieces — neither
+// ends the stream.
 func sseLines(w http.ResponseWriter, rc io.Reader) {
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
 	w.WriteHeader(http.StatusOK)
 	fl, _ := w.(http.Flusher)
-	sc := bufio.NewScanner(rc)
-	sc.Buffer(make([]byte, 64<<10), 1<<20)
-	for sc.Scan() {
-		if _, err := fmt.Fprintf(w, "data: %s\n\n", sc.Text()); err != nil {
+	br := bufio.NewReaderSize(rc, 64<<10)
+	line := make([]byte, 0, 256)
+	dirty := false // written, not flushed
+	emit := func() bool {
+		_, err := fmt.Fprintf(w, "data: %s\n\n", line)
+		line, dirty = line[:0], true
+		return err == nil
+	}
+	afterCR := false
+	split := false // the line so far went out in pieces: its end sends nothing more
+	for {
+		if dirty && br.Buffered() == 0 && fl != nil {
+			fl.Flush() // what has come is out before waiting for more
+			dirty = false
+		}
+		b, err := br.ReadByte()
+		if err != nil {
+			if len(line) > 0 {
+				emit()
+			}
+			if fl != nil {
+				fl.Flush()
+			}
 			return
 		}
-		if fl != nil {
-			fl.Flush()
+		switch {
+		case b == '\n' && afterCR: // the \n of a \r\n: the line went at the \r
+		case b == '\n' || b == '\r':
+			if (len(line) > 0 || !split) && !emit() {
+				return
+			}
+			split = false
+		default:
+			line = append(line, b)
+			if len(line) >= maxEventLine {
+				if !emit() {
+					return
+				}
+				split = true
+			}
 		}
+		afterCR = b == '\r'
 	}
 }

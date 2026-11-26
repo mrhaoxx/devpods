@@ -99,3 +99,61 @@ func TestRankDevPod(t *testing.T) {
 		t.Error("ports not stable")
 	}
 }
+
+// A rank takes only a machine it could run on: not cordoned, its taints
+// tolerated, with the job's kind of card, enough of them.
+func TestMachineFits(t *testing.T) {
+	j := testJob() // 4 NVIDIA cards a rank
+	node := func(alloc corev1.ResourceList, taints ...corev1.Taint) *corev1.Node {
+		return &corev1.Node{Spec: corev1.NodeSpec{Taints: taints}, Status: corev1.NodeStatus{Allocatable: alloc}}
+	}
+	nv8 := corev1.ResourceList{gpures.NVIDIA: resource.MustParse("8")}
+	if !machineFits(j, node(nv8)) {
+		t.Error("8 NVIDIA cards")
+	}
+	if machineFits(j, node(corev1.ResourceList{"mthreads.com/gpu": resource.MustParse("8")})) {
+		t.Error("another kind of card")
+	}
+	if machineFits(j, node(corev1.ResourceList{gpures.NVIDIA: resource.MustParse("2")})) {
+		t.Error("too few cards")
+	}
+	cordoned := node(nv8)
+	cordoned.Spec.Unschedulable = true
+	if machineFits(j, cordoned) {
+		t.Error("cordoned")
+	}
+	if !machineFits(j, node(nv8, corev1.Taint{Key: "node.kubernetes.io/not-ready", Effect: corev1.TaintEffectNoSchedule})) {
+		t.Error("a condition's taint (readiness is judged apart)")
+	}
+	if !machineFits(j, node(nv8, corev1.Taint{Key: string(gpures.NVIDIA), Effect: corev1.TaintEffectNoSchedule})) {
+		t.Error("the cards' own taint")
+	}
+	taint := corev1.Taint{Key: "dedicated", Value: "infer", Effect: corev1.TaintEffectNoSchedule}
+	if machineFits(j, node(nv8, taint)) {
+		t.Error("an untolerated taint")
+	}
+	j.Spec.Template.Spec.Tolerations = []corev1.Toleration{{Key: "dedicated", Operator: corev1.TolerationOpEqual, Value: "infer", Effect: corev1.TaintEffectNoSchedule}}
+	if !machineFits(j, node(nv8, taint)) {
+		t.Error("a tolerated taint")
+	}
+}
+
+// A rank is the queue's only with its job's owner and the name the queue
+// gives it.
+func TestIsRankOf(t *testing.T) {
+	j := testJob()
+	r := rankDevPod(j, 1, "g1", "devpods", "")
+	if !isRankOf(r, j) || attemptOf(r) != 1 {
+		t.Fatalf("the queue's own: %v attempt %d", isRankOf(r, j), attemptOf(r))
+	}
+	other := r.DeepCopy()
+	other.Spec.Owner, other.Name = "mallory", "mallory-abc12-1"
+	if isRankOf(other, j) || !rankShaped(other) {
+		t.Error("another's DevPod naming the job")
+	}
+	renamed := r.DeepCopy()
+	renamed.Name = "alice-x"
+	if isRankOf(renamed, j) || rankShaped(renamed) {
+		t.Error("named otherwise")
+	}
+}

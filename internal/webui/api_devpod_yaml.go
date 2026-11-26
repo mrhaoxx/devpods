@@ -115,6 +115,9 @@ func (s *Server) replaceDevPodSpec(r *http.Request, sess Session, dp *devpodv1al
 	dp = dp.DeepCopy()
 	dp.Spec = in.Spec
 	dp.Spec.Owner = before.Spec.Owner
+	if apiErr := jobFieldsErr(before, dp); apiErr != nil {
+		return PatchResponse{}, apiErr
+	}
 	if len(annotations) > 0 && dp.Annotations == nil {
 		dp.Annotations = map[string]string{}
 	}

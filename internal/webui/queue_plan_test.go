@@ -37,7 +37,7 @@ func qrun(name string, prio int32, preemptible bool, gpus int64, until time.Dura
 
 func view(ms []qMachine, runs []qRun, queued ...*devpodv1alpha1.Job) queueView {
 	return queueView{Now: planNow, Machines: ms, Running: runs, Queued: queued, Horizon: 14 * 24 * time.Hour,
-		Allowed: func(*devpodv1alpha1.Job, string) bool { return true }, QuotaOK: func(*devpodv1alpha1.Job) bool { return true }}
+		Allowed: func(*devpodv1alpha1.Job, string) bool { return true }, QuotaOK: func(*devpodv1alpha1.Job, []*devpodv1alpha1.Job) bool { return true }}
 }
 
 func started(p queuePlan, name string) []string {
@@ -125,7 +125,7 @@ func TestPlanPreempt(t *testing.T) {
 // A job over its owner's quota waits, and holds up nobody.
 func TestPlanQuota(t *testing.T) {
 	v := view([]qMachine{machine8("a")}, nil, qjob("q", 10, 1, 4, time.Hour, 0), qjob("r", 0, 1, 4, time.Hour, time.Minute))
-	v.QuotaOK = func(j *devpodv1alpha1.Job) bool { return j.Name != "q" }
+	v.QuotaOK = func(j *devpodv1alpha1.Job, _ []*devpodv1alpha1.Job) bool { return j.Name != "q" }
 	p := planQueue(v)
 	if p.Waits["q"].Reason != "quota" || started(p, "r") == nil {
 		t.Fatalf("quota: %+v starts %+v", p.Waits["q"], p.Starts)
@@ -137,5 +137,56 @@ func TestPlanExpected(t *testing.T) {
 	p := planQueue(view([]qMachine{machine8("a")}, []qRun{qrun("r", 0, false, 8, 90*time.Minute, -time.Hour, "a")}, qjob("next", 0, 1, 8, time.Hour, 0)))
 	if w := p.Waits["next"]; w.Expected == nil || !w.Expected.Equal(planNow.Add(90*time.Minute)) || w.Position != 1 {
 		t.Fatalf("expected: %+v", w)
+	}
+}
+
+// Behind a head that waits for one machine, jobs start on the others,
+// however long they run: the head is not put off (EASY backfill by
+// machine).
+func TestPlanBackfillAroundHead(t *testing.T) {
+	a, b := machine8("a"), machine8("b")
+	runs := []qRun{qrun("r1", 50, false, 8, 2*time.Hour, -time.Hour, "a"), qrun("r2", 50, false, 4, 10*time.Hour, -time.Hour, "b")}
+	head := qjob("head", 10, 1, 8, time.Hour, 0)
+	long := qjob("long", 0, 1, 2, 24*time.Hour, time.Minute)
+	p := planQueue(view([]qMachine{a, b}, runs, head, long))
+	if w := p.Waits["head"]; w.Expected == nil || !w.Expected.Equal(planNow.Add(2*time.Hour)) {
+		t.Fatalf("head: %+v", w)
+	}
+	if m := started(p, "long"); !slices.Equal(m, []string{"b"}) {
+		t.Fatalf("long runs past the promise on b, which the head does not need: %v (waits %+v)", m, p.Waits["long"])
+	}
+	// where it fits only on the head's machine, it would put the head off:
+	// it waits (a has 4 free now, the head wants all 8 there at 2h)
+	half := qrun("r1", 50, false, 4, 2*time.Hour, -time.Hour, "a")
+	p = planQueue(view([]qMachine{a, machine8("c")}, []qRun{half, qrun("r3", 50, false, 8, 10*time.Hour, -time.Hour, "c")}, head, long))
+	if w := p.Waits["head"]; w.Expected == nil || !w.Expected.Equal(planNow.Add(2*time.Hour)) {
+		t.Fatalf("head on a: %+v", w)
+	}
+	if started(p, "long") != nil || p.Waits["long"].Reason != "behind" {
+		t.Fatalf("long on the head's machine: %v %+v", started(p, "long"), p.Waits["long"])
+	}
+}
+
+// The quota counts the jobs the same plan starts before.
+func TestPlanQuotaCountsPlanned(t *testing.T) {
+	v := view([]qMachine{machine8("a"), machine8("b")}, nil, qjob("one", 0, 1, 8, time.Hour, 0), qjob("two", 0, 1, 8, time.Hour, time.Minute))
+	v.QuotaOK = func(_ *devpodv1alpha1.Job, planned []*devpodv1alpha1.Job) bool { return len(planned) == 0 } // room for one
+	p := planQueue(v)
+	if started(p, "one") == nil || started(p, "two") != nil || p.Waits["two"].Reason != "quota" {
+		t.Fatalf("starts %+v waits %+v", p.Starts, p.Waits)
+	}
+}
+
+// A job whose ranks once did not all start has nobody stopped for it.
+func TestPlanNoPreemptAfterGangTimeout(t *testing.T) {
+	victim := qrun("low", 0, true, 8, 10*time.Hour, -time.Hour, "a")
+	high := qjob("high", 100, 1, 8, time.Hour, 0)
+	if p := planQueue(view([]qMachine{machine8("a")}, []qRun{victim}, high)); len(p.Preempt) != 1 {
+		t.Fatalf("a first try preempts: %+v", p.Preempt)
+	}
+	high.Status.GangTimeouts = 1
+	p := planQueue(view([]qMachine{machine8("a")}, []qRun{victim}, high))
+	if len(p.Preempt) != 0 || p.Waits["high"].Reason != "capacity" {
+		t.Fatalf("after a gang timeout: preempt %+v wait %+v", p.Preempt, p.Waits["high"])
 	}
 }

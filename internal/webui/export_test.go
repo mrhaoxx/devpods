@@ -191,3 +191,8 @@ func (s *Server) HandleGetPriorityRulesForTest() http.HandlerFunc { return s.han
 func (s *Server) HandlePutPriorityRulesForTest() http.HandlerFunc { return s.handlePutPriorityRules }
 
 func (s *Server) HandleJobLogsForTest() http.HandlerFunc { return s.handleJobLogs }
+
+// WriteJobStatusForTest writes j's status as the scheduler does.
+func (s *Server) WriteJobStatusForTest(ctx context.Context, j *devpodv1alpha1.Job) bool {
+	return s.writeJobStatus(ctx, j)
+}

@@ -27,6 +27,7 @@ import (
 	devpodv1alpha1 "github.com/mrhaoxx/devpod/api/v1alpha1"
 	"github.com/mrhaoxx/devpod/internal/access"
 	"github.com/mrhaoxx/devpod/internal/configvars"
+	"github.com/mrhaoxx/devpod/internal/gpures"
 )
 
 // The queue's API (design 2026-11-26): submit a job, list the queue, see
@@ -224,6 +225,12 @@ func (s *Server) resolveTemplate(ctx context.Context, sess Session, from devpodv
 	if src.Spec.Pod == nil {
 		return devpodv1alpha1.PodWorkloadSpec{}, "", badRequest("a job's ranks are Pods: %s is a VM", src.Name)
 	}
+	// the ranks are the console's writing of what the submitter wrote:
+	// the same guards as a DevPod of theirs (no Secrets, no service
+	// account, no admin's annotations)
+	if apiErr := s.checkWriting(sess, src); apiErr != nil {
+		return devpodv1alpha1.PodWorkloadSpec{}, "", apiErr
+	}
 	if src.Spec.Persistence != nil {
 		return devpodv1alpha1.PodWorkloadSpec{}, "", badRequest("a job runs on the shared home: %s has a disk of its own (spec.persistence)", src.Name)
 	}
@@ -411,6 +418,18 @@ func (s *Server) buildJob(ctx context.Context, sess Session, req JobRequest) (*d
 	case len(machines) == 0:
 		return nil, &serverErr{http.StatusForbidden, "PRIVILEGE_DENIED", "the access rules let none of this cluster's reservable machines run these ranks (their privileges)", nil}
 	}
+	// cards: of the kind the ranks ask for (a machine of another kind is
+	// none of theirs)
+	kind := corev1.ResourceName(gpures.NVIDIA)
+	if len(tmpl.Spec.Containers) > 0 {
+		kind = gpuKindOf(&tmpl.Spec.Containers[0])
+	}
+	capFor := func(n *corev1.Node) amount {
+		c := capacityOf(n)
+		q := n.Status.Allocatable[kind]
+		c.GPU = q.Value()
+		return c
+	}
 	// cores: as asked, else each machine's share for the cards, the least
 	var cpuMilli int64
 	if req.CPUs != nil {
@@ -420,7 +439,7 @@ func (s *Server) buildJob(ctx context.Context, sess Session, req JobRequest) (*d
 			return nil, badRequest("say how many cores (cpus) each rank takes")
 		}
 		for _, n := range machines {
-			c := capacityOf(&n)
+			c := capFor(&n)
 			if c.GPU < int64(req.GPUs) {
 				continue
 			}
@@ -433,7 +452,7 @@ func (s *Server) buildJob(ctx context.Context, sess Session, req JobRequest) (*d
 	ask := amount{GPU: int64(req.GPUs), CPU: cpuMilli}
 	fit := 0
 	for _, n := range machines {
-		if ask.fits(capacityOf(&n)) && ask.CPU > 0 {
+		if ask.fits(capFor(&n)) && ask.CPU > 0 {
 			fit++
 		}
 	}

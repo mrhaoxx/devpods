@@ -117,11 +117,19 @@ func PodLimits(spec *corev1.PodSpec) corev1.ResourceList {
 func CheckQuota(q devpodv1alpha1.UserQuota, existing []devpodv1alpha1.DevPod, proposed *devpodv1alpha1.DevPod) *QuotaError {
 	var violations []QuotaViolation
 
-	if q.MaxDevPods != nil && int32(len(existing))+1 > *q.MaxDevPods {
+	// a queue job's ranks are not DevPods of one's own to count: what
+	// they run counts (compute), not how many there are
+	own := 0
+	for i := range existing {
+		if existing[i].Spec.Job == nil {
+			own++
+		}
+	}
+	if q.MaxDevPods != nil && proposed.Spec.Job == nil && int32(own)+1 > *q.MaxDevPods {
 		violations = append(violations, QuotaViolation{
 			Resource:  "devpods",
 			Requested: "1",
-			Used:      fmt.Sprintf("%d", len(existing)),
+			Used:      fmt.Sprintf("%d", own),
 			Limit:     fmt.Sprintf("%d", *q.MaxDevPods),
 		})
 	}

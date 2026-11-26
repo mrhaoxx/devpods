@@ -51,8 +51,9 @@ type queueView struct {
 	Queued   []*devpodv1alpha1.Job
 	// Allowed: the access rules let job's owner run its ranks on machine.
 	Allowed func(job *devpodv1alpha1.Job, machine string) bool
-	// QuotaOK: the job's ranks fit its owner's quota now.
-	QuotaOK func(job *devpodv1alpha1.Job) bool
+	// QuotaOK: the job's ranks fit its owner's quota now, beside planned
+	// (the jobs this plan starts before it).
+	QuotaOK func(job *devpodv1alpha1.Job, planned []*devpodv1alpha1.Job) bool
 	// Horizon: how far ahead a promise is looked for.
 	Horizon time.Duration
 }
@@ -111,6 +112,8 @@ func planQueue(v queueView) queuePlan {
 	var head *devpodv1alpha1.Job
 	var promise time.Time
 	promised := false
+	var headOn []string // the machines the head is promised
+	var planned []*devpodv1alpha1.Job
 	var position int32
 	wait := func(j *devpodv1alpha1.Job, w qWait) {
 		position++
@@ -119,6 +122,7 @@ func planQueue(v queueView) queuePlan {
 	}
 	start := func(j *devpodv1alpha1.Job, machines []string) {
 		plan.Starts = append(plan.Starts, qStart{Job: j, Machines: machines})
+		planned = append(planned, j)
 		runs = append(runs, qRun{Job: j, Machines: machines, Ask: jobAsk(j), Until: v.Now.Add(j.Spec.TimeLimit.Duration),
 			Preemptible: j.Spec.Preemptible, Priority: j.Spec.Priority, Started: v.Now})
 	}
@@ -127,10 +131,18 @@ func planQueue(v queueView) queuePlan {
 		limit := j.Spec.TimeLimit.Duration
 		cands := v.candidates(j, runs, v.Now)
 		fits := len(cands) >= n
-		quota := v.QuotaOK == nil || v.QuotaOK(j)
+		quota := v.QuotaOK == nil || v.QuotaOK(j, planned)
 		if head != nil {
-			if fits && quota && (!promised || !v.Now.Add(limit).After(promise)) {
+			// behind the head (EASY backfill): a job may start now on
+			// machines the head is not promised, or on any if it has ended
+			// by the promise — either way the head is not put off
+			away := slices.DeleteFunc(slices.Clone(cands), func(m string) bool { return slices.Contains(headOn, m) })
+			switch {
+			case fits && quota && (!promised || !v.Now.Add(limit).After(promise)):
 				start(j, cands[:n])
+				continue
+			case fits && quota && len(away) >= n:
+				start(j, away[:n])
 				continue
 			}
 			if fits && !quota {
@@ -149,20 +161,26 @@ func planQueue(v queueView) queuePlan {
 			continue
 		}
 		head = j
-		if victims := v.victimsFor(j, runs); len(victims) > 0 {
+		// one whose ranks once did not all start has nobody stopped for
+		// it: it may not start this time either
+		victims, on := []qRun(nil), []string(nil)
+		if j.Status.GangTimeouts == 0 {
+			victims, on = v.victimsFor(j, runs)
+		}
+		if len(victims) > 0 {
 			ids := make([]string, 0, len(victims))
 			for _, r := range victims {
 				plan.Preempt = append(plan.Preempt, r.Job)
 				ids = append(ids, r.Job.Name)
 			}
 			runs = slices.DeleteFunc(runs, func(r qRun) bool { return slices.Contains(ids, r.Job.Name) })
-			promise, promised = v.Now, true // it takes what they leave: nobody slips in
+			promise, promised, headOn = v.Now, true, on // it takes what they leave: nobody slips in there
 			wait(j, qWait{Reason: "preempting", Detail: map[string]string{"jobs": strings.Join(ids, ",")}})
 			continue
 		}
 		w := qWait{Reason: "capacity", Detail: v.shortfall(j, runs)}
-		if t, ok := v.earliest(j, runs); ok {
-			promise, promised = t, true
+		if t, on, ok := v.earliest(j, runs); ok {
+			promise, promised, headOn = t, true, on
 			w.Expected = &t
 		}
 		wait(j, w)
@@ -204,8 +222,9 @@ func (v queueView) candidates(j *devpodv1alpha1.Job, runs []qRun, at time.Time) 
 }
 
 // earliest: the first time (a running job's end, a reservation's start or
-// end) within the horizon from which j's ranks would all fit.
-func (v queueView) earliest(j *devpodv1alpha1.Job, runs []qRun) (time.Time, bool) {
+// end) within the horizon from which j's ranks would all fit, and the
+// machines they would take then.
+func (v queueView) earliest(j *devpodv1alpha1.Job, runs []qRun) (time.Time, []string, bool) {
 	end := v.Now.Add(v.Horizon)
 	var events []time.Time
 	add := func(t time.Time) {
@@ -224,18 +243,18 @@ func (v queueView) earliest(j *devpodv1alpha1.Job, runs []qRun) (time.Time, bool
 	}
 	slices.SortFunc(events, func(a, b time.Time) int { return a.Compare(b) })
 	for _, t := range slices.Compact(events) {
-		if len(v.candidates(j, runs, t)) >= int(j.Spec.Nodes) {
-			return t, true
+		if cs := v.candidates(j, runs, t); len(cs) >= int(j.Spec.Nodes) {
+			return t, cs[:j.Spec.Nodes], true
 		}
 	}
-	return time.Time{}, false
+	return time.Time{}, nil, false
 }
 
 // victimsFor: the fewest running jobs, preemptible and of lower priority
 // than j, whose stopping lets j's ranks start now — chosen machine by
-// machine (those needing the fewest stopped first); none when that is
-// not enough.
-func (v queueView) victimsFor(j *devpodv1alpha1.Job, runs []qRun) []qRun {
+// machine (those needing the fewest stopped first) — and the machines j
+// would take; none when that is not enough.
+func (v queueView) victimsFor(j *devpodv1alpha1.Job, runs []qRun) ([]qRun, []string) {
 	ask := jobAsk(j)
 	type option struct {
 		machine string
@@ -279,7 +298,7 @@ func (v queueView) victimsFor(j *devpodv1alpha1.Job, runs []qRun) []qRun {
 		}
 	}
 	if len(opts) < int(j.Spec.Nodes) {
-		return nil
+		return nil, nil
 	}
 	sort.SliceStable(opts, func(a, b int) bool {
 		if len(opts[a].victims) != len(opts[b].victims) {
@@ -291,14 +310,16 @@ func (v queueView) victimsFor(j *devpodv1alpha1.Job, runs []qRun) []qRun {
 		return opts[a].machine < opts[b].machine
 	})
 	var out []qRun
+	var on []string
 	for _, o := range opts[:j.Spec.Nodes] {
+		on = append(on, o.machine)
 		for _, r := range o.victims {
 			if !slices.ContainsFunc(out, func(x qRun) bool { return x.Job.Name == r.Job.Name }) {
 				out = append(out, r)
 			}
 		}
 	}
-	return out
+	return out, on
 }
 
 // shortfall: what j needs in all and what its machines have free now, for

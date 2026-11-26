@@ -6,6 +6,7 @@ package webui_test
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"testing"
 	"time"
@@ -73,4 +74,68 @@ func TestReservationStartRequeuesPreemptible(t *testing.T) {
 
 func client_key(name string) types.NamespacedName {
 	return types.NamespacedName{Namespace: "devpods", Name: name}
+}
+
+// A reservation's end hibernates its holder's DevPods on the machine where
+// they may run only under one — but not their job's ranks, which the
+// queue ran outside any reservation.
+func TestReservationEndSparesJobRanks(t *testing.T) {
+	p, _ := queueRig(t, "rs", "rs-alice")
+	setRules(t, onNode(p.n1, needsReservation))
+	if code, v := reserveWith(t, p.s, p.as("rs-alice"), p.n1, p.slot, p.slot.Add(time.Hour), map[string]any{"gpu": 4}); code != http.StatusCreated {
+		t.Fatalf("reserve: %d %+v", code, v)
+	}
+	id := startedJob(t, p, "rs-alice", 4, false)
+	rank := ranksBecome(t, id, 1)[0].Name
+	setRank(t, rank, devpodv1alpha1.DevPodRunning, nil)
+	end := p.slot.Add(time.Hour + time.Minute)
+	p.s.Reservations.Now = func() time.Time { return end }
+	ctx := context.Background()
+	for range 4 {
+		p.s.EnforceReservations(ctx)
+		time.Sleep(100 * time.Millisecond)
+	}
+	var dp devpodv1alpha1.DevPod
+	if err := p.s.Reader.Get(ctx, client_key(rank), &dp); err != nil {
+		t.Fatal(err)
+	}
+	if !dp.Spec.Running || dp.Annotations[devpodv1alpha1.HibernatedByAnnotation] != "" {
+		t.Fatalf("the rank was stopped: running %v by %q", dp.Spec.Running, dp.Annotations[devpodv1alpha1.HibernatedByAnnotation])
+	}
+}
+
+// The queue says what it can use now, and the reservation timeline shows
+// what running jobs hold, until when at most.
+func TestJobsFreeAndHolds(t *testing.T) {
+	p, _ := queueRig(t, "rf", "rf-alice")
+	id := startedJob(t, p, "rf-alice", 4, false)
+	var free struct {
+		Items []struct {
+			GPU, MaxGPU float64
+			CPU         float64
+			Machines    int
+		}
+	}
+	rec := doJSON(t, p.s.Routes().ServeHTTP, "GET", "/api/jobs/free", nil, p.as("rf-bob"), "")
+	if rec.Code != http.StatusOK || json.Unmarshal(rec.Body.Bytes(), &free) != nil || len(free.Items) != 1 {
+		t.Fatalf("free: %d %s", rec.Code, rec.Body)
+	}
+	if f := free.Items[0]; f.GPU != 4 || f.MaxGPU != 4 || f.Machines != 1 || f.CPU != 192-4 {
+		t.Fatalf("free %+v", f)
+	}
+	var list struct {
+		Jobs []struct {
+			ID, Owner, Node string
+			GPU             int
+			Mine            bool
+			Start, End      time.Time
+		}
+	}
+	rec = doJSON(t, p.s.Routes().ServeHTTP, "GET", "/api/reservations", nil, p.as("rf-bob"), "")
+	if rec.Code != http.StatusOK || json.Unmarshal(rec.Body.Bytes(), &list) != nil || len(list.Jobs) != 1 {
+		t.Fatalf("timeline: %d %s", rec.Code, rec.Body)
+	}
+	if h := list.Jobs[0]; h.ID != id || h.Owner != "rf-alice" || h.Node != p.n1 || h.GPU != 4 || h.Mine || h.End.Sub(h.Start) != 2*time.Hour {
+		t.Fatalf("hold %+v", h)
+	}
 }

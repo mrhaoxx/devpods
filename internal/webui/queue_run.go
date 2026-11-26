@@ -5,21 +5,26 @@
 package webui
 
 import (
+	"cmp"
 	"context"
 	"log/slog"
 	"maps"
+	"net/http"
 	"reflect"
+	"slices"
+	"strings"
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
-	"k8s.io/client-go/util/retry"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	devpodv1alpha1 "github.com/mrhaoxx/devpod/api/v1alpha1"
 	"github.com/mrhaoxx/devpod/internal/access"
+	"github.com/mrhaoxx/devpod/internal/audit/store"
+	"github.com/mrhaoxx/devpod/internal/render"
 	"github.com/mrhaoxx/devpod/internal/webui/clusters"
 )
 
@@ -34,6 +39,14 @@ import (
 // jobRankGrace: how long a starting job's rank may be missing (not yet
 // seen) before it counts as stopped.
 const jobRankGrace = time.Minute
+
+// maxGangTimeouts: how many times a job's ranks may fail to all start in
+// time before the job fails.
+const maxGangTimeouts = 3
+
+// jobCleanupTimeout bounds keeping an ended job's output and deleting
+// its ranks (in the background, off the round).
+const jobCleanupTimeout = 10 * time.Minute
 
 // RunQueue schedules every Tick while leads says this replica leads (nil:
 // it always does), until ctx ends. Without the queue it returns at once.
@@ -68,6 +81,7 @@ func (s *Server) QueueRound(ctx context.Context) {
 		return
 	}
 	byCluster := map[string][]*devpodv1alpha1.Job{}
+	endedIn := map[string][]*devpodv1alpha1.Job{}
 	for i := range all.Items {
 		j := &all.Items[i]
 		if j.DeletionTimestamp != nil {
@@ -78,42 +92,65 @@ func (s *Server) QueueRound(ctx context.Context) {
 				if err := s.Client.Delete(ctx, j); err != nil && !apierrors.IsNotFound(err) {
 					slog.Warn("queue_prune", "job", j.Name, "err", err)
 				}
+				continue
 			}
+			endedIn[j.Spec.Cluster] = append(endedIn[j.Spec.Cluster], j)
 			continue
 		}
 		byCluster[j.Spec.Cluster] = append(byCluster[j.Spec.Cluster], j)
 	}
+	for cluster := range endedIn {
+		if _, ok := byCluster[cluster]; !ok {
+			byCluster[cluster] = nil
+		}
+	}
 	for cluster, jobs := range byCluster {
 		if s.takesJobs(cluster) {
-			s.queueIn(ctx, cluster, jobs, now)
+			s.queueIn(ctx, cluster, jobs, endedIn[cluster], now)
 		}
 	}
 }
 
 // queueIn is one round in cluster (away: skipped — its jobs keep as they
-// are, and are judged when it is back).
-func (s *Server) queueIn(ctx context.Context, cluster string, jobs []*devpodv1alpha1.Job, now time.Time) {
+// are, and are judged when it is back). ended are its jobs that have
+// ended: ranks of theirs still there are cleaned up.
+func (s *Server) queueIn(ctx context.Context, cluster string, jobs, ended []*devpodv1alpha1.Job, now time.Time) {
 	cc := s.clientsOf(cluster)
 	if cc == nil {
 		return
 	}
 	ctx = s.in(ctx, cc)
-	ranksOf, err := s.rankDevPods(ctx, cc)
+	byID := map[string]*devpodv1alpha1.Job{}
+	for _, j := range append(slices.Clone(jobs), ended...) {
+		byID[j.Name] = j
+	}
+	live, all, err := s.rankDevPods(ctx, cc, byID)
 	if err != nil {
 		slog.Warn("queue", "cluster", cluster, "err", err)
 		return
+	}
+	for _, j := range ended {
+		if len(all[j.Name]) > 0 {
+			s.cleanUpJob(ctx, cc, j)
+		}
 	}
 	var active, queued []*devpodv1alpha1.Job
 	for _, j := range jobs {
 		switch j.Status.Phase {
 		case devpodv1alpha1.JobStarting, devpodv1alpha1.JobRunning:
-			s.followJob(ctx, cc, j, ranksOf[j.Name], now)
+			s.followJob(ctx, cc, j, live[j.Name], now)
 			if j.Status.Phase == devpodv1alpha1.JobStarting || j.Status.Phase == devpodv1alpha1.JobRunning {
 				active = append(active, j)
 			}
 		default:
 			if j.Spec.Cancelled != nil {
 				s.endJob(ctx, cc, j, devpodv1alpha1.JobCancelled, "cancelled", nil, now)
+				continue
+			}
+			// a former start's ranks still going (being deleted, their
+			// Pods in their grace): it waits for them to be gone, or its
+			// new ranks would be taken for them
+			if leftover(j, all[j.Name]) {
 				continue
 			}
 			queued = append(queued, j)
@@ -153,24 +190,44 @@ func (s *Server) queueIn(ctx context.Context, cluster string, jobs []*devpodv1al
 	}
 }
 
-// rankDevPods: cluster's job ranks, by job and rank.
-func (s *Server) rankDevPods(ctx context.Context, cc *clusters.ClusterClients) (map[string]map[int32]*devpodv1alpha1.DevPod, error) {
+// rankDevPods: cluster's ranks of jobs (by id), by job — live: by rank,
+// not being deleted; all: any, being deleted too. A DevPod that names a
+// job but is not a rank the queue made of it (its name, owner) is not
+// one: as any other DevPod.
+func (s *Server) rankDevPods(ctx context.Context, cc *clusters.ClusterClients, jobs map[string]*devpodv1alpha1.Job) (live map[string]map[int32]*devpodv1alpha1.DevPod, all map[string][]*devpodv1alpha1.DevPod, err error) {
 	var l devpodv1alpha1.DevPodList
-	if err := cc.Client.List(ctx, &l, client.InNamespace(s.NS), client.HasLabels{"devpod.io/job"}); err != nil {
-		return nil, err
+	if err := cc.Client.List(ctx, &l, client.InNamespace(s.NS), client.HasLabels{jobLabel}); err != nil {
+		return nil, nil, err
 	}
-	out := map[string]map[int32]*devpodv1alpha1.DevPod{}
+	live, all = map[string]map[int32]*devpodv1alpha1.DevPod{}, map[string][]*devpodv1alpha1.DevPod{}
 	for i := range l.Items {
 		d := &l.Items[i]
-		if d.Spec.Job == nil || d.DeletionTimestamp != nil {
+		if d.Spec.Job == nil {
 			continue
 		}
-		if out[d.Spec.Job.Name] == nil {
-			out[d.Spec.Job.Name] = map[int32]*devpodv1alpha1.DevPod{}
+		j := jobs[d.Spec.Job.Name]
+		if j == nil || !isRankOf(d, j) {
+			continue
 		}
-		out[d.Spec.Job.Name][d.Spec.Job.Rank] = d
+		all[j.Name] = append(all[j.Name], d)
+		if d.DeletionTimestamp != nil {
+			continue
+		}
+		if live[j.Name] == nil {
+			live[j.Name] = map[int32]*devpodv1alpha1.DevPod{}
+		}
+		live[j.Name][d.Spec.Job.Rank] = d
 	}
-	return out, nil
+	return live, all, nil
+}
+
+// leftover: of a waiting job j's ranks ds, one of a former start (or
+// being deleted) is still there. Ranks of the start it is making (made,
+// but the round making them did not get to say so) are not.
+func leftover(j *devpodv1alpha1.Job, ds []*devpodv1alpha1.DevPod) bool {
+	return slices.ContainsFunc(ds, func(d *devpodv1alpha1.DevPod) bool {
+		return d.DeletionTimestamp != nil || attemptOf(d) != j.Status.Attempts+1
+	})
 }
 
 // followJob brings a starting or running job up to date with its ranks:
@@ -238,6 +295,12 @@ func (s *Server) followJob(ctx context.Context, cc *clusters.ClusterClients, j *
 		j.Status.Phase, j.Status.StartedAt = devpodv1alpha1.JobRunning, &t
 		s.writeJobStatus(ctx, j)
 	case j.Status.Phase == devpodv1alpha1.JobStarting && j.Status.AttemptAt != nil && now.Sub(j.Status.AttemptAt.Time) > s.Queue.GangTimeout:
+		j.Status.GangTimeouts++
+		if j.Status.GangTimeouts >= maxGangTimeouts {
+			// it is not going to start: say what kept it
+			s.endJob(ctx, cc, j, devpodv1alpha1.JobFailed, "gang-timeout", s.whyNotStarted(ctx, cc, j, ranks), now)
+			return
+		}
 		s.requeueJob(ctx, cc, j, "gang-timeout")
 	case j.Status.Phase == devpodv1alpha1.JobRunning && j.Status.StartedAt != nil && !now.Before(j.Status.StartedAt.Add(limit)):
 		s.endJob(ctx, cc, j, devpodv1alpha1.JobTimedOut, "time-limit", nil, now)
@@ -258,32 +321,56 @@ func (s *Server) deleteRanks(ctx context.Context, cc *clusters.ClusterClients, j
 	return true
 }
 
-// endJob ends j as phase (reason, detail): its ranks' logs kept, its ranks
+// endJob ends j as phase (reason, detail); then, off the round, its
+// ranks' output is kept (where its status says) and its ranks are
 // deleted (a rank still running is told to stop and has its grace).
 func (s *Server) endJob(ctx context.Context, cc *clusters.ClusterClients, j *devpodv1alpha1.Job, phase devpodv1alpha1.JobPhase, reason string, detail map[string]string, now time.Time) {
-	s.saveRankLogs(ctx, cc, j)
-	if !s.deleteRanks(ctx, cc, j) {
-		return // the next round tries again
-	}
 	t := metav1.NewTime(now)
 	j.Status.Phase, j.Status.Reason, j.Status.Detail, j.Status.FinishedAt = phase, reason, detail, &t
 	j.Status.Position, j.Status.ExpectedStart = 0, nil
-	s.writeJobStatus(ctx, j)
+	if s.keepsRankLogs() {
+		for i := range j.Status.Ranks {
+			if rk := &j.Status.Ranks[i]; rk.Log == "" {
+				rk.Log = store.JobLogKey(j.Spec.Cluster, j.Name, rk.Rank)
+			}
+		}
+	}
+	if !s.writeJobStatus(ctx, j) {
+		return // it changed meanwhile: the next round sees it as it is
+	}
 	slog.Info("queue_job_end", "job", j.Name, "owner", j.Spec.Owner, "phase", phase, "reason", reason)
+	s.cleanUpJob(ctx, cc, j)
 }
 
-// requeueJob stops j's ranks and puts it back in the queue, keeping its
-// place (its submission time).
-func (s *Server) requeueJob(ctx context.Context, cc *clusters.ClusterClients, j *devpodv1alpha1.Job, reason string) {
-	if !s.deleteRanks(ctx, cc, j) {
+// cleanUpJob keeps the ended job j's ranks' output and then deletes its
+// ranks, in the background (bounded by jobCleanupTimeout), once at a
+// time per job; a round that finds its ranks still there asks again.
+func (s *Server) cleanUpJob(ctx context.Context, cc *clusters.ClusterClients, j *devpodv1alpha1.Job) {
+	if _, busy := s.queueCleaning.LoadOrStore(j.Name, true); busy {
 		return
 	}
+	j = j.DeepCopy()
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), jobCleanupTimeout)
+	go func() {
+		defer s.queueCleaning.Delete(j.Name)
+		defer cancel()
+		s.saveRankLogs(ctx, cc, j)
+		s.deleteRanks(ctx, cc, j)
+	}()
+}
+
+// requeueJob puts j back in the queue, keeping its place (its submission
+// time), and stops its ranks; it starts again once they are gone.
+func (s *Server) requeueJob(ctx context.Context, cc *clusters.ClusterClients, j *devpodv1alpha1.Job, reason string) {
 	j.Status.Phase, j.Status.Reason, j.Status.Detail = devpodv1alpha1.JobQueued, reason, nil
 	j.Status.Ranks, j.Status.AttemptAt, j.Status.StartedAt = nil, nil, nil
 	if reason == "preempted" {
 		j.Status.Preemptions++
 	}
-	s.writeJobStatus(ctx, j)
+	if !s.writeJobStatus(ctx, j) {
+		return // it changed meanwhile: the next round sees it as it is
+	}
+	s.deleteRanks(ctx, cc, j) // what is left the round cleans up: the job waits for it
 	slog.Info("queue_job_requeued", "job", j.Name, "owner", j.Spec.Owner, "reason", reason)
 }
 
@@ -294,18 +381,36 @@ func (s *Server) startJob(ctx context.Context, cc *clusters.ClusterClients, j *d
 	rank0 := rankName(j.Spec.Owner, j.Name, 0)
 	master := masterAddr(j, rank0, s.NS, j.Spec.Template.Spec.HostNetwork, internalIP(nodes[machines[0]]))
 	ranks := make([]devpodv1alpha1.JobRank, 0, len(machines))
+	var made []*devpodv1alpha1.DevPod
+	undo := func() {
+		for _, dp := range made {
+			if err := cc.Client.Delete(ctx, dp); err != nil && !apierrors.IsNotFound(err) {
+				slog.Warn("queue_start_undo", "job", j.Name, "devpod", dp.Name, "err", err)
+			}
+		}
+	}
 	for r, m := range machines {
 		dp := rankDevPod(j, int32(r), m, s.NS, master)
 		if err := cc.Client.Create(ctx, dp); err != nil {
 			if !apierrors.IsAlreadyExists(err) {
 				slog.Warn("queue_start", "job", j.Name, "rank", r, "err", err)
-				s.deleteRanks(ctx, cc, j)
+				undo()
 				return
 			}
+			// made already: taken as it is only if it is this start's
+			// (one of a former start is going: this start waits for it)
 			var cur devpodv1alpha1.DevPod
-			if cc.Client.Get(ctx, types.NamespacedName{Namespace: s.NS, Name: dp.Name}, &cur) == nil && pinnedNode(&cur) != "" {
+			if err := cc.Reader.Get(ctx, types.NamespacedName{Namespace: s.NS, Name: dp.Name}, &cur); err != nil ||
+				!isRankOf(&cur, j) || cur.DeletionTimestamp != nil || attemptOf(&cur) != j.Status.Attempts+1 {
+				slog.Info("queue_start_waits", "job", j.Name, "devpod", dp.Name)
+				undo()
+				return
+			}
+			if pinnedNode(&cur) != "" {
 				m = pinnedNode(&cur)
 			}
+		} else {
+			made = append(made, dp)
 		}
 		ranks = append(ranks, devpodv1alpha1.JobRank{Rank: int32(r), Node: m, DevPod: dp.Name})
 	}
@@ -313,24 +418,77 @@ func (s *Server) startJob(ctx context.Context, cc *clusters.ClusterClients, j *d
 	j.Status.Phase, j.Status.AttemptAt, j.Status.Ranks = devpodv1alpha1.JobStarting, &t, ranks
 	j.Status.Attempts++
 	j.Status.Reason, j.Status.Detail, j.Status.Position, j.Status.ExpectedStart, j.Status.StartedAt = "", nil, 0, nil, nil
-	s.writeJobStatus(ctx, j)
-	slog.Info("queue_job_start", "job", j.Name, "owner", j.Spec.Owner, "machines", machines)
+	if s.writeJobStatus(ctx, j) {
+		slog.Info("queue_job_start", "job", j.Name, "owner", j.Spec.Owner, "machines", machines)
+	}
+	// not written (cancelled meanwhile): its ranks are cleaned up by the
+	// rounds that find them, as an ended job's
 }
 
-// writeJobStatus writes j's status (the scheduler's alone), retried on a
-// conflict with a write to its spec (a cancel).
-func (s *Server) writeJobStatus(ctx context.Context, j *devpodv1alpha1.Job) {
-	err := retry.RetryOnConflict(retry.DefaultRetry, func() error {
-		var cur devpodv1alpha1.Job
-		if err := s.Reader.Get(ctx, types.NamespacedName{Name: j.Name}, &cur); err != nil {
-			return err
+// writeJobStatus writes j's status, worked out from j as it was read:
+// if j has changed since (cancelled, or ended or queued again by the
+// reservations' loop), nothing is written and it says false — the next
+// round works from j as it is then, so no change is undone.
+func (s *Server) writeJobStatus(ctx context.Context, j *devpodv1alpha1.Job) bool {
+	if err := s.Client.Status().Update(ctx, j); err != nil {
+		if apierrors.IsConflict(err) {
+			slog.Info("queue_status_stale", "job", j.Name)
+		} else {
+			slog.Warn("queue_status", "job", j.Name, "err", err)
 		}
-		cur.Status = j.Status
-		return s.Client.Status().Update(ctx, &cur)
-	})
-	if err != nil {
-		slog.Warn("queue_status", "job", j.Name, "err", err)
+		return false
 	}
+	return true
+}
+
+// keepsRankLogs: ended jobs' ranks' output is kept.
+func (s *Server) keepsRankLogs() bool {
+	return s.PodLogs != nil && s.Audit != nil && s.Audit.Objects != nil
+}
+
+// whyNotStarted: what kept j's first rank not running from running —
+// for a job failed for not starting.
+func (s *Server) whyNotStarted(ctx context.Context, cc *clusters.ClusterClients, j *devpodv1alpha1.Job, ranks map[int32]*devpodv1alpha1.DevPod) map[string]string {
+	for r := int32(0); r < j.Spec.Nodes; r++ {
+		d := ranks[r]
+		if d != nil && d.Status.Phase == devpodv1alpha1.DevPodRunning {
+			continue
+		}
+		why := "its DevPod is not there"
+		if d != nil {
+			why = d.Status.Message
+			var pod corev1.Pod
+			if cc.Client.Get(ctx, types.NamespacedName{Namespace: s.NS, Name: render.PodName(d)}, &pod) == nil {
+				if w := podWaitingFor(&pod); w != "" {
+					why = w
+				}
+			}
+			if why == "" {
+				why = "its Pod did not start"
+			}
+		}
+		return map[string]string{"rank": itoa(r), "why": why}
+	}
+	return nil
+}
+
+// podWaitingFor: why a Pod is not running — not placed, or a container
+// waiting (an image not pulled).
+func podWaitingFor(pod *corev1.Pod) string {
+	for _, c := range pod.Status.Conditions {
+		if c.Type == corev1.PodScheduled && c.Status == corev1.ConditionFalse && c.Message != "" {
+			return c.Message
+		}
+	}
+	for _, cs := range pod.Status.ContainerStatuses {
+		if w := cs.State.Waiting; w != nil && w.Reason != "" {
+			if w.Message != "" {
+				return w.Reason + ": " + w.Message
+			}
+			return w.Reason
+		}
+	}
+	return ""
 }
 
 // internalIP: a machine's InternalIP ("" unknown).
@@ -365,12 +523,16 @@ func (s *Server) queueViewFor(ctx context.Context, cc *clusters.ClusterClients, 
 		return queueView{}, nil, err
 	}
 	cluster := s.resCluster(ctx)
+	activeByID := map[string]*devpodv1alpha1.Job{}
+	for _, j := range active {
+		activeByID[j.Name] = j
+	}
 	byName := map[string]*corev1.Node{}
 	var machines []qMachine
 	for i := range nodes.Items {
 		n := &nodes.Items[i]
 		byName[n.Name] = n
-		if n.Labels[devpodv1alpha1.ReservableNodeLabel] != "true" || !readyOrUnknown(n) {
+		if n.Labels[devpodv1alpha1.ReservableNodeLabel] != "true" || !readyOrUnknown(n) || n.Spec.Unschedulable {
 			continue
 		}
 		var rs []*devpodv1alpha1.NodeReservation
@@ -379,11 +541,16 @@ func (s *Server) queueViewFor(ctx context.Context, cc *clusters.ClusterClients, 
 				rs = append(rs, &all[k])
 			}
 		}
+		// what DevPods take here — but a running job's ranks, which the
+		// jobs' own accounts hold
 		var interactive []placed
 		for _, p := range on[n.Name] {
-			if p.DP.Spec.Job == nil {
-				interactive = append(interactive, p)
+			if p.Job != nil {
+				if j := activeByID[p.Job.ID]; j != nil && isRankOf(p.DP, j) {
+					continue
+				}
 			}
+			interactive = append(interactive, p)
 		}
 		c := capacityOf(n)
 		machines = append(machines, qMachine{Name: n.Name, Cap: c, Interactive: loadAt(c, rs, interactive, now, "").outside(), Rs: rs})
@@ -414,7 +581,7 @@ func (s *Server) queueViewFor(ctx context.Context, cc *clusters.ClusterClients, 
 		}
 		n := byName[machine]
 		ok := false
-		if n != nil {
+		if n != nil && machineFits(j, n) {
 			d, admin, err := s.decide(ctx, j.Spec.Owner, cluster, access.Node{Name: n.Name, Labels: n.Labels})
 			ok = err == nil && (admin || (d.Allow && d.Admits(access.NeedsOf(&j.Spec.Template.Spec)) == nil))
 		}
@@ -425,7 +592,7 @@ func (s *Server) queueViewFor(ctx context.Context, cc *clusters.ClusterClients, 
 	if err := cc.Client.List(ctx, &dps, client.InNamespace(s.NS)); err != nil {
 		return queueView{}, nil, err
 	}
-	quotaOK := func(j *devpodv1alpha1.Job) bool {
+	quotaOK := func(j *devpodv1alpha1.Job, planned []*devpodv1alpha1.Job) bool {
 		if s.ownerIsAdmin(ctx, j.Spec.Owner) {
 			return true
 		}
@@ -438,6 +605,14 @@ func (s *Server) queueViewFor(ctx context.Context, cc *clusters.ClusterClients, 
 		for _, d := range dps.Items {
 			if d.Spec.Owner == j.Spec.Owner && d.DeletionTimestamp == nil {
 				existing = append(existing, d)
+			}
+		}
+		// the owner's jobs this round starts before it count as running
+		for _, p := range planned {
+			if p.Spec.Owner == j.Spec.Owner {
+				for r := int32(0); r < p.Spec.Nodes; r++ {
+					existing = append(existing, *rankDevPod(p, r, "x", s.NS, ""))
+				}
 			}
 		}
 		for r := int32(0); r < j.Spec.Nodes-1; r++ {
@@ -495,5 +670,108 @@ func (s *Server) jobHolds(ctx context.Context, cluster, node string, now time.Ti
 			})
 		}
 	}
+	return out
+}
+
+// queueFree: what the queue can use in one cluster now — free cards and
+// cores on its reservable machines (outside the reservations in force,
+// what DevPods and running jobs take), and the most cards one machine has.
+type queueFree struct {
+	Cluster  string  `json:"cluster,omitempty"`
+	GPU      int64   `json:"gpu"`
+	CPU      float64 `json:"cpu"`
+	MaxGPU   int64   `json:"maxGPU"`
+	Machines int     `json:"machines"`
+}
+
+// handleJobsFree serves GET /api/jobs/free: queueFree of each cluster
+// shown to the caller that takes jobs.
+func (s *Server) handleJobsFree(w http.ResponseWriter, r *http.Request) {
+	sess, ok := s.sessionFrom(w, r)
+	if !ok {
+		return
+	}
+	if s.Queue == nil {
+		s.writeErr(w, http.StatusNotFound, "QUEUE_OFF", "the queue is not on in this console", nil)
+		return
+	}
+	now := s.Queue.now()
+	jobs := s.jobsByID(r.Context())
+	shown := s.clusterGate(r.Context(), sess)
+	items := []queueFree{}
+	for _, cc := range s.ks(r) {
+		ctx := s.in(r.Context(), cc)
+		cluster := s.resCluster(ctx)
+		if !shown(cc.Name) || !s.takesJobs(cluster) {
+			continue
+		}
+		var active []*devpodv1alpha1.Job
+		for _, j := range jobs {
+			if j.Spec.Cluster == cluster && (j.Status.Phase == devpodv1alpha1.JobStarting || j.Status.Phase == devpodv1alpha1.JobRunning) {
+				active = append(active, j)
+			}
+		}
+		v, _, err := s.queueViewFor(ctx, cc, active, nil, now)
+		if err != nil {
+			slog.Warn("queue_free", "cluster", cluster, "err", err)
+			continue
+		}
+		f := queueFree{Cluster: s.clusterLabel(cc), Machines: len(v.Machines)}
+		var sum amount
+		for _, m := range v.Machines {
+			free := freeFor(m, v.Running, now, time.Minute).clamped()
+			sum = sum.add(free)
+			f.MaxGPU = max(f.MaxGPU, free.GPU)
+		}
+		f.GPU, f.CPU = sum.GPU, float64(sum.CPU)/1000
+		items = append(items, f)
+	}
+	s.writeJSON(w, http.StatusOK, map[string]any{"items": items})
+}
+
+// jobHoldView: a running job's rank on a machine, as the reservation
+// timeline draws it — what it takes there and until when at most.
+type jobHoldView struct {
+	Cluster     string    `json:"cluster,omitempty"`
+	ID          string    `json:"id"`
+	Title       string    `json:"title,omitempty"`
+	Owner       string    `json:"owner"`
+	Mine        bool      `json:"mine"`
+	Rank        int32     `json:"rank"`
+	Node        string    `json:"node"`
+	GPU         int32     `json:"gpu"`
+	CPU         float64   `json:"cpu"`
+	Start       time.Time `json:"start"`
+	End         time.Time `json:"end"`
+	Preemptible bool      `json:"preemptible,omitempty"`
+}
+
+// jobHoldViews: cluster's running (or starting) jobs' ranks, for user,
+// on the machines show lets them see.
+func (s *Server) jobHoldViews(ctx context.Context, cluster, label, user string, show func(node string) bool, now time.Time) []jobHoldView {
+	var out []jobHoldView
+	for _, j := range s.jobsByID(ctx) {
+		if j.Spec.Cluster != cluster || (j.Status.Phase != devpodv1alpha1.JobStarting && j.Status.Phase != devpodv1alpha1.JobRunning) {
+			continue
+		}
+		since := now
+		switch {
+		case j.Status.StartedAt != nil:
+			since = j.Status.StartedAt.Time
+		case j.Status.AttemptAt != nil:
+			since = j.Status.AttemptAt.Time
+		}
+		for _, r := range j.Status.Ranks {
+			if r.Node == "" || (j.Spec.Owner != user && !show(r.Node)) {
+				continue
+			}
+			out = append(out, jobHoldView{Cluster: label, ID: j.Name, Title: j.Spec.Title, Owner: j.Spec.Owner, Mine: j.Spec.Owner == user, Rank: r.Rank,
+				Node: r.Node, GPU: j.Spec.GPUsPerNode, CPU: float64(j.Spec.CPUsPerNode.MilliValue()) / 1000,
+				Start: since, End: since.Add(j.Spec.TimeLimit.Duration), Preemptible: j.Spec.Preemptible})
+		}
+	}
+	slices.SortFunc(out, func(a, b jobHoldView) int {
+		return cmp.Or(strings.Compare(a.Node, b.Node), a.Start.Compare(b.Start), strings.Compare(a.ID, b.ID))
+	})
 	return out
 }

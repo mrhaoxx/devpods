@@ -181,10 +181,10 @@ func (s *Server) clearIn(ctx context.Context, cluster string, all []devpodv1alph
 	for _, ps := range on {
 		for i := range ps {
 			if ps[i].Job != nil {
-				if j := jobs[ps[i].Job.ID]; j != nil {
+				if j := jobs[ps[i].Job.ID]; j != nil && j.Spec.Cluster == cluster && isRankOf(ps[i].DP, j) {
 					ps[i].Job.Preemptible = j.Spec.Preemptible
 				} else {
-					ps[i].Job = nil // its job is gone: as any DevPod
+					ps[i].Job = nil // its job is gone (or it is none of its): as any DevPod
 				}
 			}
 		}
@@ -382,7 +382,9 @@ func (s *Server) endIn(ctx context.Context, cluster string, rs []*devpodv1alpha1
 			}
 			for _, p := range on[nr.Spec.Node] {
 				dp := p.DP
-				if dp.Spec.Owner != nr.Spec.User || covered(all, cluster, nr.Spec.Node, nr.Spec.User, now) {
+				// a queue job's rank runs outside reservations: their end is
+				// nothing to it
+				if p.Job != nil || dp.Spec.Owner != nr.Spec.User || covered(all, cluster, nr.Spec.Node, nr.Spec.User, now) {
 					continue
 				}
 				d, admin, err := s.decide(ctx, dp.Spec.Owner, cluster, access.Node{Name: nr.Spec.Node, Labels: node.Labels})
@@ -440,7 +442,7 @@ func (s *Server) devPodsOn(ctx context.Context, cc *clusters.ClusterClients) (ma
 			continue
 		}
 		p := placed{DP: dp, Since: dp.CreationTimestamp.Time}
-		if dp.Spec.Job != nil {
+		if rankShaped(dp) {
 			p.Job = &jobRef{ID: dp.Spec.Job.Name}
 		}
 		if dp.Spec.Pod != nil {

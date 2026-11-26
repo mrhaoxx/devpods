@@ -428,6 +428,7 @@ func (s *Server) handleListReservations(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	items := []reservationView{}
+	holds := []jobHoldView{} // the timeline's: what running jobs hold
 	shown := s.clusterGate(r.Context(), sess)
 	var gs *access.GrantSet
 	var groups map[string]bool
@@ -526,10 +527,21 @@ func (s *Server) handleListReservations(w http.ResponseWriter, r *http.Request) 
 				items = append(items, v)
 			}
 		}
+		if !mine && limit == 0 && after == nil && s.Queue != nil {
+			for _, h := range s.jobHoldViews(ctx, cluster, s.clusterLabel(cc), sess.User, func(node string) bool { return open && usable(node) }, now) {
+				if (q.Get("node") == "" || q.Get("node") == h.Node) && h.Start.Before(to) && from.Before(h.End) {
+					holds = append(holds, h)
+				}
+			}
+		}
 	}
 	if limit == 0 && after == nil {
 		sort.SliceStable(items, func(i, j int) bool { return items[i].Start.Before(items[j].Start) })
-		s.writeJSON(w, http.StatusOK, map[string]any{"items": items})
+		out := map[string]any{"items": items}
+		if !mine && s.Queue != nil {
+			out["jobs"] = holds
+		}
+		s.writeJSON(w, http.StatusOK, out)
 		return
 	}
 	// a page: the latest start first; those starting together in a fixed

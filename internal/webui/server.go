@@ -127,6 +127,7 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("POST /api/jobs", s.handleSubmitJob)
 	mux.HandleFunc("GET /api/jobs", s.handleListJobs)
 	mux.HandleFunc("GET /api/jobs/limits", s.handleJobLimits)
+	mux.HandleFunc("GET /api/jobs/free", s.handleJobsFree)
 	mux.HandleFunc("GET /api/jobs/{id}", s.handleGetJob)
 	mux.HandleFunc("DELETE /api/jobs/{id}", s.handleCancelJob)
 	mux.HandleFunc("POST /api/jobs/{id}/resubmit", s.handleResubmitJob)

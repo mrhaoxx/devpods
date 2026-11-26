@@ -90,6 +90,9 @@ type Server struct {
 	// reservations has been visited once since it started
 	clearMarked sync.Map
 	clearSwept  atomic.Bool
+	// queueCleaning: ended jobs whose output is being kept and ranks
+	// deleted, in the background (by id)
+	queueCleaning sync.Map
 	// Snapshots: saving a DevPod as an image; nil = off.
 	Snapshots *Snapshots
 	// HTTPProxy: DevPod ports published through the gateway; nil = off.
@@ -543,6 +546,9 @@ func (s *Server) prepareDevPod(r *http.Request, sess Session, req CreateRequest,
 // Kore annotations unless an admin, nothing that reaches Secrets or a
 // service account token, a pod (not a VM) unless an admin.
 func (s *Server) checkWriting(sess Session, dp *devpodv1alpha1.DevPod) *serverErr {
+	if apiErr := jobFieldsErr(nil, dp); apiErr != nil {
+		return apiErr
+	}
 	if apiErr := koreErr(sess, dp); apiErr != nil {
 		return apiErr
 	}
@@ -1004,4 +1010,26 @@ func (s *Server) handleDevPodEvents(w http.ResponseWriter, r *http.Request) {
 		return events.Items[j].LastTimestamp.Before(&events.Items[i].LastTimestamp)
 	})
 	s.writeJSON(w, http.StatusOK, map[string]any{"items": events.Items})
+}
+
+// jobFieldsErr: dp (before it, old; nil for a new one) sets what makes a
+// DevPod a queue job's rank — spec.job, the job and rank labels — which
+// only the queue writes: a DevPod naming someone's job could otherwise
+// pass for its rank. Kept as they were on an edit, they may stay.
+func jobFieldsErr(old, dp *devpodv1alpha1.DevPod) *serverErr {
+	var oldJob *devpodv1alpha1.DevPodJob
+	var oldLabels map[string]string
+	if old != nil {
+		oldJob, oldLabels = old.Spec.Job, old.Labels
+	}
+	same := equality.Semantic.DeepEqual(oldJob, dp.Spec.Job)
+	for _, k := range []string{jobLabel, rankLabel} {
+		if dp.Labels[k] != oldLabels[k] {
+			same = false
+		}
+	}
+	if !same {
+		return &serverErr{http.StatusForbidden, "JOB_FIELDS_FORBIDDEN", "spec.job and the devpod.io/job and devpod.io/rank labels are the queue's: submit a job instead", nil}
+	}
+	return nil
 }

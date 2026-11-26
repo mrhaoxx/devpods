@@ -24,6 +24,7 @@ import (
 	"k8s.io/client-go/util/retry"
 
 	devpodv1alpha1 "github.com/mrhaoxx/devpod/api/v1alpha1"
+	"github.com/mrhaoxx/devpod/internal/gatewaycli"
 )
 
 // Programmatic access to the REST API, two ways:
@@ -131,6 +132,7 @@ var apiRoutes = []apiRoute{
 	{"POST /api/jobs", "jobs:write", "Submit a job: {from: {devpod|config, vars}, command|script, args, nodes, gpus, cpus?, timeLimitSeconds?, priority?, preemptible?, privileges?, env?, workdir?, title?, dryRun?}"},
 	{"GET /api/jobs", "jobs:read", "The queues (?mine=1, ?ended=1)"},
 	{"GET /api/jobs/limits", "jobs:read", "Your priority cap and the time limits here"},
+	{"GET /api/jobs/free", "jobs:read", "What the queue can use now, by cluster"},
 	{"GET /api/jobs/{id}", "jobs:read", "One job"},
 	{"DELETE /api/jobs/{id}", "jobs:write", "Cancel a job"},
 	{"POST /api/jobs/{id}/resubmit", "jobs:write", "Submit a job again"},
@@ -295,7 +297,8 @@ func (s *Server) bearerSession(w http.ResponseWriter, r *http.Request, bearer st
 				slog.Warn("user object for a gateway user", "user", name, "err", err)
 			}
 		}
-		return Session{User: name, Admin: s.adminFor(name, userPtr)}, true
+		// a command from inside a DevPod asks to be no admin (dp)
+		return Session{User: name, Admin: s.adminFor(name, userPtr) && r.Header.Get(gatewaycli.DropAdminHeader) != "1"}, true
 	}
 	rest, ok := strings.CutPrefix(bearer, tokenPrefix)
 	id, secret, ok2 := strings.Cut(rest, "_")

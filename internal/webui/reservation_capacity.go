@@ -353,10 +353,20 @@ func loadAt(c amount, rs []*devpodv1alpha1.NodeReservation, on []placed, t time.
 	}
 	for _, p := range on {
 		if p.DP.Name != skip {
-			l.Use[p.DP.Spec.Owner] = l.Use[p.DP.Spec.Owner].add(p.Ask)
+			l.Use[useKey(p)] = l.Use[useKey(p)].add(p.Ask)
 		}
 	}
 	return l
+}
+
+// useKey: whose use p is — its owner's; a queue job's rank's is its job's
+// (the queue places ranks outside reservations, its owner's too, so what
+// a rank takes never counts as inside one).
+func useKey(p placed) string {
+	if p.Job != nil {
+		return "job:" + p.Job.ID
+	}
+	return p.DP.Spec.Owner
 }
 
 // outside: what DevPods take beyond their owners' reservations.
@@ -407,7 +417,7 @@ func toClear(c amount, rs []*devpodv1alpha1.NodeReservation, on []placed, t time
 	if short.GPU <= 0 && short.CPU <= 0 {
 		return nil
 	}
-	beyond := map[string]amount{} // by owner: what they use past what they hold
+	beyond := map[string]amount{} // by owner (a rank: its job): what they use past what they hold
 	for u, use := range l.Use {
 		beyond[u] = use.sub(l.Held[u]).clamped()
 	}
@@ -416,7 +426,7 @@ func toClear(c amount, rs []*devpodv1alpha1.NodeReservation, on []placed, t time
 		if p.Job != nil && !p.Job.Preemptible {
 			continue // a job that may not be stopped is never in a reservation's way
 		}
-		if b := beyond[p.DP.Spec.Owner]; b.GPU > 0 || b.CPU > 0 {
+		if b := beyond[useKey(p)]; b.GPU > 0 || b.CPU > 0 {
 			cand = append(cand, p)
 		}
 	}
@@ -436,12 +446,12 @@ func toClear(c amount, rs []*devpodv1alpha1.NodeReservation, on []placed, t time
 			break
 		}
 		// what going frees beyond its owner's reservations
-		b := beyond[p.DP.Spec.Owner]
+		b := beyond[useKey(p)]
 		freed := amount{min(p.Ask.GPU, b.GPU), min(p.Ask.CPU, b.CPU)}
 		if (short.GPU > 0 && freed.GPU > 0) || (short.CPU > 0 && freed.CPU > 0) {
 			out = append(out, p)
 			short = short.sub(freed)
-			beyond[p.DP.Spec.Owner] = b.sub(freed)
+			beyond[useKey(p)] = b.sub(freed)
 		}
 	}
 	return out

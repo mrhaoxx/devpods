@@ -8,6 +8,7 @@ import (
 	"hash/fnv"
 	"slices"
 	"strconv"
+	"strings"
 
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
@@ -24,6 +25,36 @@ import (
 
 // jobBash: the shell a rank's command runs in.
 const jobBash = "/opt/devpod/bin/bash"
+
+// jobLabel / rankLabel: the labels the queue's DevPods carry — the
+// queue's alone (users may not set them, nor spec.job).
+const (
+	jobLabel  = "devpod.io/job"
+	rankLabel = "devpod.io/rank"
+)
+
+// attemptAnnotation: on a rank DevPod, which start of its job it is of
+// (a former start's ranks may still be going when the job starts again).
+const attemptAnnotation = "devpod.io/attempt"
+
+// attemptOf: the start of its job d is of (0: not said).
+func attemptOf(d *devpodv1alpha1.DevPod) int32 {
+	n, _ := strconv.ParseInt(d.Annotations[attemptAnnotation], 10, 32)
+	return int32(n)
+}
+
+// isRankOf: d is one of j's ranks, as the queue made it — its name, its
+// owner and its rank all j's. Anything else naming j is not.
+func isRankOf(d *devpodv1alpha1.DevPod, j *devpodv1alpha1.Job) bool {
+	return d.Spec.Job != nil && d.Spec.Job.Name == j.Name && d.Spec.Job.Rank >= 0 && d.Spec.Job.Rank < j.Spec.Nodes &&
+		d.Spec.Owner == j.Spec.Owner && d.Name == rankName(j.Spec.Owner, j.Name, d.Spec.Job.Rank)
+}
+
+// rankShaped: d is named as the rank its spec.job says, of its owner —
+// what a rank made by the queue always is (whose job it is aside).
+func rankShaped(d *devpodv1alpha1.DevPod) bool {
+	return d.Spec.Job != nil && d.Name == rankName(d.Spec.Owner, d.Spec.Job.Name, d.Spec.Job.Rank)
+}
 
 // jobPortBlock: how many ports a job has on each machine (MASTER_PORT is
 // the first): jobs of the host's network on one machine do not clash.
@@ -89,7 +120,8 @@ func rankDevPod(job *devpodv1alpha1.Job, rank int32, node, ns, master string) *d
 
 	return &devpodv1alpha1.DevPod{
 		ObjectMeta: metav1.ObjectMeta{Name: rankName(job.Spec.Owner, job.Name, rank), Namespace: ns,
-			Labels: map[string]string{"devpod.io/job": job.Name}},
+			Labels:      map[string]string{jobLabel: job.Name},
+			Annotations: map[string]string{attemptAnnotation: itoa(job.Status.Attempts + 1)}},
 		Spec: devpodv1alpha1.DevPodSpec{
 			Owner:   job.Spec.Owner,
 			Running: true,
@@ -117,13 +149,7 @@ func setJobResources(c *corev1.Container, job *devpodv1alpha1.Job) {
 	if c.Resources.Requests == nil {
 		c.Resources.Requests = corev1.ResourceList{}
 	}
-	gpu := corev1.ResourceName(gpures.NVIDIA)
-	for _, t := range gpures.Types() {
-		if _, ok := c.Resources.Limits[t.Resource]; ok {
-			gpu = t.Resource
-			break
-		}
-	}
+	gpu := gpuKindOf(c)
 	for _, t := range gpures.Types() {
 		delete(c.Resources.Limits, t.Resource)
 		delete(c.Resources.Requests, t.Resource)
@@ -164,4 +190,54 @@ func dropHostnameAffinity(spec *corev1.PodSpec) {
 	if a.NodeAffinity == nil && a.PodAffinity == nil && a.PodAntiAffinity == nil {
 		spec.Affinity = nil
 	}
+}
+
+// gpuKindOf: the cards c asks for — of the type its limits name,
+// NVIDIA's when none.
+func gpuKindOf(c *corev1.Container) corev1.ResourceName {
+	for _, t := range gpures.Types() {
+		if _, ok := c.Resources.Limits[t.Resource]; ok {
+			return t.Resource
+		}
+	}
+	return corev1.ResourceName(gpures.NVIDIA)
+}
+
+// jobGPUKind: the cards job's ranks ask for.
+func jobGPUKind(job *devpodv1alpha1.Job) corev1.ResourceName {
+	if len(job.Spec.Template.Spec.Containers) == 0 {
+		return corev1.ResourceName(gpures.NVIDIA)
+	}
+	return gpuKindOf(&job.Spec.Template.Spec.Containers[0])
+}
+
+// machineFits: n could take one of job's ranks at all — it is not
+// cordoned, its taints are tolerated, and it has the job's kind of card,
+// enough of them. The node.kubernetes.io/ taints mirror the machine's
+// conditions (readiness is judged apart), and one named for the cards the
+// ranks ask for is tolerated for them by the cluster (extended resource
+// tolerations): neither keeps a rank off.
+func machineFits(job *devpodv1alpha1.Job, n *corev1.Node) bool {
+	if n.Spec.Unschedulable {
+		return false
+	}
+	for i := range n.Spec.Taints {
+		t := &n.Spec.Taints[i]
+		if t.Effect != corev1.TaintEffectNoSchedule && t.Effect != corev1.TaintEffectNoExecute {
+			continue
+		}
+		if strings.HasPrefix(t.Key, "node.kubernetes.io/") || (job.Spec.GPUsPerNode > 0 && t.Key == string(jobGPUKind(job))) {
+			continue
+		}
+		if !slices.ContainsFunc(job.Spec.Template.Spec.Tolerations, func(tol corev1.Toleration) bool { return tol.ToleratesTaint(t) }) {
+			return false
+		}
+	}
+	if job.Spec.GPUsPerNode > 0 {
+		q := n.Status.Allocatable[jobGPUKind(job)]
+		if q.Value() < int64(job.Spec.GPUsPerNode) {
+			return false
+		}
+	}
+	return true
 }

@@ -249,3 +249,22 @@ func TestToClearJobs(t *testing.T) {
 		t.Fatalf("a job not preemptible is never taken: %v", dpNames(got))
 	}
 }
+
+// A queue job's rank counts as outside reservations, its owner's too: the
+// queue placed it on what no reservation holds.
+func TestRankUseIsOutsideReservations(t *testing.T) {
+	now := at(10, 30)
+	rs := []*devpodv1alpha1.NodeReservation{rsvOf("r1", "alice", at(10, 0), at(11, 0), 4, "0")}
+	rank := runningOn("alice-abcde-0", "alice", amount{4, 0}, at(10, 0))
+	rank.Job = &jobRef{ID: "abcde"}
+	l := loadAt(cap8, rs, []placed{rank}, now, "")
+	if o := l.outside(); o.GPU != 4 {
+		t.Fatalf("outside %v", o)
+	}
+	if err := l.refusal("n1", "alice", true, amount{4, 0}); err != nil {
+		t.Errorf("alice's own DevPod in her reservation: %v", err)
+	}
+	if err := l.refusal("n1", "bob", false, amount{4, 0}); err == nil {
+		t.Error("bob took the cards alice reserved")
+	}
+}
