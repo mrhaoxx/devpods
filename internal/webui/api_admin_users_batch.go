@@ -202,7 +202,8 @@ func (s *Server) hibernateIn(ctx context.Context, owner string, ev store.EventRo
 	res := BatchResult{Name: owner, OK: true}
 	for i := range list.Items {
 		dp := &list.Items[i]
-		if dp.Spec.Owner != owner || !dp.Spec.Running {
+		_, inLine := queuedAt(dp)
+		if dp.Spec.Owner != owner || (!dp.Spec.Running && !inLine) {
 			continue
 		}
 		stopped := false
@@ -211,10 +212,16 @@ func (s *Server) hibernateIn(ctx context.Context, owner string, ev store.EventRo
 			if err := s.kc(ctx).Reader.Get(ctx, client.ObjectKeyFromObject(dp), &cur); err != nil {
 				return err
 			}
-			if !cur.Spec.Running {
+			_, waiting := queuedAt(&cur)
+			if !cur.Spec.Running && !waiting {
 				return nil
 			}
+			// running: stopped; waiting in the queue's line: out of it
 			cur.Spec.Running = false
+			clearQueued(&cur)
+			if _, _, auto := autoPin(&cur); auto {
+				unpinAuto(&cur)
+			}
 			if err := s.kc(ctx).Client.Update(ctx, &cur); err != nil {
 				return err
 			}

@@ -487,13 +487,28 @@ func TestAPIOriginHeader(t *testing.T) {
 	}
 }
 
-// start says whether the DevPod waits in the queue's line, and where.
+// start says whether the DevPod waits in the queue's line, and where — or,
+// started within a moment, on which machine.
 func TestStartSaysQueued(t *testing.T) {
+	saved, savedWait := startPoll, startWait
+	startPoll, startWait = 10*time.Millisecond, 100*time.Millisecond
+	t.Cleanup(func() { startPoll, startWait = saved, savedWait })
 	f := newFakeAPI(t)
-	f.routes["PATCH /api/devpods/alice-a"] = map[string]any{"queued": true, "devpod": map[string]any{"metadata": map[string]any{"name": "alice-a",
-		"annotations": map[string]any{"devpod.io/queued-at": "2026-11-27T01:00:00Z", "devpod.io/queue-state": `{"position":2,"reason":"capacity"}`}}}}
-	if code, out, errs := f.run("start alice-a"); code != 0 || !strings.Contains(out, "alice-a: queued #2") {
+	queued := map[string]any{"metadata": map[string]any{"name": "alice-a", "annotations": map[string]any{"devpod.io/queued-at": "2026-11-27T01:00:00Z"}}, "spec": map[string]any{"running": false}}
+	f.routes["PATCH /api/devpods/alice-a"] = map[string]any{"queued": true, "devpod": queued}
+	f.dyn["GET /api/devpods/alice-a"] = func() any {
+		return map[string]any{"devpod": map[string]any{"metadata": map[string]any{"name": "alice-a", "annotations": map[string]any{
+			"devpod.io/queued-at": "2026-11-27T01:00:00Z", "devpod.io/queue-state": `{"position":2,"reason":"capacity"}`}}, "spec": map[string]any{"running": false}}}
+	}
+	if code, out, errs := f.run("start alice-a"); code != 0 || !strings.Contains(out, "alice-a: queued #2 (waiting for room)") {
 		t.Fatalf("queued: %d %q %q", code, out, errs)
+	}
+	f.dyn["GET /api/devpods/alice-a"] = func() any {
+		return map[string]any{"devpod": map[string]any{"metadata": map[string]any{"name": "alice-a"},
+			"spec": map[string]any{"running": true, "pod": map[string]any{"spec": map[string]any{"nodeSelector": map[string]any{"kubernetes.io/hostname": "n1"}}}}}}
+	}
+	if code, out, _ := f.run("start alice-a"); code != 0 || !strings.Contains(out, "alice-a: started on n1") {
+		t.Fatalf("started by the queue: %d %q", code, out)
 	}
 	f.routes["PATCH /api/devpods/alice-a"] = map[string]any{"queued": false, "devpod": map[string]any{"metadata": map[string]any{"name": "alice-a"}}}
 	if code, out, _ := f.run("start alice-a"); code != 0 || !strings.Contains(out, "alice-a: started") {

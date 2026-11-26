@@ -68,6 +68,9 @@ export function stateText(j: Job, now: number): string {
     case "preempting":
       why = "正在让出资源";
       break;
+    case "never":
+      why = "没有机器放得下";
+      break;
     case "preempted":
       why = "被抢占，重新排队";
       break;

@@ -332,3 +332,30 @@ func TestPlanUnpromisedHeadHoldsAsManyAsRanks(t *testing.T) {
 		t.Fatalf("two on %v, %+v", m, p.Waits["two"])
 	}
 }
+
+// An entry held to one machine (pinned, or its home's) keeps that machine
+// for itself, and is not the head: the next that cannot start is.
+func TestPlanPinnedEntryDoesNotTakeHead(t *testing.T) {
+	a, b := machine8("a"), machine8("b")
+	a.Interactive, b.Interactive = amount{8, 0}, amount{1, 0}
+	d := qdev("d", 0, 1, 0)
+	d.Only = "a"
+	p := planQueue(entriesView([]qMachine{a, b}, nil, d, jobEntry(qjob("j", 0, 1, 8, time.Hour, time.Minute))))
+	if w := p.Waits["devpod/d"]; w.Reason != "capacity" {
+		t.Fatalf("d %+v", w)
+	}
+	if w := p.Waits["j"]; w.Reason != "capacity" {
+		t.Fatalf("j behind a DevPod held to one machine: %+v", w)
+	}
+}
+
+// An entry no machine it may have could ever take waits, saying so, and
+// is never the head.
+func TestPlanImpossibleEntryNeverHead(t *testing.T) {
+	a := machine8("a")
+	a.Interactive = amount{1, 0}
+	p := planQueue(view([]qMachine{a}, nil, qjob("x", 0, 1, 16, time.Hour, 0), qjob("y", 0, 1, 8, time.Hour, time.Minute)))
+	if p.Waits["x"].Reason != "never" || p.Waits["y"].Reason != "capacity" {
+		t.Fatalf("x %+v, y %+v", p.Waits["x"], p.Waits["y"])
+	}
+}

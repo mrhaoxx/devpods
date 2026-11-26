@@ -190,18 +190,29 @@ func planQueue(v queueView) queuePlan {
 		runs = append(runs, qRun{Key: e.Key, Job: e.Job, Machines: machines, Ask: e.Ask, Until: e.until(v.Now),
 			Preemptible: e.Preemptible, Priority: e.Priority, Started: v.Now})
 	}
+	var held []string // machines kept for entries ahead held to one machine
+	notHeld := func(ms []string) []string {
+		return slices.DeleteFunc(ms, func(m string) bool { return slices.Contains(held, m) })
+	}
 	for _, j := range queueOrder(v.Queued) {
 		n := int(j.Nodes)
 		limit := j.Limit
-		cands := v.candidates(j, runs, v.Now)
+		cands := notHeld(v.candidates(j, runs, v.Now))
 		clears = nil
 		if len(cands) < n && j.Limit <= 0 {
 			// no end, and nowhere beside every reservation known: where the
 			// first in its way comes latest
 			cands, clears = v.soonCleared(j, runs)
+			cands = notHeld(cands)
 		}
 		fits := len(cands) >= n
 		quota := v.QuotaOK == nil || v.QuotaOK(j, planned)
+		if !fits && !v.everPossible(j) {
+			// no machine it may have could ever take it (too big, its
+			// machine gone or cordoned): it waits, holding nobody up
+			wait(j, qWait{Reason: "never"})
+			continue
+		}
 		if head != nil {
 			// behind the head (EASY backfill): a job may start now on
 			// machines the head holds nothing on, or on any if it has ended
@@ -230,6 +241,17 @@ func planQueue(v queueView) queuePlan {
 			continue
 		case fits:
 			wait(j, qWait{Reason: "quota"}) // holds up nobody
+			continue
+		}
+		if j.Only != "" {
+			// held to one machine (pinned, or its home's): it keeps that one
+			// for itself, and is not the head — the next that cannot start is
+			held = append(held, j.Only)
+			w := qWait{Reason: "capacity", Detail: v.shortfall(j, runs)}
+			if t, _, ok := v.earliest(j, runs); ok {
+				w.Expected = &t
+			}
+			wait(j, w)
 			continue
 		}
 		head = &j
@@ -498,4 +520,16 @@ func (v queueView) nearest(e qEntry, runs []qRun) []string {
 		out = append(out, cs[i].name)
 	}
 	return out
+}
+
+// everPossible: some machine e may have could ever take one of its ranks
+// (load aside), and as many as it has ranks.
+func (v queueView) everPossible(e qEntry) bool {
+	n := 0
+	for _, m := range v.Machines {
+		if v.mayHave(e, m.Name) && e.Ask.fits(m.Cap) {
+			n++
+		}
+	}
+	return n >= int(e.Nodes)
 }

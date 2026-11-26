@@ -315,6 +315,7 @@ func main() {
 	// reservations are carried out, and the queue scheduled, by the
 	// console, on one replica at a time (a lease of their own: telemetry's
 	// may be off)
+	var leads func() bool // nil: every replica (no lease to share)
 	if srv.Reservations != nil || srv.Queue != nil {
 		el, err := tf.newElector(restCfg)
 		if err != nil {
@@ -322,6 +323,7 @@ func main() {
 		}
 		el.Name = "devpod-webui-reservations"
 		go el.Run(ctx, func(context.Context) {}, func() {})
+		leads = el.IsLeader
 		if srv.Reservations != nil {
 			go srv.RunReservations(ctx, el.IsLeader)
 		}
@@ -329,6 +331,8 @@ func main() {
 			go srv.RunQueue(ctx, el.IsLeader)
 		}
 	}
+	// with the queue off, the pins its placement gave are swept on their own
+	go srv.RunPinSweep(ctx, leads)
 
 	if oauthEnabled {
 		oauth, err := webui.NewOAuth(ctx, webui.OAuthConfig{

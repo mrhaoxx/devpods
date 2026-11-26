@@ -7,6 +7,7 @@ package webui_test
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"testing"
 	"time"
@@ -421,5 +422,184 @@ func TestQueuedByOtherReplicaStartsSoon(t *testing.T) {
 			t.Fatal("not started within 3 s")
 		}
 		time.Sleep(50 * time.Millisecond)
+	}
+}
+
+// What the console writes on a DevPod — its place and priority in line,
+// its pins, its notes — is not anyone's to write in a DevPod they make:
+// such annotations in a YAML create are dropped.
+func TestCreateCannotForgeQueueMarks(t *testing.T) {
+	p := jobRig(t, "fq", "")
+	body, _ := json.Marshal(map[string]string{"yaml": `
+apiVersion: devpod.io/v1alpha1
+kind: DevPod
+metadata:
+  name: fq-alice-forged
+  annotations:
+    devpod.io/queued-at: "2000-01-01T00:00:00Z"
+    devpod.io/queue-priority: "1000000"
+    devpod.io/auto-pin: "fq-n1@2000-01-01T00:00:00Z"
+    devpod.io/hibernated-by: "machine-closed"
+    devpod.io/access-allowed: "fq-n1"
+    note: "mine to keep"
+spec:
+  running: false
+  pod:
+    spec:
+      containers:
+      - name: dev
+        image: ubuntu:24.04
+        resources:
+          limits: {cpu: "2", memory: "4Gi"}
+`})
+	if rec := doJSON(t, p.s.HandleCreateDevPodForTest(), "POST", "/api/devpods", nil, p.as("fq-alice"), string(body)); rec.Code != http.StatusCreated {
+		t.Fatalf("create: %d %s", rec.Code, rec.Body)
+	}
+	dp := waitDevPod(t, "fq-alice-forged")
+	for _, k := range []string{devpodv1alpha1.QueuedAtAnnotation, devpodv1alpha1.QueuePriorityAnnotation, devpodv1alpha1.AutoPinAnnotation, devpodv1alpha1.HibernatedByAnnotation, "devpod.io/access-allowed"} {
+		if v, ok := dp.Annotations[k]; ok {
+			t.Errorf("%s kept: %q", k, v)
+		}
+	}
+	if dp.Annotations["note"] != "mine to keep" {
+		t.Errorf("the user's own annotation went: %v", dp.Annotations)
+	}
+}
+
+// A DevPod stopped from before carries the allow-list of its last start;
+// started by the queue, it goes where the queue put it: the old list goes.
+func TestRoundDropsStaleAllowList(t *testing.T) {
+	p := jobRig(t, "sa2", "")
+	name := p.create("sa2-alice", http.StatusCreated) // in line
+	ctx := context.Background()
+	var dp devpodv1alpha1.DevPod
+	if err := k8sClient.Get(ctx, client_key(name), &dp); err != nil {
+		t.Fatal(err)
+	}
+	webui.SetAllowedForTest(&dp, []string{p.n1}) // only n1, from a start long ago
+	if err := k8sClient.Update(ctx, &dp); err != nil {
+		t.Fatal(err)
+	}
+	devPodWhen(t, p, name, "with the old list", func(dp *devpodv1alpha1.DevPod) bool { return len(allowedOf(*dp)) == 1 })
+	p.s.QueueRound(ctx)
+	got := devPodWhen(t, p, name, "started", func(dp *devpodv1alpha1.DevPod) bool { return dp.Spec.Running })
+	if allowedOf(got) != nil || got.Spec.Pod.Spec.Affinity != nil {
+		t.Fatalf("pinned %q with the old list %v / %+v", pinnedOf(&got), allowedOf(got), got.Spec.Pod.Spec.Affinity)
+	}
+}
+
+// Whether an edit fits where it runs is judged by the room now — a
+// reservation later on that machine is the clearing's business — and an
+// edit asking no more never needs room.
+func TestEditAutoPinnedBesideLaterReservation(t *testing.T) {
+	p, _ := clearRig(t, "el") // the queue off: pinned at its start
+	p.createGPU("el-alice", "g1", 1, "", http.StatusCreated)
+	if dp := p.get("el-alice-g1"); pinnedOf(&dp) != p.n1 {
+		t.Fatalf("pinned %q", pinnedOf(&dp))
+	}
+	if code, v := reserveAs(t, p.s, p.as("el-bob"), p.n1, p.slot.Add(2*time.Hour), p.slot.Add(3*time.Hour)); code != http.StatusCreated {
+		t.Fatalf("reserve: %d %+v", code, v)
+	}
+	if code, _, ec := patchAs(t, p, "el-alice", "el-alice-g1", `{"memory":"8Gi"}`); code != http.StatusOK {
+		t.Fatalf("more memory: %d %q", code, ec)
+	}
+	if code, _, ec := patchAs(t, p, "el-alice", "el-alice-g1", `{"gpu":"2"}`); code != http.StatusOK {
+		t.Fatalf("a card more, room now: %d %q", code, ec)
+	}
+}
+
+// An admin's pinned start inside their own reservation starts at once too.
+func TestStartAdminPinnedInOwnReservationStartsNow(t *testing.T) {
+	p := newPlaceRig(t, "sx")
+	queueOn(p.s)
+	p.s.Admins = map[string]bool{"sx-root": true}
+	root := forge(p.sm, "sx-root", true)
+	if code, v := reserveWith(t, p.s, root, p.n1, p.slot, p.slot.Add(time.Hour), map[string]any{"gpu": 4}); code != http.StatusCreated {
+		t.Fatalf("reserve: %d %+v", code, v)
+	}
+	rec := doJSON(t, p.s.HandleCreateDevPodForTest(), "POST", "/api/devpods", nil, root, fmt.Sprintf(`{"name":"g4","image":"ubuntu:24.04","cpu":"2","memory":"4Gi","gpu":"4","node":%q}`, p.n1))
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("create: %d %s", rec.Code, rec.Body)
+	}
+	if dp := waitDevPod(t, "sx-root-g4"); !dp.Spec.Running || queuedNow(dp) {
+		t.Fatalf("running %v annotations %v", dp.Spec.Running, dp.Annotations)
+	}
+}
+
+// One who may have the machine only under a reservation, asking more
+// than theirs holds, is refused at once — no wait would mend it.
+func TestStartTooBigForOwnReservationRefused(t *testing.T) {
+	p := newPlaceRig(t, "st3")
+	queueOn(p.s)
+	setRules(t, devpodv1alpha1.AccessRule{Machines: []string{p.n1}, Subject: &devpodv1alpha1.AccessSubject{Kind: "some", Users: []string{"st3-alice"}}, Effect: needsReservation})
+	if code, v := reserveWith(t, p.s, p.as("st3-alice"), p.n1, p.slot, p.slot.Add(time.Hour), map[string]any{"gpu": 4}); code != http.StatusCreated {
+		t.Fatalf("reserve: %d %+v", code, v)
+	}
+	if code := p.createGPU("st3-alice", "g8", 8, p.n1, http.StatusConflict); code != "RESERVATION_TOO_SMALL" {
+		t.Fatalf("8 cards in a 4-card reservation: %q", code)
+	}
+}
+
+// Pinned and waiting, a DevPod starts once its owner's reservation there
+// is in force and it fits in it.
+func TestRoundStartsPinnedWhenItsReservationBegins(t *testing.T) {
+	p, clock := clearRig(t, "rb")
+	queueOn(p.s)
+	p.s.Queue.Now = func() time.Time { return *clock } // one clock for the queue and the reservations
+	// the whole machine hers: the line's planning has no room there for anyone
+	if code, v := reserveAs(t, p.s, p.as("rb-alice"), p.n1, p.slot.Add(time.Hour), p.slot.Add(2*time.Hour)); code != http.StatusCreated {
+		t.Fatalf("reserve: %d %+v", code, v)
+	}
+	p.createGPU("rb-alice", "g4", 4, p.n1, http.StatusCreated)
+	if dp := p.get("rb-alice-g4"); dp.Spec.Running || !queuedNow(dp) {
+		t.Fatalf("before its reservation: running %v", dp.Spec.Running)
+	}
+	*clock = p.slot.Add(time.Hour + time.Minute)
+	p.s.QueueRound(context.Background())
+	devPodWhen(t, p, "rb-alice-g4", "started in its reservation", func(dp *devpodv1alpha1.DevPod) bool { return dp.Spec.Running && pinnedOf(dp) == p.n1 })
+}
+
+// An admin's hibernate-all takes the user's DevPods out of the line too.
+func TestUsersBatchHibernateDequeues(t *testing.T) {
+	p := jobRig(t, "hb", "")
+	p.s.Admins = map[string]bool{"hb-root": true}
+	name := p.create("hb-alice", http.StatusCreated) // in line
+	rec := doJSON(t, p.s.HandleUsersBatchForTest(), "POST", "/api/admin/users:batch", nil, forge(p.sm, "hb-root", true), `{"op":"hibernateAll","names":["hb-alice"]}`)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("batch: %d %s", rec.Code, rec.Body)
+	}
+	devPodWhen(t, p, name, "out of line", func(dp *devpodv1alpha1.DevPod) bool { return !queuedNow(*dp) && !dp.Spec.Running })
+}
+
+// With the queue off, a DevPod whose Pod will not schedule where it was
+// pinned is pinned again elsewhere, that machine kept from it a while.
+func TestUnschedulableQueueOffPlacedAgain(t *testing.T) {
+	p := newPlaceRig(t, "uo")
+	name := p.create("uo-alice", http.StatusCreated)
+	dp := p.get(name)
+	first := pinnedOf(&dp)
+	if first == "" || !dp.Spec.Running {
+		t.Fatalf("pinned %q running %v", first, dp.Spec.Running)
+	}
+	ctx := context.Background()
+	pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "devpods"}, Spec: corev1.PodSpec{Containers: []corev1.Container{{Name: "dev", Image: "x"}}}}
+	if err := k8sClient.Create(ctx, pod); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = k8sClient.Delete(ctx, pod) })
+	pod.Status.Phase = corev1.PodPending
+	pod.Status.Conditions = []corev1.PodCondition{{Type: corev1.PodScheduled, Status: corev1.ConditionFalse, Reason: corev1.PodReasonUnschedulable,
+		Message: "insufficient memory", LastTransitionTime: metav1.NewTime(time.Now().Add(-6 * time.Minute))}}
+	if err := k8sClient.Status().Update(ctx, pod); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, func() bool {
+		var got corev1.Pod
+		return k8sClient.Get(ctx, client_key(name), &got) == nil && len(got.Status.Conditions) == 1
+	})
+	p.s.PinSweepRoundForTest(ctx)
+	got := devPodWhen(t, p, name, "pinned again", func(dp *devpodv1alpha1.DevPod) bool { return pinnedOf(dp) != "" && pinnedOf(dp) != first })
+	if !got.Spec.Running || got.Annotations[devpodv1alpha1.AutoPinAnnotation] == "" {
+		t.Fatalf("running %v annotations %v", got.Spec.Running, got.Annotations)
 	}
 }

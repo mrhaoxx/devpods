@@ -828,15 +828,11 @@ func runRunning(on bool) func(e *Env, a *parsed) int {
 				return "", err
 			})
 		}
-		// a start may wait in the queue's line: say so, and where
+		// a start may wait in the queue's line: a moment for its turn, then
+		// say where it started, or where it waits and why
 		return each(e, a, find(name), "", func(n string) (string, error) {
 			var out struct {
 				Queued bool `json:"queued"`
-				DevPod struct {
-					Metadata struct {
-						Annotations map[string]string `json:"annotations"`
-					} `json:"metadata"`
-				} `json:"devpod"`
 			}
 			if _, err := call(e, "PATCH", dpPath(e, n), body, &out); err != nil {
 				return "", err
@@ -844,15 +840,7 @@ func runRunning(on bool) func(e *Env, a *parsed) int {
 			if !out.Queued {
 				return "started", nil
 			}
-			var st struct {
-				Position int    `json:"position"`
-				Reason   string `json:"reason"`
-			}
-			_ = json.Unmarshal([]byte(out.DevPod.Metadata.Annotations["devpod.io/queue-state"]), &st)
-			if st.Position > 0 {
-				return fmt.Sprintf("queued #%d", st.Position), nil
-			}
-			return "queued (it starts by itself in its turn)", nil
+			return startOutcome(e, dpPath(e, n)), nil
 		})
 	}
 }
@@ -1224,4 +1212,61 @@ func portAccess(public, users []int, port int) string {
 // pinnedNode: the node dp is pinned to ("" when the scheduler picks).
 func pinnedNode(dp *devpodv1alpha1.DevPod) string {
 	return dp.Spec.Pod.Spec.NodeSelector["kubernetes.io/hostname"]
+}
+
+// startPoll / startWait: how often, and how long, start looks at a DevPod
+// it put in the queue's line before saying where it stands.
+var startPoll, startWait = 300 * time.Millisecond, 3 * time.Second
+
+// startOutcome: what became, within startWait, of the DevPod at path put in
+// line — "started on <machine>", or "queued #n (why)".
+func startOutcome(e *Env, path string) string {
+	var st struct {
+		Position int               `json:"position"`
+		Reason   string            `json:"reason"`
+		Detail   map[string]string `json:"detail"`
+	}
+	deadline := time.Now().Add(startWait)
+	for {
+		var d struct {
+			DevPod struct {
+				Metadata struct {
+					Annotations map[string]string `json:"annotations"`
+				} `json:"metadata"`
+				Spec struct {
+					Running bool `json:"running"`
+					Pod     struct {
+						Spec struct {
+							NodeSelector map[string]string `json:"nodeSelector"`
+						} `json:"spec"`
+					} `json:"pod"`
+				} `json:"spec"`
+			} `json:"devpod"`
+		}
+		if _, err := call(e, "GET", path, nil, &d); err == nil {
+			if d.DevPod.Spec.Running {
+				if node := d.DevPod.Spec.Pod.Spec.NodeSelector["kubernetes.io/hostname"]; node != "" {
+					return "started on " + node
+				}
+				return "started"
+			}
+			_ = json.Unmarshal([]byte(d.DevPod.Metadata.Annotations["devpod.io/queue-state"]), &st)
+		}
+		if !time.Now().Before(deadline) {
+			break
+		}
+		time.Sleep(startPoll)
+	}
+	if st.Position == 0 {
+		return "queued (it starts by itself in its turn)"
+	}
+	why := map[string]string{"capacity": "waiting for room", "quota": "over quota", "preempting": "jobs are making room",
+		"never": "no machine could ever take it"}[st.Reason]
+	if st.Reason == "behind" {
+		why = "behind " + st.Detail["head"]
+	}
+	if why == "" {
+		return fmt.Sprintf("queued #%d", st.Position)
+	}
+	return fmt.Sprintf("queued #%d (%s)", st.Position, why)
 }

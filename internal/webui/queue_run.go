@@ -192,12 +192,21 @@ func (s *Server) queueIn(ctx context.Context, cluster string, jobs, ended []*dev
 		if !inLine || dp.Spec.Running || dp.DeletionTimestamp != nil || dp.Spec.Pod == nil {
 			continue
 		}
+		// pinned inside its owner's reservation begun meanwhile: that room
+		// is theirs, not the line's
+		if s.startInOwnReservation(ctx, cc, dp) {
+			continue
+		}
 		only := pinnedNode(dp)
 		if _, _, auto := autoPin(dp); auto {
 			only = "" // a former run's: placed anew
 		}
 		if only == "" {
-			only = s.homeNode(ctx, cc, dp)
+			home, told := s.homeNodeOf(ctx, cc, dp)
+			if !told {
+				continue // where its home is cannot be told now: it waits
+			}
+			only = home
 		}
 		waiting = append(waiting, devPodEntry(dp, since, queuePriority(dp), only, avoiding(dp, now)))
 	}

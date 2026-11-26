@@ -161,7 +161,7 @@ func (s *Server) PlanLaunchForTest(r *http.Request, user, config string, req Lau
 
 // RunLaunchForTest writes a checked plan.
 func (s *Server) RunLaunchForTest(r *http.Request, plan *LaunchPlan) ([]LaunchItem, int) {
-	return s.runLaunch(r, plan)
+	return s.runLaunch(r, Session{}, plan)
 }
 
 // DecideForTest is decide for a node of the given name and labels.
@@ -240,3 +240,7 @@ func (s *Server) HomeNodeForTest(ctx context.Context, dp *devpodv1alpha1.DevPod)
 }
 
 func (s *Server) HomePVCNameForTest(dp *devpodv1alpha1.DevPod) string { return render.HomePVCName(dp) }
+
+func SetAllowedForTest(dp *devpodv1alpha1.DevPod, nodes []string) { access.SetAllowed(dp, nodes) }
+
+func (s *Server) PinSweepRoundForTest(ctx context.Context) { s.pinSweepRound(ctx) }

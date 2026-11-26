@@ -29,6 +29,8 @@ export function queueWhy(q: QueueState): string {
       return "超出配额";
     case "preempting":
       return "正在让出资源";
+    case "never":
+      return "没有机器放得下（看看要的资源，或绑定的机器）";
   }
   return "";
 }

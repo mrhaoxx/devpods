@@ -37,12 +37,12 @@ type judge struct {
 
 func (s *Server) judgeFor(ctx context.Context, owner string) (*judge, error) {
 	j := &judge{owner: owner, cluster: s.resCluster(ctx)}
-	if j.admin = s.ownerIsAdmin(ctx, owner); j.admin {
-		return j, nil
-	}
-	var err error
-	if j.policy, j.groups, err = s.accessFor(ctx, owner); err != nil {
-		return nil, err
+	// an admin's rules are none, but their reservations are theirs too
+	if j.admin = s.ownerIsAdmin(ctx, owner); !j.admin {
+		var err error
+		if j.policy, j.groups, err = s.accessFor(ctx, owner); err != nil {
+			return nil, err
+		}
 	}
 	j.reserved = map[string]bool{}
 	if s.Reservations != nil {

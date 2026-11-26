@@ -191,6 +191,22 @@ func (l *lazyCH) InsertReservationEvent(ctx context.Context, r store.Reservation
 	return c.InsertReservationEvent(ctx, r)
 }
 
+func (l *lazyCH) InsertEvent(ctx context.Context, r store.EventRow) error {
+	c, err := l.get(ctx)
+	if err != nil {
+		return err
+	}
+	return c.InsertEvent(ctx, r)
+}
+
+func (l *lazyCH) SearchEvents(ctx context.Context, f store.EventFilter) ([]store.EventRow, string, error) {
+	c, err := l.get(ctx)
+	if err != nil {
+		return nil, "", err
+	}
+	return c.SearchEvents(ctx, f)
+}
+
 func (l *lazyCH) Presence(ctx context.Context, uids []string) (map[string][]string, error) {
 	c, err := l.get(ctx)
 	if err != nil {

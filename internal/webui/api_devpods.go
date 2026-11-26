@@ -46,6 +46,9 @@ type Server struct {
 	// again (0: 10 s)
 	events     eventWriter
 	eventRetry time.Duration
+	// homeUnread: the clusters whose home volumes could not be read, said
+	// once each
+	homeUnread sync.Map
 	// nudge: a round asked for soon (a start waits in line); made once
 	nudge     chan struct{}
 	nudgeOnce sync.Once
@@ -516,6 +519,7 @@ func (s *Server) prepareDevPod(r *http.Request, sess Session, req CreateRequest,
 	if apiErr != nil {
 		return nil, apiErr
 	}
+	dropConsoleMarks(dp)
 	if apiErr := s.checkWriting(sess, dp); apiErr != nil {
 		return nil, apiErr
 	}

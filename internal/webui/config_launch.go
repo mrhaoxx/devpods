@@ -368,7 +368,7 @@ func (s *Server) checkValues(r *http.Request, sess Session, c *devpodv1alpha1.De
 // fails now — the name was taken meanwhile, say — does not stop the
 // rest and nothing is undone. The status is 200 when all were created,
 // 207 otherwise.
-func (s *Server) runLaunch(r *http.Request, plan *LaunchPlan) ([]LaunchItem, int) {
+func (s *Server) runLaunch(r *http.Request, sess Session, plan *LaunchPlan) ([]LaunchItem, int) {
 	items := make([]LaunchItem, len(plan.Items))
 	status := http.StatusOK
 	for i, it := range plan.Items {
@@ -380,6 +380,8 @@ func (s *Server) runLaunch(r *http.Request, plan *LaunchPlan) ([]LaunchItem, int
 				it.fail("BAD_REQUEST", rejected("create", err))
 			}
 			status = http.StatusMultiStatus
+		} else {
+			s.devPodEvent(r, sess, plan.devpods[i], "create", createSummary(plan.devpods[i]))
 		}
 		items[i] = it
 	}
@@ -460,7 +462,7 @@ func (s *Server) launch(w http.ResponseWriter, r *http.Request, sess Session, c 
 		s.writeJSON(w, http.StatusOK, out)
 		return
 	}
-	items, status := s.runLaunch(r, plan)
+	items, status := s.runLaunch(r, sess, plan)
 	out["items"] = items
 	s.writeJSON(w, status, out)
 }

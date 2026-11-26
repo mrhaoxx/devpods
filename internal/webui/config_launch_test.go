@@ -555,3 +555,28 @@ func TestLaunchUnsavedYAML(t *testing.T) {
 	apiCall(t, srv, "POST", "/api/configs:launch", bob, jsonBody(map[string]any{"content": content}), http.StatusBadRequest) // NAME
 	apiCall(t, srv, "POST", "/api/configs:launch", bob, jsonBody(map[string]any{"content": strings.Repeat("x", 257<<10), "vars": map[string]string{"NAME": "v"}}), http.StatusBadRequest)
 }
+
+// A DevPod made from a config is recorded as any made.
+func TestConfigLaunchRecorded(t *testing.T) {
+	setupSuite(t)
+	s, sm := newServer(t)
+	f := &fakeAuditStore{}
+	s.Audit = &webui.AuditDeps{Store: f}
+	t.Cleanup(func() { cleanupDevPods(t); cleanupConfigs(t) })
+	alice := forge(sm, "clr-alice", false)
+	srv := httptest.NewServer(s.Routes())
+	t.Cleanup(srv.Close)
+	apiCall(t, srv, "POST", "/api/configs", alice, jsonBody(map[string]any{"id": "one", "title": "one", "content": launchYAML("${OWNER}-one", "1", "")}), http.StatusCreated)
+	items := launchItems(t, apiCall(t, srv, "POST", "/api/configs/clr-alice-one/launch", alice, jsonBody(map[string]any{}), http.StatusOK))
+	if len(items) != 1 || !items[0].OK {
+		t.Fatalf("launch: %+v", items)
+	}
+	waitFor(t, func() bool {
+		for _, e := range f.written() {
+			if e.Action == "create" && e.Object == items[0].Name && e.Actor == "clr-alice" {
+				return true
+			}
+		}
+		return false
+	})
+}

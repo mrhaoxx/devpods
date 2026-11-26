@@ -29,6 +29,7 @@ describe("phaseSummary", () => {
     expect(phaseSummary(q({ position: 3, reason: "capacity" }), undefined, now)).toBe("排队中 #3 · 等空闲资源");
     expect(phaseSummary(q({ position: 2, reason: "behind", detail: { head: "abc12" } }), undefined, now)).toBe("排队中 #2 · 排在 abc12 后");
     expect(phaseSummary(q({}), undefined, now)).toBe("排队中");
+    expect(phaseSummary(q({ position: 4, reason: "never" }), undefined, now)).toBe("排队中 #4 · 没有机器放得下（看看要的资源，或绑定的机器）");
   });
   it("Failed shows the reason and the retry countdown", () => {
     const s = phaseSummary(dp({}, { phase: "Failed", message: "ImagePullBackOff", retryCount: 2, lastFailureAt: "2026-11-10T11:59:50Z" }), undefined, now);

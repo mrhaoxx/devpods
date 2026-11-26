@@ -49,27 +49,50 @@ func devPodEntry(dp *devpodv1alpha1.DevPod, since time.Time, prio int32, only, a
 // read (an older role) fails at once rather than waiting on a cache that
 // never fills.
 func (s *Server) homeNode(ctx context.Context, cc *clusters.ClusterClients, dp *devpodv1alpha1.DevPod) string {
+	n, _ := s.homeNodeOf(ctx, cc, dp)
+	return n
+}
+
+// homeNodeOf is homeNode, and whether it could be told: false when the
+// volume could not be read (not "it is not there" — a role that may not
+// read it, the cluster away), which is logged once per cluster.
+func (s *Server) homeNodeOf(ctx context.Context, cc *clusters.ClusterClients, dp *devpodv1alpha1.DevPod) (string, bool) {
 	if dp.Spec.Persistence == nil || cc.Reader == nil {
-		return ""
+		return "", true
+	}
+	unread := func(what string, err error) (string, bool) {
+		if apierrors.IsNotFound(err) {
+			return "", true
+		}
+		if _, said := s.homeUnread.LoadOrStore(cc.Name, true); !said {
+			slog.Warn("queue_home_unread", "cluster", cc.Name, "what", what, "err", err, "fix", "the console's (or agent's) role needs get on persistentvolumeclaims and persistentvolumes")
+		}
+		return "", false
 	}
 	var pvc corev1.PersistentVolumeClaim
-	if err := cc.Reader.Get(ctx, types.NamespacedName{Name: render.HomePVCName(dp), Namespace: s.NS}, &pvc); err != nil || pvc.Spec.VolumeName == "" {
-		return ""
+	if err := cc.Reader.Get(ctx, types.NamespacedName{Name: render.HomePVCName(dp), Namespace: s.NS}, &pvc); err != nil {
+		return unread("pvc", err)
+	}
+	if pvc.Spec.VolumeName == "" {
+		return "", true
 	}
 	var pv corev1.PersistentVolume
-	if err := cc.Reader.Get(ctx, types.NamespacedName{Name: pvc.Spec.VolumeName}, &pv); err != nil || pv.Spec.NodeAffinity == nil || pv.Spec.NodeAffinity.Required == nil {
-		return ""
+	if err := cc.Reader.Get(ctx, types.NamespacedName{Name: pvc.Spec.VolumeName}, &pv); err != nil {
+		return unread("pv", err)
+	}
+	if pv.Spec.NodeAffinity == nil || pv.Spec.NodeAffinity.Required == nil {
+		return "", true
 	}
 	terms := pv.Spec.NodeAffinity.Required.NodeSelectorTerms
 	if len(terms) != 1 {
-		return ""
+		return "", true
 	}
 	for _, r := range terms[0].MatchExpressions {
 		if r.Key == hostnameLabel && r.Operator == corev1.NodeSelectorOpIn && len(r.Values) == 1 {
-			return r.Values[0]
+			return r.Values[0], true
 		}
 	}
-	return ""
+	return "", true
 }
 
 // devPodQuotaOK: dp, started, keeps its owner within their compute quota
@@ -310,8 +333,8 @@ func (s *Server) admitStart(ctx context.Context, dp *devpodv1alpha1.DevPod, prio
 			return false, nil
 		}
 		known, ever := s.machinesFor(ctx, dp)
-		if !known {
-			return false, nil // no machine known to place it on: as before
+		if _, told := s.homeNodeOf(ctx, s.kc(ctx), dp); !known || !told {
+			return false, nil // no machine known to place it on, or its home's unknown: as before
 		}
 		if !ever {
 			return false, s.neverFits(ctx, dp)
@@ -349,11 +372,13 @@ func (s *Server) admitStart(ctx context.Context, dp *devpodv1alpha1.DevPod, prio
 		if e := j.refusal(&n, &needs, true); e != nil {
 			return false, e
 		}
-		// inside its owner's own reservation there: that room is theirs
-		if j.reserved[node] {
-			if rm, err := s.roomsIn(ctx, []corev1.Node{n}); err == nil && rm.refusal(&n, owner, true, dp.Name, askOfPod(spec)) == nil {
-				return false, nil
-			}
+		// inside its owner's own reservation there: that room is theirs,
+		// now; one who may have the machine only under a reservation and
+		// does not fit in theirs is refused (no wait would mend it)
+		if inside, e := s.insideOwnReservation(ctx, j, &n, dp); inside {
+			return false, nil
+		} else if e != nil {
+			return false, e
 		}
 	} else {
 		known, ever := s.machinesFor(ctx, dp)
@@ -425,7 +450,7 @@ func (s *Server) placeNow(ctx context.Context, dp *devpodv1alpha1.DevPod) *serve
 	if s.Reservations != nil {
 		now = s.Reservations.now()
 	}
-	e := devPodEntry(dp, now, 0, s.homeNode(ctx, kc, dp), "")
+	e := devPodEntry(dp, now, 0, s.homeNode(ctx, kc, dp), avoiding(dp, now))
 	v, _, err := s.queueViewFor(ctx, kc, nil, []qEntry{e}, now)
 	if err != nil {
 		return &serverErr{http.StatusServiceUnavailable, "CLUSTER_UNAVAILABLE", err.Error(), nil}
@@ -473,6 +498,9 @@ func (s *Server) startQueuedDevPod(ctx context.Context, cc *clusters.ClusterClie
 	} else if pinnedNode(&dp) != machine {
 		return false
 	}
+	// pinned now: an allow-list of a former start (from before the queue
+	// placed DevPods) would keep it off the machine it was given
+	access.SetAllowed(&dp, nil)
 	dp.Spec.Running = true
 	clearQueued(&dp)
 	delete(dp.Annotations, devpodv1alpha1.QueueAvoidAnnotation)
@@ -496,7 +524,27 @@ func (s *Server) startQueuedDevPod(ctx context.Context, cc *clusters.ClusterClie
 	ev.Node = machine
 	s.recordDevPod(ctx, s.clusterLabel(cc), ev, &dp, "queue-start", detail)
 	slog.Info("queue_devpod_start", "devpod", dp.Name, "owner", dp.Spec.Owner, "machine", machine, "auto", auto)
+	waitCached(ctx, cc, &dp)
 	return true
+}
+
+// waitCached waits (2 s at most) for cc's cache to hold dp as written: the
+// next round plans from the cache, and must not see dp still waiting, its
+// room free.
+func waitCached(ctx context.Context, cc *clusters.ClusterClients, dp *devpodv1alpha1.DevPod) {
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		var got devpodv1alpha1.DevPod
+		if err := cc.Client.Get(ctx, types.NamespacedName{Name: dp.Name, Namespace: dp.Namespace}, &got); err == nil &&
+			(got.ResourceVersion == dp.ResourceVersion || got.Spec.Running) {
+			return
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(20 * time.Millisecond):
+		}
+	}
 }
 
 // unschedulableFor: how long a DevPod's Pod may stay unschedulable on the
@@ -531,10 +579,18 @@ func (s *Server) sweepAutoPins(ctx context.Context, cc *clusters.ClusterClients,
 				continue
 			}
 			unpinAuto(cp)
-			cp.Spec.Running = false
-			markQueued(cp, since, 0)
 			avoidFor(cp, node, now.Add(avoidPeriod))
 			action, reason = "requeue-unschedulable", why
+			if s.Queue == nil {
+				// no line: pinned again now, elsewhere (or left as it is)
+				if e := s.placeNow(ctx, cp); e != nil {
+					continue
+				}
+				action = "replace-unschedulable"
+				break
+			}
+			cp.Spec.Running = false
+			markQueued(cp, since, 0)
 		}
 		if err := cc.Client.Update(ctx, cp); err != nil {
 			if !apierrors.IsConflict(err) {
@@ -565,14 +621,21 @@ func unschedulableSince(pod *corev1.Pod, now time.Time) (string, bool) {
 
 // fitsWhereItIs: dp, running on the machine the queue gave it, may be
 // remade as after only if after fits there now — the machine's free room
-// with what before takes given back (nil: it does, or what the machine
-// has cannot be told).
+// now (a reservation later is the clearing's business) with what before
+// takes given back. An edit asking no more cards or cores always may
+// (nil: it fits, or what the machine has cannot be told).
 func (s *Server) fitsWhereItIs(ctx context.Context, before, after *devpodv1alpha1.DevPod) *serverErr {
 	node, _, ok := autoPin(after)
 	if !ok || before.Spec.Pod == nil || after.Spec.Pod == nil {
 		return nil
 	}
+	if askOfPod(&after.Spec.Pod.Spec).fits(askOfPod(&before.Spec.Pod.Spec)) {
+		return nil
+	}
 	now := time.Now()
+	if s.Reservations != nil {
+		now = s.Reservations.now()
+	}
 	e := devPodEntry(after, now, 0, node, "")
 	v, _, err := s.queueViewFor(ctx, s.kc(ctx), nil, []qEntry{e}, now)
 	if err != nil {
@@ -582,11 +645,121 @@ func (s *Server) fitsWhereItIs(ctx context.Context, before, after *devpodv1alpha
 		if m.Name != node || (m.Cap.GPU == 0 && m.Cap.CPU == 0) {
 			continue
 		}
-		free := freeFor(m, v.Running, now, v.Horizon).add(askOfPod(&before.Spec.Pod.Spec))
+		free := freeFor(m, v.Running, now, time.Millisecond).add(askOfPod(&before.Spec.Pod.Spec))
 		if !askOfPod(&after.Spec.Pod.Spec).fits(free) {
 			return &serverErr{http.StatusConflict, "NO_ROOM_HERE",
 				fmt.Sprintf("it does not fit on %s as it is now: stop it and start it again to wait for room", node), map[string]any{"node": node}}
 		}
 	}
 	return nil
+}
+
+// consoleMarks: the annotations only the console writes on a DevPod — its
+// place and priority in the queue's line and where it stands, the queue's
+// pin and what came with it, why it was hibernated, a reservation's
+// clearing mark, the access rules' allow-list.
+var consoleMarks = []string{
+	devpodv1alpha1.QueuedAtAnnotation, devpodv1alpha1.QueuePriorityAnnotation, devpodv1alpha1.QueueStateAnnotation,
+	devpodv1alpha1.AutoPinAnnotation, devpodv1alpha1.QueueAvoidAnnotation, devpodv1alpha1.ExpectClearAnnotation,
+	devpodv1alpha1.HibernatedByAnnotation, devpodv1alpha1.ClearAtAnnotation, devpodv1alpha1.ClearForAnnotation,
+	access.AnnAllowed,
+}
+
+// dropConsoleMarks takes off a new DevPod what only the console writes
+// (a YAML create could carry them — a place in line made up, a priority
+// over one's cap).
+func dropConsoleMarks(dp *devpodv1alpha1.DevPod) {
+	for _, k := range consoleMarks {
+		delete(dp.Annotations, k)
+	}
+}
+
+// insideOwnReservation: dp, pinned to n, fits inside its owner's own
+// reservation in force there (j: the owner's judge) — and, when it does
+// not though its owner may have n only under a reservation, why it may
+// not run there at all.
+func (s *Server) insideOwnReservation(ctx context.Context, j *judge, n *corev1.Node, dp *devpodv1alpha1.DevPod) (bool, *serverErr) {
+	needsRes := !j.admin && j.on(n).NeedsReservation
+	if !j.reserved[n.Name] && !needsRes {
+		return false, nil
+	}
+	rm, err := s.roomsIn(ctx, []corev1.Node{*n})
+	if err != nil || rm == nil {
+		return false, nil
+	}
+	e := rm.refusal(n, dp.Spec.Owner, true, dp.Name, askOfPod(&dp.Spec.Pod.Spec))
+	if e == nil && j.reserved[n.Name] {
+		return true, nil
+	}
+	if needsRes {
+		return false, e
+	}
+	return false, nil
+}
+
+// startInOwnReservation starts dp (waiting in line, pinned by its user) at
+// once when it fits inside its owner's reservation in force on its
+// machine — begun while it waited; true when it did.
+func (s *Server) startInOwnReservation(ctx context.Context, cc *clusters.ClusterClients, dp *devpodv1alpha1.DevPod) bool {
+	node := pinnedNode(dp)
+	if _, _, auto := autoPin(dp); node == "" || auto || dp.Spec.Pod == nil {
+		return false
+	}
+	j, err := s.judgeFor(ctx, dp.Spec.Owner)
+	if err != nil || !j.reserved[node] {
+		return false
+	}
+	var n corev1.Node
+	if err := cc.Client.Get(ctx, types.NamespacedName{Name: node}, &n); err != nil {
+		return false
+	}
+	if inside, _ := s.insideOwnReservation(ctx, j, &n, dp); !inside {
+		return false
+	}
+	return s.startQueuedDevPod(ctx, cc, dp, node, nil)
+}
+
+// pinSweepTick: how often, with the queue off, the queue's pins are swept.
+const pinSweepTick = 30 * time.Second
+
+// RunPinSweep sweeps the queue's pins (sweepAutoPins) every pinSweepTick
+// while leads says this replica leads (nil: it always does) — with the
+// queue off, where no round does it; with it on, it returns at once.
+func (s *Server) RunPinSweep(ctx context.Context, leads func() bool) {
+	if s.Queue != nil {
+		return
+	}
+	t := time.NewTicker(pinSweepTick)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+		}
+		if leads == nil || leads() {
+			s.pinSweepRound(ctx)
+		}
+	}
+}
+
+// pinSweepRound sweeps the queue's pins in every cluster once.
+func (s *Server) pinSweepRound(ctx context.Context) {
+	for _, cluster := range s.knownClusters(ctx) {
+		cc := s.clientsOf(cluster)
+		if cc == nil {
+			continue
+		}
+		cctx := s.in(ctx, cc)
+		var dps devpodv1alpha1.DevPodList
+		var pods corev1.PodList
+		if cc.Client.List(cctx, &dps, client.InNamespace(s.NS)) != nil || cc.Client.List(cctx, &pods, client.InNamespace(s.NS)) != nil {
+			continue
+		}
+		podOf := map[string]*corev1.Pod{}
+		for i := range pods.Items {
+			podOf[pods.Items[i].Name] = &pods.Items[i]
+		}
+		s.sweepAutoPins(cctx, cc, dps.Items, podOf, time.Now())
+	}
 }
