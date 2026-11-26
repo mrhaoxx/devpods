@@ -247,22 +247,23 @@ func (s *Server) roomFor(ctx context.Context, n *corev1.Node, nr, old *devpodv1a
 	ask, whole := reservedOf(nr, c), isWhole(nr)
 	start, end := nr.Spec.Start.Time, nr.Spec.End.Time
 	type span struct{ from, to time.Time }
-	// what is past does not matter: a reservation of the current slot
-	// fits beside one that ended (or was cancelled) earlier in it
+	// what is past does not matter (checkRoom looks from now on): a
+	// reservation of the current slot fits beside one that ended, or was
+	// cancelled, earlier in it
 	now := s.Reservations.now()
-	start = later(start, now)
 	spans := []span{{start, end}}
 	if old != nil {
+		from := later(start, now)
 		os, oe := old.Spec.Start.Time, old.Spec.End.Time
 		if !ask.fits(reservedOf(old, c)) || (whole && !isWhole(old)) {
-			spans = []span{{start, end}}
+			spans = []span{{from, end}}
 		} else {
 			spans = nil
-			if start.Before(os) {
-				spans = append(spans, span{start, earlier(os, end)})
+			if from.Before(os) {
+				spans = append(spans, span{from, earlier(os, end)})
 			}
 			if end.After(oe) {
-				spans = append(spans, span{later(oe, start), end})
+				spans = append(spans, span{later(oe, from), end})
 			}
 		}
 	}
@@ -275,7 +276,7 @@ func (s *Server) roomFor(ctx context.Context, n *corev1.Node, nr, old *devpodv1a
 		if !sp.from.Before(sp.to) {
 			continue
 		}
-		r := checkRoom(others, c, ask, whole, sp.from, sp.to, ru.Granularity, horizon)
+		r := checkRoom(others, c, ask, whole, sp.from, sp.to, now, ru.Granularity, horizon)
 		if r == nil {
 			continue
 		}
@@ -673,6 +674,7 @@ func (s *Server) handleCreateReservation(w http.ResponseWriter, r *http.Request)
 		Spec:       devpodv1alpha1.NodeReservationSpec{Cluster: cluster, Node: n.Name, User: user, Start: metav1.NewTime(req.Start.UTC()), End: metav1.NewTime(req.End.UTC()), Purpose: purpose},
 	}
 	nr.Spec.GPU, nr.Spec.CPU = gpu, cpu
+	syncShare(nr)
 	if apiErr := s.roomFor(r.Context(), n, nr, nil); apiErr != nil {
 		s.writeServerErr(w, apiErr)
 		return
@@ -701,6 +703,7 @@ func (s *Server) handleCreateReservation(w http.ResponseWriter, r *http.Request)
 func (s *Server) ownReservation(w http.ResponseWriter, r *http.Request, sess Session, now time.Time) (*devpodv1alpha1.NodeReservation, bool) {
 	var nr devpodv1alpha1.NodeReservation
 	err := s.Reader.Get(r.Context(), types.NamespacedName{Name: r.PathValue("id")}, &nr)
+	restoreShare(&nr)
 	if err != nil || nr.Spec.Cluster != s.resCluster(r.Context()) {
 		s.writeErr(w, http.StatusNotFound, "NOT_FOUND", "no such reservation", nil)
 		return nil, false

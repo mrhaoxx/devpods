@@ -11,9 +11,14 @@ import (
 	"testing"
 	"time"
 
+	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/types"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	devpodv1alpha1 "github.com/mrhaoxx/devpod/api/v1alpha1"
+	"github.com/mrhaoxx/devpod/internal/gpures"
 )
 
 // clearRig: a placeRig whose clock the test moves.
@@ -200,4 +205,74 @@ func TestClearingSkipsPreV2(t *testing.T) {
 	p.s.EnforceReservations(ctx)
 	time.Sleep(500 * time.Millisecond)
 	devPodWhen(t, p, "cv-bob-g2", "left alone", unmarked)
+}
+
+// A machine whose reported capacity falls below what is reserved (a
+// device plugin restarting) is left as it is until it is back.
+func TestClearingWaitsOutCapacityDrop(t *testing.T) {
+	p, clock := clearRig(t, "cd")
+	ctx := context.Background()
+	p.createGPU("cd-bob", "g6", 6, p.n1, http.StatusCreated)
+	code, r := reserveWith(t, p.s, p.as("cd-alice"), p.n1, clock.Add(20*time.Minute), clock.Add(80*time.Minute), map[string]any{"gpu": 4})
+	if code != http.StatusCreated {
+		t.Fatalf("reserve: %d %+v", code, r)
+	}
+	p.s.EnforceReservations(ctx)
+	devPodWhen(t, p, "cd-bob-g6", "marked", marked(clock.Add(30*time.Minute), r.ID))
+	setGPUs := func(n string) {
+		t.Helper()
+		var node corev1.Node
+		if err := k8sClient.Get(ctx, types.NamespacedName{Name: p.n1}, &node); err != nil {
+			t.Fatal(err)
+		}
+		node.Status.Allocatable[gpures.NVIDIA] = resource.MustParse(n)
+		node.Status.Capacity = node.Status.Allocatable
+		if err := k8sClient.Status().Update(ctx, &node); err != nil {
+			t.Fatal(err)
+		}
+		waitFor(t, func() bool {
+			var got corev1.Node
+			if k8sClient.Get(ctx, types.NamespacedName{Name: p.n1}, &got) != nil {
+				return false
+			}
+			q := got.Status.Allocatable[gpures.NVIDIA]
+			return q.String() == n
+		})
+	}
+	setGPUs("0")
+	*clock = clock.Add(30 * time.Minute)
+	p.s.EnforceReservations(ctx)
+	time.Sleep(500 * time.Millisecond)
+	devPodWhen(t, p, "cd-bob-g6", "left as it is while the cards are not reported", marked(*clock, r.ID))
+	setGPUs("8")
+	p.s.EnforceReservations(ctx)
+	devPodWhen(t, p, "cd-bob-g6", "hibernated once they are back", func(dp *devpodv1alpha1.DevPod) bool { return !dp.Spec.Running })
+}
+
+// Marks another leader left are swept whenever this replica leads again.
+func TestClearingSweepsOnRegainedLead(t *testing.T) {
+	p, _ := clearRig(t, "cl")
+	ctx := context.Background()
+	p.createGPU("cl-bob", "g2", 2, p.n1, http.StatusCreated)
+	// a reservation long over: the cluster has reservations, none in force
+	over := &devpodv1alpha1.NodeReservation{ObjectMeta: metav1.ObjectMeta{Name: "cl-over"}, Spec: devpodv1alpha1.NodeReservationSpec{
+		Node: p.n1, User: "cl-alice", Start: metav1.NewTime(p.slot.Add(-3 * time.Hour)), End: metav1.NewTime(p.slot.Add(-2 * time.Hour))}}
+	if err := k8sClient.Create(ctx, over); err != nil {
+		t.Fatal(err)
+	}
+	p.s.EnforceReservations(ctx) // the first round sweeps
+	stale := p.get("cl-bob-g2")
+	patch := client.MergeFrom(stale.DeepCopy())
+	if stale.Annotations == nil {
+		stale.Annotations = map[string]string{}
+	}
+	stale.Annotations[devpodv1alpha1.ClearAtAnnotation] = "2026-11-12T02:40:00Z"
+	stale.Annotations[devpodv1alpha1.ClearForAnnotation] = "cl-gone"
+	if err := k8sClient.Patch(ctx, &stale, patch); err != nil {
+		t.Fatal(err)
+	}
+	devPodWhen(t, p, "cl-bob-g2", "marked by another leader", marked(time.Date(2026, 11, 12, 2, 40, 0, 0, time.UTC), "cl-gone"))
+	p.s.LoseLeadForTest()
+	p.s.EnforceReservations(ctx)
+	devPodWhen(t, p, "cl-bob-g2", "swept", unmarked)
 }

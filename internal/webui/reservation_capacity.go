@@ -14,6 +14,7 @@ import (
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/resource"
 
 	devpodv1alpha1 "github.com/mrhaoxx/devpod/api/v1alpha1"
 	"github.com/mrhaoxx/devpod/internal/gpures"
@@ -80,9 +81,13 @@ func isWhole(nr *devpodv1alpha1.NodeReservation) bool {
 	return nr.Spec.GPU == nil && nr.Spec.CPU == nil
 }
 
-// reservedOf: what nr holds of a machine with capacity c.
+// reservedOf: what nr holds of a machine with capacity c — all of it when
+// whole; else what it says (an amount it does not say: none).
 func reservedOf(nr *devpodv1alpha1.NodeReservation, c amount) amount {
-	a := c
+	if isWhole(nr) {
+		return c
+	}
+	var a amount
 	if nr.Spec.GPU != nil {
 		a.GPU = int64(*nr.Spec.GPU)
 	}
@@ -90,6 +95,61 @@ func reservedOf(nr *devpodv1alpha1.NodeReservation, c amount) amount {
 		a.CPU = nr.Spec.CPU.MilliValue()
 	}
 	return a
+}
+
+// shareText: nr's amounts as ShareAnnotation says them ("" when whole).
+func shareText(nr *devpodv1alpha1.NodeReservation) string {
+	if isWhole(nr) {
+		return ""
+	}
+	a := reservedOf(nr, amount{})
+	return fmt.Sprintf("gpu=%d,cpu=%s", a.GPU, coresOf(a.CPU))
+}
+
+// syncShare makes nr's ShareAnnotation say its amounts.
+func syncShare(nr *devpodv1alpha1.NodeReservation) {
+	if t := shareText(nr); t != "" {
+		if nr.Annotations == nil {
+			nr.Annotations = map[string]string{}
+		}
+		nr.Annotations[devpodv1alpha1.ShareAnnotation] = t
+		return
+	}
+	delete(nr.Annotations, devpodv1alpha1.ShareAnnotation)
+}
+
+// restoreShare puts back amounts a writer that did not know them dropped:
+// a spec without amounts whose ShareAnnotation has them. True when it did.
+func restoreShare(nr *devpodv1alpha1.NodeReservation) bool {
+	t := nr.Annotations[devpodv1alpha1.ShareAnnotation]
+	if t == "" || !isWhole(nr) {
+		return false
+	}
+	var gpu *int32
+	var cpu *resource.Quantity
+	for _, kv := range strings.Split(t, ",") {
+		k, v, _ := strings.Cut(kv, "=")
+		switch k {
+		case "gpu":
+			n, err := strconv.ParseInt(v, 10, 32)
+			if err != nil || n < 0 {
+				return false
+			}
+			g := int32(n)
+			gpu = &g
+		case "cpu":
+			q, err := resource.ParseQuantity(v)
+			if err != nil {
+				return false
+			}
+			cpu = &q
+		}
+	}
+	if gpu == nil || cpu == nil {
+		return false
+	}
+	nr.Spec.GPU, nr.Spec.CPU = gpu, cpu
+	return true
 }
 
 // askOfPod: what a Pod takes of a machine, as the scheduler counts it —
@@ -180,10 +240,11 @@ type roomRefusal struct {
 }
 
 // checkRoom: nil when a reservation of ask (whole: the whole machine) for
-// [start, end) fits beside others; else what is free, and the earliest
-// start, in steps from start, before start+horizon, where it would.
-func checkRoom(others []*devpodv1alpha1.NodeReservation, c, ask amount, whole bool, start, end time.Time, step, horizon time.Duration) *roomRefusal {
-	ok, free := fitsIn(others, c, ask, whole, start, end)
+// [start, end) fits beside others from from on; else what is free, and the
+// earliest start, in steps from start, before start+horizon, where it
+// would (as long as asked).
+func checkRoom(others []*devpodv1alpha1.NodeReservation, c, ask amount, whole bool, start, end, from time.Time, step, horizon time.Duration) *roomRefusal {
+	ok, free := fitsIn(others, c, ask, whole, later(start, from), end)
 	if ok {
 		return nil
 	}
@@ -191,9 +252,14 @@ func checkRoom(others []*devpodv1alpha1.NodeReservation, c, ask amount, whole bo
 	if step <= 0 {
 		return r
 	}
+	// whole steps from the start asked, as long as asked (what is before
+	// from does not matter)
 	d := end.Sub(start)
 	for s := start.Add(step); s.Before(start.Add(horizon)); s = s.Add(step) {
-		if ok, _ := fitsIn(others, c, ask, whole, s, s.Add(d)); ok {
+		if !s.Add(d).After(from) {
+			continue
+		}
+		if ok, _ := fitsIn(others, c, ask, whole, later(s, from), s.Add(d)); ok {
 			r.Earliest = s
 			break
 		}
@@ -407,13 +473,16 @@ func (s *Server) roomsIn(ctx context.Context, nodes []corev1.Node) (*rooms, erro
 }
 
 // refusal: why owner may not add a DevPod (named skip, if it is there
-// already) taking ask on n now — nil on a machine that is not reservable.
+// already) taking ask on n now — nil on a machine that is not reservable,
+// that nothing is reserved on now, or whose capacity is not reported.
 func (r *rooms) refusal(n *corev1.Node, owner string, needsRes bool, skip string, ask amount) *serverErr {
 	if r == nil {
 		return nil
 	}
+	// judged only while a reservation of it is in force, and only when
+	// what it has is reported
 	c, ok := r.cap[n.Name]
-	if !ok {
+	if !ok || c == (amount{}) || !r.reservedNow(n.Name) {
 		return nil
 	}
 	return loadAt(c, r.rs[n.Name], r.on[n.Name], r.now, skip).refusal(n.Name, owner, needsRes, ask)

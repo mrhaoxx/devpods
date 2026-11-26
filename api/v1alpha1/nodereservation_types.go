@@ -24,13 +24,13 @@ type NodeReservationSpec struct {
 	User  string      `json:"user"`
 	Start metav1.Time `json:"start"`
 	End   metav1.Time `json:"end"`
-	// GPU: the cards reserved; absent, all the machine has.
+	// GPU: the cards reserved.
 	//
 	// +optional
 	// +kubebuilder:validation:Minimum=0
 	GPU *int32 `json:"gpu,omitempty"`
-	// CPU: the cores reserved; absent, all the machine has. Both absent:
-	// the whole machine, which overlaps no other reservation.
+	// CPU: the cores reserved. Both absent: the whole machine, which
+	// overlaps no other reservation; one alone: none of the other.
 	//
 	// +optional
 	CPU *resource.Quantity `json:"cpu,omitempty"`

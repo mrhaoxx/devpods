@@ -64,28 +64,44 @@ func TestBookedPeak(t *testing.T) {
 func TestCheckRoom(t *testing.T) {
 	step, horizon := 30*time.Minute, 14*24*time.Hour
 	whole := []*devpodv1alpha1.NodeReservation{rsvOf("r1", "alice", at(10, 0), at(11, 0), -1, "")}
-	if r := checkRoom(whole, cap8, amount{4, 96000}, false, at(10, 0), at(11, 0), step, horizon); r == nil || r.Free != (amount{}) || !r.Earliest.Equal(at(11, 0)) {
+	if r := checkRoom(whole, cap8, amount{4, 96000}, false, at(10, 0), at(11, 0), at(9, 0), step, horizon); r == nil || r.Free != (amount{}) || !r.Earliest.Equal(at(11, 0)) {
 		t.Errorf("against a whole one: %+v", r)
 	}
-	if r := checkRoom(whole, cap8, amount{4, 96000}, false, at(11, 0), at(12, 0), step, horizon); r != nil {
+	if r := checkRoom(whole, cap8, amount{4, 96000}, false, at(11, 0), at(12, 0), at(9, 0), step, horizon); r != nil {
 		t.Errorf("after a whole one: %+v", r)
 	}
 	halves := []*devpodv1alpha1.NodeReservation{
 		rsvOf("r1", "alice", at(10, 0), at(11, 0), 4, "96"),
 		rsvOf("r2", "bob", at(10, 0), at(11, 0), 4, "96"),
 	}
-	if r := checkRoom(halves, cap8, cap8, true, at(10, 30), at(11, 30), step, horizon); r == nil || !r.Earliest.Equal(at(11, 0)) {
+	if r := checkRoom(halves, cap8, cap8, true, at(10, 30), at(11, 30), at(9, 0), step, horizon); r == nil || !r.Earliest.Equal(at(11, 0)) {
 		t.Errorf("whole over two halves: %+v", r)
 	}
-	if r := checkRoom(halves[:1], cap8, amount{4, 96000}, false, at(10, 0), at(11, 0), step, horizon); r != nil {
+	if r := checkRoom(halves[:1], cap8, amount{4, 96000}, false, at(10, 0), at(11, 0), at(9, 0), step, horizon); r != nil {
 		t.Errorf("the other half: %+v", r)
 	}
-	if r := checkRoom(halves[:1], cap8, amount{5, 96000}, false, at(10, 0), at(11, 0), step, horizon); r == nil || r.Free != (amount{4, 96000}) {
+	if r := checkRoom(halves[:1], cap8, amount{5, 96000}, false, at(10, 0), at(11, 0), at(9, 0), step, horizon); r == nil || r.Free != (amount{4, 96000}) {
 		t.Errorf("more than the other half: %+v", r)
 	}
+	// asked from the current slot (10:00, now 10:10): what would be free is
+	// a slot start, with the whole length asked
+	if r := checkRoom(whole, cap8, amount{4, 96000}, false, at(10, 0), at(11, 0), at(10, 10), step, horizon); r == nil || !r.Earliest.Equal(at(11, 0)) {
+		t.Errorf("from the current slot: %+v", r)
+	}
 	// a machine whose capacity is unknown: a whole one is still exclusive
-	if r := checkRoom(whole, amount{}, amount{}, true, at(10, 0), at(11, 0), step, horizon); r == nil {
+	if r := checkRoom(whole, amount{}, amount{}, true, at(10, 0), at(11, 0), at(9, 0), step, horizon); r == nil {
 		t.Error("two whole reservations on a 0-capacity machine overlap")
+	}
+}
+
+// A share with one amount said holds none of the other (only both unsaid
+// is the whole machine).
+func TestReservedOfOneAmount(t *testing.T) {
+	nr := rsvOf("r1", "alice", at(10, 0), at(11, 0), -1, "")
+	c := resource.MustParse("16")
+	nr.Spec.CPU = &c
+	if got := reservedOf(nr, cap8); got != (amount{0, 16000}) {
+		t.Errorf("cores alone: %+v", got)
 	}
 }
 

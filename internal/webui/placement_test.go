@@ -17,12 +17,14 @@ import (
 
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/equality"
+	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/yaml"
 
 	devpodv1alpha1 "github.com/mrhaoxx/devpod/api/v1alpha1"
 	"github.com/mrhaoxx/devpod/internal/access"
+	"github.com/mrhaoxx/devpod/internal/gpures"
 	"github.com/mrhaoxx/devpod/internal/webui"
 )
 
@@ -521,4 +523,49 @@ func TestUnpinnedKeptOffFullMachines(t *testing.T) {
 		t.Fatalf("reserve n2: %d %+v", code, v)
 	}
 	create(root, "uk-root", "u4", http.StatusConflict)
+}
+
+// A machine whose capacity is not reported is not judged — nor is any
+// machine nothing is reserved on now.
+func TestStartUnreportedCapacity(t *testing.T) {
+	p := newPlaceRig(t, "su")
+	ctx := context.Background()
+	var n corev1.Node
+	if err := k8sClient.Get(ctx, types.NamespacedName{Name: p.n1}, &n); err != nil {
+		t.Fatal(err)
+	}
+	n.Status.Allocatable, n.Status.Capacity = corev1.ResourceList{}, corev1.ResourceList{}
+	if err := k8sClient.Status().Update(ctx, &n); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, func() bool {
+		var got corev1.Node
+		return k8sClient.Get(ctx, types.NamespacedName{Name: p.n1}, &got) == nil && len(got.Status.Allocatable) == 0
+	})
+	p.createGPU("su-bob", "g1", 1, p.n1, http.StatusCreated)
+}
+
+// A Pod that has finished (evicted, done) holds nothing.
+func TestStartIgnoresFinishedPods(t *testing.T) {
+	p := newPlaceRig(t, "sf")
+	ctx := context.Background()
+	if code, v := reserveWith(t, p.s, p.as("sf-alice"), p.n1, p.slot, p.slot.Add(time.Hour), map[string]any{"gpu": 4}); code != http.StatusCreated {
+		t.Fatalf("reserve: %d %+v", code, v)
+	}
+	dp := p.create("sf-bob", http.StatusCreated)
+	pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: dp, Namespace: "devpods"}, Spec: corev1.PodSpec{NodeName: p.n1, Containers: []corev1.Container{{Name: "dev", Image: "ubuntu:24.04",
+		Resources: corev1.ResourceRequirements{Limits: corev1.ResourceList{gpures.NVIDIA: resource.MustParse("4")}, Requests: corev1.ResourceList{gpures.NVIDIA: resource.MustParse("4")}}}}}}
+	if err := k8sClient.Create(ctx, pod); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = k8sClient.Delete(ctx, pod) })
+	pod.Status.Phase = corev1.PodFailed
+	if err := k8sClient.Status().Update(ctx, pod); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, func() bool {
+		var got corev1.Pod
+		return k8sClient.Get(ctx, types.NamespacedName{Namespace: "devpods", Name: dp}, &got) == nil && got.Status.Phase == corev1.PodFailed
+	})
+	p.createGPU("sf-carol", "g4", 4, p.n1, http.StatusCreated)
 }

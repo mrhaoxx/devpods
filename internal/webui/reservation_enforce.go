@@ -48,6 +48,8 @@ func (s *Server) RunReservations(ctx context.Context, leads func() bool) {
 	for {
 		if leads == nil || leads() {
 			s.EnforceReservations(ctx)
+		} else {
+			s.loseLead()
 		}
 		select {
 		case <-ctx.Done():
@@ -56,6 +58,10 @@ func (s *Server) RunReservations(ctx context.Context, leads func() bool) {
 		}
 	}
 }
+
+// loseLead: this replica no longer leads — when it leads again it sweeps
+// every cluster with reservations once more (another leader's marks).
+func (s *Server) loseLead() { s.clearSwept.Store(false) }
 
 // clientsOf: a cluster's clients by the name reservations give it ("" is
 // the console's own, in a console of one cluster); nil when away.
@@ -182,6 +188,7 @@ func (s *Server) clearIn(ctx context.Context, cluster string, all []devpodv1alph
 		forID string
 	}
 	want := map[string]mark{} // by DevPod name
+	hold := map[string]bool{} // on a machine not judged now: left as they are
 	for node, rs := range byNode {
 		var moments []time.Time
 		for _, nr := range rs {
@@ -204,6 +211,15 @@ func (s *Server) clearIn(ctx context.Context, cluster string, all []devpodv1alph
 		slices.SortFunc(moments, func(a, b time.Time) int { return a.Compare(b) })
 		moments = slices.Compact(moments)
 		c, left := capacityOf(&n), slices.Clone(on[node])
+		// not ready, or reporting less than its reservations hold (a device
+		// plugin restarting): what it has is not known — nobody is marked or
+		// hibernated there until it is back
+		if !readyOrUnknown(&n) || slices.ContainsFunc(moments, func(t time.Time) bool { return !bookedAt(rs, c, t).fits(c) }) {
+			for _, p := range on[node] {
+				hold[p.DP.Name] = true
+			}
+			continue
+		}
 		for _, t := range moments {
 			id := clearedFor(rs, t)
 			for _, p := range toClear(c, rs, left, t) {
@@ -224,6 +240,12 @@ func (s *Server) clearIn(ctx context.Context, cluster string, all []devpodv1alph
 			dp := p.DP
 			atText, has := dp.Annotations[devpodv1alpha1.ClearAtAnnotation]
 			forID := dp.Annotations[devpodv1alpha1.ClearForAnnotation]
+			if hold[dp.Name] {
+				if has || forID != "" {
+					stillMarked = true
+				}
+				continue
+			}
 			m, listed := want[dp.Name]
 			if !listed {
 				if (has || forID != "") && !s.unmarkClearing(ctx, cc, dp) {
@@ -261,6 +283,16 @@ func (s *Server) clearIn(ctx context.Context, cluster string, all []devpodv1alph
 			st.Cleared = append(st.Cleared, names...)
 		})
 	}
+}
+
+// readyOrUnknown: n says it is Ready, or says nothing either way.
+func readyOrUnknown(n *corev1.Node) bool {
+	for _, c := range n.Status.Conditions {
+		if c.Type == corev1.NodeReady {
+			return c.Status == corev1.ConditionTrue
+		}
+	}
+	return true
 }
 
 // markClearing notes on dp when it is to be hibernated, and for which
@@ -384,7 +416,8 @@ func (s *Server) devPodsOn(ctx context.Context, cc *clusters.ClusterClients) (ma
 			p.Ask = askOfPod(&dp.Spec.Pod.Spec)
 		}
 		node := ""
-		if pod := podOf[render.PodName(dp)]; pod != nil {
+		// a Pod that has finished (evicted, done) holds nothing
+		if pod := podOf[render.PodName(dp)]; pod != nil && pod.Status.Phase != corev1.PodSucceeded && pod.Status.Phase != corev1.PodFailed {
 			// what holds the machine is its Pod, as it was made
 			node, p.Since, p.Ask = pod.Spec.NodeName, pod.CreationTimestamp.Time, askOfPod(&pod.Spec)
 		}

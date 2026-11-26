@@ -87,15 +87,15 @@ spec:
                 - type: integer
                 - type: string
                 description: |-
-                  CPU: the cores reserved; absent, all the machine has. Both absent:
-                  the whole machine, which overlaps no other reservation.
+                  CPU: the cores reserved. Both absent: the whole machine, which
+                  overlaps no other reservation; one alone: none of the other.
                 pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
                 x-kubernetes-int-or-string: true
               end:
                 format: date-time
                 type: string
               gpu:
-                description: 'GPU: the cards reserved; absent, all the machine has.'
+                description: 'GPU: the cards reserved.'
                 format: int32
                 minimum: 0
                 type: integer

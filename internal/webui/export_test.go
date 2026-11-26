@@ -167,3 +167,6 @@ func (s *Server) DecideForTest(ctx context.Context, owner, cluster, node string,
 
 // LoginWaitForTest is how long a sign-in waits after n failures in a row.
 func LoginWaitForTest(n int) time.Duration { return loginWait(n) }
+
+// LoseLeadForTest: as when this replica stops leading.
+func (s *Server) LoseLeadForTest() { s.loseLead() }

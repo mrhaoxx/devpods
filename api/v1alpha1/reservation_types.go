@@ -23,6 +23,11 @@ const (
 	// shares, it clears whoever is in its way when it starts. One made
 	// before (a permit then) clears nobody.
 	ClearsAnnotation = "devpod.io/clears"
+	// ShareAnnotation on a NodeReservation repeats what of the machine it
+	// holds ("gpu=4,cpu=96"; none: the whole machine), for when a writer
+	// that does not know the amounts drops them from the spec (an older
+	// console mid-rollout, or a CRD not yet updated).
+	ShareAnnotation = "devpod.io/share"
 
 	// DevPod condition types set by the reservation machinery.
 	ConditionNodeReserved        = "NodeReserved"        // pinned to a node someone else holds: no Pod

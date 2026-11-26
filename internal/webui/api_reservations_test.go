@@ -193,6 +193,10 @@ func TestReservationRoom(t *testing.T) {
 	if code, v := reserveWith(t, s, bob, node, ten.Add(30*time.Minute), ten.Add(90*time.Minute), map[string]any{"gpu": 4}); code != http.StatusConflict {
 		t.Fatalf("bob 4 cards over alice's whole: %d %+v", code, v)
 	}
+	// asked from the current slot: free from a slot start, not from now on
+	if code, v := reserveAs(t, s, bob, node, ten, ten.Add(time.Hour)); code != http.StatusConflict || !v.Detail.Earliest.Equal(ten.Add(time.Hour)) {
+		t.Fatalf("bob from the current slot: %d %+v", code, v)
+	}
 	noon := ten.Add(2 * time.Hour)
 	if code, v := reserveWith(t, s, alice, node, noon, noon.Add(time.Hour), map[string]any{"gpu": 4}); code != http.StatusCreated || v.GPU == nil || *v.GPU != 4 || v.CPU == nil || *v.CPU != 96 {
 		t.Fatalf("alice 4 cards (cpu follows): %d %+v", code, v)
@@ -940,5 +944,66 @@ func TestReservationHistoryAmounts(t *testing.T) {
 	}
 	if got[part.ID] != [2]float64{4, 96} || got[whole.ID] != [2]float64{-1, -1} {
 		t.Fatalf("history amounts: %v (part %s, whole %s)", got, part.ID, whole.ID)
+	}
+	st.mu.Unlock()
+	// one written with cores alone (kubectl): no cards, not "whole"
+	c16 := resource.MustParse("16")
+	own := &devpodv1alpha1.NodeReservation{ObjectMeta: metav1.ObjectMeta{Name: "ha-cores"}, Spec: devpodv1alpha1.NodeReservationSpec{
+		Node: node, User: "ha-alice", Start: metav1.NewTime(slot.Add(3 * time.Hour)), End: metav1.NewTime(slot.Add(4 * time.Hour)), CPU: &c16}}
+	if err := k8sClient.Create(context.Background(), own); err != nil {
+		t.Fatal(err)
+	}
+	if rec := doJSON(t, s.HandlePatchReservationForTest(), "PATCH", "/api/reservations/ha-cores", map[string]string{"id": "ha-cores"}, alice, `{"purpose":"y"}`); rec.Code != http.StatusOK {
+		t.Fatalf("patch: %d %s", rec.Code, rec.Body)
+	}
+	st.mu.Lock()
+	for _, r := range st.resv {
+		if r.ID == "ha-cores" && (r.GPU != 0 || r.CPU != 16) {
+			t.Fatalf("cores alone in history: %d %v", r.GPU, r.CPU)
+		}
+	}
+}
+
+// What a reservation holds is also kept in an annotation: a writer that
+// does not know the amounts (an older console mid-rollout, or a CRD not
+// yet updated) drops them from the spec, and they come back from it.
+func TestReservationShareSurvivesOldWriter(t *testing.T) {
+	s, sm, _, node := rsvRig(t, "sw2")
+	ctx := context.Background()
+	alice, bob := forge(sm, "sw2-alice", false), forge(sm, "sw2-bob", false)
+	slot := time.Date(2026, 11, 12, 4, 0, 0, 0, time.UTC)
+	code, v := reserveWith(t, s, alice, node, slot, slot.Add(time.Hour), map[string]any{"gpu": 4})
+	if code != http.StatusCreated {
+		t.Fatalf("reserve: %d %+v", code, v)
+	}
+	var nr devpodv1alpha1.NodeReservation
+	if err := k8sClient.Get(ctx, client_key_cluster(v.ID), &nr); err != nil {
+		t.Fatal(err)
+	}
+	nr.Spec.GPU, nr.Spec.CPU = nil, nil // as an older writer leaves it
+	if err := k8sClient.Update(ctx, &nr); err != nil {
+		t.Fatal(err)
+	}
+	for _, x := range listReservations(t, s, alice) {
+		if x.ID == v.ID && (x.GPU == nil || *x.GPU != 4 || x.CPU == nil || *x.CPU != 96) {
+			t.Fatalf("listed after an older writer: %+v", x)
+		}
+	}
+	if code, w := reserveWith(t, s, bob, node, slot, slot.Add(time.Hour), map[string]any{"gpu": 4}); code != http.StatusCreated {
+		t.Fatalf("the other half beside it: %d %+v", code, w)
+	}
+	// a change through this console writes them back
+	if rec := doJSON(t, s.HandlePatchReservationForTest(), "PATCH", "/api/reservations/"+v.ID, map[string]string{"id": v.ID}, alice, `{"purpose":"x"}`); rec.Code != http.StatusOK {
+		t.Fatalf("patch: %d %s", rec.Code, rec.Body)
+	}
+	if err := k8sClient.Get(ctx, client_key_cluster(v.ID), &nr); err != nil || nr.Spec.GPU == nil || *nr.Spec.GPU != 4 {
+		t.Fatalf("after a change: %+v %v", nr.Spec, err)
+	}
+	// any change keeps the annotation in step with the spec
+	if rec := doJSON(t, s.HandlePatchReservationForTest(), "PATCH", "/api/reservations/"+v.ID, map[string]string{"id": v.ID}, alice, `{"end":"`+slot.Add(30*time.Minute).Format(time.RFC3339)+`"}`); rec.Code != http.StatusOK {
+		t.Fatalf("shorten: %d %s", rec.Code, rec.Body)
+	}
+	if err := k8sClient.Get(ctx, client_key_cluster(v.ID), &nr); err != nil || nr.Annotations[devpodv1alpha1.ShareAnnotation] != "gpu=4,cpu=96" {
+		t.Fatalf("annotation after a change: %v %v", nr.Annotations, err)
 	}
 }

@@ -38,6 +38,9 @@ func (s *Server) nodeReservations(ctx context.Context) ([]devpodv1alpha1.NodeRes
 	out := list.Items[:0]
 	for i := range list.Items {
 		if list.Items[i].DeletionTimestamp == nil {
+			if restoreShare(&list.Items[i]) {
+				slog.Warn("reservation_share_restored", "reservation", list.Items[i].Name, "share", list.Items[i].Annotations[devpodv1alpha1.ShareAnnotation])
+			}
 			out = append(out, list.Items[i])
 		}
 	}
@@ -69,9 +72,11 @@ func (s *Server) changeReservation(ctx context.Context, name string, fn func(*de
 		if nr.Spec.Cluster != cluster {
 			return fmt.Errorf("reservation %s is of cluster %q", name, nr.Spec.Cluster)
 		}
+		restoreShare(&nr) // written back with the change
 		if changed = fn(&nr.Spec); !changed {
 			return nil
 		}
+		syncShare(&nr)
 		return s.Client.Update(ctx, &nr)
 	})
 	if err != nil {
@@ -98,13 +103,11 @@ func (s *Server) reservationHistory(ctx context.Context, nr *devpodv1alpha1.Node
 	row := store.ReservationEventRow{
 		TS: time.Now().UTC(), Cluster: nr.Spec.Cluster, ID: nr.Name, Node: nr.Spec.Node, User: nr.Spec.User,
 		Start: nr.Spec.Start.Time.UTC(), End: nr.Spec.End.Time.UTC(), Event: event, Detail: strings.Join(detail, " "),
-		Purpose: nr.Spec.Purpose, GPU: -1, CPU: -1,
+		Purpose: nr.Spec.Purpose, GPU: -1, CPU: -1, // the whole machine
 	}
-	if nr.Spec.GPU != nil {
-		row.GPU = *nr.Spec.GPU
-	}
-	if nr.Spec.CPU != nil {
-		row.CPU = float64(nr.Spec.CPU.MilliValue()) / 1000
+	if !isWhole(nr) {
+		a := reservedOf(nr, amount{})
+		row.GPU, row.CPU = int32(a.GPU), float64(a.CPU)/1000
 	}
 	if nr.Spec.Cancelled != nil {
 		row.CancelledBy = nr.Spec.Cancelled.By
