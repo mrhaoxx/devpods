@@ -246,6 +246,13 @@ func TestPlacementReservedMachineByPinOnly(t *testing.T) {
 	p.patch("pk-alice", dp, fmt.Sprintf(`{"node":%q}`, p.n1), http.StatusOK) // pinned, it may
 	p.patch("pk-alice", dp, `{"node":""}`, http.StatusOK)
 	p.patch("pk-alice", dp, `{"running":false}`, http.StatusOK)
+	// the start below is judged on the DevPod as the cache has it: not
+	// before it is unpinned and stopped there (pinned to n1, under her
+	// reservation, it would start)
+	waitFor(t, func() bool {
+		var got devpodv1alpha1.DevPod
+		return k8sClient.Get(context.Background(), types.NamespacedName{Namespace: "devpods", Name: dp}, &got) == nil && !got.Spec.Running && pinnedOf(&got) == ""
+	})
 	setRules(t, onNode(p.n1, needsReservation), devpodv1alpha1.AccessRule{Subject: &devpodv1alpha1.AccessSubject{Kind: "everyone"}, Effect: denied})
 	if code := p.patch("pk-alice", dp, `{"running":true}`, http.StatusConflict); code != "RESERVATION_REQUIRED" {
 		t.Fatalf("only a reserved machine left: %q", code)
@@ -568,4 +575,12 @@ func TestStartIgnoresFinishedPods(t *testing.T) {
 		return k8sClient.Get(ctx, types.NamespacedName{Namespace: "devpods", Name: dp}, &got) == nil && got.Status.Phase == corev1.PodFailed
 	})
 	p.createGPU("sf-carol", "g4", 4, p.n1, http.StatusCreated)
+}
+
+// pinnedOf: the machine dp is pinned to ("": none).
+func pinnedOf(dp *devpodv1alpha1.DevPod) string {
+	if dp.Spec.Pod == nil {
+		return ""
+	}
+	return dp.Spec.Pod.Spec.NodeSelector["kubernetes.io/hostname"]
 }

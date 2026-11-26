@@ -148,6 +148,10 @@ render bundled "${WEBUI[@]}" --set audit.enabled=true \
 has bundled "name: devpod-audit-s3"
 has bundled "kind: StatefulSet"
 has bundled "name: devpod-audit-clickhouse"
+# the bundled ClickHouse loads a table whose broken parts (an unclean stop)
+# are more than its default 100: set aside, not left offline
+has bundled "<max_suspicious_broken_parts>1000</max_suspicious_broken_parts>"
+docHas bundled StatefulSet devpod-audit-clickhouse "mountPath: /etc/clickhouse-server/config.d/devpod.xml, subPath: server.xml"
 # the console and the bundled ClickHouse placed on chosen nodes
 render placed "${WEBUI[@]}" --set audit.enabled=true --set audit.s3.bundled.enabled=true --set audit.clickhouse.bundled.enabled=true \
   --set-string webui.nodeSelector.storage=true --set-string audit.clickhouse.bundled.nodeSelector.storage=true \

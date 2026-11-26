@@ -8,9 +8,12 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"log/slog"
 	"net/http"
+	"regexp"
 	"slices"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/mrhaoxx/devpod/internal/audit/store"
@@ -88,7 +91,7 @@ func (s *Server) handleDevPodMetrics(w http.ResponseWriter, r *http.Request) {
 	to := time.Now().UTC()
 	series, err := ts.MetricsRange(r.Context(), string(dp.UID), to.Add(-d), to, step)
 	if err != nil {
-		s.writeErr(w, http.StatusServiceUnavailable, "AUDIT_UNAVAILABLE", err.Error(), nil)
+		s.storeUnavailable(w, err)
 		return
 	}
 	s.writeJSON(w, http.StatusOK, series)
@@ -114,7 +117,7 @@ func (s *Server) handleDevPodInfo(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err != nil {
-		s.writeErr(w, http.StatusServiceUnavailable, "AUDIT_UNAVAILABLE", err.Error(), nil)
+		s.storeUnavailable(w, err)
 		return
 	}
 	out := map[string]any{"info": json.RawMessage(info.Info), "infoTs": info.TS}
@@ -208,7 +211,7 @@ func (s *Server) handleLiveRecent(w http.ResponseWriter, r *http.Request) {
 	to := time.Now().UTC()
 	rs, err := ts.RecentContainer(r.Context(), uids, to.Add(-recentWindow), to, recentStep)
 	if err != nil {
-		s.writeErr(w, http.StatusServiceUnavailable, "AUDIT_UNAVAILABLE", err.Error(), nil)
+		s.storeUnavailable(w, err)
 		return
 	}
 	items := map[string]store.RecentItem{}
@@ -279,8 +282,49 @@ func (s *Server) handleNodesRecent(w http.ResponseWriter, r *http.Request) {
 	to := time.Now().UTC()
 	rs, err := ts.RecentContainer(r.Context(), uids, to.Add(-recentWindow), to, recentStep)
 	if err != nil {
-		s.writeErr(w, http.StatusServiceUnavailable, "AUDIT_UNAVAILABLE", err.Error(), nil)
+		s.storeUnavailable(w, err)
 		return
 	}
 	s.writeJSON(w, http.StatusOK, map[string]any{"step": rs.Step, "ts": rs.TS, "items": sumRecentByNode(rs, nodeOf)})
+}
+
+// storeUnavailable answers that the telemetry store cannot be read now,
+// in a line a person can read (shortStoreErr); the store's whole error
+// (ClickHouse's, with its stack trace) goes to the log.
+func (s *Server) storeUnavailable(w http.ResponseWriter, err error) {
+	slog.Warn("telemetry_store", "err", err)
+	s.writeErr(w, http.StatusServiceUnavailable, "AUDIT_UNAVAILABLE", "the telemetry store cannot be read now: "+shortStoreErr(err), nil)
+}
+
+// loadJobTable: a table ClickHouse names in a load job's error.
+var loadJobTable = regexp.MustCompile(`table ([A-Za-z0-9_]+\.[A-Za-z0-9_]+)'`)
+
+// shortStoreErr: err in a line — before any stack trace, ClickHouse's
+// innermost exception's first sentence and the tables its load jobs
+// name; at most 200 characters.
+func shortStoreErr(err error) string {
+	msg := err.Error()
+	if i := strings.Index(msg, "Stack trace"); i >= 0 {
+		msg = msg[:i]
+	}
+	var tables []string
+	for _, m := range loadJobTable.FindAllStringSubmatch(msg, -1) {
+		if !slices.Contains(tables, m[1]) {
+			tables = append(tables, m[1])
+		}
+	}
+	if i := strings.LastIndex(msg, "DB::Exception: "); i >= 0 {
+		msg = msg[i+len("DB::Exception: "):]
+		if j := strings.Index(msg, ". "); j >= 0 {
+			msg = msg[:j]
+		}
+	}
+	msg = strings.Join(strings.Fields(msg), " ")
+	if len(tables) > 0 {
+		msg += " (" + strings.Join(tables, ", ") + ")"
+	}
+	if r := []rune(msg); len(r) > 200 {
+		msg = string(r[:200]) + "…"
+	}
+	return msg
 }

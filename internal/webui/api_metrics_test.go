@@ -7,10 +7,12 @@ package webui_test
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
@@ -32,10 +34,14 @@ type fakeTelemetryStore struct {
 	lastRange  [2]time.Time
 	lastSess   map[string]time.Time
 	recentUIDs []string
+	rangeErr   error // MetricsRange fails so
 }
 
 func (f *fakeTelemetryStore) MetricsRange(_ context.Context, uid string, from, to time.Time, step time.Duration) (*store.MetricSeries, error) {
 	f.lastRange = [2]time.Time{from, to}
+	if f.rangeErr != nil {
+		return nil, f.rangeErr
+	}
 	v := 2.0
 	return &store.MetricSeries{Step: 60, TS: []int64{from.Unix()}, Series: map[string][]*float64{"cpu": {&v}}}, nil
 }
@@ -357,5 +363,26 @@ func TestSumRecentByNode(t *testing.T) {
 	want := `{"n1":{"cpu":[3,null,3],"mem":[30,null,30]},"n2":{"cpu":[9,9,9],"mem":[null,null,null]}}`
 	if string(b) != want {
 		t.Fatalf("got  %s\nwant %s", b, want)
+	}
+}
+
+// A store that cannot be read says so in a line, not with ClickHouse's
+// whole exception and stack trace (those go to the console's log).
+func TestMetricsAPI_StoreErrorShort(t *testing.T) {
+	setupSuite(t)
+	s, sm := newServer(t)
+	alice := forge(sm, "gm-alice", false)
+	createFor(t, s, alice, "gm-alice-dev1")
+	t.Cleanup(func() { cleanupDevPods(t) })
+	long := "container series: code: 722, message: Waited job failed: Code: 696. DB::Exception: Load job 'startup table devpod_audit.metrics_container_1s' -> Code: 695. DB::Exception: Load job 'load table devpod_audit.metrics_container_1s' failed: Code: 231. DB::Exception: Suspiciously many (102 parts, 24.15 KiB in total) broken parts to remove while maximum allowed broken parts count is 100. " +
+		strings.Repeat("You can change the maximum value with merge tree setting ... ", 20) + "Stack trace (when copying this message, always include the lines below): 0. DB::Exception::Exception(DB::Exception::MessageMasked&&, int, bool) @ 0x000000001738916a"
+	s.Audit = &webui.AuditDeps{Store: &fakeTelemetryStore{rangeErr: errors.New(long)}}
+	rec := doJSON(t, s.HandleDevPodMetricsForTest(), "GET", "/api/devpods/gm-alice-dev1/metrics?range=1h", map[string]string{"name": "gm-alice-dev1"}, alice, "")
+	var e struct{ Code, Message string }
+	if rec.Code != http.StatusServiceUnavailable || json.Unmarshal(rec.Body.Bytes(), &e) != nil {
+		t.Fatalf("%d %s", rec.Code, rec.Body)
+	}
+	if utf8.RuneCountInString(e.Message) > 240 || strings.Contains(e.Message, "Stack trace") || strings.Contains(e.Message, "0x0000") || !strings.Contains(e.Message, "metrics_container_1s") {
+		t.Fatalf("message (%d runes): %q", utf8.RuneCountInString(e.Message), e.Message)
 	}
 }

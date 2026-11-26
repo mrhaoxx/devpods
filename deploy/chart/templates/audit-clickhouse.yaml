@@ -30,6 +30,17 @@ metadata:
   namespace: {{ .Values.namespaces.system }}
   labels: {{ include "devpod.labels" . | nindent 4 }}
 data:
+  # The server: after an unclean stop (its node lost) the 1 s metric
+  # tables, written to all the time in small parts, can hold more broken
+  # parts than ClickHouse's default 100 — they are set aside (detached),
+  # not a reason to keep the table offline (zjusct, 2026-11: four metric
+  # tables would not load, the 监控 tab showed only the error).
+  server.xml: |
+    <clickhouse>
+      <merge_tree>
+        <max_suspicious_broken_parts>1000</max_suspicious_broken_parts>
+      </merge_tree>
+    </clickhouse>
   # Least-privilege accounts; passwords come from the Secrets above.
   devpod.xml: |
     <clickhouse>
@@ -110,6 +121,7 @@ spec:
         volumeMounts:
         - {name: data, mountPath: /var/lib/clickhouse}
         - {name: users, mountPath: /etc/clickhouse-server/users.d/devpod.xml, subPath: devpod.xml, readOnly: true}
+        - {name: users, mountPath: /etc/clickhouse-server/config.d/devpod.xml, subPath: server.xml, readOnly: true}
       volumes:
       - name: users
         configMap:
