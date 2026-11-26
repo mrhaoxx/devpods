@@ -246,3 +246,51 @@ func TestJobSubmitWaitInterrupted(t *testing.T) {
 		t.Fatalf("calls %v", f.calls)
 	}
 }
+
+// Requeued (preempted, say), --wait follows the next attempt's output too.
+func TestJobSubmitWaitRequeued(t *testing.T) {
+	saved := waitPoll
+	waitPoll = 20 * time.Millisecond
+	t.Cleanup(func() { waitPoll = saved })
+	f := newFakeAPI(t)
+	f.routes["POST /api/clusters/st/jobs"] = map[string]any{"id": "abc12", "cluster": "st", "phase": "Queued", "nodes": 1}
+	n := 0
+	f.dyn["GET /api/jobs/abc12"] = func() any {
+		n++
+		phase := map[int]string{1: "Running", 2: "Queued", 3: "Running"}[n]
+		if phase == "" {
+			phase = "Succeeded"
+		}
+		return map[string]any{"id": "abc12", "cluster": "st", "phase": phase, "nodes": 1, "ranks": []any{map[string]any{"rank": 0, "node": "m700"}}}
+	}
+	f.raw["GET /api/jobs/abc12/logs?rank=0&follow=1"] = "data: an attempt's line\n\n"
+	code, out, errs := f.runWait("job submit --wait --gpus 1 -- true", nil)
+	if code != 0 || strings.Count(out, "an attempt's line\n") != 2 {
+		t.Fatalf("requeued: %d out %q err %q", code, out, errs)
+	}
+}
+
+// A job that ended without ever running (cancelled while waiting) ends
+// --wait at once: there is no output to look for.
+func TestJobSubmitWaitNeverRan(t *testing.T) {
+	saved := waitPoll
+	waitPoll = 20 * time.Millisecond
+	t.Cleanup(func() { waitPoll = saved })
+	f := newFakeAPI(t)
+	f.routes["POST /api/clusters/st/jobs"] = map[string]any{"id": "abc12", "cluster": "st", "phase": "Queued", "nodes": 2}
+	f.dyn["GET /api/jobs/abc12"] = func() any {
+		return map[string]any{"id": "abc12", "cluster": "st", "phase": "Cancelled", "nodes": 2, "reason": "cancelled"}
+	}
+	start := time.Now()
+	code, _, errs := f.runWait("job submit --wait -N 2 --gpus 1 -- true", nil)
+	if code != 1 || time.Since(start) > 2*time.Second {
+		t.Fatalf("never ran: %d after %s, %q", code, time.Since(start), errs)
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for _, c := range f.calls {
+		if strings.Contains(c, "/logs") {
+			t.Fatalf("looked for output: %v", f.calls)
+		}
+	}
+}

@@ -354,6 +354,9 @@ func waitJob(e *Env, ref, id string, nodes int) int {
 	if ctx == nil {
 		ctx = e.Ctx
 	}
+	// the ranks' streams end with it (a job's end ends them anyway)
+	sctx, stopStreams := context.WithCancel(ctx)
+	defer stopStreams()
 	var mu sync.Mutex // the ranks' lines, one at a time
 	print := func(rank int, line string) {
 		mu.Lock()
@@ -366,19 +369,39 @@ func waitJob(e *Env, ref, id string, nodes int) int {
 	}
 	logs := "/api/jobs/" + url.PathEscape(id) + "/logs?rank="
 	var streams sync.WaitGroup
-	follow := func() { // live, from each rank's start, until its log ends
+	follow := func(j jobView) { // live, from each rank's start, until its log ends
+		// no keepalives come: a rank quiet all its run is still followed
+		idle := time.Duration(j.TimeLimitSeconds)*time.Second + 15*time.Minute
+		if j.TimeLimitSeconds <= 0 {
+			idle = 7 * 24 * time.Hour
+		}
 		for r := 0; r < nodes; r++ {
 			streams.Add(1)
 			go func() {
 				defer streams.Done()
-				_ = e.API.Stream(ctx, e.User, logs+strconv.Itoa(r)+"&follow=1", time.Hour, func(data []byte) error {
-					print(r, string(data))
-					return nil
-				})
+				for try := 0; try < 5; try++ { // not there yet: again, while nothing came
+					got := false
+					err := e.API.Stream(sctx, e.User, logs+strconv.Itoa(r)+"&follow=1", idle, func(data []byte) error {
+						got = true
+						print(r, string(data))
+						return nil
+					})
+					if err == nil || got || sctx.Err() != nil {
+						return
+					}
+					select {
+					case <-sctx.Done():
+						return
+					case <-time.After(waitPoll):
+					}
+				}
 			}()
 		}
 	}
-	kept := func() { // ended before it was followed: what was kept
+	kept := func(j jobView) { // ended before it was followed: what was kept
+		if len(j.Ranks) == 0 {
+			return // it never ran
+		}
 		for r := 0; r < nodes; r++ {
 			for try := 0; try < 10; try++ { // kept a moment after the end
 				raw, err := e.API.Do(ctx, e.User, "GET", logs+strconv.Itoa(r), nil)
@@ -406,7 +429,7 @@ func waitJob(e *Env, ref, id string, nodes int) int {
 				ended := j.Phase == "Succeeded" || j.Phase == "Failed" || j.Phase == "TimedOut" || j.Phase == "Cancelled"
 				switch {
 				case ended && !following:
-					kept()
+					kept(j)
 					return jobExit(j)
 				case ended:
 					done := make(chan struct{})
@@ -418,7 +441,11 @@ func waitJob(e *Env, ref, id string, nodes int) int {
 					return jobExit(j)
 				case j.Phase == "Running" && !following:
 					following = true
-					follow()
+					follow(j)
+				case (j.Phase == "Queued" || j.Phase == "Starting") && following:
+					// requeued: this attempt's logs end as its ranks go;
+					// the next one's are followed when it runs
+					following = false
 				}
 			}
 		}
