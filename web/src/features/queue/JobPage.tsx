@@ -191,13 +191,18 @@ export function JobPage() {
  *  what was kept. */
 function RankLogs({ job }: { job: Job }) {
   const [rank, setRank] = useState(0);
+  // a job started more than once (preempted, queued again): each start's
+  // output, the last one first
+  const attempts = job.attempts ?? 1;
+  const [attempt, setAttempt] = useState(attempts);
+  const earlier = attempt < attempts;
   const r = job.ranks?.find((x) => x.rank === rank);
-  const live = (job.phase === "Running" || job.phase === "Starting") && r?.phase !== "Succeeded" && r?.phase !== "Failed";
+  const live = !earlier && (job.phase === "Running" || job.phase === "Starting") && r?.phase !== "Succeeded" && r?.phase !== "Failed";
   const [lines, setLines] = useState<string[]>([]);
   const [text, setText] = useState<string | null>(null);
   const [err, setErr] = useState("");
   const pre = useRef<HTMLPreElement>(null);
-  const url = `/api/jobs/${job.id}/logs?rank=${rank}`;
+  const url = `/api/jobs/${job.id}/logs?rank=${rank}${earlier ? `&attempt=${attempt}` : ""}`;
 
   useEffect(() => {
     setLines([]);
@@ -237,6 +242,15 @@ function RankLogs({ job }: { job: Job }) {
       title="输出"
       actions={
         <>
+          {attempts > 1 && (
+            <Select aria-label="看第几次" value={String(attempt)} onChange={(e) => setAttempt(Number(e.target.value))} className="!h-7 text-xs">
+              {Array.from({ length: attempts }, (_, i) => attempts - i).map((n) => (
+                <option key={n} value={n}>
+                  {n === attempts ? `第 ${n} 次（最近）` : `第 ${n} 次`}
+                </option>
+              ))}
+            </Select>
+          )}
           <Select aria-label="看第几台" value={String(rank)} onChange={(e) => setRank(Number(e.target.value))} className="!h-7 text-xs">
             {(job.ranks ?? []).map((x) => (
               <option key={x.rank} value={x.rank}>
@@ -244,7 +258,7 @@ function RankLogs({ job }: { job: Job }) {
               </option>
             ))}
           </Select>
-          <a href={url} download={`${job.id}-rank-${rank}.log`} className="text-xs text-accent hover:underline">
+          <a href={url} download={`${job.id}-${earlier ? `attempt-${attempt}-` : ""}rank-${rank}.log`} className="text-xs text-accent hover:underline">
             下载
           </a>
         </>

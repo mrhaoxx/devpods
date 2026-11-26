@@ -375,10 +375,16 @@ func (s *Server) endJob(ctx context.Context, cc *clusters.ClusterClients, j *dev
 	s.cleanUpJob(ctx, cc, j)
 }
 
-// cleanUpJob keeps the ended job j's ranks' output and then deletes its
-// ranks, in the background (bounded by jobCleanupTimeout), once at a
-// time per job; a round that finds its ranks still there asks again.
+// cleanUpJob deletes the ended job j's ranks, keeping their output to its
+// end, in the background (bounded by jobCleanupTimeout), once at a time
+// per job; a round that finds its ranks still there asks again.
 func (s *Server) cleanUpJob(ctx context.Context, cc *clusters.ClusterClients, j *devpodv1alpha1.Job) {
+	s.stopInBackground(ctx, cc, j, func(r int32) string { return store.JobLogKey(j.Spec.Cluster, j.Name, r) })
+}
+
+// stopInBackground: keepAndStop(j, key), off the round, once at a time
+// per job.
+func (s *Server) stopInBackground(ctx context.Context, cc *clusters.ClusterClients, j *devpodv1alpha1.Job, key func(rank int32) string) {
 	if _, busy := s.queueCleaning.LoadOrStore(j.Name, true); busy {
 		return
 	}
@@ -387,8 +393,7 @@ func (s *Server) cleanUpJob(ctx context.Context, cc *clusters.ClusterClients, j 
 	go func() {
 		defer s.queueCleaning.Delete(j.Name)
 		defer cancel()
-		s.saveRankLogs(ctx, cc, j)
-		s.deleteRanks(ctx, cc, j)
+		s.keepAndStop(ctx, cc, j, key)
 	}()
 }
 
@@ -403,7 +408,10 @@ func (s *Server) requeueJob(ctx context.Context, cc *clusters.ClusterClients, j 
 	if !s.writeJobStatus(ctx, j) {
 		return // it changed meanwhile: the next round sees it as it is
 	}
-	s.deleteRanks(ctx, cc, j) // what is left the round cleans up: the job waits for it
+	// its ranks go, their output kept as this start's; the job waits for
+	// them to be gone
+	attempt := j.Status.Attempts
+	s.stopInBackground(ctx, cc, j, func(r int32) string { return store.JobAttemptLogKey(j.Spec.Cluster, j.Name, attempt, r) })
 	slog.Info("queue_job_requeued", "job", j.Name, "owner", j.Spec.Owner, "reason", reason)
 }
 

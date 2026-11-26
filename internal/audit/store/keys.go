@@ -27,3 +27,12 @@ func JobLogKey(cluster, id string, rank int32) string {
 	}
 	return fmt.Sprintf("jobs/%s/%s/rank-%d.log", cluster, id, rank)
 }
+
+// JobAttemptLogKey: where the output of a start of a job that did not
+// end it (preempted, queued again) is kept, by the start's number.
+func JobAttemptLogKey(cluster, id string, attempt, rank int32) string {
+	if cluster == "" {
+		cluster = "-"
+	}
+	return fmt.Sprintf("jobs/%s/%s/attempt-%d/rank-%d.log", cluster, id, attempt, rank)
+}

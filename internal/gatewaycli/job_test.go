@@ -131,3 +131,15 @@ func TestJobStateReserved(t *testing.T) {
 		t.Fatalf("squeue: %q", squeueReason("reserved"))
 	}
 }
+
+// An earlier start's output, as kept.
+func TestJobLogsAttempt(t *testing.T) {
+	f := newFakeAPI(t)
+	f.raw["GET /api/jobs/abc12/logs?rank=0&attempt=1"] = "before it was preempted\n"
+	if code, out, errs := f.run("job logs --attempt 1 abc12"); code != 0 || out != "before it was preempted\n" {
+		t.Fatalf("--attempt 1: %d %q %q", code, out, errs)
+	}
+	if code, _, errs := f.run("job logs -f --attempt 1 abc12"); code != ExitUsage || !strings.Contains(errs, "kept") {
+		t.Fatalf("-f --attempt: %d %q", code, errs)
+	}
+}

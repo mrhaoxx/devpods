@@ -12,8 +12,10 @@ import (
 	"log/slog"
 	"net/http"
 	"strconv"
+	"sync"
 
 	devpodv1alpha1 "github.com/mrhaoxx/devpod/api/v1alpha1"
+	"github.com/mrhaoxx/devpod/internal/audit/store"
 	"github.com/mrhaoxx/devpod/internal/webui/clusters"
 )
 
@@ -33,29 +35,49 @@ func rankContainer(j *devpodv1alpha1.Job) string {
 	return j.Spec.Template.Spec.Containers[0].Name
 }
 
-// saveRankLogs keeps the ended job j's ranks' output where its status
-// says (best effort: a log that cannot be read or kept is left out; ctx
-// bounds it all).
-func (s *Server) saveRankLogs(ctx context.Context, _ *clusters.ClusterClients, j *devpodv1alpha1.Job) {
-	if !s.keepsRankLogs() {
-		return
+// keepAndStop deletes j's ranks, keeping their output to its end under
+// key(rank): each rank's log is opened, followed, before the ranks are
+// told to stop, and read until its container is gone — what a rank says
+// while shutting down (a checkpoint saved) is kept too. Best effort: a
+// log that cannot be opened or kept is left out; ctx bounds it all.
+// Without kept output it only deletes them.
+func (s *Server) keepAndStop(ctx context.Context, cc *clusters.ClusterClients, j *devpodv1alpha1.Job, key func(rank int32) string) {
+	streams := make([]io.ReadCloser, j.Spec.Nodes)
+	// what it keeps with and where, as they are now (this runs on)
+	podLogs, objects := s.PodLogs, store.ObjectStore(nil)
+	if s.keepsRankLogs() {
+		objects = s.Audit.Objects
+		var wg sync.WaitGroup
+		for r := int32(0); r < j.Spec.Nodes; r++ {
+			wg.Add(1)
+			go func() { // opened together: stopping waits for the slowest only
+				defer wg.Done()
+				rc, err := podLogs(ctx, j.Spec.Cluster, s.NS, rankName(j.Spec.Owner, j.Name, r), rankContainer(j), true)
+				if err != nil {
+					slog.Info("queue_logs", "job", j.Name, "rank", r, "err", err)
+					return
+				}
+				streams[r] = rc
+			}()
+		}
+		wg.Wait()
 	}
-	for _, rk := range j.Status.Ranks {
-		if rk.Log == "" {
+	s.deleteRanks(ctx, cc, j)
+	var wg sync.WaitGroup
+	for r, rc := range streams {
+		if rc == nil {
 			continue
 		}
-		name := rankName(j.Spec.Owner, j.Name, rk.Rank)
-		rc, err := s.PodLogs(ctx, j.Spec.Cluster, s.NS, name, rankContainer(j), false)
-		if err != nil {
-			slog.Warn("queue_logs", "job", j.Name, "rank", rk.Rank, "err", err)
-			continue
-		}
-		err = s.Audit.Objects.Put(ctx, rk.Log, io.LimitReader(rc, maxRankLog), -1)
-		_ = rc.Close()
-		if err != nil {
-			slog.Warn("queue_logs", "job", j.Name, "rank", rk.Rank, "err", err)
-		}
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			defer func() { _ = rc.Close() }()
+			if err := objects.Put(ctx, key(int32(r)), io.LimitReader(rc, maxRankLog), -1); err != nil {
+				slog.Warn("queue_logs", "job", j.Name, "rank", r, "err", err)
+			}
+		}()
 	}
+	wg.Wait()
 }
 
 // handleJobLogs serves GET /api/jobs/{id}/logs?rank=N[&follow=1]: a
@@ -74,6 +96,19 @@ func (s *Server) handleJobLogs(w http.ResponseWriter, r *http.Request) {
 	if err != nil || rank < 0 || rank >= int(j.Spec.Nodes) {
 		s.writeErr(w, http.StatusBadRequest, "BAD_REQUEST", fmt.Sprintf("rank is 0 to %d", j.Spec.Nodes-1), nil)
 		return
+	}
+	// ?attempt=N: the output of an earlier start (one that did not end
+	// the job: preempted, queued again), as kept
+	if v := r.URL.Query().Get("attempt"); v != "" {
+		n, err := strconv.Atoi(v)
+		if err != nil || n < 1 || n > int(j.Status.Attempts) {
+			s.writeErr(w, http.StatusBadRequest, "BAD_REQUEST", fmt.Sprintf("attempt is 1 to %d", j.Status.Attempts), nil)
+			return
+		}
+		if n < int(j.Status.Attempts) || (n == int(j.Status.Attempts) && j.Status.Phase == devpodv1alpha1.JobQueued) {
+			s.keptLog(w, r, store.JobAttemptLogKey(j.Spec.Cluster, j.Name, int32(n), int32(rank)))
+			return
+		}
 	}
 	follow := r.URL.Query().Get("follow") == "1"
 	if !jobEnded(j.Status.Phase) && s.PodLogs != nil {
@@ -95,6 +130,11 @@ func (s *Server) handleJobLogs(w http.ResponseWriter, r *http.Request) {
 			key = rk.Log
 		}
 	}
+	s.keptLog(w, r, key)
+}
+
+// keptLog answers with the kept output at key ("": none was kept).
+func (s *Server) keptLog(w http.ResponseWriter, r *http.Request, key string) {
 	if key == "" || s.Audit == nil || s.Audit.Objects == nil {
 		s.writeErr(w, http.StatusNotFound, "NO_LOGS", "this rank's output is not there (not running, and none was kept)", nil)
 		return

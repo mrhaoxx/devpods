@@ -44,6 +44,19 @@ describe("JobPage", () => {
     expect(screen.getByRole("link", { name: "下载" }).getAttribute("href")).toBe("/api/jobs/abc12/logs?rank=1");
   });
 
+  it("a job started more than once: each start's output, the last first", async () => {
+    const calls = stubFetch({
+      "/api/jobs/abc12": { ...ended, attempts: 2, preemptions: 1 },
+      "/api/jobs/abc12/logs": (u: URL) => new Response(`attempt ${u.searchParams.get("attempt") ?? "last"}\n`, { status: 200, headers: { "Content-Type": "text/plain" } }),
+    });
+    page();
+    expect(await screen.findByText(/attempt last/)).toBeTruthy();
+    fireEvent.change(screen.getByLabelText("看第几次"), { target: { value: "1" } });
+    expect(await screen.findByText(/attempt 1/)).toBeTruthy();
+    expect(calls.some((c) => c.url.pathname === "/api/jobs/abc12/logs" && c.url.searchParams.get("attempt") === "1")).toBe(true);
+    expect(screen.getByRole("link", { name: "下载" }).getAttribute("href")).toBe("/api/jobs/abc12/logs?rank=0&attempt=1");
+  });
+
   it("another user's job: no output, no command, no buttons", async () => {
     stubFetch({ "/api/jobs/abc12": { ...ended, owner: "carol", mine: false, canManage: false, command: undefined, workdir: undefined, phase: "Running", detail: undefined } });
     page();

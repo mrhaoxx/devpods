@@ -25,7 +25,9 @@ const jobLong = `job submit [opts] -- command…    submit a job (or --script FI
 job list [--mine] [--ended]       the queues (ended jobs with --ended)
 job show <id>                     one job: its ranks, where they run, how they ended
 job cancel <id>…                  cancel jobs (a running one is stopped)
-job logs [-f] [--rank N] <id>     a rank's output (live with -f while it runs)
+job logs [-f] [--rank N] [--attempt N] <id>
+                                  a rank's output (live with -f while it runs;
+                                  --attempt: an earlier start's, as kept)
 job ssh <id> [--rank N]           the SSH login of a rank while it runs
 
 submit options:
@@ -51,7 +53,7 @@ func jobCommands() []*command {
 		brief: "[submit|list|show|cancel|logs|ssh …]",
 		short: "the queue: submit jobs, see the queue, cancel, read a job's output",
 		long:  jobLong,
-		vals:  []string{"title", "from-devpod", "from-config", "var", "N", "nodes", "gpus", "cpus", "t", "time", "priority", "cap-add", "env", "workdir", "script", "rank"},
+		vals:  []string{"title", "from-devpod", "from-config", "var", "N", "nodes", "gpus", "cpus", "t", "time", "priority", "cap-add", "env", "workdir", "script", "rank", "attempt"},
 		bools: []string{"preemptible", "host-network", "privileged", "dry-run", "mine", "ended", "f", "follow"}, run: runJob}}
 }
 
@@ -516,6 +518,15 @@ func jobLogs(e *Env, a *parsed, c *command) int {
 		rank = r
 	}
 	path := "/api/jobs/" + url.PathEscape(id) + "/logs?rank=" + rank
+	if n, ok := a.val["attempt"]; ok {
+		if _, err := strconv.Atoi(n); err != nil {
+			return usage(e, c, "--attempt takes a number")
+		}
+		if a.has["f"] || a.has["follow"] {
+			return usage(e, c, "an earlier start's output is kept, not live: drop -f")
+		}
+		path += "&attempt=" + n
+	}
 	if a.has["f"] || a.has["follow"] {
 		ctx := e.Session
 		if ctx == nil {
