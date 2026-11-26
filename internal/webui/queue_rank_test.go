@@ -1,0 +1,101 @@
+// Copyright 2026 The DevPod Authors.
+//
+// SPDX-License-Identifier: Apache-2.0
+
+package webui
+
+import (
+	"slices"
+	"strings"
+	"testing"
+	"time"
+
+	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/resource"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+
+	devpodv1alpha1 "github.com/mrhaoxx/devpod/api/v1alpha1"
+	"github.com/mrhaoxx/devpod/internal/gpures"
+)
+
+func testJob() *devpodv1alpha1.Job {
+	return &devpodv1alpha1.Job{
+		ObjectMeta: metav1.ObjectMeta{Name: "abc12"},
+		Spec: devpodv1alpha1.JobSpec{
+			Owner: "alice", Title: "train", Command: "python t.py", Args: []string{"--lr", "1"}, Workdir: "/home/alice/x",
+			Nodes: 2, GPUsPerNode: 4, CPUsPerNode: resource.MustParse("32"), TimeLimit: metav1.Duration{Duration: 2 * time.Hour},
+			Env: []corev1.EnvVar{{Name: "FOO", Value: "bar"}},
+			Template: devpodv1alpha1.PodWorkloadSpec{Spec: corev1.PodSpec{
+				Containers: []corev1.Container{{Name: "dev", Image: "pytorch:2.6", Env: []corev1.EnvVar{{Name: "RANK", Value: "stale"}, {Name: "KEEP", Value: "1"}},
+					Resources: corev1.ResourceRequirements{Limits: corev1.ResourceList{gpures.NVIDIA: resource.MustParse("8"), corev1.ResourceCPU: resource.MustParse("64")}}}},
+				Affinity: &corev1.Affinity{NodeAffinity: &corev1.NodeAffinity{RequiredDuringSchedulingIgnoredDuringExecution: &corev1.NodeSelector{
+					NodeSelectorTerms: []corev1.NodeSelectorTerm{{MatchExpressions: []corev1.NodeSelectorRequirement{{Key: hostnameLabel, Operator: corev1.NodeSelectorOpIn, Values: []string{"g1", "g2"}}}}}}}},
+			}},
+		},
+	}
+}
+
+func envValue(c corev1.Container, name string) string {
+	v := ""
+	for _, e := range c.Env {
+		if e.Name == name {
+			v = e.Value // the last one counts
+		}
+	}
+	return v
+}
+
+// A rank is a DevPod of its owner pinned to its machine, running the job's
+// command in a login bash with what it needs to find the others.
+func TestRankDevPod(t *testing.T) {
+	job := testJob()
+	master := masterAddr(job, rankName("alice", "abc12", 0), "devpods", false, "")
+	dp := rankDevPod(job, 1, "g2", "devpods", master)
+	if dp.Name != "alice-abc12-1" || dp.Namespace != "devpods" || dp.Spec.Owner != "alice" || !dp.Spec.Running || dp.Spec.Persistence != nil {
+		t.Fatalf("rank: %s/%s owner %q", dp.Namespace, dp.Name, dp.Spec.Owner)
+	}
+	if dp.Spec.Job == nil || dp.Spec.Job.Name != "abc12" || dp.Spec.Job.Rank != 1 || dp.Labels["devpod.io/job"] != "abc12" {
+		t.Fatalf("job %+v labels %v", dp.Spec.Job, dp.Labels)
+	}
+	spec := dp.Spec.Pod.Spec
+	if spec.NodeSelector[hostnameLabel] != "g2" || spec.Affinity != nil {
+		t.Fatalf("placement: %v %+v", spec.NodeSelector, spec.Affinity)
+	}
+	c := spec.Containers[0]
+	if !slices.Equal(c.Command, []string{"/opt/devpod/bin/bash", "-lc", "python t.py", "train", "--lr", "1"}) || c.Args != nil || c.WorkingDir != "/home/alice/x" {
+		t.Fatalf("command %q args %q dir %q", c.Command, c.Args, c.WorkingDir)
+	}
+	lo, hi := jobPorts("abc12")
+	for k, want := range map[string]string{"RANK": "1", "NODE_RANK": "1", "LOCAL_RANK": "0", "WORLD_SIZE": "2", "MASTER_ADDR": "alice-abc12-0.devpods.svc",
+		"MASTER_PORT": itoa(lo), "DEVPOD_JOB": "abc12", "DEVPOD_JOB_PORTS": itoa(lo) + "-" + itoa(hi), "FOO": "bar", "KEEP": "1"} {
+		if got := envValue(c, k); got != want {
+			t.Errorf("%s=%q, want %q", k, got, want)
+		}
+	}
+	if q := c.Resources.Limits[gpures.NVIDIA]; q.Value() != 4 {
+		t.Errorf("gpu limit %s", q.String())
+	}
+	if q := c.Resources.Limits[corev1.ResourceCPU]; q.String() != "32" {
+		t.Errorf("cpu limit %s", q.String())
+	}
+	if q := c.Resources.Requests[corev1.ResourceCPU]; q.String() != "32" {
+		t.Errorf("cpu request %s", q.String())
+	}
+	if a := jobAsk(job); a != (amount{4, 32000}) {
+		t.Errorf("ask %+v", a)
+	}
+	// host network: rank 0's machine's address
+	if m := masterAddr(job, "alice-abc12-0", "devpods", true, "10.0.0.7"); m != "10.0.0.7" {
+		t.Errorf("host network master %q", m)
+	}
+	// the name budget (the submit check uses this)
+	if n := rankName(strings.Repeat("u", 16), "abc12", 10); len(n) <= 22 {
+		t.Errorf("%q fits 22", n)
+	}
+	if lo < 20000 || hi != lo+15 || hi > 51999 {
+		t.Errorf("ports %d-%d", lo, hi)
+	}
+	if lo2, _ := jobPorts("abc12"); lo2 != lo {
+		t.Error("ports not stable")
+	}
+}
