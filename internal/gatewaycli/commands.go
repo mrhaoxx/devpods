@@ -142,6 +142,7 @@ func init() {
 		{name: "nodes", args: "[--cluster C]", short: "list nodes", admin: true, run: runNodes},
 	}
 	commands = append(commands, reserveCommands()...)
+	commands = append(commands, jobCommands()...)
 	commands = append(commands, snapshotCommands()...)
 	commands = append(commands, configCommands()...)
 	commands = append(commands, &command{group: "You", name: "whoami", short: "who you are, your quota and usage (per cluster)", run: runWhoami})

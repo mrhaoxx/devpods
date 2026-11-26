@@ -51,10 +51,11 @@ type fakeAPI struct {
 	calls  []string // "METHOD path body"
 	routes map[string]any
 	status map[string]int
+	raw    map[string]string // answered as they are (text, an event stream)
 }
 
 func newFakeAPI(t *testing.T) *fakeAPI {
-	f := &fakeAPI{t: t, routes: map[string]any{}, status: map[string]int{}}
+	f := &fakeAPI{t: t, routes: map[string]any{}, status: map[string]int{}, raw: map[string]string{}}
 	f.srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Header.Get("Authorization") != "Bearer gwk_k3y" || r.Header.Get(UserHeader) != "alice" {
 			t.Errorf("headers: Authorization=%q %s=%q", r.Header.Get("Authorization"), UserHeader, r.Header.Get(UserHeader))
@@ -62,6 +63,13 @@ func newFakeAPI(t *testing.T) *fakeAPI {
 		body, _ := io.ReadAll(r.Body)
 		key := r.Method + " " + r.URL.RequestURI()
 		f.calls = append(f.calls, strings.TrimSpace(key+" "+string(body)))
+		if text, ok := f.raw[key]; ok {
+			if strings.HasPrefix(text, "data:") {
+				w.Header().Set("Content-Type", "text/event-stream")
+			}
+			_, _ = io.WriteString(w, text)
+			return
+		}
 		v, ok := f.routes[key]
 		if !ok {
 			w.WriteHeader(http.StatusNotFound)
