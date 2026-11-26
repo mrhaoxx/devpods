@@ -1,12 +1,12 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { fireEvent, screen, within } from "@testing-library/react";
+import { fireEvent, screen, waitFor, within } from "@testing-library/react";
 import { Route, Routes } from "react-router-dom";
 import { renderWithProviders, stubFetch, stubMe } from "../../test/render";
 import { plainOutput, replayable } from "./replay";
 import { SessionPage } from "./SessionPage";
 import { SessionsPage } from "./SessionsPage";
-import { HTTPPage } from "./SearchPages";
-import type { ChannelRow, HTTPRequestRow, SessionDetail } from "../../data/api";
+import { EventsPage, HTTPPage } from "./SearchPages";
+import type { AuditEvent, ChannelRow, HTTPRequestRow, SessionDetail } from "../../data/api";
 
 vi.mock("./SessionPlayer", () => ({
   SessionPlayer: ({ sessionId, channel, open, seek, markers, text }: { sessionId: string; channel: number; open: boolean; seek?: { t: number }; markers?: { t: number; label: string }[]; text?: boolean }) => (
@@ -164,6 +164,20 @@ describe("audit pages", () => {
     expect(await screen.findByText("匿名")).toBeTruthy();
     expect(screen.getByText("bob-dev:3000")).toBeTruthy();
     expect(screen.getByText("/a?t=1")).toBeTruthy();
+  });
+
+  it("操作记录 lists who did what to which object; an action filter goes to the server", async () => {
+    const row: AuditEvent = {
+      ts: "2026-11-27T10:00:00Z", kind: "devpod", object: "bob-dev", object_uid: "u1", owner: "bob", actor: "root", via: "web", action: "stop", node: "g1", detail: "cpu 2→4",
+    };
+    const calls = stubFetch({ "/api/audit/events": { items: [row], next: "" } });
+    renderWithProviders(<EventsPage />, { route: "/audit/events", me: stubMe({ admin: true }) });
+    expect(await screen.findByText("bob-dev")).toBeTruthy();
+    expect(screen.getAllByText("停止")).toHaveLength(2); // the action filter's option, and the row's
+    expect(screen.getByText("root")).toBeTruthy();
+    expect(screen.getByText("cpu 2→4")).toBeTruthy();
+    fireEvent.change(screen.getByLabelText("动作"), { target: { value: "start" } });
+    await waitFor(() => expect(calls.some((c) => c.url.pathname === "/api/audit/events" && c.url.searchParams.get("action") === "start")).toBe(true));
   });
 
   it("AUDIT_UNAVAILABLE shows the error panel", async () => {

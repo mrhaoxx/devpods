@@ -5,7 +5,8 @@ import { useClusterFilter } from "../../data/clusterFilter";
 import { useState } from "react";
 import { Link, NavLink } from "react-router-dom";
 import type { ColumnDef, SortingState } from "@tanstack/react-table";
-import { fileContentURL, searchCommands, searchFiles, searchHTTP, type CommandRow, type FileEventRow, type HTTPRequestRow } from "../../data/api";
+import { fileContentURL, searchCommands, searchEvents, searchFiles, searchHTTP, type AuditEvent, type CommandRow, type FileEventRow, type HTTPRequestRow } from "../../data/api";
+import { ACTIONS, KINDS, actionLabel, kindLabel, viaLabel } from "./events";
 import { useMe } from "../../data/queries";
 import { DataTable } from "../../design/DataTable";
 import { Badge } from "../../design/Badge";
@@ -26,6 +27,9 @@ function Tabs() {
       </NavLink>
       <NavLink to="/audit/http" className={cls}>
         HTTP
+      </NavLink>
+      <NavLink to="/audit/events" className={cls}>
+        操作
       </NavLink>
     </nav>
   );
@@ -199,6 +203,107 @@ export function HTTPPage() {
             sorting={sorting}
             onSortingChange={setSorting}
             empty={<EmptyState title={q.isLoading ? "加载中…" : "这段时间没有 HTTP 请求"} />}
+          />
+          <LoadMore hasMore={q.hasNextPage} busy={q.isFetchingNextPage} onClick={() => void q.fetchNextPage()} />
+        </>
+      )}
+    </div>
+  );
+}
+
+const eventSchema = {
+  range: { kind: "string", default: "7d" },
+  kind: { kind: "string", default: "" },
+  action: { kind: "string", default: "" },
+  object: { kind: "string", default: "" },
+  owner: { kind: "string", default: "" },
+  actor: { kind: "string", default: "" },
+} satisfies Schema;
+
+/** 操作记录: what was done to DevPods, jobs and machines — by whom, how,
+ *  why; the server keeps everyone to their own (what they own or did)
+ *  unless they may see more. */
+export function EventsPage() {
+  const [url, setUrl] = useUrlState(eventSchema, { key: "audit.events" });
+  const [sorting, setSorting] = useState<SortingState>([]);
+  const { filter, several } = useClusterFilter();
+  const q = usePaged<AuditEvent>(
+    "events",
+    { ...fromTo(url.range), kind: url.kind, action: url.action, object: url.object, owner: url.owner, actor: url.actor, cluster: filter },
+    searchEvents,
+  );
+  const select = "!h-7 rounded border border-line bg-surface px-1 text-xs";
+  const columns: ColumnDef<AuditEvent, unknown>[] = [
+    { id: "ts", header: "时间", accessorKey: "ts", meta: { priority: 2, width: 150 }, cell: ({ getValue }) => fmtTS(String(getValue())) },
+    {
+      id: "actor",
+      header: "谁",
+      accessorKey: "actor",
+      meta: { priority: 1, width: 130, mono: true },
+      cell: ({ row }) => (
+        <span title={[viaLabel(row.original.via), row.original.origin, row.original.client_ip].filter(Boolean).join(" · ")}>
+          <span>{row.original.actor}</span> <span className="text-faint">{viaLabel(row.original.via)}</span>
+        </span>
+      ),
+    },
+    { id: "action", header: "动作", accessorKey: "action", meta: { priority: 1, width: 100 }, cell: ({ getValue }) => actionLabel(String(getValue())) },
+    {
+      id: "object",
+      header: "对象",
+      accessorKey: "object",
+      meta: { priority: 1, width: 180, mono: true },
+      cell: ({ row }) => (
+        <span>
+          <Badge>{kindLabel(row.original.kind)}</Badge> <span>{row.original.object}</span>
+        </span>
+      ),
+    },
+    { id: "owner", header: "主人", accessorKey: "owner", meta: { priority: 4, width: 90, mono: true } },
+    { id: "node", header: "机器", accessorKey: "node", meta: { priority: 5, width: 90, mono: true } },
+    { id: "detail", header: "详情", accessorKey: "detail", meta: { priority: 3, width: 300 }, cell: ({ getValue }) => <span title={String(getValue() ?? "")}>{String(getValue() ?? "")}</span> },
+    { id: "reason", header: "原因", accessorKey: "reason", meta: { priority: 6, width: 140 } },
+  ];
+  return (
+    <div className="flex h-full min-h-0 flex-col">
+      <Tabs />
+      <div className="flex flex-wrap items-center gap-2 border-b border-line px-3 py-2">
+        <RangePicker value={url.range} onChange={(range) => setUrl({ range })} />
+        <select aria-label="类型" className={select} value={url.kind} onChange={(e) => setUrl({ kind: e.target.value })}>
+          <option value="">全部类型</option>
+          {Object.entries(KINDS).map(([k, label]) => (
+            <option key={k} value={k}>
+              {label}
+            </option>
+          ))}
+        </select>
+        <select aria-label="动作" className={select} value={url.action} onChange={(e) => setUrl({ action: e.target.value })}>
+          <option value="">全部动作</option>
+          {Object.entries(ACTIONS).map(([a, label]) => (
+            <option key={a} value={a}>
+              {label}
+            </option>
+          ))}
+        </select>
+        <FilterBox label="对象" value={url.object} onChange={(object) => setUrl({ object })} width="w-36" />
+        <FilterBox label="主人" value={url.owner} onChange={(owner) => setUrl({ owner })} width="w-28" />
+        <FilterBox label="谁做的" value={url.actor} onChange={(actor) => setUrl({ actor })} width="w-28" />
+        <span className="flex-1" />
+        <PagedRefresh q={q} />
+      </div>
+      {q.isError ? (
+        <AuditError error={q.error} />
+      ) : (
+        <>
+          <DataTable<AuditEvent>
+            fill
+            onEnd={endOf(q)}
+            storageKey="events"
+            data={q.items}
+            columns={withCluster(columns, several)}
+            getRowId={(e) => `${e.ts}|${e.kind}|${e.object}|${e.action}|${e.actor}|${e.detail ?? ""}`}
+            sorting={sorting}
+            onSortingChange={setSorting}
+            empty={<EmptyState title={q.isLoading ? "加载中…" : "这段时间没有记录"} />}
           />
           <LoadMore hasMore={q.hasNextPage} busy={q.isFetchingNextPage} onClick={() => void q.fetchNextPage()} />
         </>

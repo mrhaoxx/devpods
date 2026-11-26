@@ -393,6 +393,28 @@ export const getAuditSession = (id: string) => req<SessionDetail>("GET", `/api/a
 export const searchCommands = (q: Record<string, string | undefined>) => req<Page<CommandRow>>("GET", `/api/audit/commands?${qs(q)}`);
 export const searchFiles = (q: Record<string, string | undefined>) => req<Page<FileEventRow>>("GET", `/api/audit/files?${qs(q)}`);
 export const searchHTTP = (q: Record<string, string | undefined>) => req<Page<HTTPRequestRow>>("GET", `/api/audit/http?${qs(q)}`);
+
+/** AuditEvent: one thing done to a DevPod, a job or a machine (the audit store's events). */
+export type AuditEvent = {
+  ts: string;
+  cluster?: string;
+  kind: string; // devpod | job | machine
+  object: string;
+  object_uid?: string;
+  owner?: string;
+  actor: string; // a user, or system:<what>
+  via: string; // web | cli | dp | token:<id> | system
+  action: string;
+  node?: string;
+  reason?: string;
+  detail?: string;
+  origin?: string; // the DevPod a dp call came from
+  client_ip?: string;
+  request_id?: string;
+};
+export const searchEvents = (q: Record<string, string | undefined>) => req<Page<AuditEvent>>("GET", `/api/audit/events?${qs(q)}`);
+export const getDevPodHistory = (r: Ref) => req<Page<AuditEvent>>("GET", apiIn(r.cluster, `/api/devpods/${r.name}/history`));
+export const getJobHistory = (id: string) => req<Page<AuditEvent>>("GET", `/api/jobs/${id}/history`);
 export const listAlerts = (q: Record<string, string | undefined>) => req<Page<AlertRow>>("GET", `/api/audit/alerts?${qs(q)}`);
 export const listAccessLog = (q: Record<string, string | undefined>) => req<Page<AccessLogRow>>("GET", `/api/audit/access-log?${qs(q)}`);
 export const castURL = (id: string, ch: number) => `/api/audit/sessions/${id}/channels/${ch}/cast`;

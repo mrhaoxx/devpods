@@ -44,6 +44,20 @@ describe("JobPage", () => {
     expect(screen.getByRole("link", { name: "下载" }).getAttribute("href")).toBe("/api/jobs/abc12/logs?rank=1");
   });
 
+  it("记录 lists what was done to the job", async () => {
+    stubFetch({
+      "/api/jobs/abc12": ended,
+      "/api/jobs/abc12/logs": () => new Response("", { status: 200, headers: { "Content-Type": "text/plain" } }),
+      "/api/jobs/abc12/history": {
+        items: [{ ts: "2026-11-27T09:00:00Z", kind: "job", object: "abc12", owner: "alice", actor: "system:queue", via: "system", action: "start", detail: "g1,g2" }],
+        next: "",
+      },
+    });
+    page();
+    expect(await screen.findByText("启动")).toBeTruthy();
+    expect(screen.getByText("g1,g2")).toBeTruthy();
+  });
+
   it("a job started more than once: each start's output, the last first", async () => {
     const calls = stubFetch({
       "/api/jobs/abc12": { ...ended, attempts: 2, preemptions: 1 },

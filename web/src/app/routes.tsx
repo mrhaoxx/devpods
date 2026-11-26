@@ -13,7 +13,7 @@ import { OverviewPage } from "../features/overview/OverviewPage";
 import { UsersPage } from "../features/users/UsersPage";
 import { SessionsPage } from "../features/audit/SessionsPage";
 import { SessionPage } from "../features/audit/SessionPage";
-import { CommandsPage, FilesPage, HTTPPage } from "../features/audit/SearchPages";
+import { CommandsPage, EventsPage, FilesPage, HTTPPage } from "../features/audit/SearchPages";
 import { AccessLogPage, AlertsPage, PolicyPage } from "../features/audit/AdminPages";
 import { NodesPage } from "../features/nodes/NodesPage";
 import { ManagedNodesPage } from "../features/nodes/ManagedNodesPage";
@@ -65,6 +65,7 @@ export function AppRoutes() {
           <Route path="audit/commands" element={<CommandsPage />} />
           <Route path="audit/files" element={<FilesPage />} />
           <Route path="audit/http" element={<HTTPPage />} />
+          <Route path="audit/events" element={<EventsPage />} />
           <Route element={<RequirePermission p="viewAudit" />}>
             <Route path="audit/sessions" element={<SessionsPage />} />
             <Route path="audit/alerts" element={<AlertsPage />} />

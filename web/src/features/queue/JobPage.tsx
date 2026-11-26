@@ -5,9 +5,10 @@
 import { useEffect, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, useNavigate, useParams } from "react-router-dom";
-import { ApiFailure, cancelJob, getJob, resubmitJob, sshCommand, type Job } from "../../data/api";
+import { ApiFailure, cancelJob, getJob, getJobHistory, resubmitJob, sshCommand, type Job } from "../../data/api";
 import { clusterSeg, segCluster } from "../../data/cluster";
 import { useMe } from "../../data/queries";
+import { HistoryList } from "../audit/History";
 import { Button } from "../../design/Button";
 import { ConfirmDialog } from "../../design/ConfirmDialog";
 import { copyText } from "../../design/Copy";
@@ -171,6 +172,11 @@ export function JobPage() {
         </Panel>
       )}
       {j.canManage && (j.ranks ?? []).length > 0 && <RankLogs job={j} />}
+      {me?.features.audit && (
+        <Panel title="记录">
+          <HistoryList queryKey={["job-history", j.id]} load={() => getJobHistory(j.id)} />
+        </Panel>
+      )}
       <ConfirmDialog
         open={confirming}
         onOpenChange={setConfirming}

@@ -12,6 +12,7 @@ import { Link, useNavigate, useParams } from "react-router-dom";
 import { useQueryClient } from "@tanstack/react-query";
 import {
   ApiFailure,
+  getDevPodHistory,
   listAuditSessions,
   shellPath,
   sshCommand,
@@ -43,6 +44,7 @@ import { LiveCards } from "./LiveCards";
 import { ProcessTable } from "./ProcessesTab";
 import { SessionList } from "./SessionsTab";
 import { EventList } from "./EventsTab";
+import { HistoryList } from "../../audit/History";
 import { MonitorTab } from "./MonitorTab";
 import { ContainerTab } from "./ContainerTab";
 import { PortsPanel } from "./PortsPanel";
@@ -188,6 +190,7 @@ export function DetailPage() {
     ...(me?.features.httpProxy ? ([["ports", "端口"]] as [string, string][]) : []),
     ["container", "容器"],
     ["events", "事件"],
+    ...(audit ? ([["history", "记录"]] as [string, string][]) : []),
     ["yaml", "YAML"],
   ];
   // the container's sshd port: never proxied, so not listed among the ports
@@ -335,6 +338,11 @@ export function DetailPage() {
       {tab === "events" && (
         <Panel title="事件">
           <EventList events={events} />
+        </Panel>
+      )}
+      {tab === "history" && audit && (
+        <Panel title="记录">
+          <HistoryList queryKey={["devpod-history", r.cluster, r.name]} load={() => getDevPodHistory(r)} />
         </Panel>
       )}
 
