@@ -5,11 +5,18 @@
 package main
 
 import (
+	"context"
 	"flag"
 	"fmt"
+	"io"
 	"time"
 
+	corev1 "k8s.io/api/core/v1"
+	"k8s.io/client-go/kubernetes"
+	"k8s.io/client-go/rest"
+
 	"github.com/mrhaoxx/devpod/internal/webui"
+	"github.com/mrhaoxx/devpod/internal/webui/clusters"
 )
 
 // queueFlags: the job queue (design 2026-11-26), which the console keeps
@@ -37,4 +44,20 @@ func (f *queueFlags) build() (*webui.QueueRules, error) {
 	}
 	return &webui.QueueRules{DefaultTimeLimit: f.defaultLimit, MaxTimeLimit: f.maxLimit, GangTimeout: 5 * time.Minute,
 		PreemptGrace: 2 * time.Minute, Tick: 5 * time.Second, KeepEnded: 30 * 24 * time.Hour}, nil
+}
+
+// podLogs reads a Pod's log: in the console's own cluster ("") through
+// its own config, in another through that cluster's agent.
+func podLogs(local *rest.Config, reg *clusters.Registry) func(ctx context.Context, cluster, ns, pod, container string, follow bool) (io.ReadCloser, error) {
+	return func(ctx context.Context, cluster, ns, pod, container string, follow bool) (io.ReadCloser, error) {
+		cfg := local
+		if cluster != "" && reg != nil {
+			cfg = reg.RESTConfig(cluster)
+		}
+		cs, err := kubernetes.NewForConfig(cfg)
+		if err != nil {
+			return nil, err
+		}
+		return cs.CoreV1().Pods(ns).GetLogs(pod, &corev1.PodLogOptions{Container: container, Follow: follow}).Stream(ctx)
+	}
 }

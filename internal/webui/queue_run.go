@@ -447,6 +447,3 @@ func (s *Server) queueViewFor(ctx context.Context, cc *clusters.ClusterClients, 
 	}
 	return queueView{Now: now, Machines: machines, Running: running, Queued: queued, Allowed: mayRun, QuotaOK: quotaOK, Horizon: 14 * 24 * time.Hour}, byName, nil
 }
-
-// saveRankLogs keeps j's ranks' output (queue_logs.go).
-func (s *Server) saveRankLogs(_ context.Context, _ *clusters.ClusterClients, _ *devpodv1alpha1.Job) {}

@@ -189,3 +189,5 @@ func (s *Server) HandleResubmitJobForTest() http.HandlerFunc      { return s.han
 func (s *Server) HandleJobLimitsForTest() http.HandlerFunc        { return s.handleJobLimits }
 func (s *Server) HandleGetPriorityRulesForTest() http.HandlerFunc { return s.handleGetPriorityRules }
 func (s *Server) HandlePutPriorityRulesForTest() http.HandlerFunc { return s.handlePutPriorityRules }
+
+func (s *Server) HandleJobLogsForTest() http.HandlerFunc { return s.handleJobLogs }

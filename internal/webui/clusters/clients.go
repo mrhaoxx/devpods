@@ -50,6 +50,12 @@ func (r *Registry) restConfig(cluster string) *rest.Config {
 	}
 }
 
+// RESTConfig: a REST config that reaches cluster's API server through its
+// agent (what the cached clients cannot do, e.g. a Pod's log).
+func (r *Registry) RESTConfig(cluster string) *rest.Config {
+	return r.restConfig(cluster)
+}
+
 func (r *Registry) buildClients(ctx context.Context, cluster string) (*ClusterClients, error) {
 	cfg := r.restConfig(cluster)
 	hc, err := rest.HTTPClientFor(cfg)

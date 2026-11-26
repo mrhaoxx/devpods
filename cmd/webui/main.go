@@ -264,6 +264,9 @@ func main() {
 		slog.Error("queue", "err", err)
 		os.Exit(1)
 	}
+	if srv.Queue != nil {
+		srv.PodLogs = podLogs(restCfg, srv.Clusters)
+	}
 	if srv.Snapshots, err = snf.build(restCfg); err != nil {
 		slog.Error("snapshots", "err", err)
 		os.Exit(1)

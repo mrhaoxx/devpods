@@ -18,3 +18,12 @@ func RawKey(opened time.Time, session string, seq uint32) string {
 func FileKey(opened time.Time, session string, channel uint32, n int) string {
 	return fmt.Sprintf("files/%s/%s/%d-%d", opened.UTC().Format("2006/01/02"), session, channel, n)
 }
+
+// JobLogKey: where a queue job's rank's output is kept ("-" for the
+// console's own cluster in a console of one).
+func JobLogKey(cluster, id string, rank int32) string {
+	if cluster == "" {
+		cluster = "-"
+	}
+	return fmt.Sprintf("jobs/%s/%s/rank-%d.log", cluster, id, rank)
+}

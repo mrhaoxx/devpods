@@ -151,6 +151,7 @@ func (s *S3) EnsureLifecycle(ctx context.Context, days int) error {
 		LifecycleConfiguration: &types.BucketLifecycleConfiguration{Rules: []types.LifecycleRule{
 			rule("devpod-audit-raw", "raw/"),
 			rule("devpod-audit-files", "files/"),
+			rule("devpod-job-logs", "jobs/"),
 		}},
 	})
 	if err != nil {

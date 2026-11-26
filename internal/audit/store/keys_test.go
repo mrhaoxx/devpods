@@ -50,3 +50,12 @@ func TestCheckCHURL(t *testing.T) {
 		}
 	}
 }
+
+func TestJobLogKey(t *testing.T) {
+	if k := JobLogKey("st", "abc12", 3); k != "jobs/st/abc12/rank-3.log" {
+		t.Fatalf("%q", k)
+	}
+	if k := JobLogKey("", "abc12", 0); k != "jobs/-/abc12/rank-0.log" {
+		t.Fatalf("no cluster: %q", k)
+	}
+}

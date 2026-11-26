@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"maps"
 	"net/http"
 	"slices"
@@ -81,6 +82,9 @@ type Server struct {
 	Reservations *ReservationRules
 	// Queue: the job queue's rules; nil turns the queue off.
 	Queue *QueueRules
+	// PodLogs reads a Pod's log in a cluster ("" the console's own): job
+	// ranks' output, shown live and kept when a job ends.
+	PodLogs func(ctx context.Context, cluster, ns, pod, container string, follow bool) (io.ReadCloser, error)
 	// clearMarked: clusters where this replica has marked DevPods to be
 	// cleared (visited until none is); clearSwept: every cluster with
 	// reservations has been visited once since it started

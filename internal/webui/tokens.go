@@ -134,6 +134,7 @@ var apiRoutes = []apiRoute{
 	{"GET /api/jobs/{id}", "jobs:read", "One job"},
 	{"DELETE /api/jobs/{id}", "jobs:write", "Cancel a job"},
 	{"POST /api/jobs/{id}/resubmit", "jobs:write", "Submit a job again"},
+	{"GET /api/jobs/{id}/logs", "jobs:read", "A rank's output (?rank=N; ?follow=1: live, server-sent events)"},
 	{"PUT /api/admin/nodes/{name}/reservable", "admin:write", "Open or close a node for reservation (closing ends every reservation on it not over): {reservable}"},
 
 	{"GET /api/live/devpods", "metrics:read", "Server-sent events: live CPU / memory / GPU / network of my DevPods"},
