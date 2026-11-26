@@ -25,6 +25,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/util/retry"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	devpodv1alpha1 "github.com/mrhaoxx/devpod/api/v1alpha1"
 	"github.com/mrhaoxx/devpod/internal/access"
@@ -734,7 +735,73 @@ func (s *Server) handleListJobs(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	sort.SliceStable(items, func(i, j int) bool { return items[i].Submitted.Before(items[j].Submitted) })
-	s.writeJSON(w, http.StatusOK, map[string]any{"items": items})
+	devpods := []queuedDevPodView{}
+	if !ended {
+		devpods = s.queuedDevPods(r, sess, mine, shown)
+	}
+	s.writeJSON(w, http.StatusOK, map[string]any{"items": items, "devpods": devpods})
+}
+
+// queuedDevPodView is a DevPod waiting in the queue's line as the queue
+// list shows it; its name only to its owner and admins.
+type queuedDevPodView struct {
+	Name          string            `json:"name,omitempty"`
+	Cluster       string            `json:"cluster,omitempty"`
+	Owner         string            `json:"owner"`
+	Mine          bool              `json:"mine"`
+	Priority      int32             `json:"priority"`
+	Position      int32             `json:"position,omitempty"`
+	Reason        string            `json:"reason,omitempty"`
+	Detail        map[string]string `json:"detail,omitempty"`
+	ExpectedStart *time.Time        `json:"expectedStart,omitempty"`
+	QueuedAt      time.Time         `json:"queuedAt"`
+	GPUs          int64             `json:"gpus"`
+	CPUs          float64           `json:"cpus"`
+	Node          string            `json:"node,omitempty"` // the machine its user pinned it to
+}
+
+// queuedDevPods: the DevPods waiting in line in the clusters sess may see
+// (mine: theirs only), by place.
+func (s *Server) queuedDevPods(r *http.Request, sess Session, mine bool, shown func(string) bool) []queuedDevPodView {
+	out := []queuedDevPodView{}
+	for _, cc := range s.ks(r) {
+		var dps devpodv1alpha1.DevPodList
+		if err := cc.Client.List(r.Context(), &dps, client.InNamespace(s.NS)); err != nil {
+			continue
+		}
+		for i := range dps.Items {
+			dp := &dps.Items[i]
+			since, inLine := queuedAt(dp)
+			if !inLine || dp.Spec.Running || dp.DeletionTimestamp != nil {
+				continue
+			}
+			own := dp.Spec.Owner == sess.User
+			if (mine && !own) || (!own && !sess.Admin && !shown(cc.Name)) {
+				continue
+			}
+			st := queueStateOf(dp)
+			v := queuedDevPodView{Cluster: s.clusterLabel(cc), Owner: dp.Spec.Owner, Mine: own, Priority: queuePriority(dp),
+				Position: st.Position, Reason: st.Reason, Detail: st.Detail, ExpectedStart: timeUTC(st.Expected), QueuedAt: since.UTC()}
+			if own || sess.Admin {
+				v.Name = dp.Name
+			}
+			if dp.Spec.Pod != nil {
+				a := askOfPod(&dp.Spec.Pod.Spec)
+				v.GPUs, v.CPUs = a.GPU, float64(a.CPU)/1000
+			}
+			if _, _, auto := autoPin(dp); !auto {
+				v.Node = pinnedNode(dp)
+			}
+			out = append(out, v)
+		}
+	}
+	sort.SliceStable(out, func(i, j int) bool {
+		if out[i].Position != out[j].Position {
+			return out[i].Position != 0 && (out[j].Position == 0 || out[i].Position < out[j].Position)
+		}
+		return out[i].QueuedAt.Before(out[j].QueuedAt)
+	})
+	return out
 }
 
 // jobFor loads job id for the caller: their own, an admin's, or one of a

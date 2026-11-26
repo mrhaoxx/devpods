@@ -379,3 +379,27 @@ func TestJobCountCapRules(t *testing.T) {
 		t.Fatalf("a fourth: %d %+v", code, v)
 	}
 }
+
+// The queue's list holds the DevPods waiting in line: everyone sees whose
+// and how big, only the owner (and admins) which.
+func TestListJobsIncludesQueuedDevPods(t *testing.T) {
+	p := jobRig(t, "lq", "lq-alice") // lq-alice-dev1, made running: in line
+	list := func(user string) []map[string]any {
+		t.Helper()
+		rec := doJSON(t, p.s.HandleListJobsForTest(), "GET", "/api/jobs", nil, p.as(user), "")
+		var out struct{ Devpods []map[string]any }
+		if rec.Code != http.StatusOK || json.Unmarshal(rec.Body.Bytes(), &out) != nil {
+			t.Fatalf("list: %d %s", rec.Code, rec.Body)
+		}
+		return out.Devpods
+	}
+	var mine []map[string]any
+	waitFor(t, func() bool { mine = list("lq-alice"); return len(mine) == 1 })
+	if mine[0]["name"] != "lq-alice-dev1" || mine[0]["owner"] != "lq-alice" || mine[0]["mine"] != true {
+		t.Fatalf("alice's: %+v", mine[0])
+	}
+	theirs := list("lq-bob")
+	if len(theirs) != 1 || theirs[0]["name"] != nil || theirs[0]["owner"] != "lq-alice" || theirs[0]["mine"] != false {
+		t.Fatalf("bob's: %+v", theirs)
+	}
+}
