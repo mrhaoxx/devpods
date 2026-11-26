@@ -194,3 +194,108 @@ func TestPlanNoPreemptAfterGangTimeout(t *testing.T) {
 		t.Fatalf("after a gang timeout: preempt %+v wait %+v", p.Preempt, p.Waits["high"])
 	}
 }
+
+// qdev: a DevPod to start, of priority prio, asking gpus cards (4 cores),
+// queued at planNow+after; it has no end.
+func qdev(name string, prio int32, gpus int64, after time.Duration) qEntry {
+	return qEntry{Key: "devpod/" + name, Owner: "u", Priority: prio, Since: planNow.Add(after), Nodes: 1, Ask: amount{gpus, 4000}}
+}
+
+// entriesView: a view of entries as they are.
+func entriesView(ms []qMachine, runs []qRun, es ...qEntry) queueView {
+	v := view(ms, runs)
+	v.Queued = es
+	return v
+}
+
+// wholeFrom: a's whole reservation from planNow+at for an hour.
+func wholeFrom(m *qMachine, at time.Duration) {
+	m.Rs = append(m.Rs, &devpodv1alpha1.NodeReservation{Spec: devpodv1alpha1.NodeReservationSpec{Node: m.Name,
+		Start: metav1.NewTime(planNow.Add(at)), End: metav1.NewTime(planNow.Add(at + time.Hour))}})
+}
+
+// A DevPod goes to the snuggest machine that has room.
+func TestPlanDevPodSnuggest(t *testing.T) {
+	b := machine8("b")
+	b.Interactive = amount{6, 0}
+	p := planQueue(entriesView([]qMachine{machine8("a"), b}, nil, qdev("d", 0, 1, 0)))
+	if m := started(p, "devpod/d"); !slices.Equal(m, []string{"b"}) {
+		t.Fatalf("started on %v", m)
+	}
+}
+
+// With no end, it fits beside every reservation known, if it can.
+func TestPlanDevPodFitsBesideReservations(t *testing.T) {
+	a := machine8("a")
+	wholeFrom(&a, 3*24*time.Hour)
+	p := planQueue(entriesView([]qMachine{a, machine8("b")}, nil, qdev("d", 0, 1, 0)))
+	if m := started(p, "devpod/d"); !slices.Equal(m, []string{"b"}) || p.Starts[0].ClearsAt != nil {
+		t.Fatalf("started on %v, clears at %v", m, p.Starts[0].ClearsAt)
+	}
+}
+
+// Where none can, it goes where the first reservation in its way comes
+// latest, and is told when it will be cleared.
+func TestPlanDevPodLatestConflict(t *testing.T) {
+	a, b := machine8("a"), machine8("b")
+	wholeFrom(&a, 3*time.Hour)
+	wholeFrom(&b, 2*24*time.Hour)
+	p := planQueue(entriesView([]qMachine{a, b}, nil, qdev("d", 0, 1, 0)))
+	if m := started(p, "devpod/d"); !slices.Equal(m, []string{"b"}) || p.Starts[0].ClearsAt == nil || !p.Starts[0].ClearsAt.Equal(planNow.Add(2*24*time.Hour)) {
+		t.Fatalf("started on %v, clears at %v", m, p.Starts)
+	}
+}
+
+// One machine of its own: it waits for that one.
+func TestPlanDevPodOnlyItsMachine(t *testing.T) {
+	a := machine8("a")
+	a.Interactive = amount{8, 0}
+	d := qdev("d", 0, 1, 0)
+	d.Only = "a"
+	p := planQueue(entriesView([]qMachine{a, machine8("b")}, nil, d))
+	if started(p, "devpod/d") != nil || p.Waits["devpod/d"].Reason != "capacity" {
+		t.Fatalf("starts %v wait %+v", p.Starts, p.Waits["devpod/d"])
+	}
+}
+
+// A machine to avoid is not given, snug as it is.
+func TestPlanDevPodAvoid(t *testing.T) {
+	b := machine8("b")
+	b.Interactive = amount{6, 0}
+	d := qdev("d", 0, 1, 0)
+	d.Avoid = "b"
+	if m := started(planQueue(entriesView([]qMachine{machine8("a"), b}, nil, d)), "devpod/d"); !slices.Equal(m, []string{"a"}) {
+		t.Fatalf("started on %v", m)
+	}
+}
+
+// Behind a head promised a machine, a DevPod (no end: it would never be
+// gone by then) starts only elsewhere.
+func TestPlanNoEndBehindPromisedHead(t *testing.T) {
+	busy := []qRun{qrun("r", 50, false, 4, time.Hour, -time.Hour, "a")} // a: 4 cards till +1h
+	head := qjob("head", 10, 1, 8, time.Hour, 0)
+	es := []qEntry{jobEntry(head), qdev("d", 0, 1, time.Minute)}
+	p := planQueue(entriesView([]qMachine{machine8("a"), machine8("b")}, busy, es...))
+	// the head takes b now; with b gone, the DevPod would fit only on a,
+	// promised to nobody: it starts there
+	if started(p, "head") == nil {
+		t.Fatalf("head: %+v", p.Waits["head"])
+	}
+	b, c := machine8("b"), machine8("c")
+	b.Interactive, c.Interactive = amount{8, 0}, amount{2, 0}
+	p = planQueue(entriesView([]qMachine{machine8("a"), b, c}, busy, es...))
+	// the head fits nowhere now and is promised a (+1h); the DevPod, which
+	// a would suit better (4 free to c's 6), starts on c, never on a
+	if m := started(p, "devpod/d"); !slices.Equal(m, []string{"c"}) {
+		t.Fatalf("DevPod on %v; head %+v", m, p.Waits["head"])
+	}
+}
+
+// A DevPod at the head stops a lower, preemptible job for its room.
+func TestPlanDevPodHeadPreempts(t *testing.T) {
+	runs := []qRun{qrun("low", 0, true, 8, 5*time.Hour, -time.Hour, "a")}
+	p := planQueue(entriesView([]qMachine{machine8("a")}, runs, qdev("d", 5, 1, 0)))
+	if len(p.Preempt) != 1 || p.Preempt[0].Name != "low" {
+		t.Fatalf("preempt %v wait %+v", p.Preempt, p.Waits["devpod/d"])
+	}
+}

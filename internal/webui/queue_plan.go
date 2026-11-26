@@ -86,6 +86,38 @@ type queueView struct {
 type qStart struct {
 	Entry    qEntry
 	Machines []string
+	// ClearsAt: an entry with no end, started where a reservation will
+	// want its room — when (nil: none in sight)
+	ClearsAt *time.Time
+}
+
+// noEnd: how long an entry with no end is taken to run.
+const noEnd = 100 * 365 * 24 * time.Hour
+
+// until: when e, started at from, has ended at the latest.
+func (e qEntry) until(from time.Time) time.Time {
+	if e.Limit <= 0 {
+		return from.Add(noEnd)
+	}
+	return from.Add(e.Limit)
+}
+
+// window: how far ahead e must fit — its time limit, or (no end) all the
+// planner sees.
+func (v queueView) window(e qEntry) time.Duration {
+	if e.Limit <= 0 {
+		return v.Horizon
+	}
+	return e.Limit
+}
+
+// mayHave: e may be given machine m — the access rules, and its own one
+// machine or the one it avoids.
+func (v queueView) mayHave(e qEntry, m string) bool {
+	if (e.Only != "" && m != e.Only) || (e.Avoid != "" && m == e.Avoid) {
+		return false
+	}
+	return v.Allowed == nil || v.Allowed(e, m)
 }
 
 // qWait: why a job waits, and its place.
@@ -145,16 +177,27 @@ func planQueue(v queueView) queuePlan {
 		w.Position = position
 		plan.Waits[e.Key] = w
 	}
+	var clears map[string]time.Time // where the entry at hand would be cleared, when
 	start := func(e qEntry, machines []string) {
-		plan.Starts = append(plan.Starts, qStart{Entry: e, Machines: machines})
+		st := qStart{Entry: e, Machines: machines}
+		if t, ok := clears[machines[0]]; ok && e.Nodes == 1 {
+			st.ClearsAt = &t
+		}
+		plan.Starts = append(plan.Starts, st)
 		planned = append(planned, e)
-		runs = append(runs, qRun{Key: e.Key, Job: e.Job, Machines: machines, Ask: e.Ask, Until: v.Now.Add(e.Limit),
+		runs = append(runs, qRun{Key: e.Key, Job: e.Job, Machines: machines, Ask: e.Ask, Until: e.until(v.Now),
 			Preemptible: e.Preemptible, Priority: e.Priority, Started: v.Now})
 	}
 	for _, j := range queueOrder(v.Queued) {
 		n := int(j.Nodes)
 		limit := j.Limit
 		cands := v.candidates(j, runs, v.Now)
+		clears = nil
+		if len(cands) < n && j.Limit <= 0 {
+			// no end, and nowhere beside every reservation known: where the
+			// first in its way comes latest
+			cands, clears = v.soonCleared(j, runs)
+		}
 		fits := len(cands) >= n
 		quota := v.QuotaOK == nil || v.QuotaOK(j, planned)
 		if head != nil {
@@ -163,7 +206,7 @@ func planQueue(v queueView) queuePlan {
 			// by the promise — either way the head is not put off
 			away := slices.DeleteFunc(slices.Clone(cands), func(m string) bool { return slices.Contains(headOn, m) })
 			switch {
-			case fits && quota && (!promised || !v.Now.Add(limit).After(promise)):
+			case fits && quota && (!promised || (limit > 0 && !v.Now.Add(limit).After(promise))):
 				start(j, cands[:n])
 				continue
 			case fits && quota && len(away) >= n:
@@ -223,10 +266,10 @@ func (v queueView) candidates(j qEntry, runs []qRun, at time.Time) []string {
 	}
 	var cs []cand
 	for _, m := range v.Machines {
-		if v.Allowed != nil && !v.Allowed(j, m.Name) {
+		if !v.mayHave(j, m.Name) {
 			continue
 		}
-		if f := freeFor(m, runs, at, j.Limit); ask.fits(f) {
+		if f := freeFor(m, runs, at, v.window(j)); ask.fits(f) {
 			cs = append(cs, cand{m.Name, f.sub(ask)})
 		}
 	}
@@ -288,10 +331,10 @@ func (v queueView) victimsFor(j qEntry, runs []qRun) ([]qRun, []string) {
 	}
 	var opts []option
 	for _, m := range v.Machines {
-		if v.Allowed != nil && !v.Allowed(j, m.Name) {
+		if !v.mayHave(j, m.Name) {
 			continue
 		}
-		f := freeFor(m, runs, v.Now, j.Limit)
+		f := freeFor(m, runs, v.Now, v.window(j))
 		if ask.fits(f) {
 			opts = append(opts, option{machine: m.Name})
 			continue
@@ -354,10 +397,10 @@ func (v queueView) shortfall(j qEntry, runs []qRun) map[string]string {
 	ask := j.Ask
 	var free amount
 	for _, m := range v.Machines {
-		if v.Allowed != nil && !v.Allowed(j, m.Name) {
+		if !v.mayHave(j, m.Name) {
 			continue
 		}
-		free = free.add(freeFor(m, runs, v.Now, j.Limit).clamped())
+		free = free.add(freeFor(m, runs, v.Now, v.window(j)).clamped())
 	}
 	n := int64(j.Nodes)
 	return map[string]string{
@@ -365,4 +408,54 @@ func (v queueView) shortfall(j qEntry, runs []qRun) map[string]string {
 		"needCPU": coresOf(ask.CPU * n), "freeCPU": coresOf(free.CPU),
 		"fit": strconv.Itoa(len(v.candidates(j, runs, v.Now))),
 	}
+}
+
+// soonCleared: for e with no end, the machines it fits on now though a
+// reservation known will want its room — the one whose first such
+// reservation comes latest first, then the snuggest — and when each
+// would clear it.
+func (v queueView) soonCleared(e qEntry, runs []qRun) ([]string, map[string]time.Time) {
+	type cand struct {
+		name string
+		at   time.Time
+		left amount
+	}
+	var cs []cand
+	for _, m := range v.Machines {
+		if !v.mayHave(e, m.Name) {
+			continue
+		}
+		now := freeFor(m, runs, v.Now, time.Millisecond)
+		if !e.Ask.fits(now) {
+			continue
+		}
+		var starts []time.Time
+		for _, nr := range m.Rs {
+			if t := nr.Spec.Start.Time; t.After(v.Now) && !t.After(v.Now.Add(v.Horizon)) {
+				starts = append(starts, t)
+			}
+		}
+		slices.SortFunc(starts, func(a, b time.Time) int { return a.Compare(b) })
+		for _, t := range starts {
+			if !e.Ask.fits(freeFor(m, runs, t, time.Millisecond)) {
+				cs = append(cs, cand{m.Name, t, now.sub(e.Ask)})
+				break
+			}
+		}
+	}
+	sort.Slice(cs, func(a, b int) bool {
+		if !cs[a].at.Equal(cs[b].at) {
+			return cs[a].at.After(cs[b].at)
+		}
+		if cs[a].left.GPU != cs[b].left.GPU {
+			return cs[a].left.GPU < cs[b].left.GPU
+		}
+		return cs[a].name < cs[b].name
+	})
+	names := make([]string, len(cs))
+	at := map[string]time.Time{}
+	for i, c := range cs {
+		names[i], at[c.name] = c.name, c.at
+	}
+	return names, at
 }
