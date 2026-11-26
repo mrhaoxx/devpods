@@ -58,6 +58,11 @@ func TestRankDevPod(t *testing.T) {
 		t.Fatalf("job %+v labels %v", dp.Spec.Job, dp.Labels)
 	}
 	spec := dp.Spec.Pod.Spec
+	// Kubernetes ends it too if nobody else does: its time limit and ten
+	// minutes more (the console's end comes first)
+	if spec.ActiveDeadlineSeconds == nil || *spec.ActiveDeadlineSeconds != 2*3600+600 {
+		t.Fatalf("activeDeadlineSeconds %v", spec.ActiveDeadlineSeconds)
+	}
 	if spec.NodeSelector[hostnameLabel] != "g2" || spec.Affinity != nil {
 		t.Fatalf("placement: %v %+v", spec.NodeSelector, spec.Affinity)
 	}

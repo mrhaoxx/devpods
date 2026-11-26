@@ -322,3 +322,8 @@ type DevPodList struct {
 func init() {
 	SchemeBuilder.Register(&DevPod{}, &DevPodList{})
 }
+
+// RankDeadlineMessage begins a job rank's status.message when Kubernetes
+// ended its Pod at its deadline (activeDeadlineSeconds: its job's time
+// limit, with some slack): the job is out of time, not failed.
+const RankDeadlineMessage = "DeadlineExceeded"

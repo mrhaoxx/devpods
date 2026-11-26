@@ -427,3 +427,29 @@ func TestQueueCountsOtherPods(t *testing.T) {
 	p.s.SetOtherUsageForTest(func(string) map[string]agent.NodeUsage { return map[string]agent.NodeUsage{p.n1: {GPU: 4}} })
 	roundUntil(t, p, id, devpodv1alpha1.JobStarting)
 }
+
+// A rank Kubernetes ended at its deadline (the console away at the time
+// limit) ends its job out of time, not failed.
+func TestRankDeadlineIsTimeOut(t *testing.T) {
+	p, _ := queueRig(t, "qd2", "qd2-alice")
+	id := submit(t, p, "qd2-alice", 1, 1, nil)
+	roundUntil(t, p, id, devpodv1alpha1.JobStarting)
+	r := ranksBecome(t, id, 1)[0]
+	setRank(t, r.Name, devpodv1alpha1.DevPodRunning, nil)
+	roundUntil(t, p, id, devpodv1alpha1.JobRunning)
+	err := retry.RetryOnConflict(retry.DefaultRetry, func() error {
+		var dp devpodv1alpha1.DevPod
+		if err := k8sManager.GetAPIReader().Get(context.Background(), client_key(r.Name), &dp); err != nil {
+			return err
+		}
+		code := int32(137)
+		dp.Status.Phase, dp.Status.ExitCode, dp.Status.Message = devpodv1alpha1.DevPodFailed, &code, devpodv1alpha1.RankDeadlineMessage
+		return k8sClient.Status().Update(context.Background(), &dp)
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if j := roundUntil(t, p, id, devpodv1alpha1.JobTimedOut); j.Status.Reason != "time-limit" {
+		t.Fatalf("reason %q", j.Status.Reason)
+	}
+}

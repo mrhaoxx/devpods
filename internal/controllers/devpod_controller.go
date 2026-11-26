@@ -894,6 +894,11 @@ func (r *DevPodReconciler) jobFinished(ctx context.Context, dp *devpodv1alpha1.D
 	if pod.Status.Phase == corev1.PodFailed {
 		dp.Status.Phase = devpodv1alpha1.DevPodFailed
 		dp.Status.Message = podFailureMessage(pod)
+		if pod.Status.Reason == "DeadlineExceeded" {
+			// ended at its deadline (its job's time limit), whatever its
+			// container's own end says
+			dp.Status.Message = devpodv1alpha1.RankDeadlineMessage + ": " + pod.Status.Message
+		}
 	}
 	dp.Status.Endpoint = ""
 	dp.Status.WorkloadRef = &devpodv1alpha1.WorkloadRef{APIVersion: "v1", Kind: "Pod", Name: pod.Name}

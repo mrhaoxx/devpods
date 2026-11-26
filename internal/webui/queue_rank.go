@@ -8,6 +8,7 @@ import (
 	"hash/fnv"
 	"slices"
 	"strconv"
+	"time"
 
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
@@ -24,6 +25,11 @@ import (
 
 // jobBash: the shell a rank's command runs in.
 const jobBash = "/opt/devpod/bin/bash"
+
+// jobDeadlineSlack: seconds a rank's Pod may run past its job's time
+// limit before Kubernetes ends it (activeDeadlineSeconds) — the console
+// ends it at the limit; this is for when the console cannot.
+const jobDeadlineSlack = 600
 
 // jobLabel / rankLabel: the labels the queue's DevPods carry — the
 // queue's alone (users may not set them, nor spec.job).
@@ -125,6 +131,11 @@ func rankDevPod(job *devpodv1alpha1.Job, rank int32, node, ns, master string) *d
 	}
 	spec.NodeSelector[hostnameLabel] = node
 	dropHostnameAffinity(spec)
+	// Kubernetes ends it too if nobody else does (the console away at the
+	// time limit): its time limit and some more — the console's end, from
+	// when all ranks run, comes first
+	deadline := int64(job.Spec.TimeLimit.Duration/time.Second) + jobDeadlineSlack
+	spec.ActiveDeadlineSeconds = &deadline
 
 	c := &spec.Containers[0]
 	c.Command = append([]string{jobBash, "-lc", job.Spec.Command, jobArg0(job)}, job.Spec.Args...)

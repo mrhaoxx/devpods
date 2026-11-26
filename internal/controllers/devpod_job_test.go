@@ -276,3 +276,24 @@ func TestJobRankPodGoneFails(t *testing.T) {
 		t.Fatal("a new Pod was made")
 	}
 }
+
+// A job rank whose Pod Kubernetes ended at its deadline (its time limit)
+// says so, whatever its container's own end says.
+func TestJobRankDeadlineExceeded(t *testing.T) {
+	setupSuite(t)
+	env := newTestEnv(t)
+	dp := jobDevPod("jd-a-0", "jd", "a1b2c", 0, "true")
+	if err := env.Client.Create(env.Ctx, dp); err != nil {
+		t.Fatal(err)
+	}
+	pod := waitPod(t, env, dp)
+	patch := client.MergeFrom(pod.DeepCopy())
+	pod.Status.Phase, pod.Status.Reason, pod.Status.Message = corev1.PodFailed, "DeadlineExceeded", "Pod was active on the node longer than the specified deadline"
+	pod.Status.ContainerStatuses = []corev1.ContainerStatus{{Name: "dev", State: corev1.ContainerState{Terminated: &corev1.ContainerStateTerminated{ExitCode: 137, Reason: "Error", FinishedAt: metav1.Now()}}}}
+	if err := env.Client.Status().Patch(env.Ctx, &pod, patch); err != nil {
+		t.Fatal(err)
+	}
+	devPodBecomes(t, env, dp, "Failed at its deadline", func(d *devpodv1alpha1.DevPod) bool {
+		return d.Status.Phase == devpodv1alpha1.DevPodFailed && strings.HasPrefix(d.Status.Message, devpodv1alpha1.RankDeadlineMessage)
+	})
+}

@@ -282,6 +282,7 @@ func (s *Server) followJob(ctx context.Context, cc *clusters.ClusterClients, j *
 	}
 	allStarted, allDone := true, true
 	var failed *devpodv1alpha1.JobRank
+	deadline := false // a rank Kubernetes ended at its deadline
 	for r := int32(0); r < n; r++ {
 		rk := &status[r]
 		rk.Rank = r
@@ -303,6 +304,9 @@ func (s *Server) followJob(ctx context.Context, cc *clusters.ClusterClients, j *
 			if failed == nil {
 				failed = rk
 			}
+			if strings.HasPrefix(d.Status.Message, devpodv1alpha1.RankDeadlineMessage) {
+				deadline = true
+			}
 		case devpodv1alpha1.DevPodSucceeded, devpodv1alpha1.DevPodRunning:
 		default:
 			allStarted = false
@@ -315,6 +319,8 @@ func (s *Server) followJob(ctx context.Context, cc *clusters.ClusterClients, j *
 	j.Status.Ranks = status
 	limit := j.Spec.TimeLimit.Duration
 	switch {
+	case deadline:
+		s.endJob(ctx, cc, j, devpodv1alpha1.JobTimedOut, "time-limit", nil, now)
 	case failed != nil:
 		detail := map[string]string{"rank": itoa(failed.Rank)}
 		if failed.ExitCode != nil {
