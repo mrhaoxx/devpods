@@ -100,15 +100,24 @@ func (s *Server) QueueRound(ctx context.Context) {
 		}
 		byCluster[j.Spec.Cluster] = append(byCluster[j.Spec.Cluster], j)
 	}
-	for cluster := range endedIn {
-		if _, ok := byCluster[cluster]; !ok {
-			byCluster[cluster] = nil
-		}
+	// every cluster: DevPods wait in line in each, whether or not its
+	// controller runs jobs (whose jobs wait for one that does)
+	visit := map[string]bool{}
+	for cluster := range byCluster {
+		visit[cluster] = true
 	}
-	for cluster, jobs := range byCluster {
-		if s.takesJobs(ctx, cluster) {
-			s.queueIn(ctx, cluster, jobs, endedIn[cluster], now)
+	for cluster := range endedIn {
+		visit[cluster] = true
+	}
+	for _, cluster := range s.knownClusters(ctx) {
+		visit[cluster] = true
+	}
+	for cluster := range visit {
+		jobs, ended := byCluster[cluster], endedIn[cluster]
+		if !s.takesJobs(ctx, cluster) {
+			jobs, ended = nil, nil
 		}
+		s.queueIn(ctx, cluster, jobs, ended, now)
 	}
 }
 
@@ -157,13 +166,36 @@ func (s *Server) queueIn(ctx context.Context, cluster string, jobs, ended []*dev
 			queued = append(queued, j)
 		}
 	}
-	if len(queued) == 0 {
+	// the DevPods waiting in line: in the cache, as a round reads them
+	var dps devpodv1alpha1.DevPodList
+	if err := cc.Client.List(ctx, &dps, client.InNamespace(s.NS)); err != nil {
+		slog.Warn("queue", "cluster", cluster, "err", err)
 		return
 	}
-	entries := make([]qEntry, 0, len(queued))
+	var waiting []qEntry
+	for i := range dps.Items {
+		dp := &dps.Items[i]
+		since, inLine := queuedAt(dp)
+		if !inLine || dp.Spec.Running || dp.DeletionTimestamp != nil || dp.Spec.Pod == nil {
+			continue
+		}
+		only := pinnedNode(dp)
+		if _, _, auto := autoPin(dp); auto {
+			only = "" // a former run's: placed anew
+		}
+		if only == "" {
+			only = s.homeNode(ctx, cc, dp)
+		}
+		waiting = append(waiting, devPodEntry(dp, since, queuePriority(dp), only, avoiding(dp, now)))
+	}
+	if len(queued) == 0 && len(waiting) == 0 {
+		return
+	}
+	entries := make([]qEntry, 0, len(queued)+len(waiting))
 	for _, j := range queued {
 		entries = append(entries, jobEntry(j))
 	}
+	entries = append(entries, waiting...)
 	v, nodes, err := s.queueViewFor(ctx, cc, active, entries, now)
 	if err != nil {
 		slog.Warn("queue", "cluster", cluster, "err", err)
@@ -194,10 +226,11 @@ func (s *Server) queueIn(ctx context.Context, cluster string, jobs, ended []*dev
 		return slices.ContainsFunc(plan.Preempt, func(p *devpodv1alpha1.Job) bool { return p.Name == r.Key })
 	})
 	for _, st := range plan.Starts {
-		j := st.Entry.Job
-		if j == nil {
-			continue // a DevPod: not yet in the line
+		if st.Entry.DevPod != nil {
+			s.startQueuedDevPod(ctx, cc, st.Entry.DevPod, st.Machines[0], st.ClearsAt)
+			continue
 		}
+		j := st.Entry.Job
 		if !s.startJob(ctx, cc, j, st.Machines, nodes, ports, now) {
 			continue
 		}
@@ -212,6 +245,21 @@ func (s *Server) queueIn(ctx context.Context, cluster string, jobs, ended []*dev
 		}
 		runs = append(runs, qRun{Key: st.Entry.Key, Job: j, Machines: st.Machines, Ask: st.Entry.Ask, Until: now.Add(st.Entry.Limit),
 			Preemptible: st.Entry.Preemptible, Priority: st.Entry.Priority, Started: now})
+	}
+	// where each waiting DevPod stands, written only when it changed (on
+	// the copy the round read: changed meanwhile, the next round writes it)
+	for _, e := range waiting {
+		w, ok := plan.Waits[e.Key]
+		if !ok {
+			continue
+		}
+		cp := e.DevPod.DeepCopy()
+		if !setQueueState(cp, queueState{Position: w.Position, Reason: w.Reason, Detail: w.Detail, Expected: w.Expected}) {
+			continue
+		}
+		if err := cc.Client.Update(ctx, cp); err != nil && !apierrors.IsConflict(err) {
+			slog.Warn("queue_devpod_state", "devpod", cp.Name, "err", err)
+		}
 	}
 	for _, j := range queued {
 		w, ok := plan.Waits[j.Name]

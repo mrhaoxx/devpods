@@ -177,3 +177,76 @@ func TestStartPriorityOverCapRefused(t *testing.T) {
 		t.Fatalf("priority 5 over cap 0: %d %q", code, ec)
 	}
 }
+
+// A round starts a DevPod in its turn: pinned to the snuggest machine,
+// the pin the queue's, out of line — the system's doing, recorded.
+func TestRoundStartsQueuedDevPod(t *testing.T) {
+	p := jobRig(t, "rs", "")
+	f := &fakeAuditStore{}
+	p.s.Audit = &webui.AuditDeps{Store: f}
+	name := p.create("rs-alice", http.StatusCreated)
+	p.s.QueueRound(context.Background())
+	dp := devPodWhen(t, p, name, "started", func(dp *devpodv1alpha1.DevPod) bool { return dp.Spec.Running })
+	if pin := pinnedOf(&dp); pin != p.n2 || queuedNow(dp) || len(dp.Annotations[devpodv1alpha1.AutoPinAnnotation]) <= len(pin) ||
+		dp.Annotations[devpodv1alpha1.AutoPinAnnotation][:len(pin)+1] != pin+"@" {
+		t.Fatalf("pin %q annotations %v", pin, dp.Annotations)
+	}
+	rows := eventsOf(t, f, name, "create", "queue-start")
+	if r := rows[1]; r.Actor != "system:queue" || r.Node != p.n2 || r.Detail != "auto" {
+		t.Fatalf("queue-start %+v", r)
+	}
+}
+
+// DevPods and jobs keep one line: a job submitted first starts first;
+// the DevPod after it waits, saying where it stands — written once.
+func TestRoundOrdersDevPodsWithJobs(t *testing.T) {
+	p := jobRig(t, "ro", "ro-alice")
+	id := submit(t, p, "ro-alice", 1, 8, nil)
+	p.createGPU("ro-alice", "g8", 8, "", http.StatusCreated)
+	ctx := context.Background()
+	p.s.QueueRound(ctx)
+	if j := jobNow(t, id); j.Status.Phase != devpodv1alpha1.JobStarting {
+		t.Fatalf("job %+v", j.Status)
+	}
+	dp := devPodWhen(t, p, "ro-alice-g8", "waiting, saying where", func(dp *devpodv1alpha1.DevPod) bool {
+		return queuedNow(*dp) && !dp.Spec.Running && dp.Annotations[devpodv1alpha1.QueueStateAnnotation] != ""
+	})
+	var st struct {
+		Position int32
+		Reason   string
+	}
+	_ = json.Unmarshal([]byte(dp.Annotations[devpodv1alpha1.QueueStateAnnotation]), &st)
+	if st.Position != 1 || st.Reason != "capacity" {
+		t.Fatalf("state %+v", st)
+	}
+	time.Sleep(300 * time.Millisecond)
+	before := p.get("ro-alice-g8").ResourceVersion
+	p.s.QueueRound(ctx)
+	time.Sleep(300 * time.Millisecond)
+	if after := p.get("ro-alice-g8").ResourceVersion; after != before {
+		t.Fatalf("a round with nothing changed wrote it: %s -> %s", before, after)
+	}
+}
+
+// Out of line between the plan and its start, a DevPod is not started.
+func TestRoundQueuedDevPodChangedMeanwhile(t *testing.T) {
+	p := jobRig(t, "rc", "")
+	name := p.create("rc-alice", http.StatusCreated)
+	ctx := context.Background()
+	p.s.SetQueueBeforeStartsForTest(func() {
+		var dp devpodv1alpha1.DevPod
+		if err := k8sClient.Get(ctx, client_key(name), &dp); err != nil {
+			t.Error(err)
+			return
+		}
+		delete(dp.Annotations, devpodv1alpha1.QueuedAtAnnotation)
+		if err := k8sClient.Update(ctx, &dp); err != nil {
+			t.Error(err)
+		}
+	})
+	p.s.QueueRound(ctx)
+	time.Sleep(500 * time.Millisecond)
+	if dp := p.get(name); dp.Spec.Running || pinnedOf(&dp) != "" {
+		t.Fatalf("started after leaving the line: running %v pin %q", dp.Spec.Running, pinnedOf(&dp))
+	}
+}

@@ -8,6 +8,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"maps"
 	"net/http"
 	"reflect"
@@ -16,6 +17,7 @@ import (
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/types"
 
 	"github.com/mrhaoxx/devpod/internal/access"
@@ -156,8 +158,14 @@ func queueStateOf(dp *devpodv1alpha1.DevPod) queueState {
 	return st
 }
 
-// setQueueState writes st on dp; false when it says so already.
+// setQueueState writes st on dp; false when it says so already. Times are
+// kept to the second, as a job's status keeps them: a promise worked out
+// afresh each round does not rewrite it for less.
 func setQueueState(dp *devpodv1alpha1.DevPod, st queueState) bool {
+	if st.Expected != nil {
+		t := st.Expected.UTC().Truncate(time.Second)
+		st.Expected = &t
+	}
 	cur := queueStateOf(dp)
 	same := cur.Position == st.Position && cur.Reason == st.Reason && maps.Equal(cur.Detail, st.Detail) &&
 		reflect.DeepEqual(timeUTC(cur.Expected), timeUTC(st.Expected))
@@ -378,4 +386,51 @@ func (s *Server) placeNow(ctx context.Context, dp *devpodv1alpha1.DevPod) *serve
 		msg += "; there may be at " + w.Expected.UTC().Format(time.RFC3339)
 	}
 	return &serverErr{http.StatusConflict, "NO_ROOM", msg, detail}
+}
+
+// startQueuedDevPod starts planned (as the plan read it) on machine, its
+// turn come: pinned there (the queue's pin) unless its user pinned it,
+// out of line, told when a reservation will clear it (clearsAt). Not if
+// it changed meanwhile — out of line, started, being deleted, its spec
+// edited: the next round sees it as it is.
+func (s *Server) startQueuedDevPod(ctx context.Context, cc *clusters.ClusterClients, planned *devpodv1alpha1.DevPod, machine string, clearsAt *time.Time) bool {
+	var dp devpodv1alpha1.DevPod
+	if err := cc.Reader.Get(ctx, types.NamespacedName{Name: planned.Name, Namespace: planned.Namespace}, &dp); err != nil {
+		return false
+	}
+	since, inLine := queuedAt(&dp)
+	if !inLine || dp.Spec.Running || dp.DeletionTimestamp != nil || dp.Generation != planned.Generation || dp.Spec.Pod == nil {
+		return false
+	}
+	auto := false
+	if _, _, former := autoPin(&dp); former || pinnedNode(&dp) == "" {
+		setAutoPin(&dp, machine, since)
+		auto = true
+	} else if pinnedNode(&dp) != machine {
+		return false
+	}
+	dp.Spec.Running = true
+	clearQueued(&dp)
+	delete(dp.Annotations, devpodv1alpha1.QueueAvoidAnnotation)
+	detail := "pinned"
+	if auto {
+		detail = "auto"
+	}
+	if clearsAt != nil {
+		annotate(&dp, devpodv1alpha1.ExpectClearAnnotation, clearsAt.UTC().Format(time.RFC3339))
+		detail += "; a reservation clears it at " + clearsAt.UTC().Format(time.RFC3339)
+	} else {
+		delete(dp.Annotations, devpodv1alpha1.ExpectClearAnnotation)
+	}
+	if err := cc.Client.Update(ctx, &dp); err != nil {
+		if !apierrors.IsConflict(err) {
+			slog.Warn("queue_devpod_start", "devpod", dp.Name, "err", err)
+		}
+		return false
+	}
+	ev := systemEvent("system:queue")
+	ev.Node = machine
+	s.recordDevPod(ctx, s.clusterLabel(cc), ev, &dp, "queue-start", detail)
+	slog.Info("queue_devpod_start", "devpod", dp.Name, "owner", dp.Spec.Owner, "machine", machine, "auto", auto)
+	return true
 }
