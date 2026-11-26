@@ -2,7 +2,9 @@
 #
 # Mirrors, optional (unset: the upstream ones): APK_MIRROR (an Alpine
 # mirror's base, e.g. https://mirrors.zju.edu.cn/alpine), DEBIAN_MIRROR
-# (e.g. https://mirrors.zju.edu.cn), GOPROXY (e.g. https://goproxy.cn,direct).
+# (http, e.g. http://mirrors.zju.edu.cn: the slim image has no CA
+# certificates; apt checks the signatures), GOPROXY (e.g.
+# https://goproxy.cn,direct).
 
 # --- Stage 1: static-pie OpenSSH from source (musl) -----------------------
 FROM alpine:3.20 AS sshd-build
