@@ -674,13 +674,17 @@ func (s *Server) estimate(ctx context.Context, job *devpodv1alpha1.Job) map[stri
 	now := s.Queue.now()
 	probe := job.DeepCopy()
 	probe.Name, probe.CreationTimestamp = "(new)", metav1.NewTime(now)
-	v, _, err := s.queueViewFor(ctx, s.kc(ctx), active, append(queued, probe), now)
+	entries := make([]qEntry, 0, len(queued)+1)
+	for _, j := range append(queued, probe) {
+		entries = append(entries, jobEntry(j))
+	}
+	v, _, err := s.queueViewFor(ctx, s.kc(ctx), active, entries, now)
 	if err != nil {
 		return out
 	}
 	plan := planQueue(v)
 	for _, st := range plan.Starts {
-		if st.Job == probe {
+		if st.Entry.Key == probe.Name {
 			out["position"], out["startsNow"] = 0, true
 			return out
 		}

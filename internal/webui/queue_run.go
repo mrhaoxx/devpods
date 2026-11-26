@@ -160,7 +160,11 @@ func (s *Server) queueIn(ctx context.Context, cluster string, jobs, ended []*dev
 	if len(queued) == 0 {
 		return
 	}
-	v, nodes, err := s.queueViewFor(ctx, cc, active, queued, now)
+	entries := make([]qEntry, 0, len(queued))
+	for _, j := range queued {
+		entries = append(entries, jobEntry(j))
+	}
+	v, nodes, err := s.queueViewFor(ctx, cc, active, entries, now)
 	if err != nil {
 		slog.Warn("queue", "cluster", cluster, "err", err)
 		return
@@ -187,23 +191,27 @@ func (s *Server) queueIn(ctx context.Context, cluster string, jobs, ended []*dev
 	// what runs while the jobs start: not the jobs stopped for others, and
 	// each started one from its start on
 	runs := slices.DeleteFunc(slices.Clone(v.Running), func(r qRun) bool {
-		return slices.ContainsFunc(plan.Preempt, func(p *devpodv1alpha1.Job) bool { return p.Name == r.Job.Name })
+		return slices.ContainsFunc(plan.Preempt, func(p *devpodv1alpha1.Job) bool { return p.Name == r.Key })
 	})
 	for _, st := range plan.Starts {
-		if !s.startJob(ctx, cc, st.Job, st.Machines, nodes, ports, now) {
+		j := st.Entry.Job
+		if j == nil {
+			continue // a DevPod: not yet in the line
+		}
+		if !s.startJob(ctx, cc, j, st.Machines, nodes, ports, now) {
 			continue
 		}
 		// a job that may not be stopped, once it has said it starts, looks
 		// at the reservations afresh: one made since the plan was read
 		// (whose own look did not see this job yet) is given way to
-		if !st.Job.Spec.Preemptible && s.Reservations != nil {
+		if !j.Spec.Preemptible && s.Reservations != nil {
 			if fresh, err := s.nodeReservations(ctx); err == nil && !keptBesideReservations(v, st, fresh, s.resCluster(ctx), runs) {
-				s.requeueJob(ctx, cc, st.Job, "reserved")
+				s.requeueJob(ctx, cc, j, "reserved")
 				continue
 			}
 		}
-		runs = append(runs, qRun{Job: st.Job, Machines: st.Machines, Ask: jobAsk(st.Job), Until: now.Add(st.Job.Spec.TimeLimit.Duration),
-			Preemptible: st.Job.Spec.Preemptible, Priority: st.Job.Spec.Priority, Started: now})
+		runs = append(runs, qRun{Key: st.Entry.Key, Job: j, Machines: st.Machines, Ask: st.Entry.Ask, Until: now.Add(st.Entry.Limit),
+			Preemptible: st.Entry.Preemptible, Priority: st.Entry.Priority, Started: now})
 	}
 	for _, j := range queued {
 		w, ok := plan.Waits[j.Name]
@@ -594,7 +602,7 @@ func internalIP(n *corev1.Node) string {
 // interactive DevPods take outside reservations, the jobs running, the
 // jobs waiting; who may run where (the access rules, with the jobs'
 // privileges) and whose quota has room. Also the machines by name.
-func (s *Server) queueViewFor(ctx context.Context, cc *clusters.ClusterClients, active, queued []*devpodv1alpha1.Job, now time.Time) (queueView, map[string]*corev1.Node, error) {
+func (s *Server) queueViewFor(ctx context.Context, cc *clusters.ClusterClients, active []*devpodv1alpha1.Job, queued []qEntry, now time.Time) (queueView, map[string]*corev1.Node, error) {
 	var nodes corev1.NodeList
 	if err := cc.Client.List(ctx, &nodes); err != nil {
 		return queueView{}, nil, err
@@ -656,15 +664,19 @@ func (s *Server) queueViewFor(ctx context.Context, cc *clusters.ClusterClients, 
 		case j.Status.AttemptAt != nil:
 			since = j.Status.AttemptAt.Time
 		}
-		running = append(running, qRun{Job: j, Machines: ms, Ask: jobAsk(j), Until: since.Add(j.Spec.TimeLimit.Duration),
+		running = append(running, qRun{Key: j.Name, Job: j, Machines: ms, Ask: jobAsk(j), Until: since.Add(j.Spec.TimeLimit.Duration),
 			Preemptible: j.Spec.Preemptible, Priority: j.Spec.Priority, Started: since})
 	}
 	// the access rules: each owner's read once, each job's judged per
 	// machine in memory
 	owners := map[string]*ownerAccessOf{}
 	allowed := map[string]bool{}
-	mayRun := func(j *devpodv1alpha1.Job, machine string) bool {
-		key := j.Name + "/" + machine
+	mayRun := func(e qEntry, machine string) bool {
+		j := e.Job
+		if j == nil {
+			return false // a DevPod: not yet in the line
+		}
+		key := e.Key + "/" + machine
 		if v, seen := allowed[key]; seen {
 			return v
 		}
@@ -689,7 +701,11 @@ func (s *Server) queueViewFor(ctx context.Context, cc *clusters.ClusterClients, 
 	if err := cc.Client.List(ctx, &dps, client.InNamespace(s.NS)); err != nil {
 		return queueView{}, nil, err
 	}
-	quotaOK := func(j *devpodv1alpha1.Job, planned []*devpodv1alpha1.Job) bool {
+	quotaOK := func(e qEntry, planned []qEntry) bool {
+		j := e.Job
+		if j == nil {
+			return false // a DevPod: not yet in the line
+		}
 		if s.ownerIsAdmin(ctx, j.Spec.Owner) {
 			return true
 		}
@@ -705,8 +721,8 @@ func (s *Server) queueViewFor(ctx context.Context, cc *clusters.ClusterClients, 
 			}
 		}
 		// the owner's jobs this round starts before it count as running
-		for _, p := range planned {
-			if p.Spec.Owner == j.Spec.Owner {
+		for _, pe := range planned {
+			if p := pe.Job; p != nil && p.Spec.Owner == j.Spec.Owner {
 				for r := int32(0); r < p.Spec.Nodes; r++ {
 					existing = append(existing, *rankDevPod(p, r, "x", s.NS, ""))
 				}
@@ -885,7 +901,7 @@ func ranksMachines(ranks []devpodv1alpha1.JobRank) []string {
 // keptBesideReservations: st's ranks still have room on each of their
 // machines beside the reservations as they are now (fresh) and runs.
 func keptBesideReservations(v queueView, st qStart, fresh []devpodv1alpha1.NodeReservation, cluster string, runs []qRun) bool {
-	ask, limit := jobAsk(st.Job), st.Job.Spec.TimeLimit.Duration
+	ask, limit := st.Entry.Ask, st.Entry.Limit
 	for _, name := range st.Machines {
 		i := slices.IndexFunc(v.Machines, func(m qMachine) bool { return m.Name == name })
 		if i < 0 {

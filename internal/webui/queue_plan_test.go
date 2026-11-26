@@ -32,17 +32,21 @@ func machine8(name string) qMachine { return qMachine{Name: name, Cap: amount{8,
 func qrun(name string, prio int32, preemptible bool, gpus int64, until time.Duration, started time.Duration, machines ...string) qRun {
 	j := qjob(name, prio, int32(len(machines)), int32(gpus), until, started)
 	j.Spec.Preemptible = preemptible
-	return qRun{Job: j, Machines: machines, Ask: amount{gpus, 24000}, Until: planNow.Add(until), Preemptible: preemptible, Priority: prio, Started: planNow.Add(started)}
+	return qRun{Key: name, Job: j, Machines: machines, Ask: amount{gpus, 24000}, Until: planNow.Add(until), Preemptible: preemptible, Priority: prio, Started: planNow.Add(started)}
 }
 
 func view(ms []qMachine, runs []qRun, queued ...*devpodv1alpha1.Job) queueView {
-	return queueView{Now: planNow, Machines: ms, Running: runs, Queued: queued, Horizon: 14 * 24 * time.Hour,
-		Allowed: func(*devpodv1alpha1.Job, string) bool { return true }, QuotaOK: func(*devpodv1alpha1.Job, []*devpodv1alpha1.Job) bool { return true }}
+	es := make([]qEntry, len(queued))
+	for i, j := range queued {
+		es[i] = jobEntry(j)
+	}
+	return queueView{Now: planNow, Machines: ms, Running: runs, Queued: es, Horizon: 14 * 24 * time.Hour,
+		Allowed: func(qEntry, string) bool { return true }, QuotaOK: func(qEntry, []qEntry) bool { return true }}
 }
 
-func started(p queuePlan, name string) []string {
+func started(p queuePlan, key string) []string {
 	for _, s := range p.Starts {
-		if s.Job.Name == name {
+		if s.Entry.Key == key {
 			return s.Machines
 		}
 	}
@@ -125,7 +129,7 @@ func TestPlanPreempt(t *testing.T) {
 // A job over its owner's quota waits, and holds up nobody.
 func TestPlanQuota(t *testing.T) {
 	v := view([]qMachine{machine8("a")}, nil, qjob("q", 10, 1, 4, time.Hour, 0), qjob("r", 0, 1, 4, time.Hour, time.Minute))
-	v.QuotaOK = func(j *devpodv1alpha1.Job, _ []*devpodv1alpha1.Job) bool { return j.Name != "q" }
+	v.QuotaOK = func(e qEntry, _ []qEntry) bool { return e.Key != "q" }
 	p := planQueue(v)
 	if p.Waits["q"].Reason != "quota" || started(p, "r") == nil {
 		t.Fatalf("quota: %+v starts %+v", p.Waits["q"], p.Starts)
@@ -170,7 +174,7 @@ func TestPlanBackfillAroundHead(t *testing.T) {
 // The quota counts the jobs the same plan starts before.
 func TestPlanQuotaCountsPlanned(t *testing.T) {
 	v := view([]qMachine{machine8("a"), machine8("b")}, nil, qjob("one", 0, 1, 8, time.Hour, 0), qjob("two", 0, 1, 8, time.Hour, time.Minute))
-	v.QuotaOK = func(_ *devpodv1alpha1.Job, planned []*devpodv1alpha1.Job) bool { return len(planned) == 0 } // room for one
+	v.QuotaOK = func(_ qEntry, planned []qEntry) bool { return len(planned) == 0 } // room for one
 	p := planQueue(v)
 	if started(p, "one") == nil || started(p, "two") != nil || p.Waits["two"].Reason != "quota" {
 		t.Fatalf("starts %+v waits %+v", p.Starts, p.Waits)
