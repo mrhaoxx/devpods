@@ -105,3 +105,23 @@ func TestSlurmEdges(t *testing.T) {
 		t.Fatalf("job submit --cluster st2 from st: %d %q", code, errs)
 	}
 }
+
+// sbatch's --requeue / --no-requeue, in the script or on the command
+// line (which wins).
+func TestSbatchRequeueFlags(t *testing.T) {
+	f := newFakeAPI(t)
+	f.routes["POST /api/clusters/st/jobs"] = map[string]any{"id": "abc12", "cluster": "st"}
+	script := "#!/bin/bash\n#SBATCH --no-requeue\npython t.py\n"
+	if code, _, errs := f.runFrom("sbatch t.sh", origin, map[string]string{"t.sh": script}); code != 0 {
+		t.Fatalf("script: %d %q", code, errs)
+	}
+	if b := lastBody(t, f, "POST", "/api/clusters/st/jobs"); b["requeue"] != false {
+		t.Fatalf("script body %v", b)
+	}
+	if code, _, errs := f.runFrom("sbatch --requeue t.sh", origin, map[string]string{"t.sh": script}); code != 0 {
+		t.Fatalf("command line: %d %q", code, errs)
+	}
+	if b := lastBody(t, f, "POST", "/api/clusters/st/jobs"); b["requeue"] != true {
+		t.Fatalf("command line body %v", b)
+	}
+}

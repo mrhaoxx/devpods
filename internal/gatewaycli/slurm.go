@@ -36,8 +36,9 @@ command line wins): -N/--nodes, --gpus-per-node, -G/--gpus (in all),
 -c/--cpus-per-task (cores per machine), -t/--time, -J/--job-name,
 -o/--output and -e/--error (default slurm-%j.out in the directory it was
 submitted from; %j the job, %x its name), -p/--partition (the cluster),
---export ALL|NONE (the shell's environment, ALL by default), and the
-queue's own --priority N and --preemptible. -n/--ntasks may not be
+--export ALL|NONE (the shell's environment, ALL by default),
+--requeue / --no-requeue (stopped for another: wait again, or end), and
+the queue's own --priority N and --preemptible. -n/--ntasks may not be
 more than the machines (one rank each). Anything else (--array,
 --dependency, --mem, …) is refused by name.`
 
@@ -55,6 +56,7 @@ func parseSbatch(script string, argv []string) (submitOpts, error) {
 	o := submitOpts{nodes: 1, vars: map[string]string{}, env: map[string]string{}}
 	vals := map[string]string{}
 	bools := map[string]bool{}
+	var requeue *bool // the last of --requeue / --no-requeue said
 	read := func(words []string, takeScript bool) error {
 		for i := 0; i < len(words); i++ {
 			w := words[i]
@@ -81,6 +83,9 @@ func parseSbatch(script string, argv []string) (submitOpts, error) {
 			switch {
 			case name == "preemptible":
 				bools[name] = true
+				continue
+			case name == "requeue" || name == "no-requeue":
+				requeue = ptrBool(name == "requeue")
 				continue
 			case !sbatchValue[name]:
 				return fmt.Errorf("sbatch: --%s is not supported here", name)
@@ -177,6 +182,7 @@ func parseSbatch(script string, argv []string) (submitOpts, error) {
 		return o, fmt.Errorf("sbatch: --export takes ALL or NONE here (not %q)", o.export)
 	}
 	o.preemptible = bools["preemptible"]
+	o.requeue = requeue
 	out, errFile := vals["output"], vals["error"]
 	if out == "" {
 		out = "slurm-%j.out"

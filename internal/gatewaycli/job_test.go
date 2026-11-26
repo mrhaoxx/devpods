@@ -322,3 +322,24 @@ func TestJobSubmitWaitJobGone(t *testing.T) {
 		t.Fatalf("gone: %d %q", code, errs)
 	}
 }
+
+// job submit says whether a job stopped for another waits again.
+func TestJobSubmitRequeueFlags(t *testing.T) {
+	f := newFakeAPI(t)
+	f.routes["POST /api/clusters/st/jobs"] = map[string]any{"id": "abc12", "cluster": "st"}
+	if code, _, errs := f.runFrom("job submit -d --no-requeue -- true", origin, nil); code != 0 {
+		t.Fatalf("--no-requeue: %d %q", code, errs)
+	}
+	if b := lastBody(t, f, "POST", "/api/clusters/st/jobs"); b["requeue"] != false {
+		t.Fatalf("--no-requeue body %v", b)
+	}
+	if code, _, errs := f.runFrom("job submit -d -- true", origin, nil); code != 0 {
+		t.Fatalf("plain: %d %q", code, errs)
+	}
+	if _, has := lastBody(t, f, "POST", "/api/clusters/st/jobs")["requeue"]; has {
+		t.Fatal("requeue sent unasked")
+	}
+	if code, _, _ := f.runFrom("job submit -d --requeue --no-requeue -- true", origin, nil); code != ExitUsage {
+		t.Fatalf("both: %d", code)
+	}
+}

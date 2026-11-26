@@ -44,6 +44,9 @@ submit options:
   --priority p      higher runs first (at most your cap: job submit --dry-run says)
   --preemptible     may be stopped (and queued again) for higher jobs or a
                     reservation; starts sooner
+  --no-requeue      stopped for another (preempted, a reservation, its
+                    machine closed), it ends instead of waiting again
+                    (--requeue, the default, waits again)
   --host-network --privileged --cap-add CAP   what of the host the ranks ask
   --env K=V  --workdir DIR  --title T  --dry-run (where it would stand)
   --export ALL|NONE take the shell's environment along (inside a DevPod;
@@ -66,7 +69,7 @@ func jobCommands() []*command {
 		short: "the queue: submit jobs, see the queue, cancel, read a job's output",
 		long:  jobLong,
 		vals:  []string{"title", "from-devpod", "from-config", "var", "N", "nodes", "gpus", "cpus", "t", "time", "priority", "cap-add", "env", "workdir", "script", "rank", "attempt", "export"},
-		bools: []string{"preemptible", "host-network", "privileged", "dry-run", "mine", "ended", "f", "follow", "d", "detach"}, run: runJob}}
+		bools: []string{"preemptible", "host-network", "privileged", "dry-run", "mine", "ended", "f", "follow", "d", "detach", "requeue", "no-requeue"}, run: runJob}}
 }
 
 type jobView struct {
@@ -136,7 +139,8 @@ type submitOpts struct {
 	cpus                                           *float64
 	limit                                          time.Duration
 	preemptible, hostNetwork, privileged, dryRun   bool
-	detach                                         bool // job submit -d: submit and be done (else as srun)
+	requeue                                        *bool // nil: the console's default (requeued)
+	detach                                         bool  // job submit -d: submit and be done (else as srun)
 	capAdd                                         []string
 	command                                        []string
 	scriptText                                     string
@@ -207,6 +211,14 @@ func submitOptsOf(a *parsed) (submitOpts, error) {
 		return o, errors.New("--export takes ALL or NONE")
 	}
 	o.preemptible, o.hostNetwork, o.privileged, o.dryRun = a.has["preemptible"], a.has["host-network"], a.has["privileged"], a.has["dry-run"]
+	switch {
+	case a.has["requeue"] && a.has["no-requeue"]:
+		return o, errors.New("--requeue and --no-requeue say opposite things")
+	case a.has["requeue"]:
+		o.requeue = ptrBool(true)
+	case a.has["no-requeue"]:
+		o.requeue = ptrBool(false)
+	}
 	o.detach = a.has["d"] || a.has["detach"]
 	o.command = a.pos
 	return o, nil
@@ -256,6 +268,9 @@ func submitBody(e *Env, o submitOpts) (string, map[string]any, error) {
 	}
 	if o.limit > 0 {
 		body["timeLimitSeconds"] = int64(o.limit / time.Second)
+	}
+	if o.requeue != nil {
+		body["requeue"] = *o.requeue
 	}
 	if o.preemptible {
 		body["preemptible"] = true
@@ -895,3 +910,5 @@ func plural(n, one, many string) string {
 func validExport(v string) bool {
 	return v == "" || strings.EqualFold(v, "ALL") || strings.EqualFold(v, "NONE")
 }
+
+func ptrBool(v bool) *bool { return &v }
