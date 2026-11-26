@@ -100,7 +100,9 @@ type command struct {
 	admin   bool     // the API only answers admins
 	vals    []string // flags that take a value
 	bools   []string // flags that do not
-	run     func(e *Env, a *parsed) int
+	// raw: the command reads its own arguments (Slurm's); no flags parsed
+	raw bool
+	run func(e *Env, a *parsed) int
 }
 
 var commands []*command
@@ -143,6 +145,7 @@ func init() {
 	}
 	commands = append(commands, reserveCommands()...)
 	commands = append(commands, jobCommands()...)
+	commands = append(commands, slurmCommands()...)
 	commands = append(commands, snapshotCommands()...)
 	commands = append(commands, configCommands()...)
 	commands = append(commands, &command{group: "You", name: "whoami", short: "who you are, your quota and usage (per cluster)", run: runWhoami})
@@ -362,9 +365,14 @@ func Run(e *Env, argv []string) int {
 		help(e.Out, c.name, e.Interactive, true)
 		return ExitOK
 	}
-	a, err := parse(c, rest)
-	if err != nil {
-		return usage(e, c, err.Error())
+	var a *parsed
+	if c.raw {
+		a = &parsed{pos: rest, val: map[string]string{}, all: map[string][]string{}, has: map[string]bool{}}
+	} else {
+		var err error
+		if a, err = parse(c, rest); err != nil {
+			return usage(e, c, err.Error())
+		}
 	}
 	e.Cluster = a.cluster
 	if e.Cluster == "" && e.Origin != nil {

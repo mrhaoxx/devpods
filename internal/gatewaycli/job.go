@@ -125,6 +125,8 @@ type submitOpts struct {
 	capAdd                                         []string
 	command                                        []string
 	scriptText                                     string
+	args                                           []string // after the script
+	partition                                      string   // sbatch -p: the cluster
 }
 
 // submitOptsOf reads job submit's flags.
@@ -258,10 +260,17 @@ func submitBody(e *Env, o submitOpts) (string, map[string]any, error) {
 	if o.title != "" {
 		body["title"] = o.title
 	}
+	if len(o.args) > 0 {
+		body["args"] = o.args
+	}
 	if o.dryRun {
 		body["dryRun"] = true
 	}
-	return e.Cluster, body, nil
+	cluster := e.Cluster
+	if o.partition != "" {
+		cluster = o.partition
+	}
+	return cluster, body, nil
 }
 
 func jobSubmit(e *Env, a *parsed, c *command) int {
