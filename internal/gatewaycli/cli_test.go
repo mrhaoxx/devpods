@@ -486,3 +486,29 @@ func TestAPIOriginHeader(t *testing.T) {
 		t.Fatalf("no origin: header %q", got)
 	}
 }
+
+// start says whether the DevPod waits in the queue's line, and where.
+func TestStartSaysQueued(t *testing.T) {
+	f := newFakeAPI(t)
+	f.routes["PATCH /api/devpods/alice-a"] = map[string]any{"queued": true, "devpod": map[string]any{"metadata": map[string]any{"name": "alice-a",
+		"annotations": map[string]any{"devpod.io/queued-at": "2026-11-27T01:00:00Z", "devpod.io/queue-state": `{"position":2,"reason":"capacity"}`}}}}
+	if code, out, errs := f.run("start alice-a"); code != 0 || !strings.Contains(out, "alice-a: queued #2") {
+		t.Fatalf("queued: %d %q %q", code, out, errs)
+	}
+	f.routes["PATCH /api/devpods/alice-a"] = map[string]any{"queued": false, "devpod": map[string]any{"metadata": map[string]any{"name": "alice-a"}}}
+	if code, out, _ := f.run("start alice-a"); code != 0 || !strings.Contains(out, "alice-a: started") {
+		t.Fatalf("started: %d %q", code, out)
+	}
+}
+
+// start --priority N asks that priority in the line.
+func TestStartPriority(t *testing.T) {
+	f := newFakeAPI(t)
+	f.routes["PATCH /api/devpods/alice-a"] = map[string]any{"queued": true, "devpod": map[string]any{"metadata": map[string]any{"name": "alice-a"}}}
+	if code, _, errs := f.run("start --priority 5 alice-a"); code != 0 {
+		t.Fatalf("start: %d %q", code, errs)
+	}
+	if b := lastBody(t, f, "PATCH", "/api/devpods/alice-a"); b["running"] != true || b["priority"] != float64(5) {
+		t.Fatalf("body %v", b)
+	}
+}

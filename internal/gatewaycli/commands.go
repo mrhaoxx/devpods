@@ -126,7 +126,8 @@ func init() {
 				"--shell: bash, zsh or fish; host — the node's own shell (a privileged DevPod sharing the host's PID); or a login command of\n" +
 				"your own, e.g. --shell /usr/bin/zsh or --shell \"tmux new -A -s main\" (`ssh … cmd`, scp and sftp keep a plain shell).",
 			vals: append([]string{"collab"}, edit...), run: runCreate},
-		{name: "start", args: "<name>…", short: "start (wake) DevPods", run: runRunning(true)},
+		{name: "start", args: "<name>… [--priority N]", short: "start (wake) DevPods — through the queue's line, where it is on",
+			vals: []string{"priority"}, run: runRunning(true)},
 		{name: "stop", args: "<name>…", short: "stop (hibernate) DevPods; the home volume stays", run: runRunning(false)},
 		{name: "redeploy", args: "<name>…", short: "recreate the Pod (sessions drop, the home volume stays)", run: runRedeploy},
 		{name: "rebuild", args: "<name>… [--dry-run]", short: "rebuild DevPods from the config they were made from, as it is now",
@@ -813,9 +814,45 @@ func runRunning(on bool) func(e *Env, a *parsed) int {
 		name, done = "start", "started"
 	}
 	return func(e *Env, a *parsed) int {
-		return each(e, a, find(name), done, func(n string) (string, error) {
-			_, err := call(e, "PATCH", dpPath(e, n), map[string]any{"running": on}, nil)
-			return "", err
+		body := map[string]any{"running": on}
+		if p := a.val["priority"]; p != "" {
+			n, err := strconv.Atoi(p)
+			if err != nil || n < 0 {
+				return usage(e, find(name), "--priority takes a number, 0 or more")
+			}
+			body["priority"] = n
+		}
+		if !on {
+			return each(e, a, find(name), done, func(n string) (string, error) {
+				_, err := call(e, "PATCH", dpPath(e, n), body, nil)
+				return "", err
+			})
+		}
+		// a start may wait in the queue's line: say so, and where
+		return each(e, a, find(name), "", func(n string) (string, error) {
+			var out struct {
+				Queued bool `json:"queued"`
+				DevPod struct {
+					Metadata struct {
+						Annotations map[string]string `json:"annotations"`
+					} `json:"metadata"`
+				} `json:"devpod"`
+			}
+			if _, err := call(e, "PATCH", dpPath(e, n), body, &out); err != nil {
+				return "", err
+			}
+			if !out.Queued {
+				return "started", nil
+			}
+			var st struct {
+				Position int    `json:"position"`
+				Reason   string `json:"reason"`
+			}
+			_ = json.Unmarshal([]byte(out.DevPod.Metadata.Annotations["devpod.io/queue-state"]), &st)
+			if st.Position > 0 {
+				return fmt.Sprintf("queued #%d", st.Position), nil
+			}
+			return "queued (it starts by itself in its turn)", nil
 		})
 	}
 }

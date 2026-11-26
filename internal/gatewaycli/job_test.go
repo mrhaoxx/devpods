@@ -343,3 +343,15 @@ func TestJobSubmitRequeueFlags(t *testing.T) {
 		t.Fatalf("both: %d", code)
 	}
 }
+
+// The queue's list shows the DevPods waiting in its line, marked so.
+func TestJobListShowsDevPods(t *testing.T) {
+	f := newFakeAPI(t)
+	f.routes["GET /api/jobs"] = map[string]any{"items": []any{
+		map[string]any{"id": "abc12", "owner": "bob", "phase": "Queued", "position": 1, "nodes": 1, "gpus": 8, "timeLimitSeconds": 3600, "reason": "capacity"}},
+		"devpods": []any{map[string]any{"name": "alice-a", "owner": "alice", "mine": true, "priority": 0, "position": 2, "reason": "behind", "detail": map[string]any{"head": "abc12"}, "gpus": 1, "cpus": 4, "queuedAt": "2026-11-27T01:00:00Z"}}}
+	code, out, errs := f.run("job list")
+	if code != 0 || !strings.Contains(out, "devpod/alice-a") || strings.Index(out, "abc12") > strings.Index(out, "devpod/alice-a") {
+		t.Fatalf("list: %d %q %q", code, out, errs)
+	}
+}

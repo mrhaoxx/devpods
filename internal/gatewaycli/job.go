@@ -574,7 +574,14 @@ func jobList(e *Env, a *parsed) int {
 		path += "?" + q.Encode()
 	}
 	var list struct {
-		Items []jobView `json:"items"`
+		Items   []jobView `json:"items"`
+		DevPods []struct {
+			Name, Cluster, Owner, Reason string
+			Priority, Position           int32
+			GPUs                         int64
+			CPUs                         float64
+			Detail                       map[string]string
+		} `json:"devpods"`
 	}
 	raw, err := call(e, "GET", path, nil, &list)
 	if err != nil {
@@ -583,6 +590,15 @@ func jobList(e *Env, a *parsed) int {
 	if a.json {
 		printJSON(e, raw)
 		return ExitOK
+	}
+	// the DevPods waiting in line stand in it as one-machine entries
+	for _, d := range list.DevPods {
+		name := "devpod/" + d.Name
+		if d.Name == "" {
+			name = "devpod"
+		}
+		list.Items = append(list.Items, jobView{Cluster: d.Cluster, ID: name, Owner: d.Owner, Phase: "Queued", Reason: d.Reason, Detail: d.Detail,
+			Position: int(d.Position), Nodes: 1, GPUs: int(d.GPUs), CPUs: d.CPUs, Priority: int(d.Priority)})
 	}
 	if len(list.Items) == 0 {
 		fmt.Fprintln(e.Out, "the queue is empty; submit a job with `job submit -- command`")
