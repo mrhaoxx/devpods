@@ -20,6 +20,7 @@ import (
 	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync/atomic"
 	"syscall"
@@ -58,6 +59,10 @@ func main() {
 	// sshd running root's shell for host or a login command (login.go)
 	if strings.TrimPrefix(filepath.Base(os.Args[0]), "-") == "devpod-login" {
 		os.Exit(runLogin(os.Args[1:]))
+	}
+	// dp, and sbatch / squeue / scancel: the console's CLI (dp.go)
+	if name := filepath.Base(os.Args[0]); slices.Contains(dpNames, name) {
+		os.Exit(runDP(name, os.Args[1:]))
 	}
 	if len(os.Args) >= 2 && os.Args[1] == "bootstrap" {
 		os.Exit(runBootstrap())
@@ -378,6 +383,11 @@ func runBootstrap() int {
 	_ = os.Remove(link)
 	if err := os.Symlink("../devpod-supervisor", link); err != nil {
 		fmt.Fprintf(os.Stderr, "supervisor bootstrap: devpod-login: %v\n", err)
+	}
+	for _, name := range dpNames {
+		if err := os.Symlink("../devpod-supervisor", filepath.Join(dst, "bin", name)); err != nil {
+			fmt.Fprintf(os.Stderr, "supervisor bootstrap: %s: %v\n", name, err)
+		}
 	}
 	return 0
 }
