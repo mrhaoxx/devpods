@@ -996,14 +996,18 @@ func TestReservationShareSurvivesOldWriter(t *testing.T) {
 	if rec := doJSON(t, s.HandlePatchReservationForTest(), "PATCH", "/api/reservations/"+v.ID, map[string]string{"id": v.ID}, alice, `{"purpose":"x"}`); rec.Code != http.StatusOK {
 		t.Fatalf("patch: %d %s", rec.Code, rec.Body)
 	}
-	if err := k8sClient.Get(ctx, client_key_cluster(v.ID), &nr); err != nil || nr.Spec.GPU == nil || *nr.Spec.GPU != 4 {
-		t.Fatalf("after a change: %+v %v", nr.Spec, err)
+	waitFor(t, func() bool { return k8sClient.Get(ctx, client_key_cluster(v.ID), &nr) == nil && nr.Spec.Purpose == "x" }) // the cache caught up
+	if nr.Spec.GPU == nil || *nr.Spec.GPU != 4 {
+		t.Fatalf("after a change: %+v", nr.Spec)
 	}
 	// any change keeps the annotation in step with the spec
 	if rec := doJSON(t, s.HandlePatchReservationForTest(), "PATCH", "/api/reservations/"+v.ID, map[string]string{"id": v.ID}, alice, `{"end":"`+slot.Add(30*time.Minute).Format(time.RFC3339)+`"}`); rec.Code != http.StatusOK {
 		t.Fatalf("shorten: %d %s", rec.Code, rec.Body)
 	}
-	if err := k8sClient.Get(ctx, client_key_cluster(v.ID), &nr); err != nil || nr.Annotations[devpodv1alpha1.ShareAnnotation] != "gpu=4,cpu=96" {
-		t.Fatalf("annotation after a change: %v %v", nr.Annotations, err)
+	waitFor(t, func() bool {
+		return k8sClient.Get(ctx, client_key_cluster(v.ID), &nr) == nil && nr.Spec.End.Time.Equal(slot.Add(30*time.Minute))
+	})
+	if nr.Annotations[devpodv1alpha1.ShareAnnotation] != "gpu=4,cpu=96" {
+		t.Fatalf("annotation after a change: %v", nr.Annotations)
 	}
 }
