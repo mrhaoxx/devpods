@@ -200,9 +200,10 @@ func (s *Server) clearIn(ctx context.Context, cluster string, all []devpodv1alph
 		at    time.Time
 		forID string
 	}
-	want := map[string]mark{}    // by DevPod name
-	requeue := map[string]bool{} // preemptible jobs in the way, by id
-	hold := map[string]bool{}    // on a machine not judged now: left as they are
+	want := map[string]mark{}     // by DevPod name
+	requeue := map[string]bool{}  // preemptible jobs in the way, by id
+	hold := map[string]bool{}     // on a machine not judged now: left as they are
+	others := s.othersOn(cluster) // what other workloads hold, by machine
 	for node, rs := range byNode {
 		var moments []time.Time
 		for _, nr := range rs {
@@ -236,7 +237,7 @@ func (s *Server) clearIn(ctx context.Context, cluster string, all []devpodv1alph
 		}
 		for _, t := range moments {
 			id := clearedFor(rs, t)
-			for _, p := range toClear(c, rs, left, t) {
+			for _, p := range toClear(c, rs, left, others[node], t) {
 				if p.Job != nil {
 					// a preemptible job's rank: its job stops at once and waits again
 					requeue[p.Job.ID] = true

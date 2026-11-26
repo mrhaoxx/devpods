@@ -30,6 +30,7 @@ import (
 	"sigs.k8s.io/yaml"
 
 	devpodv1alpha1 "github.com/mrhaoxx/devpod/api/v1alpha1"
+	"github.com/mrhaoxx/devpod/internal/agent"
 	"github.com/mrhaoxx/devpod/internal/gatewaycli"
 	"github.com/mrhaoxx/devpod/internal/gpures"
 	"github.com/mrhaoxx/devpod/internal/webui/clusters"
@@ -97,6 +98,9 @@ type Server struct {
 	queueBeforeStarts func()
 	// ctrlWord: this cluster's controller's word (devpod-controller), as
 	// last read (at ctrlWordAt) — a console of one cluster
+	// otherUsage: what workloads that are not DevPods hold on each machine
+	// of a cluster (nil: its agent's word; tests set it)
+	otherUsage func(cluster string) map[string]agent.NodeUsage
 	ctrlWordMu sync.Mutex
 	ctrlWord   *corev1.ConfigMap
 	ctrlWordAt time.Time

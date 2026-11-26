@@ -16,6 +16,7 @@ import (
 
 	devpodv1alpha1 "github.com/mrhaoxx/devpod/api/v1alpha1"
 	"github.com/mrhaoxx/devpod/internal/access"
+	"github.com/mrhaoxx/devpod/internal/agent"
 )
 
 // Handler accessors for the external test package. Test-only file.
@@ -200,3 +201,9 @@ func (s *Server) WriteJobStatusForTest(ctx context.Context, j *devpodv1alpha1.Jo
 // SetQueueBeforeStartsForTest runs f in each round after the plan, before
 // its jobs are started.
 func (s *Server) SetQueueBeforeStartsForTest(f func()) { s.queueBeforeStarts = f }
+
+// SetOtherUsageForTest makes f what other workloads hold on each machine
+// of a cluster (the agent's word otherwise).
+func (s *Server) SetOtherUsageForTest(f func(cluster string) map[string]agent.NodeUsage) {
+	s.otherUsage = f
+}

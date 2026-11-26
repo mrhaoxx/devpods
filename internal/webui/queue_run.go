@@ -581,6 +581,7 @@ func (s *Server) queueViewFor(ctx context.Context, cc *clusters.ClusterClients, 
 		return queueView{}, nil, err
 	}
 	cluster := s.resCluster(ctx)
+	others := s.othersOn(cluster) // what other workloads hold, by machine
 	activeByID := map[string]*devpodv1alpha1.Job{}
 	for _, j := range active {
 		activeByID[j.Name] = j
@@ -611,7 +612,7 @@ func (s *Server) queueViewFor(ctx context.Context, cc *clusters.ClusterClients, 
 			interactive = append(interactive, p)
 		}
 		c := capacityOf(n)
-		machines = append(machines, qMachine{Name: n.Name, Cap: c, Interactive: loadAt(c, rs, interactive, now, "").outside(), Rs: rs})
+		machines = append(machines, qMachine{Name: n.Name, Cap: c, Interactive: loadAt(c, rs, interactive, now, "").with(others[n.Name]).outside(), Rs: rs})
 	}
 	var running []qRun
 	for _, j := range active {

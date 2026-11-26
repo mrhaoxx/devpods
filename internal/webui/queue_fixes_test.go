@@ -24,6 +24,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 
 	devpodv1alpha1 "github.com/mrhaoxx/devpod/api/v1alpha1"
+	"github.com/mrhaoxx/devpod/internal/agent"
 	"github.com/mrhaoxx/devpod/internal/gpures"
 	"github.com/mrhaoxx/devpod/internal/webui"
 )
@@ -407,4 +408,22 @@ func TestQueueChoosesPortBlocks(t *testing.T) {
 			t.Fatalf("MASTER_PORT %s, block %d", e.Value, ja.Status.PortBase)
 		}
 	}
+}
+
+// What other workloads hold on a machine (the agent says) is not the
+// queue's: a job does not start on cards other pods have.
+func TestQueueCountsOtherPods(t *testing.T) {
+	p, _ := queueRig(t, "qv", "qv-alice")
+	p.s.SetOtherUsageForTest(func(string) map[string]agent.NodeUsage {
+		return map[string]agent.NodeUsage{p.n1: {CPU: 8, GPU: 6}}
+	})
+	id := submit(t, p, "qv-alice", 1, 4, nil)
+	for range 3 {
+		p.s.QueueRound(context.Background())
+	}
+	if j := jobNow(t, id); j.Status.Phase != devpodv1alpha1.JobQueued || j.Status.Reason != "capacity" || j.Status.Detail["free"] != "2" {
+		t.Fatalf("job %s %s %v", j.Status.Phase, j.Status.Reason, j.Status.Detail)
+	}
+	p.s.SetOtherUsageForTest(func(string) map[string]agent.NodeUsage { return map[string]agent.NodeUsage{p.n1: {GPU: 4}} })
+	roundUntil(t, p, id, devpodv1alpha1.JobStarting)
 }

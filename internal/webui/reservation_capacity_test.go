@@ -173,26 +173,26 @@ func TestToClear(t *testing.T) {
 		runningOn("bob-1", "bob", amount{2, 0}, at(8, 30)),
 		runningOn("carol-1", "carol", amount{4, 0}, at(9, 30)),
 	}
-	got := toClear(cap8, held(4, "96"), on, now)
+	got := toClear(cap8, held(4, "96"), on, amount{}, now)
 	if len(got) != 1 || got[0].DP.Name != "carol-1" {
 		t.Errorf("4 held: %v", dpNames(got))
 	}
 	on[0].Ask = amount{2, 0}
-	if got := toClear(cap8, held(2, "48"), on, now); len(got) != 0 {
+	if got := toClear(cap8, held(2, "48"), on, amount{}, now); len(got) != 0 {
 		t.Errorf("nothing short: %v", dpNames(got))
 	}
 	twins := []placed{runningOn("x-1", "xu", amount{4, 0}, at(9, 0)), runningOn("x-2", "xu", amount{4, 0}, at(9, 0))}
-	if got := toClear(cap8, held(-1, ""), twins, now); len(got) != 2 || got[0].DP.Name != "x-2" {
+	if got := toClear(cap8, held(-1, ""), twins, amount{}, now); len(got) != 2 || got[0].DP.Name != "x-2" {
 		t.Errorf("whole held, two in the way: %v", dpNames(got))
 	}
-	if got := toClear(cap8, held(4, "96"), twins, now); len(got) != 1 || got[0].DP.Name != "x-2" {
+	if got := toClear(cap8, held(4, "96"), twins, amount{}, now); len(got) != 1 || got[0].DP.Name != "x-2" {
 		t.Errorf("started together, the later name goes: %v", dpNames(got))
 	}
 	// a holder's DevPods beyond what they hold are in the way too: alice
 	// holds 1 core and runs 6 cards; bob's 4 cards need 2 of them
 	rs := []*devpodv1alpha1.NodeReservation{rsvOf("r1", "alice", at(10, 0), at(11, 0), 0, "1"), rsvOf("r2", "bob", at(10, 0), at(11, 0), 4, "96")}
 	beyond := []placed{runningOn("a1", "alice", amount{4, 0}, at(8, 0)), runningOn("a2", "alice", amount{2, 0}, at(9, 0))}
-	if got := toClear(cap8, rs, beyond, now); len(got) != 1 || got[0].DP.Name != "a2" {
+	if got := toClear(cap8, rs, beyond, amount{}, now); len(got) != 1 || got[0].DP.Name != "a2" {
 		t.Errorf("a holder beyond their share: %v", dpNames(got))
 	}
 }
@@ -240,12 +240,12 @@ func TestToClearJobs(t *testing.T) {
 	job := runningOn("j-0", "bob", amount{4, 0}, at(8, 0))
 	job.Job = &jobRef{ID: "j", Preemptible: true}
 	newer := runningOn("carol-1", "carol", amount{4, 0}, at(9, 30))
-	if got := toClear(cap8, rs, []placed{job, newer}, now); len(got) != 1 || got[0].DP.Name != "j-0" {
+	if got := toClear(cap8, rs, []placed{job, newer}, amount{}, now); len(got) != 1 || got[0].DP.Name != "j-0" {
 		t.Fatalf("preemptible first: %v", dpNames(got))
 	}
 	stuck := runningOn("k-0", "bob", amount{4, 0}, at(9, 50))
 	stuck.Job = &jobRef{ID: "k"}
-	if got := toClear(cap8, rs, []placed{stuck, newer}, now); len(got) != 1 || got[0].DP.Name != "carol-1" {
+	if got := toClear(cap8, rs, []placed{stuck, newer}, amount{}, now); len(got) != 1 || got[0].DP.Name != "carol-1" {
 		t.Fatalf("a job not preemptible is never taken: %v", dpNames(got))
 	}
 }
@@ -266,5 +266,32 @@ func TestRankUseIsOutsideReservations(t *testing.T) {
 	}
 	if err := l.refusal("n1", "bob", false, amount{4, 0}); err == nil {
 		t.Error("bob took the cards alice reserved")
+	}
+}
+
+// What other workloads (not DevPods) take on a machine counts as outside
+// every reservation: it leaves less to start a DevPod on, and more to
+// clear at a reservation's start.
+func TestOtherPodsTakeRoom(t *testing.T) {
+	now := at(10, 30)
+	rs := []*devpodv1alpha1.NodeReservation{rsvOf("r1", "alice", at(10, 0), at(11, 0), 4, "0")}
+	l := loadAt(cap8, rs, nil, now, "")
+	if err := l.refusal("n1", "bob", false, amount{4, 0}); err != nil {
+		t.Fatalf("4 free outside alice's reservation: %v", err)
+	}
+	if err := l.with(amount{2, 0}).refusal("n1", "bob", false, amount{4, 0}); err == nil {
+		t.Fatal("2 of them taken by other pods: bob's 4 do not fit")
+	}
+	if o := l.with(amount{2, 0}).outside(); o.GPU != 2 {
+		t.Fatalf("outside %v", o)
+	}
+	// at the reservation's start, bob's 4 (outside) and 2 of other pods'
+	// leave alice 2 of her 4: bob's DevPod is cleared
+	bob := runningOn("bob-1", "bob", amount{4, 0}, at(9, 0))
+	if got := toClear(cap8, rs, []placed{bob}, amount{2, 0}, now); len(got) != 1 {
+		t.Fatalf("cleared %v", dpNames(got))
+	}
+	if got := toClear(cap8, rs, []placed{bob}, amount{}, now); len(got) != 0 {
+		t.Fatalf("no other pods, nothing short: %v", dpNames(got))
 	}
 }

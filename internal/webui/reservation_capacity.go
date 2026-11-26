@@ -7,6 +7,7 @@ package webui
 import (
 	"context"
 	"fmt"
+	"math"
 	"net/http"
 	"sort"
 	"strconv"
@@ -17,6 +18,7 @@ import (
 	"k8s.io/apimachinery/pkg/api/resource"
 
 	devpodv1alpha1 "github.com/mrhaoxx/devpod/api/v1alpha1"
+	"github.com/mrhaoxx/devpod/internal/agent"
 	"github.com/mrhaoxx/devpod/internal/gpures"
 )
 
@@ -338,6 +340,15 @@ type jobRef struct {
 type nodeLoad struct {
 	Cap, Booked amount
 	Held, Use   map[string]amount
+	// Other: what workloads that are not DevPods hold (the agent says):
+	// outside every reservation, and nobody's to clear
+	Other amount
+}
+
+// with: l, other workloads holding other.
+func (l nodeLoad) with(other amount) nodeLoad {
+	l.Other = other
+	return l
 }
 
 // loadAt: the machine (capacity c, reservations rs, DevPods on) at t,
@@ -369,9 +380,10 @@ func useKey(p placed) string {
 	return p.DP.Spec.Owner
 }
 
-// outside: what DevPods take beyond their owners' reservations.
+// outside: what DevPods take beyond their owners' reservations, and
+// other workloads take.
 func (l nodeLoad) outside() amount {
-	var o amount
+	o := l.Other
 	for u, use := range l.Use {
 		o = o.add(use.sub(l.Held[u]).clamped())
 	}
@@ -411,8 +423,8 @@ func (l nodeLoad) refusal(node, owner string, needsRes bool, ask amount) *server
 // holder's past what they hold), preemptible jobs' ranks first, then the
 // newest first (then the later name), only while one makes a shortage
 // smaller; never a rank of a job that may not be stopped.
-func toClear(c amount, rs []*devpodv1alpha1.NodeReservation, on []placed, t time.Time) []placed {
-	l := loadAt(c, rs, on, t, "")
+func toClear(c amount, rs []*devpodv1alpha1.NodeReservation, on []placed, other amount, t time.Time) []placed {
+	l := loadAt(c, rs, on, t, "").with(other)
 	short := l.outside().sub(c.sub(l.Booked))
 	if short.GPU <= 0 && short.CPU <= 0 {
 		return nil
@@ -464,6 +476,8 @@ type rooms struct {
 	rs  map[string][]*devpodv1alpha1.NodeReservation
 	on  map[string][]placed
 	now time.Time
+	// other: what workloads that are not DevPods hold, by machine
+	other map[string]amount
 }
 
 // roomsIn: ctx's cluster's reservable machines among nodes; nil when
@@ -496,6 +510,7 @@ func (s *Server) roomsIn(ctx context.Context, nodes []corev1.Node) (*rooms, erro
 	if r.on, err = s.devPodsByNode(ctx, s.kc(ctx)); err != nil {
 		return nil, err
 	}
+	r.other = s.othersOn(cluster)
 	return r, nil
 }
 
@@ -512,7 +527,7 @@ func (r *rooms) refusal(n *corev1.Node, owner string, needsRes bool, skip string
 	if !ok || c == (amount{}) || !r.reservedNow(n.Name) {
 		return nil
 	}
-	return loadAt(c, r.rs[n.Name], r.on[n.Name], r.now, skip).refusal(n.Name, owner, needsRes, ask)
+	return loadAt(c, r.rs[n.Name], r.on[n.Name], r.now, skip).with(r.other[n.Name]).refusal(n.Name, owner, needsRes, ask)
 }
 
 // reservedNow: a reservation of n is in force.
@@ -526,4 +541,25 @@ func (r *rooms) reservedNow(node string) bool {
 		}
 	}
 	return false
+}
+
+// othersOn: what workloads that are not DevPods hold on cluster's machines,
+// by machine, as its agent says (none known: nil — a console of its own
+// cluster, without an agent, cannot see them).
+func (s *Server) othersOn(cluster string) map[string]amount {
+	f := s.otherUsage
+	if f == nil {
+		if s.Clusters == nil {
+			return nil
+		}
+		f = func(c string) map[string]agent.NodeUsage {
+			in, _ := s.Clusters.Info(c)
+			return in.Nodes
+		}
+	}
+	out := map[string]amount{}
+	for node, u := range f(cluster) {
+		out[node] = amount{GPU: int64(u.GPU), CPU: int64(math.Ceil(u.CPU * 1000))}
+	}
+	return out
 }
