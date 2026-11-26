@@ -327,3 +327,25 @@ func init() {
 // ended its Pod at its deadline (activeDeadlineSeconds: its job's time
 // limit, with some slack): the job is out of time, not failed.
 const RankDeadlineMessage = "DeadlineExceeded"
+
+// The console's queue keeps these on a DevPod (design 2026-11-27); the
+// controller reads none of them.
+const (
+	// QueuedAtAnnotation: in the queue's line since (RFC 3339, ns): a
+	// start asked for, the DevPod stopped until the queue starts it
+	QueuedAtAnnotation = "devpod.io/queued-at"
+	// QueuePriorityAnnotation: its priority in the line
+	QueuePriorityAnnotation = "devpod.io/queue-priority"
+	// QueueStateAnnotation: where it stands (JSON: position, reason,
+	// detail, expected), the queue leader's
+	QueueStateAnnotation = "devpod.io/queue-state"
+	// AutoPinAnnotation: the queue pinned it — "<node>@<queued-at>", the
+	// node it was given and since when it was in line
+	AutoPinAnnotation = "devpod.io/auto-pin"
+	// QueueAvoidAnnotation: a machine it is not given until a time —
+	// "<node> <RFC 3339>" (it would not schedule there)
+	QueueAvoidAnnotation = "devpod.io/queue-avoid"
+	// ExpectClearAnnotation: a reservation will want its room then
+	// (RFC 3339): it was started where nothing kept clear of one
+	ExpectClearAnnotation = "devpod.io/expect-clear"
+)
