@@ -16,6 +16,7 @@ import (
 	"net/http/httptest"
 	"reflect"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -51,18 +52,27 @@ type fakeAPI struct {
 	calls  []string // "METHOD path body"
 	routes map[string]any
 	status map[string]int
-	raw    map[string]string // answered as they are (text, an event stream)
+	raw    map[string]string     // answered as they are (text, an event stream)
+	dyn    map[string]func() any // answered anew each call (a job's state as it goes)
+	mu     sync.Mutex
 }
 
 func newFakeAPI(t *testing.T) *fakeAPI {
-	f := &fakeAPI{t: t, routes: map[string]any{}, status: map[string]int{}, raw: map[string]string{}}
+	f := &fakeAPI{t: t, routes: map[string]any{}, status: map[string]int{}, raw: map[string]string{}, dyn: map[string]func() any{}}
 	f.srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Header.Get("Authorization") != "Bearer gwk_k3y" || r.Header.Get(UserHeader) != "alice" {
 			t.Errorf("headers: Authorization=%q %s=%q", r.Header.Get("Authorization"), UserHeader, r.Header.Get(UserHeader))
 		}
 		body, _ := io.ReadAll(r.Body)
 		key := r.Method + " " + r.URL.RequestURI()
+		f.mu.Lock()
 		f.calls = append(f.calls, strings.TrimSpace(key+" "+string(body)))
+		fn := f.dyn[key]
+		f.mu.Unlock()
+		if fn != nil {
+			_ = json.NewEncoder(w).Encode(fn())
+			return
+		}
 		if text, ok := f.raw[key]; ok {
 			if strings.HasPrefix(text, "data:") {
 				w.Header().Set("Content-Type", "text/event-stream")

@@ -8,6 +8,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -175,5 +176,73 @@ func TestJobSubmitExportsEnv(t *testing.T) {
 	}
 	if env := lastBody(t, f, "POST", "/api/clusters/st/jobs")["env"]; env != nil {
 		t.Fatalf("sbatch NONE env %v", env)
+	}
+}
+
+// runWait runs line from a DevPod with an interrupt channel.
+func (f *fakeAPI) runWait(line string, interrupt <-chan struct{}) (int, string, string) {
+	f.t.Helper()
+	argv, err := Split(line)
+	if err != nil {
+		f.t.Fatal(err)
+	}
+	var out, errw syncBuffer
+	code := Run(&Env{Ctx: context.Background(), Session: context.Background(), User: "alice", API: NewAPI(f.srv.URL, "k3y"), Out: &out, Err: &errw, Origin: origin,
+		Interrupt: interrupt, Now: func() time.Time { return time.Date(2026, 11, 27, 4, 0, 0, 0, time.UTC) }}, argv)
+	return code, out.String(), errw.String()
+}
+
+// job submit --wait is srun's: it waits, prints every rank's output as it
+// comes (marked by rank when several), and ends with the job's exit code.
+func TestJobSubmitWait(t *testing.T) {
+	saved := waitPoll
+	waitPoll = 20 * time.Millisecond
+	t.Cleanup(func() { waitPoll = saved })
+	f := newFakeAPI(t)
+	f.routes["POST /api/clusters/st/jobs"] = map[string]any{"id": "abc12", "cluster": "st", "phase": "Queued", "nodes": 2}
+	n := 0
+	f.dyn["GET /api/jobs/abc12"] = func() any {
+		n++
+		switch {
+		case n == 1:
+			return map[string]any{"id": "abc12", "cluster": "st", "phase": "Queued", "nodes": 2, "position": 1, "reason": "behind", "detail": map[string]any{"head": "zzz99"}}
+		case n < 4:
+			return map[string]any{"id": "abc12", "cluster": "st", "phase": "Running", "nodes": 2, "ranks": []any{map[string]any{"rank": 0, "node": "m700"}, map[string]any{"rank": 1, "node": "m701"}}}
+		}
+		return map[string]any{"id": "abc12", "cluster": "st", "phase": "Failed", "nodes": 2, "reason": "rank-failed", "detail": map[string]any{"rank": "1", "exit": "3"}}
+	}
+	f.raw["GET /api/jobs/abc12/logs?rank=0&follow=1"] = "data: hello from 0\n\n"
+	f.raw["GET /api/jobs/abc12/logs?rank=1&follow=1"] = "data: hello from 1\n\n"
+	code, out, errs := f.runWait("job submit --wait -N 2 --gpus 1 -- torchrun t.py", nil)
+	if code != 3 || !strings.Contains(out, "0: hello from 0\n") || !strings.Contains(out, "1: hello from 1\n") {
+		t.Fatalf("--wait: %d out %q err %q", code, out, errs)
+	}
+	if !strings.Contains(errs, "abc12") || !strings.Contains(errs, "m700") {
+		t.Fatalf("progress: %q", errs)
+	}
+}
+
+// Interrupted (Ctrl-C, or dp's caller gone), --wait cancels the job.
+func TestJobSubmitWaitInterrupted(t *testing.T) {
+	saved := waitPoll
+	waitPoll = 20 * time.Millisecond
+	t.Cleanup(func() { waitPoll = saved })
+	f := newFakeAPI(t)
+	f.routes["POST /api/clusters/st/jobs"] = map[string]any{"id": "abc12", "cluster": "st", "phase": "Queued", "nodes": 1}
+	f.dyn["GET /api/jobs/abc12"] = func() any {
+		return map[string]any{"id": "abc12", "cluster": "st", "phase": "Queued", "nodes": 1, "position": 3}
+	}
+	f.status["DELETE /api/jobs/abc12"] = 204
+	f.routes["DELETE /api/jobs/abc12"] = nil
+	stop := make(chan struct{})
+	time.AfterFunc(300*time.Millisecond, func() { close(stop) })
+	code, _, errs := f.runWait("job submit --wait --gpus 1 -- sleep 100", stop)
+	if code != 130 || !strings.Contains(errs, "cancelled") {
+		t.Fatalf("interrupted: %d %q", code, errs)
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if !slices.Contains(f.calls, "DELETE /api/jobs/abc12") {
+		t.Fatalf("calls %v", f.calls)
 	}
 }

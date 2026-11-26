@@ -5,13 +5,17 @@
 package gatewaycli
 
 import (
+	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"net/url"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -43,6 +47,9 @@ submit options:
   --env K=V  --workdir DIR  --title T  --dry-run (where it would stand)
   --export ALL|NONE take the shell's environment along (inside a DevPod;
                     ALL, as sbatch's): PATH goes in front of the ranks' own
+  --wait            as srun: wait, print every rank's output as it comes
+                    (marked by rank when several), end with the job's exit
+                    code (124 out of time); Ctrl-C cancels the job
 Each rank runs the command in a login bash with RANK, WORLD_SIZE, MASTER_ADDR,
 MASTER_PORT (and DEVPOD_JOB_PORTS) set; the job ends when every rank has.`
 
@@ -56,7 +63,7 @@ func jobCommands() []*command {
 		short: "the queue: submit jobs, see the queue, cancel, read a job's output",
 		long:  jobLong,
 		vals:  []string{"title", "from-devpod", "from-config", "var", "N", "nodes", "gpus", "cpus", "t", "time", "priority", "cap-add", "env", "workdir", "script", "rank", "attempt", "export"},
-		bools: []string{"preemptible", "host-network", "privileged", "dry-run", "mine", "ended", "f", "follow"}, run: runJob}}
+		bools: []string{"preemptible", "host-network", "privileged", "dry-run", "mine", "ended", "f", "follow", "wait"}, run: runJob}}
 }
 
 type jobView struct {
@@ -126,6 +133,7 @@ type submitOpts struct {
 	cpus                                           *float64
 	limit                                          time.Duration
 	preemptible, hostNetwork, privileged, dryRun   bool
+	wait                                           bool // job submit --wait: as srun
 	capAdd                                         []string
 	command                                        []string
 	scriptText                                     string
@@ -196,6 +204,7 @@ func submitOptsOf(a *parsed) (submitOpts, error) {
 		return o, errors.New("--export takes ALL or NONE")
 	}
 	o.preemptible, o.hostNetwork, o.privileged, o.dryRun = a.has["preemptible"], a.has["host-network"], a.has["privileged"], a.has["dry-run"]
+	o.wait = a.has["wait"]
 	o.command = a.pos
 	return o, nil
 }
@@ -319,7 +328,154 @@ func jobSubmit(e *Env, a *parsed, c *command) int {
 	if err != nil {
 		return usage(e, c, err.Error())
 	}
+	if o.wait && !o.dryRun {
+		var v jobView
+		if _, err := call(e, "POST", scoped(e, cluster, "/api/jobs"), body, &v); err != nil {
+			return fail(e, err)
+		}
+		ref := joinRef(v.Cluster, v.ID)
+		fmt.Fprintf(e.Err, "submitted job %s\n", ref)
+		return waitJob(e, ref, v.ID, o.nodes)
+	}
 	return postJob(e, a, scoped(e, cluster, "/api/jobs"), body)
+}
+
+// waitPoll: how often job submit --wait looks at its job.
+var waitPoll = 2 * time.Second
+
+// waitJob is job submit --wait (srun's way): it says on standard error
+// where the job is, prints every rank's output on standard output as it
+// comes (each line marked "<rank>: " when there are several; a rank's
+// log is followed from its start, so nothing is missed), and returns the
+// job's exit code once it has ended. Interrupted — Ctrl-C, or dp's caller
+// gone — it cancels the job.
+func waitJob(e *Env, ref, id string, nodes int) int {
+	ctx := e.Session
+	if ctx == nil {
+		ctx = e.Ctx
+	}
+	var mu sync.Mutex // the ranks' lines, one at a time
+	print := func(rank int, line string) {
+		mu.Lock()
+		defer mu.Unlock()
+		if nodes > 1 {
+			fmt.Fprintf(e.Out, "%d: %s\n", rank, line)
+		} else {
+			fmt.Fprintln(e.Out, line)
+		}
+	}
+	logs := "/api/jobs/" + url.PathEscape(id) + "/logs?rank="
+	var streams sync.WaitGroup
+	follow := func() { // live, from each rank's start, until its log ends
+		for r := 0; r < nodes; r++ {
+			streams.Add(1)
+			go func() {
+				defer streams.Done()
+				_ = e.API.Stream(ctx, e.User, logs+strconv.Itoa(r)+"&follow=1", time.Hour, func(data []byte) error {
+					print(r, string(data))
+					return nil
+				})
+			}()
+		}
+	}
+	kept := func() { // ended before it was followed: what was kept
+		for r := 0; r < nodes; r++ {
+			for try := 0; try < 10; try++ { // kept a moment after the end
+				raw, err := e.API.Do(ctx, e.User, "GET", logs+strconv.Itoa(r), nil)
+				if err == nil {
+					for _, line := range strings.Split(strings.TrimRight(string(raw), "\n"), "\n") {
+						print(r, line)
+					}
+					break
+				}
+				time.Sleep(time.Second)
+			}
+		}
+	}
+	tick := time.NewTicker(waitPoll)
+	defer tick.Stop()
+	said, following := "", false
+	for {
+		var j jobView
+		if raw, err := e.API.Do(ctx, e.User, "GET", "/api/jobs/"+url.PathEscape(id), nil); err == nil {
+			if json.Unmarshal(raw, &j) == nil {
+				if s := waitState(j, e.Now()); s != said {
+					fmt.Fprintf(e.Err, "job %s: %s\n", ref, s)
+					said = s
+				}
+				ended := j.Phase == "Succeeded" || j.Phase == "Failed" || j.Phase == "TimedOut" || j.Phase == "Cancelled"
+				switch {
+				case ended && !following:
+					kept()
+					return jobExit(j)
+				case ended:
+					done := make(chan struct{})
+					go func() { streams.Wait(); close(done) }()
+					select { // the ranks' logs end as they are stopped
+					case <-done:
+					case <-time.After(30 * time.Second):
+					}
+					return jobExit(j)
+				case j.Phase == "Running" && !following:
+					following = true
+					follow()
+				}
+			}
+		}
+		select {
+		case <-e.Interrupt:
+			return cancelWaited(e, ref, id)
+		case <-ctx.Done():
+			return cancelWaited(e, ref, id)
+		case <-tick.C:
+		}
+	}
+}
+
+// waitState: where a waited job is, for standard error.
+func waitState(j jobView, now time.Time) string {
+	var on []string
+	for _, r := range j.Ranks {
+		if r.Node != "" && !slices.Contains(on, r.Node) {
+			on = append(on, r.Node)
+		}
+	}
+	switch j.Phase {
+	case "Starting":
+		return "starting on " + strings.Join(on, ", ")
+	case "Running":
+		return "running on " + strings.Join(on, ", ")
+	}
+	return jobState(j, now)
+}
+
+// jobExit: a job's end as an exit code — 0 done, a failed rank's code (1
+// when it has none), 124 out of time (timeout's), 1 cancelled.
+func jobExit(j jobView) int {
+	switch j.Phase {
+	case "Succeeded":
+		return 0
+	case "TimedOut":
+		return 124
+	case "Failed":
+		if n, err := strconv.Atoi(j.Detail["exit"]); err == nil && n > 0 && n < 256 {
+			return n
+		}
+	}
+	return 1
+}
+
+// cancelWaited cancels the job --wait waited for (its caller interrupted
+// or gone), as srun does, and returns 130 (a Ctrl-C's).
+func cancelWaited(e *Env, ref, id string) int {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	if _, err := e.API.Do(ctx, e.User, "DELETE", "/api/jobs/"+url.PathEscape(id), nil); err != nil {
+		fmt.Fprintf(e.Err, "job %s: could not cancel it: %v\n", ref, err)
+	} else {
+		fmt.Fprintf(e.Err, "job %s: cancelled\n", ref)
+	}
+	return 130
 }
 
 // postJob submits body to path and says how it went.
