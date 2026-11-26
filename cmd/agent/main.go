@@ -166,7 +166,7 @@ func main() {
 		},
 		Telemetry: telemetry,
 		Info: func(ctx context.Context) agent.Info {
-			in := agent.Info{AgentVersion: version, Capabilities: caps, Nodes: usage.Nodes()}
+			in := agent.Info{AgentVersion: version, Nodes: usage.Nodes()}
 			if v, err := kc.Discovery().ServerVersion(); err == nil {
 				in.KubernetesVersion = v.GitVersion
 			}
@@ -176,6 +176,12 @@ func main() {
 					in.ControllerVersion = img[i+1:]
 				}
 			}
+			// what the controller says it can do (jobs, shared homes)
+			cm, err := kc.CoreV1().ConfigMaps(devpodNamespace).Get(ctx, devpodv1alpha1.ControllerFeaturesConfigMap, metav1.GetOptions{})
+			if err != nil {
+				cm = nil
+			}
+			in.Capabilities, in.SharedHomes = agent.ControllerCaps(caps, in.ControllerVersion, cm)
 			return in
 		},
 	})

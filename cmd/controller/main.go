@@ -7,6 +7,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"flag"
 	"fmt"
 	"net/http"
@@ -21,6 +22,7 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/cache"
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
+	"sigs.k8s.io/controller-runtime/pkg/manager"
 	"sigs.k8s.io/controller-runtime/pkg/metrics/server"
 
 	devpodv1alpha1 "github.com/mrhaoxx/devpod/api/v1alpha1"
@@ -30,6 +32,9 @@ import (
 )
 
 var setupLog = ctrl.Log.WithName("setup")
+
+// version is the image's tag, set at build (-X main.version).
+var version = "dev"
 
 // die logs a setup error via the configured structured logger and exits.
 func die(err error, msg string) {
@@ -204,6 +209,23 @@ func main() {
 		PlainHTTPRegistries: splitList(snapshotPlainHTTP), PullSecrets: splitList(pullSecrets),
 	}).SetupWithManager(mgr); err != nil {
 		die(err, "set up DevPodSnapshotReconciler")
+	}
+
+	// what this controller can do, for the cluster's agent to say
+	sharedHomes := ""
+	if gw.Spec.HomeDir != nil {
+		sharedHomes = gw.Spec.HomeDir.MountPrefix
+		if sharedHomes == "" {
+			sharedHomes = "/home"
+		}
+	}
+	if err := mgr.Add(manager.RunnableFunc(func(ctx context.Context) error {
+		if err := controllers.AnnounceFeatures(ctx, mgr.GetClient(), gw.Spec.DevPodNamespace, version, sharedHomes); err != nil {
+			setupLog.Error(err, "announce features")
+		}
+		return nil
+	})); err != nil {
+		die(err, "add announce")
 	}
 
 	if err := mgr.AddHealthzCheck("ping", func(_ *http.Request) error { return nil }); err != nil {

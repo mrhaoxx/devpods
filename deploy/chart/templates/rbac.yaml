@@ -91,6 +91,14 @@ rules:
 - apiGroups: [""]
   resources: ["configmaps"]
   verbs: ["get","list","watch"]
+# what this controller can do (devpod-controller), written when it starts
+- apiGroups: [""]
+  resources: ["configmaps"]
+  verbs: ["create"]
+- apiGroups: [""]
+  resources: ["configmaps"]
+  resourceNames: ["devpod-controller"]
+  verbs: ["patch"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding

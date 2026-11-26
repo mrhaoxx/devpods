@@ -19,6 +19,9 @@ type Info struct {
 	ControllerVersion string   `json:"controllerVersion,omitempty"`
 	KubernetesVersion string   `json:"kubernetesVersion,omitempty"`
 	Capabilities      []string `json:"capabilities,omitempty"`
+	// SharedHomes: where owners' home directories are mounted, shared by
+	// the machines (<it>/<owner>); "" when they are not (the controller says).
+	SharedHomes string `json:"sharedHomes,omitempty"`
 	// Gateways the agent is connected to.
 	Gateways []string `json:"gateways,omitempty"`
 	// Nodes: what pods other than DevPods hold on each node (requests),

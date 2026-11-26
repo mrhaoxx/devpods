@@ -11,7 +11,10 @@ import (
 	"testing"
 	"time"
 
+	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	devpodv1alpha1 "github.com/mrhaoxx/devpod/api/v1alpha1"
 	"github.com/mrhaoxx/devpod/internal/webui"
@@ -21,6 +24,25 @@ import (
 func queueOn(s *webui.Server) {
 	s.Queue = &webui.QueueRules{DefaultTimeLimit: 24 * time.Hour, MaxTimeLimit: 72 * time.Hour, GangTimeout: 5 * time.Minute,
 		PreemptGrace: 2 * time.Minute, Tick: 5 * time.Second, KeepEnded: 30 * 24 * time.Hour}
+	controllerSays(devpodv1alpha1.FeatureJobs, "/home")
+}
+
+// controllerSays: the cluster's controller says it can do features, with
+// homes shared at sharedHomes ("" not).
+func controllerSays(features, sharedHomes string) {
+	ctx := context.Background()
+	data := map[string]string{devpodv1alpha1.ControllerVersionKey: "test", devpodv1alpha1.ControllerFeaturesKey: features}
+	if sharedHomes != "" {
+		data[devpodv1alpha1.ControllerSharedHomesKey] = sharedHomes
+	}
+	cm := &corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{Name: devpodv1alpha1.ControllerFeaturesConfigMap, Namespace: "devpods"}, Data: data}
+	if err := k8sClient.Create(ctx, cm); apierrors.IsAlreadyExists(err) {
+		var cur corev1.ConfigMap
+		if k8sClient.Get(ctx, client.ObjectKeyFromObject(cm), &cur) == nil {
+			cur.Data = data
+			_ = k8sClient.Update(ctx, &cur)
+		}
+	}
 }
 
 // priorityRules makes the rules these, and waits until the console sees

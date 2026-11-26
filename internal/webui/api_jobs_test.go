@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"strings"
 	"testing"
+	"time"
 
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
@@ -219,4 +220,41 @@ func TestPriorityRulesAdmin(t *testing.T) {
 		var l devpodv1alpha1.JobPriorityRuleList
 		return k8sClient.List(context.Background(), &l) == nil && len(l.Items) == 1 && l.Items[0].Spec.MaxPriority == 10
 	})
+}
+
+// A job runs where the machines share storage: under the owner's shared
+// home (or on a shared volume of the source), never in what only the
+// DevPod's machine has.
+func TestJobWorkdirMustBeShared(t *testing.T) {
+	p := jobRig(t, "jw", "jw-alice")
+	alice := p.as("jw-alice")
+	body := func(wd string) map[string]any {
+		return map[string]any{"from": map[string]any{"devpod": "jw-alice-dev1"}, "nodes": 1, "gpus": 1, "command": "true", "workdir": wd}
+	}
+	if code, v := submitJob(t, p.s, alice, body("/root/x")); code != http.StatusBadRequest || v.Code != "WORKDIR_NOT_SHARED" || !strings.Contains(v.Message, "/home/jw-alice") {
+		t.Errorf("/root/x: %d %+v", code, v)
+	}
+	if code, v := submitJob(t, p.s, alice, body("x")); code != http.StatusBadRequest {
+		t.Errorf("relative: %d %+v", code, v)
+	}
+	if code, v := submitJob(t, p.s, alice, body("/home/jw-alice/proj")); code != http.StatusCreated {
+		t.Errorf("in the shared home: %d %+v", code, v)
+	}
+	if code, v := submitJob(t, p.s, alice, body("/home/jw-bob/proj")); code != http.StatusBadRequest {
+		t.Errorf("another's home is not one's own: %d %+v", code, v)
+	}
+}
+
+// Where the controller has not said it runs job ranks (an older one), the
+// cluster takes no jobs.
+func TestQueueOffWithoutTheControllersWord(t *testing.T) {
+	setupSuite(t)
+	controllerSays("", "/home")
+	t.Cleanup(func() { controllerSays(devpodv1alpha1.FeatureJobs, "/home") })
+	s, sm := newServer(t)
+	s.Queue = &webui.QueueRules{DefaultTimeLimit: 24 * time.Hour, MaxTimeLimit: 72 * time.Hour, GangTimeout: 5 * time.Minute, Tick: 5 * time.Second, KeepEnded: time.Hour}
+	code, v := submitJob(t, s, forge(sm, "jq-alice", false), map[string]any{"from": map[string]any{"devpod": "jq-alice-dev1"}, "nodes": 1, "gpus": 1, "command": "true"})
+	if code != http.StatusNotFound || v.Code != "QUEUE_OFF" {
+		t.Fatalf("submit: %d %+v", code, v)
+	}
 }

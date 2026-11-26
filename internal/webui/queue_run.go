@@ -106,7 +106,7 @@ func (s *Server) QueueRound(ctx context.Context) {
 		}
 	}
 	for cluster, jobs := range byCluster {
-		if s.takesJobs(cluster) {
+		if s.takesJobs(ctx, cluster) {
 			s.queueIn(ctx, cluster, jobs, endedIn[cluster], now)
 		}
 	}
@@ -771,7 +771,7 @@ func (s *Server) handleJobsFree(w http.ResponseWriter, r *http.Request) {
 	for _, cc := range s.ks(r) {
 		ctx := s.in(r.Context(), cc)
 		cluster := s.resCluster(ctx)
-		if !shown(cc.Name) || !s.takesJobs(cluster) {
+		if !shown(cc.Name) || !s.takesJobs(ctx, cluster) {
 			continue
 		}
 		var active []*devpodv1alpha1.Job

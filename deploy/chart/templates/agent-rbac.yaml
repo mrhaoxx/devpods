@@ -33,6 +33,12 @@ rules:
   resources: ["configmaps"]
   resourceNames: ["devpod-gateway-keys"]
   verbs: ["get", "update"]
+# What the cluster's controller can do (it writes devpod-controller): the
+# cluster takes queue jobs only where it runs them.
+- apiGroups: [""]
+  resources: ["configmaps"]
+  resourceNames: ["devpod-controller"]
+  verbs: ["get"]
 # Redeploy: delete a DevPod's Pod so the controller recreates it.
 - apiGroups: [""]
   resources: ["pods"]

@@ -95,6 +95,11 @@ type Server struct {
 	queueCleaning sync.Map
 	// queueBeforeStarts: tests' hook, after a round's plan, before starts
 	queueBeforeStarts func()
+	// ctrlWord: this cluster's controller's word (devpod-controller), as
+	// last read (at ctrlWordAt) — a console of one cluster
+	ctrlWordMu sync.Mutex
+	ctrlWord   *corev1.ConfigMap
+	ctrlWordAt time.Time
 	// Snapshots: saving a DevPod as an image; nil = off.
 	Snapshots *Snapshots
 	// HTTPProxy: DevPod ports published through the gateway; nil = off.

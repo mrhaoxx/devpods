@@ -8,8 +8,10 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"math"
 	"net/http"
+	"path"
 	"slices"
 	"sort"
 	"strings"
@@ -26,6 +28,7 @@ import (
 
 	devpodv1alpha1 "github.com/mrhaoxx/devpod/api/v1alpha1"
 	"github.com/mrhaoxx/devpod/internal/access"
+	"github.com/mrhaoxx/devpod/internal/agent"
 	"github.com/mrhaoxx/devpod/internal/configvars"
 	"github.com/mrhaoxx/devpod/internal/gpures"
 )
@@ -145,7 +148,7 @@ func (s *Server) queueOK(w http.ResponseWriter, ctx context.Context) bool {
 		s.writeErr(w, http.StatusNotFound, "QUEUE_OFF", "the queue is not on in this console", nil)
 		return false
 	}
-	if !s.takesJobs(s.resCluster(ctx)) {
+	if !s.takesJobs(ctx, s.resCluster(ctx)) {
 		s.writeErr(w, http.StatusNotFound, "QUEUE_OFF", "this cluster takes no jobs (its controller does not run them)", nil)
 		return false
 	}
@@ -154,12 +157,71 @@ func (s *Server) queueOK(w http.ResponseWriter, ctx context.Context) bool {
 
 // takesJobs: cluster runs job ranks — its agent says "jobs"; in a console
 // of one cluster, always.
-func (s *Server) takesJobs(cluster string) bool {
-	if s.Clusters == nil {
+func (s *Server) takesJobs(ctx context.Context, cluster string) bool {
+	jobs, _ := s.controllerSays(ctx, cluster)
+	return jobs
+}
+
+// controllerSays: what cluster's controller says it can do — run job
+// ranks (and the cluster was given jobs) — and where owners' homes are
+// shared ("" not). A console of several clusters hears it from their
+// agents; a console of one reads its controller's word itself.
+func (s *Server) controllerSays(ctx context.Context, cluster string) (jobs bool, sharedHomes string) {
+	if s.Clusters != nil {
+		in, ok := s.Clusters.Info(cluster)
+		return ok && slices.Contains(in.Capabilities, agent.CapJobs), in.SharedHomes
+	}
+	caps, homes := agent.ControllerCaps([]string{agent.CapJobs}, "", s.localControllerWord(ctx))
+	return slices.Contains(caps, agent.CapJobs), homes
+}
+
+// localControllerWord: this cluster's controller's devpod-controller
+// ConfigMap (nil: none), read at most every 10 s.
+func (s *Server) localControllerWord(ctx context.Context) *corev1.ConfigMap {
+	s.ctrlWordMu.Lock()
+	defer s.ctrlWordMu.Unlock()
+	if time.Since(s.ctrlWordAt) < 10*time.Second {
+		return s.ctrlWord
+	}
+	var cm corev1.ConfigMap
+	s.ctrlWord, s.ctrlWordAt = nil, time.Now()
+	if err := s.Reader.Get(ctx, types.NamespacedName{Namespace: s.NS, Name: devpodv1alpha1.ControllerFeaturesConfigMap}, &cm); err == nil {
+		s.ctrlWord = &cm
+	} else if !apierrors.IsNotFound(err) {
+		slog.Warn("controller_word", "err", err)
+	}
+	return s.ctrlWord
+}
+
+// sharedDir: dir is on storage every machine has — under owner's shared
+// home (sharedHomes/<owner>), or under a mount of the ranks' container
+// of a volume that is not the Pod's own (a host directory, NFS, a
+// claim, CephFS, GlusterFS, CSI).
+func sharedDir(dir, owner, sharedHomes string, spec *corev1.PodSpec) bool {
+	under := func(root string) bool {
+		root = strings.TrimRight(root, "/")
+		return root != "" && (dir == root || strings.HasPrefix(dir, root+"/"))
+	}
+	if sharedHomes != "" && under(path.Join(sharedHomes, owner)) {
 		return true
 	}
-	in, ok := s.Clusters.Info(cluster)
-	return ok && slices.Contains(in.Capabilities, "jobs")
+	if len(spec.Containers) == 0 {
+		return false
+	}
+	vols := map[string]corev1.Volume{}
+	for _, v := range spec.Volumes {
+		vols[v.Name] = v
+	}
+	for _, m := range spec.Containers[0].VolumeMounts {
+		v, ok := vols[m.Name]
+		if !ok {
+			continue
+		}
+		if (v.HostPath != nil || v.NFS != nil || v.PersistentVolumeClaim != nil || v.CephFS != nil || v.Glusterfs != nil || v.CSI != nil) && under(m.MountPath) {
+			return true
+		}
+	}
+	return false
 }
 
 func validTitle(t string) (string, error) {
@@ -409,6 +471,22 @@ func (s *Server) buildJob(ctx context.Context, sess Session, req JobRequest) (*d
 	}
 	applyPrivileges(&tmpl.Spec, req.Privileges)
 	owner := sess.User
+	// where the ranks run: on storage the machines share, or they (on
+	// other machines than the DevPod's) would not find it
+	if wd := req.Workdir; wd != "" {
+		if !path.IsAbs(wd) {
+			return nil, badRequest("the working directory is a full path (it is %q)", wd)
+		}
+		_, homes := s.controllerSays(ctx, s.resCluster(ctx))
+		if !sharedDir(path.Clean(wd), owner, homes, &tmpl.Spec) {
+			where := "this cluster's homes are not shared: work on a shared volume of the DevPod (a host directory, NFS, a claim), or give no working directory"
+			if homes != "" {
+				where = fmt.Sprintf("work under %s (your shared home) or on a shared volume of the DevPod", path.Join(homes, owner))
+			}
+			return nil, &serverErr{http.StatusBadRequest, "WORKDIR_NOT_SHARED",
+				fmt.Sprintf("the job would run in %s, which the machines do not share: its ranks, on other machines, would not find it — %s", wd, where), nil}
+		}
+	}
 	machines, usable, err := s.jobMachines(ctx, owner, access.NeedsOf(&tmpl.Spec))
 	if err != nil {
 		return nil, &serverErr{http.StatusServiceUnavailable, "CLUSTER_UNAVAILABLE", err.Error(), nil}

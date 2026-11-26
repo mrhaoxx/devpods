@@ -28,6 +28,12 @@ rules:
 - apiGroups: [""]
   resources: ["pods"]
   verbs: ["delete"]
+# What this cluster's controller can do (it writes devpod-controller): the
+# console's own cluster takes queue jobs only where it runs them.
+- apiGroups: [""]
+  resources: ["configmaps"]
+  resourceNames: ["devpod-controller"]
+  verbs: ["get"]
 {{- if include "devpod.telemetry.on" $ }}
 # TelemetryAlert Events on DevPods.
 - apiGroups: [""]
