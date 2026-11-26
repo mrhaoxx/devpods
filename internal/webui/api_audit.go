@@ -13,11 +13,13 @@ import (
 	"log/slog"
 	"net/http"
 	"path"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
 	"time"
 
+	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/types"
 
@@ -25,6 +27,7 @@ import (
 	"github.com/mrhaoxx/devpod/internal/audit/policy"
 	"github.com/mrhaoxx/devpod/internal/audit/rawlog"
 	"github.com/mrhaoxx/devpod/internal/audit/store"
+	"github.com/mrhaoxx/devpod/internal/render"
 )
 
 const defaultAuditRange = 7 * 24 * time.Hour
@@ -40,6 +43,7 @@ func (s *Server) registerAuditRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/audit/commands", s.handleAuditCommands)
 	mux.HandleFunc("GET /api/audit/files", s.handleAuditFiles)
 	mux.HandleFunc("GET /api/audit/http", s.handleAuditHTTP)
+	mux.HandleFunc("GET /api/audit/events", s.handleAuditEvents)
 	mux.HandleFunc("GET /api/audit/alerts", s.handleAuditAlerts)
 	mux.HandleFunc("GET /api/audit/access-log", s.handleAuditAccessLog)
 	mux.HandleFunc("GET /api/audit/presence", s.handleAuditPresence)
@@ -621,4 +625,121 @@ func (s *Server) setAuditPolicy(ctx context.Context, name string, pol *devpodv1a
 		u.Spec.AuditPolicy = pol
 		return nil
 	})
+}
+
+// handleAuditEvents serves GET /api/audit/events: what was done to
+// DevPods, jobs and machines, in the viewer's scope (one's own: what one
+// owns or did), narrowed by kind, cluster, owner, actor, object, action.
+func (s *Server) handleAuditEvents(w http.ResponseWriter, r *http.Request) {
+	sess, ok := s.auditSession(w, r)
+	if !ok {
+		return
+	}
+	from, to, err := timeRange(r)
+	if err != nil {
+		s.writeErr(w, http.StatusBadRequest, "BAD_REQUEST", err.Error(), nil)
+		return
+	}
+	sc, err := s.auditScope(r.Context(), sess, true)
+	if err != nil {
+		s.writeErr(w, http.StatusInternalServerError, "INTERNAL", err.Error(), nil)
+		return
+	}
+	q := r.URL.Query()
+	s.answerEvents(w, r, store.EventFilter{Scope: sc, Kind: q.Get("kind"), Cluster: q.Get("cluster"), Owner: q.Get("owner"),
+		Actor: q.Get("actor"), Object: q.Get("object"), Action: q.Get("action"), From: from, To: to})
+}
+
+// answerEvents answers with a page of the events f asks.
+func (s *Server) answerEvents(w http.ResponseWriter, r *http.Request, f store.EventFilter) {
+	f.Cursor, f.Limit = r.URL.Query().Get("cursor"), queryLimit(r)
+	items, next, err := s.Audit.Store.SearchEvents(r.Context(), f)
+	if err != nil {
+		s.auditStoreErr(w, err)
+		return
+	}
+	if items == nil {
+		items = []store.EventRow{}
+	}
+	s.writeJSON(w, http.StatusOK, page[store.EventRow]{Items: items, Next: next})
+}
+
+// historySince: the span of an object's history — from/to when asked,
+// else from since (a minute before, for clocks apart) until now.
+func historySince(r *http.Request, since time.Time) (time.Time, time.Time, error) {
+	if r.URL.Query().Get("from") != "" || r.URL.Query().Get("to") != "" {
+		return timeRange(r)
+	}
+	return since.Add(-time.Minute), time.Now().Add(time.Minute), nil
+}
+
+// mayReadHistory: sess may read the history of what owner (with
+// collaborators) has in cluster on nodes — theirs, a collaborator's, an
+// admin's, or one whose audit scope takes in the cluster or a node.
+func (s *Server) mayReadHistory(ctx context.Context, sess Session, cluster, owner string, collaborators, nodes []string) bool {
+	if sess.Admin || sess.User == owner || slices.Contains(collaborators, sess.User) {
+		return true
+	}
+	sc, err := s.auditScope(ctx, sess, false)
+	if err != nil {
+		return false
+	}
+	if sc == nil || slices.Contains(sc.Clusters, cluster) {
+		return true
+	}
+	for _, m := range sc.Machines {
+		if m.Cluster == cluster && slices.Contains(nodes, m.Node) {
+			return true
+		}
+	}
+	return false
+}
+
+// handleDevPodHistory serves GET /api/devpods/{name}/history: what was
+// done to the DevPod (this one, by its UID), since it was made.
+func (s *Server) handleDevPodHistory(w http.ResponseWriter, r *http.Request) {
+	sess, ok := s.auditSession(w, r)
+	if !ok {
+		return
+	}
+	ctx := r.Context()
+	var dp devpodv1alpha1.DevPod
+	err := s.k(r).Client.Get(ctx, types.NamespacedName{Name: r.PathValue("name"), Namespace: s.NS}, &dp)
+	nodes := []string{pinnedNode(&dp)}
+	var pod corev1.Pod
+	if err == nil && s.k(r).Client.Get(ctx, types.NamespacedName{Name: render.PodName(&dp), Namespace: s.NS}, &pod) == nil {
+		nodes = append(nodes, pod.Spec.NodeName)
+	}
+	cluster := s.clusterLabel(s.k(r))
+	if err != nil || !s.mayReadHistory(ctx, sess, cluster, dp.Spec.Owner, dp.Spec.Collaborators, nodes) {
+		s.writeErr(w, http.StatusNotFound, "NOT_FOUND", "no such DevPod", nil)
+		return
+	}
+	from, to, err := historySince(r, dp.CreationTimestamp.Time)
+	if err != nil {
+		s.writeErr(w, http.StatusBadRequest, "BAD_REQUEST", err.Error(), nil)
+		return
+	}
+	s.answerEvents(w, r, store.EventFilter{Kind: "devpod", ObjectUID: string(dp.UID), From: from, To: to})
+}
+
+// handleJobHistory serves GET /api/jobs/{id}/history: what was done to
+// the job, since it was submitted.
+func (s *Server) handleJobHistory(w http.ResponseWriter, r *http.Request) {
+	sess, ok := s.auditSession(w, r)
+	if !ok {
+		return
+	}
+	var j devpodv1alpha1.Job
+	if err := s.Reader.Get(r.Context(), types.NamespacedName{Name: r.PathValue("id")}, &j); err != nil ||
+		!s.mayReadHistory(r.Context(), sess, j.Spec.Cluster, j.Spec.Owner, nil, ranksMachines(j.Status.Ranks)) {
+		s.writeErr(w, http.StatusNotFound, "NOT_FOUND", "no such job", nil)
+		return
+	}
+	from, to, err := historySince(r, j.CreationTimestamp.Time)
+	if err != nil {
+		s.writeErr(w, http.StatusBadRequest, "BAD_REQUEST", err.Error(), nil)
+		return
+	}
+	s.answerEvents(w, r, store.EventFilter{Kind: "job", Object: j.Name, Cluster: j.Spec.Cluster, From: from, To: to})
 }

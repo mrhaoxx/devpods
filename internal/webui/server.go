@@ -129,6 +129,7 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("GET /api/jobs/limits", s.handleJobLimits)
 	mux.HandleFunc("GET /api/jobs/free", s.handleJobsFree)
 	mux.HandleFunc("GET /api/jobs/{id}", s.handleGetJob)
+	mux.HandleFunc("GET /api/jobs/{id}/history", s.handleJobHistory)
 	mux.HandleFunc("DELETE /api/jobs/{id}", s.handleCancelJob)
 	mux.HandleFunc("POST /api/jobs/{id}/resubmit", s.handleResubmitJob)
 	mux.HandleFunc("GET /api/jobs/{id}/logs", s.handleJobLogs)
@@ -138,6 +139,7 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("GET /api/nodes/managed", s.handleManagedNodes)
 	mux.HandleFunc("GET /api/devpods/{name}/shell", s.handleDevPodShell)
 	mux.HandleFunc("GET /api/devpods/{name}/events", s.handleDevPodEvents)
+	mux.HandleFunc("GET /api/devpods/{name}/history", s.handleDevPodHistory)
 	// Single SSE connection carrying both DevPod status and its events.
 	mux.HandleFunc("GET /api/devpods/{name}/stream", s.handleDevPodStream)
 	mux.HandleFunc("GET /api/devpods/{name}/pod", s.handleDevPodPod)

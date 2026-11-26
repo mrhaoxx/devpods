@@ -6,6 +6,7 @@ package webui_test
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"net/http"
 	"reflect"
@@ -296,5 +297,80 @@ func TestMeGrantsStall(t *testing.T) {
 	before := tr.asked.Load()
 	if code := me("as-root", true); code != http.StatusOK || tr.asked.Load() != before {
 		t.Fatalf("an admin: %d, grants asked %d times", code, tr.asked.Load()-before)
+	}
+}
+
+// The record of what was done is read in one's scope, narrowed as asked.
+func TestAuditEventsScope(t *testing.T) {
+	s, sm, st := scopeRig(t)
+	viewAudit(t, s, "as-bob", "user = as-bob and machine = as-n1")
+	viewAudit(t, s, "as-dan", "user = as-dan")
+	list := func(user string, admin bool, query string) store.EventFilter {
+		t.Helper()
+		if rec := route(t, s, "GET", "/api/audit/events"+query, forge(sm, user, admin), ""); rec.Code != http.StatusOK {
+			t.Fatalf("%s: %d %s", user, rec.Code, rec.Body)
+		}
+		st.mu.Lock()
+		defer st.mu.Unlock()
+		return st.eventF
+	}
+	if f := list("as-eve", false, ""); !reflect.DeepEqual(f.Scope, &store.Scope{User: "as-eve"}) {
+		t.Errorf("no grant: %+v", f.Scope)
+	}
+	if f := list("as-bob", false, ""); !reflect.DeepEqual(f.Scope, &store.Scope{User: "as-bob", Machines: []store.ClusterNode{{Cluster: "", Node: "as-n1"}}}) {
+		t.Errorf("a machine grant: %+v", f.Scope)
+	}
+	if f := list("as-dan", false, ""); !reflect.DeepEqual(f.Scope, &store.Scope{User: "as-dan", Clusters: []string{""}}) {
+		t.Errorf("a whole-cluster grant: %+v", f.Scope)
+	}
+	f := list("as-root", true, "?kind=devpod&action=start&object=x&owner=o&actor=a")
+	if f.Scope != nil || f.Kind != "devpod" || f.Action != "start" || f.Object != "x" || f.Owner != "o" || f.Actor != "a" || f.From.IsZero() {
+		t.Errorf("an admin's: %+v", f)
+	}
+}
+
+// A DevPod's history is its owner's, its collaborators', an admin's and
+// its machine's auditors' to read — of this DevPod, since it was made.
+func TestDevPodHistory(t *testing.T) {
+	s, sm, st := scopeRig(t)
+	viewAudit(t, s, "as-bob", "user = as-bob and machine = as-n1")
+	ctx := context.Background()
+	dp := &devpodv1alpha1.DevPod{ObjectMeta: metav1.ObjectMeta{Name: "as-carol-h", Namespace: "devpods"}, Spec: devpodv1alpha1.DevPodSpec{Owner: "as-carol", Collaborators: []string{"as-cat"},
+		Pod: &devpodv1alpha1.PodWorkloadSpec{Spec: corev1.PodSpec{NodeSelector: map[string]string{"kubernetes.io/hostname": "as-n1"}, Containers: []corev1.Container{{Name: "dev", Image: "x"}}}}}}
+	if err := k8sClient.Create(ctx, dp); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = k8sClient.Delete(ctx, dp) })
+	waitFor(t, func() bool { return waitDevPod(t, dp.Name).UID != "" })
+	st.mu.Lock()
+	st.events = []store.EventRow{
+		{Kind: "devpod", Object: dp.Name, ObjectUID: string(dp.UID), Owner: "as-carol", Actor: "as-carol", Action: "create"},
+		{Kind: "devpod", Object: dp.Name, ObjectUID: "an-earlier-one", Owner: "as-carol", Actor: "as-carol", Action: "delete"},
+	}
+	st.mu.Unlock()
+	get := func(user string, admin bool) (int, []store.EventRow) {
+		t.Helper()
+		rec := route(t, s, "GET", "/api/devpods/"+dp.Name+"/history", forge(sm, user, admin), "")
+		var out struct{ Items []store.EventRow }
+		_ = json.Unmarshal(rec.Body.Bytes(), &out)
+		return rec.Code, out.Items
+	}
+	for _, who := range []struct {
+		user  string
+		admin bool
+	}{{"as-carol", false}, {"as-cat", false}, {"as-bob", false}, {"as-root", true}} {
+		code, items := get(who.user, who.admin)
+		if code != http.StatusOK || len(items) != 1 || items[0].Action != "create" {
+			t.Errorf("%s: %d %+v", who.user, code, items)
+		}
+	}
+	if code, _ := get("as-eve", false); code != http.StatusNotFound {
+		t.Errorf("a stranger: %d", code)
+	}
+	st.mu.Lock()
+	from := st.eventF.From
+	st.mu.Unlock()
+	if from.After(dp.CreationTimestamp.Time) {
+		t.Errorf("from %s, after it was made (%s)", from, dp.CreationTimestamp.Time)
 	}
 }
