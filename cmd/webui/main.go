@@ -309,16 +309,22 @@ func main() {
 	if !mgr.GetCache().WaitForCacheSync(ctx) {
 		fatal(fmt.Errorf("cache sync failed"))
 	}
-	// reservations are carried out by the console, on one replica at a
-	// time (a lease of their own: telemetry's may be off)
-	if srv.Reservations != nil {
+	// reservations are carried out, and the queue scheduled, by the
+	// console, on one replica at a time (a lease of their own: telemetry's
+	// may be off)
+	if srv.Reservations != nil || srv.Queue != nil {
 		el, err := tf.newElector(restCfg)
 		if err != nil {
 			fatal(err)
 		}
 		el.Name = "devpod-webui-reservations"
 		go el.Run(ctx, func(context.Context) {}, func() {})
-		go srv.RunReservations(ctx, el.IsLeader)
+		if srv.Reservations != nil {
+			go srv.RunReservations(ctx, el.IsLeader)
+		}
+		if srv.Queue != nil {
+			go srv.RunQueue(ctx, el.IsLeader)
+		}
 	}
 
 	if oauthEnabled {

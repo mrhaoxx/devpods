@@ -502,19 +502,46 @@ func (s *Server) createJob(ctx context.Context, job *devpodv1alpha1.Job) *server
 	return nil
 }
 
-// estimate: where job would stand if submitted now (a dry run).
+// estimate: where job would stand if submitted now (a dry run) — the
+// planner run over its cluster's queue with it in.
 func (s *Server) estimate(ctx context.Context, job *devpodv1alpha1.Job) map[string]any {
+	out := map[string]any{"cpus": float64(job.Spec.CPUsPerNode.MilliValue()) / 1000}
 	var all devpodv1alpha1.JobList
-	pos := 1
-	if err := s.Reader.List(ctx, &all); err == nil {
-		for i := range all.Items {
-			o := &all.Items[i]
-			if o.Spec.Cluster == job.Spec.Cluster && (o.Status.Phase == devpodv1alpha1.JobQueued || o.Status.Phase == "") && o.Spec.Priority >= job.Spec.Priority {
-				pos++
-			}
+	if err := s.Reader.List(ctx, &all); err != nil {
+		return out
+	}
+	var active, queued []*devpodv1alpha1.Job
+	for i := range all.Items {
+		o := &all.Items[i]
+		switch {
+		case o.Spec.Cluster != job.Spec.Cluster || o.DeletionTimestamp != nil || jobEnded(o.Status.Phase):
+		case o.Status.Phase == devpodv1alpha1.JobStarting || o.Status.Phase == devpodv1alpha1.JobRunning:
+			active = append(active, o)
+		default:
+			queued = append(queued, o)
 		}
 	}
-	return map[string]any{"position": pos, "cpus": float64(job.Spec.CPUsPerNode.MilliValue()) / 1000}
+	now := s.Queue.now()
+	probe := job.DeepCopy()
+	probe.Name, probe.CreationTimestamp = "(new)", metav1.NewTime(now)
+	v, _, err := s.queueViewFor(ctx, s.kc(ctx), active, append(queued, probe), now)
+	if err != nil {
+		return out
+	}
+	plan := planQueue(v)
+	for _, st := range plan.Starts {
+		if st.Job == probe {
+			out["position"], out["startsNow"] = 0, true
+			return out
+		}
+	}
+	if w, ok := plan.Waits[probe.Name]; ok {
+		out["position"], out["reason"], out["detail"] = w.Position, w.Reason, w.Detail
+		if w.Expected != nil {
+			out["expectedStart"] = w.Expected.UTC()
+		}
+	}
+	return out
 }
 
 // handleListJobs serves GET /api/jobs[?mine=1][&ended=1]: the queues of
