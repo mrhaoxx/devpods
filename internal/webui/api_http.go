@@ -239,6 +239,7 @@ func (s *Server) handlePutHTTP(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
+	before := dp.DeepCopy()
 	dp, err := s.annotate(r, dp, func(a map[string]string) {
 		if req.Reset || a[httpauth.IDAnnotation] == "" {
 			a[httpauth.IDAnnotation] = httpauth.NewID()
@@ -264,6 +265,7 @@ func (s *Server) handlePutHTTP(w http.ResponseWriter, r *http.Request) {
 		s.writeErr(w, http.StatusInternalServerError, "INTERNAL", err.Error(), nil)
 		return
 	}
+	s.devPodEvent(r, sess, dp, "http-ports", httpPortChanges(before, dp))
 	s.writeJSON(w, http.StatusOK, s.httpProxyIn(r, h).view(dp))
 }
 

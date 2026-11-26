@@ -172,5 +172,8 @@ func (s *Server) handleRebuildFromConfig(w http.ResponseWriter, r *http.Request)
 		s.writeServerErr(w, apiErr)
 		return
 	}
+	if resp.DevPod != nil {
+		s.devPodEvent(r, sess, resp.DevPod, "rebuild-from-config", devPodChanges(dp, resp.DevPod, true))
+	}
 	s.writeJSON(w, http.StatusOK, resp)
 }

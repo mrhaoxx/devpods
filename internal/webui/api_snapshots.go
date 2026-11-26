@@ -313,6 +313,7 @@ func (s *Server) handleRetrySnapshot(w http.ResponseWriter, r *http.Request) {
 		s.writeErr(w, http.StatusBadRequest, "BAD_REQUEST", "snapshot rejected", err.Error())
 		return
 	}
+	s.devPodEvent(r, sess, &dp, "snapshot-retry", old.Name+"→"+sn.Name)
 	s.writeJSON(w, http.StatusCreated, viewSnapshot(sn))
 }
 
@@ -421,6 +422,7 @@ func (s *Server) handleCreateSnapshot(w http.ResponseWriter, r *http.Request) {
 		s.writeErr(w, http.StatusBadRequest, "BAD_REQUEST", "snapshot rejected", detail)
 		return
 	}
+	s.devPodEvent(r, sess, dp, "snapshot", sn.Name)
 	s.writeJSON(w, http.StatusCreated, viewSnapshot(sn))
 }
 
@@ -498,6 +500,10 @@ func (s *Server) handleDeleteSnapshot(w http.ResponseWriter, r *http.Request) {
 		s.writeErr(w, http.StatusInternalServerError, "INTERNAL", err.Error(), nil)
 		return
 	}
+	// the record is of its DevPod (gone, perhaps: then by name)
+	of := &devpodv1alpha1.DevPod{ObjectMeta: metav1.ObjectMeta{Name: sn.Spec.DevPodName}}
+	_ = s.k(r).Reader.Get(r.Context(), types.NamespacedName{Name: sn.Spec.DevPodName, Namespace: s.NS}, of)
+	s.devPodEvent(r, sess, of, "snapshot-delete", sn.Name)
 	w.WriteHeader(http.StatusNoContent)
 }
 

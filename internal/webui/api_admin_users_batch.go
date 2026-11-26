@@ -19,6 +19,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	devpodv1alpha1 "github.com/mrhaoxx/devpod/api/v1alpha1"
+	"github.com/mrhaoxx/devpod/internal/audit/store"
 )
 
 // maxBatchUsers bounds one POST /api/admin/users:batch.
@@ -81,7 +82,8 @@ func generatePassword(n int) (string, error) {
 // Users are processed one after another; one user's failure does not
 // stop the rest.
 func (s *Server) handleUsersBatch(w http.ResponseWriter, r *http.Request) {
-	if _, ok := s.requireAdmin(w, r); !ok {
+	sess, ok := s.requireAdmin(w, r)
+	if !ok {
 		return
 	}
 	var req batchRequest
@@ -157,7 +159,9 @@ func (s *Server) handleUsersBatch(w http.ResponseWriter, r *http.Request) {
 			return res
 		}
 	case "hibernateAll":
-		apply = s.hibernateAll
+		ev := eventFrom(r, sess)
+		ev.Reason = "users batch"
+		apply = func(ctx context.Context, name string) BatchResult { return s.hibernateAll(ctx, name, ev) }
 	default:
 		s.writeErr(w, http.StatusBadRequest, "BAD_REQUEST", "op must be setQuota, setPolicy, resetPassword or hibernateAll", nil)
 		return
@@ -176,10 +180,10 @@ func (s *Server) handleUsersBatch(w http.ResponseWriter, r *http.Request) {
 
 // hibernateAll stops every running DevPod the user owns. Users without a
 // User object (LDAP) can own DevPods too, so none is required.
-func (s *Server) hibernateAll(ctx context.Context, owner string) BatchResult {
+func (s *Server) hibernateAll(ctx context.Context, owner string, ev store.EventRow) BatchResult {
 	res := BatchResult{Name: owner, OK: true}
 	for _, cc := range s.ksc(ctx) { // in every cluster
-		one := s.hibernateIn(s.in(ctx, cc), owner)
+		one := s.hibernateIn(s.in(ctx, cc), owner, ev)
 		res.Hibernated += one.Hibernated
 		if !one.OK {
 			res.OK, res.Error = false, clusterPrefix(cc.Name)+one.Error
@@ -188,8 +192,9 @@ func (s *Server) hibernateAll(ctx context.Context, owner string) BatchResult {
 	return res
 }
 
-// hibernateIn is hibernateAll in the cluster of ctx.
-func (s *Server) hibernateIn(ctx context.Context, owner string) BatchResult {
+// hibernateIn is hibernateAll in the cluster of ctx; each DevPod stopped
+// is recorded as ev says.
+func (s *Server) hibernateIn(ctx context.Context, owner string, ev store.EventRow) BatchResult {
 	var list devpodv1alpha1.DevPodList
 	if err := s.kc(ctx).Client.List(ctx, &list, client.InNamespace(s.NS)); err != nil {
 		return result(owner, err)
@@ -200,6 +205,7 @@ func (s *Server) hibernateIn(ctx context.Context, owner string) BatchResult {
 		if dp.Spec.Owner != owner || !dp.Spec.Running {
 			continue
 		}
+		stopped := false
 		err := retry.RetryOnConflict(retry.DefaultRetry, func() error {
 			var cur devpodv1alpha1.DevPod
 			if err := s.kc(ctx).Reader.Get(ctx, client.ObjectKeyFromObject(dp), &cur); err != nil {
@@ -209,11 +215,18 @@ func (s *Server) hibernateIn(ctx context.Context, owner string) BatchResult {
 				return nil
 			}
 			cur.Spec.Running = false
-			return s.kc(ctx).Client.Update(ctx, &cur)
+			if err := s.kc(ctx).Client.Update(ctx, &cur); err != nil {
+				return err
+			}
+			stopped = true
+			return nil
 		})
 		if err != nil {
 			res.OK, res.Error = false, dp.Name+": "+err.Error()
 			continue
+		}
+		if stopped {
+			s.recordDevPod(ctx, s.resCluster(ctx), ev, dp, "hibernate", "")
 		}
 		res.Hibernated++
 	}

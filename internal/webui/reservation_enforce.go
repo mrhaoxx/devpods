@@ -481,6 +481,9 @@ func (s *Server) hibernateFor(ctx context.Context, cc *clusters.ClusterClients, 
 		return false
 	}
 	slog.Info("reservation_hibernate", "cluster", cc.Name, "devpod", dp.Name, "owner", dp.Spec.Owner, "by", by)
+	ev := systemEvent("system:reservation")
+	ev.Reason = by
+	s.recordDevPod(ctx, cc.Name, ev, dp, "hibernate", "")
 	return true
 }
 

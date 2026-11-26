@@ -214,3 +214,5 @@ func (s *Server) SetEventRetryForTest(d time.Duration)                 { s.event
 func (s *Server) EventFromForTest(r *http.Request, sess Session) store.EventRow {
 	return eventFrom(r, sess)
 }
+
+func (s *Server) HandlePutDevPodYAMLForTest() http.HandlerFunc { return s.handlePutDevPodYAML }

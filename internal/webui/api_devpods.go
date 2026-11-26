@@ -499,6 +499,7 @@ func (s *Server) handleCreateDevPod(w http.ResponseWriter, r *http.Request) {
 		s.writeErr(w, http.StatusBadRequest, "BAD_REQUEST", rejected("create", err), err.Error())
 		return
 	}
+	s.devPodEvent(r, sess, dp, "create", createSummary(dp))
 	s.writeJSON(w, http.StatusCreated, dp)
 }
 
@@ -920,6 +921,9 @@ func (s *Server) patchDevPod(r *http.Request, sess Session, dp *devpodv1alpha1.D
 		}
 		return PatchResponse{}, &serverErr{http.StatusBadRequest, "BAD_REQUEST", rejected("update", err), err.Error()}
 	}
+	for _, c := range devPodActions(before, dp) {
+		s.devPodEvent(r, sess, dp, c.action, c.detail)
+	}
 	return PatchResponse{DevPod: dp, Rebuild: rebuild}, nil
 }
 
@@ -988,6 +992,7 @@ func (s *Server) handleRedeployDevPod(w http.ResponseWriter, r *http.Request) {
 		s.writeErr(w, http.StatusInternalServerError, "INTERNAL", err.Error(), nil)
 		return
 	}
+	s.devPodEvent(r, sess, placed, "redeploy", devPodChanges(dp, placed, true))
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -1004,6 +1009,7 @@ func (s *Server) handleDeleteDevPod(w http.ResponseWriter, r *http.Request) {
 		s.writeErr(w, http.StatusInternalServerError, "INTERNAL", err.Error(), nil)
 		return
 	}
+	s.devPodEvent(r, sess, dp, "delete", "")
 	w.WriteHeader(http.StatusNoContent)
 }
 

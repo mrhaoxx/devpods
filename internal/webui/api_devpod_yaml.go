@@ -213,5 +213,8 @@ func (s *Server) handlePutDevPodYAML(w http.ResponseWriter, r *http.Request) {
 		s.writeServerErr(w, apiErr)
 		return
 	}
+	if resp.DevPod != nil {
+		s.devPodEvent(r, sess, resp.DevPod, "yaml", devPodChanges(dp, resp.DevPod, true))
+	}
 	s.writeJSON(w, http.StatusOK, resp)
 }
