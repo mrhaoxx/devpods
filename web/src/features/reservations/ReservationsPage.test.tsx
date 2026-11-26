@@ -547,7 +547,51 @@ describe("ReservationsPage", () => {
     fireEvent.click(amounts.getByRole("radio", { name: "4 卡" }));
     expect(dialog.getByText("→ 96 核")).toBeTruthy();
     fireEvent.click(dialog.getByRole("button", { name: "预约" }));
-    await waitFor(() => expect(JSON.parse(calls.find((c) => c.method === "POST")?.body ?? "{}")).toMatchObject({ node: "g206", gpu: 4, cpu: 96 }));
+    // the cards: the console gives each machine its share of the cores
+    await waitFor(() => expect(JSON.parse(calls.find((c) => c.method === "POST")?.body ?? "{}")).toMatchObject({ node: "g206", gpu: 4 }));
+    expect(JSON.parse(calls.find((c) => c.method === "POST")!.body!)).not.toHaveProperty("cpu");
+  });
+
+  it("several machines: each gets its own share of the cores, and is judged by it", async () => {
+    at();
+    const calls = stubFetch({
+      "/api/reservations/rules": rules,
+      "/api/nodes": { items: [node("g206", { cpu: { allocatable: 192, allocated: 0 } }), node("g207", { cpu: { allocatable: 64, allocated: 0 } })] },
+      // 40 of g207's 64 cores are reserved: 4 cards' share there (32) does not fit
+      "/api/reservations": { items: [block({ id: "c", node: "g207", user: "bob", mine: false, start: "2026-11-12T02:00:00Z", end: "2026-11-12T04:00:00Z", gpu: 0, cpu: 40 })] },
+      "POST /api/reservations": block({ id: "new" }),
+    });
+    renderWithProviders(<ReservationsPage />, { me: me() });
+    fireEvent.click(await screen.findByRole("button", { name: "预约节点" }));
+    const dialog = within(screen.getByRole("dialog"));
+    fireEvent.click(dialog.getByLabelText("g207"));
+    fireEvent.click(within(dialog.getByRole("radiogroup", { name: "要多少" })).getByRole("radio", { name: "2 卡" }));
+    expect(dialog.getByText(/✓ 这段时间 g206/)).toBeTruthy();
+    expect(dialog.getByText(/✓ 这段时间 g207/)).toBeTruthy(); // 2 cards there take 16 cores: 24 are free
+    fireEvent.click(within(dialog.getByRole("radiogroup", { name: "要多少" })).getByRole("radio", { name: "4 卡" }));
+    expect(dialog.getByText(/✗ g207 这段时间最多还能约 8 卡 · 24 核/)).toBeTruthy();
+    fireEvent.click(within(dialog.getByRole("radiogroup", { name: "要多少" })).getByRole("radio", { name: "2 卡" }));
+    fireEvent.click(dialog.getByRole("button", { name: "预约 2 台" }));
+    await waitFor(() => expect(calls.filter((c) => c.method === "POST")).toHaveLength(2));
+    for (const c of calls.filter((c) => c.method === "POST")) expect(JSON.parse(c.body!)).not.toHaveProperty("cpu");
+  });
+
+  it("picking a machine of another size starts the amount over", async () => {
+    at();
+    stubFetch({
+      "/api/reservations/rules": rules,
+      "/api/nodes": { items: [node("g206"), node("c101", { gpuTotal: 0, gpuModel: undefined })] },
+      "/api/reservations": { items: [] },
+    });
+    renderWithProviders(<ReservationsPage />, { me: me() });
+    fireEvent.click(await screen.findByRole("button", { name: "预约节点" }));
+    const dialog = within(screen.getByRole("dialog"));
+    fireEvent.click(within(dialog.getByRole("radiogroup", { name: "要多少" })).getByRole("radio", { name: "4 卡" }));
+    fireEvent.click(dialog.getByLabelText("g206"));
+    fireEvent.click(dialog.getByLabelText("c101"));
+    const amounts = within(dialog.getByRole("radiogroup", { name: "要多少" }));
+    expect(amounts.getAllByRole("radio").map((r) => r.textContent)).toEqual(["整台", "32 核", "16 核"]);
+    expect(amounts.getByRole("radio", { name: "整台" }).getAttribute("aria-checked")).toBe("true");
   });
 
   it("with no room in that time it says so, and does not send", async () => {

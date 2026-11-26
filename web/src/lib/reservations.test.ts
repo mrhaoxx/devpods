@@ -53,6 +53,7 @@ describe("reservation amounts", () => {
     expect(isWhole(half)).toBe(false);
     expect(amountOf(whole, cap)).toEqual(cap);
     expect(amountOf(half, cap)).toEqual({ gpu: 4, cpu: 96 });
+    expect(amountOf({ cpu: 16 }, cap)).toEqual({ gpu: 0, cpu: 16 }); // one amount said: none of the other
     expect(capOf({ gpuTotal: 8, cpu: { allocatable: 64, allocated: 0 } } as NodeChoice)).toEqual({ gpu: 8, cpu: 64 });
     expect(cpuShare(4, cap)).toBe(96);
     expect(cpuShare(3, { gpu: 8, cpu: 100 })).toBe(37); // whole cores, rounded down

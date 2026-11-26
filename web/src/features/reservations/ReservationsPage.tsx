@@ -219,14 +219,28 @@ function ReserveDialog({
     edit && !wholeAsk(ask) && !presets(cap).some((p) => (cap.gpu > 0 ? p.gpu === edit.gpu : p.cpu === edit.cpu)) ? String((cap.gpu > 0 ? edit.gpu : edit.cpu) ?? "") : "",
   );
   const pick = (a: Ask) => (setAsk(a), touch());
+  // another machine of another size first: the amount starts over
+  const capKey = `${cap.gpu}/${cap.cpu}`;
+  const lastCap = useRef(capKey);
+  useEffect(() => {
+    if (lastCap.current === capKey) return;
+    lastCap.current = capKey;
+    setAsk({});
+    setCustom("");
+    setOwnCpu(false);
+  }, [capKey]);
+  // what the ask is on a machine of c: cards take that machine's share of
+  // the cores (unless the cores were set by hand)
+  const askOn = (c: Amount): Amount =>
+    wholeAsk(ask) ? c : c.gpu > 0 && ask.gpu != null && !ownCpu ? { gpu: ask.gpu, cpu: cpuShare(ask.gpu, c) } : { gpu: ask.gpu ?? 0, cpu: ask.cpu ?? 0 };
   // the times to check, as the console does: from now; a change only for
   // the time it adds — all it has left when it asks for more (one made
   // before shares may overlap another and still be shortened or renamed)
   const spansOf = (c: Amount): [number, number][] => {
     const from = Math.max(s, now);
     if (!edit) return [[from, e]];
-    const was = wholeAsk(edit) ? c : { gpu: edit.gpu ?? 0, cpu: edit.cpu ?? 0 };
-    const want = wholeAsk(ask) ? c : { gpu: ask.gpu ?? 0, cpu: ask.cpu ?? 0 };
+    const was = amountOf(edit, c);
+    const want = askOn(c);
     if (want.gpu > was.gpu || want.cpu > was.cpu || (wholeAsk(ask) && !wholeAsk(edit))) return [[from, e]];
     const [os, oe] = [Date.parse(edit.start), Date.parse(edit.end)];
     const out: [number, number][] = [];
@@ -245,7 +259,8 @@ function ReserveDialog({
         if (spans.length === 0) return []; // nothing more asked
         const frees = spans.map(([a, b]) => freeIn(blocksOf(k), a, b, c, edit?.id));
         const free = { gpu: Math.min(...frees.map((f) => f.gpu)), cpu: Math.min(...frees.map((f) => f.cpu)) };
-        const ok = frees.every((f) => (wholeAsk(ask) ? f.gpu === c.gpu && f.cpu === c.cpu : (ask.gpu ?? 0) <= f.gpu && (ask.cpu ?? 0) <= f.cpu));
+        const want = askOn(c);
+        const ok = frees.every((f) => (wholeAsk(ask) ? f.gpu === c.gpu && f.cpu === c.cpu : want.gpu <= f.gpu && want.cpu <= f.cpu));
         const what = c.gpu > 0 ? `${free.gpu} 卡 · ${num(free.cpu)} 核` : `${num(free.cpu)} 核`;
         return [{ k, ok, what, full: free.gpu <= 0 && free.cpu <= 0 }];
       });
@@ -279,8 +294,9 @@ function ReserveDialog({
       const extra = {
         ...(purpose.trim() ? { purpose: purpose.trim() } : {}),
         ...(forOthers && forUser.trim() ? { user: forUser.trim() } : {}),
+        // cards alone: the console gives each machine its share of the cores
         ...(ask.gpu != null ? { gpu: ask.gpu } : {}),
-        ...(ask.cpu != null ? { cpu: ask.cpu } : {}),
+        ...(ask.cpu != null && (ownCpu || ask.gpu == null) ? { cpu: ask.cpu } : {}),
       };
       const results = await Promise.allSettled(keys.map((k) => createReservation(refOfKey(k).cluster, { ...period, ...extra, node: refOfKey(k).name })));
       const failed = results.flatMap((r, i) => (r.status === "rejected" ? [{ key: keys[i], why: apiMessage(r.reason) }] : []));
@@ -409,7 +425,7 @@ function ReserveDialog({
                         }}
                       />
                     ) : (
-                      <span className="text-muted">→ {ask.cpu} 核</span>
+                      <span className="text-muted">{!edit && picked.length > 1 ? "→ 每台按卡数配 CPU" : `→ ${ask.cpu} 核`}</span>
                     )}
                     <button type="button" className="text-accent hover:underline" onClick={() => setOwnCpu((o) => !o)}>
                       {ownCpu ? "按卡数配 CPU" : "调整 CPU"}

@@ -85,8 +85,8 @@ export const capOf = (n: NodeChoice): Amount => ({ gpu: n.gpuTotal, cpu: n.cpu.a
 /** isWhole: the reservation is the whole machine. */
 export const isWhole = (b: Pick<Reservation, "gpu" | "cpu">) => b.gpu == null && b.cpu == null;
 
-/** amountOf: what b holds of a machine that has cap. */
-export const amountOf = (b: Pick<Reservation, "gpu" | "cpu">, cap: Amount): Amount => ({ gpu: b.gpu ?? cap.gpu, cpu: b.cpu ?? cap.cpu });
+/** amountOf: what b holds of a machine that has cap — all of it when whole; else what it says (an amount not said: none). */
+export const amountOf = (b: Pick<Reservation, "gpu" | "cpu">, cap: Amount): Amount => (isWhole(b) ? cap : { gpu: b.gpu ?? 0, cpu: b.cpu ?? 0 });
 
 /** cpuShare: the cores that go with gpu of cap's cards (whole cores, rounded down, as the console). */
 export const cpuShare = (gpu: number, cap: Amount) => (cap.gpu > 0 ? Math.floor((cap.cpu * gpu) / cap.gpu) : 0);
