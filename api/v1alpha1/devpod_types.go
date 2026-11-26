@@ -13,7 +13,7 @@ import (
 
 // DevPodPhase enumerates lifecycle states observable on a DevPod.
 //
-// +kubebuilder:validation:Enum=Pending;Running;Stopped;Failed
+// +kubebuilder:validation:Enum=Pending;Running;Stopped;Failed;Succeeded
 type DevPodPhase string
 
 const (
@@ -21,7 +21,23 @@ const (
 	DevPodRunning DevPodPhase = "Running"
 	DevPodStopped DevPodPhase = "Stopped"
 	DevPodFailed  DevPodPhase = "Failed"
+	// DevPodSucceeded: a job rank whose command ended with 0.
+	DevPodSucceeded DevPodPhase = "Succeeded"
 )
+
+// DevPodJob makes a DevPod one rank of a queue job: its command runs
+// once, the DevPod records how it ended (Succeeded or Failed, and the
+// exit code), and it is never started again.
+type DevPodJob struct {
+	// Name: the job (the console's Job object).
+	//
+	// +kubebuilder:validation:MinLength=1
+	Name string `json:"name"`
+	// Rank: this DevPod's place in the job, from 0.
+	//
+	// +kubebuilder:validation:Minimum=0
+	Rank int32 `json:"rank"`
+}
 
 // PersistenceSpec opts a DevPod into a persistent home volume.
 type PersistenceSpec struct {
@@ -171,6 +187,13 @@ type DevPodSpec struct {
 	// +kubebuilder:validation:Pattern=`^[^\x00-\x1f\x7f]*$`
 	Shell string `json:"shell,omitempty"`
 
+	// Job, if set, makes this DevPod one rank of a queue job (see
+	// DevPodJob). It never changes.
+	//
+	// +optional
+	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="job is immutable"
+	Job *DevPodJob `json:"job,omitempty"`
+
 	// Pod, if set, materializes the workload as a Pod.
 	//
 	// +optional
@@ -243,6 +266,17 @@ type DevPodStatus struct {
 	//
 	// +optional
 	Message string `json:"message,omitempty"`
+
+	// ExitCode: a job rank's command's exit code once it ended (128 +
+	// the signal when one killed it).
+	//
+	// +optional
+	ExitCode *int32 `json:"exitCode,omitempty"`
+
+	// FinishedAt: when a job rank's command ended.
+	//
+	// +optional
+	FinishedAt *metav1.Time `json:"finishedAt,omitempty"`
 
 	// +optional
 	// +patchStrategy=merge
