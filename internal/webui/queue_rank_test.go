@@ -183,3 +183,34 @@ func TestIsRankOf(t *testing.T) {
 		t.Error("named otherwise")
 	}
 }
+
+// A rank goes only where its source's own placement lets it: its
+// nodeSelector and required node affinity (the machine they name aside:
+// each rank is given its own).
+func TestMachineFitsPlacement(t *testing.T) {
+	node := func(arch string) *corev1.Node {
+		return &corev1.Node{ObjectMeta: metav1.ObjectMeta{Name: "n-" + arch, Labels: map[string]string{"kubernetes.io/arch": arch, hostnameLabel: "n-" + arch}},
+			Status: corev1.NodeStatus{Allocatable: corev1.ResourceList{gpures.NVIDIA: resource.MustParse("8")}}}
+	}
+	j := testJob()
+	j.Spec.Template.Spec.Affinity = nil
+	j.Spec.Template.Spec.NodeSelector = map[string]string{"kubernetes.io/arch": "arm64", hostnameLabel: "somewhere-else"}
+	if machineFits(j, node("amd64")) || !machineFits(j, node("arm64")) {
+		t.Error("nodeSelector: arm64 only, the hostname aside")
+	}
+	j.Spec.Template.Spec.NodeSelector = nil
+	j.Spec.Template.Spec.Affinity = &corev1.Affinity{NodeAffinity: &corev1.NodeAffinity{RequiredDuringSchedulingIgnoredDuringExecution: &corev1.NodeSelector{
+		NodeSelectorTerms: []corev1.NodeSelectorTerm{{MatchExpressions: []corev1.NodeSelectorRequirement{
+			{Key: "kubernetes.io/arch", Operator: corev1.NodeSelectorOpNotIn, Values: []string{"amd64"}},
+			{Key: hostnameLabel, Operator: corev1.NodeSelectorOpIn, Values: []string{"g1"}},
+		}}}}}}
+	if machineFits(j, node("amd64")) || !machineFits(j, node("arm64")) {
+		t.Error("required affinity: not amd64, the hostname aside")
+	}
+	j.Spec.Template.Spec.Affinity.NodeAffinity.RequiredDuringSchedulingIgnoredDuringExecution.NodeSelectorTerms = append(
+		j.Spec.Template.Spec.Affinity.NodeAffinity.RequiredDuringSchedulingIgnoredDuringExecution.NodeSelectorTerms,
+		corev1.NodeSelectorTerm{MatchExpressions: []corev1.NodeSelectorRequirement{{Key: "kubernetes.io/arch", Operator: corev1.NodeSelectorOpIn, Values: []string{"amd64"}}}})
+	if !machineFits(j, node("amd64")) {
+		t.Error("terms are or'ed")
+	}
+}

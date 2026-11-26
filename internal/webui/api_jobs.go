@@ -531,7 +531,8 @@ func (s *Server) buildJob(ctx context.Context, sess Session, req JobRequest) (*d
 	ask := amount{GPU: int64(req.GPUs), CPU: cpuMilli}
 	fit := 0
 	for _, n := range machines {
-		if ask.fits(capFor(&n)) && ask.CPU > 0 {
+		// one its own placement and taints let it on, with the room
+		if ask.fits(capFor(&n)) && ask.CPU > 0 && placementAdmits(&tmpl.Spec, &n) && taintsTolerated(&tmpl.Spec, req.GPUs > 0, &n) {
 			fit++
 		}
 	}

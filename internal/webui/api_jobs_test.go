@@ -258,3 +258,21 @@ func TestQueueOffWithoutTheControllersWord(t *testing.T) {
 		t.Fatalf("submit: %d %+v", code, v)
 	}
 }
+
+// A source whose own placement rules out every machine of the queue is
+// refused at once, not left waiting.
+func TestJobSubmitPlacementNowhere(t *testing.T) {
+	p := jobRig(t, "jp", "jp-alice")
+	ctx := context.Background()
+	arm := &devpodv1alpha1.DevPod{ObjectMeta: metav1.ObjectMeta{Name: "jp-alice-arm", Namespace: "devpods"}, Spec: devpodv1alpha1.DevPodSpec{Owner: "jp-alice",
+		Pod: &devpodv1alpha1.PodWorkloadSpec{Spec: corev1.PodSpec{NodeSelector: map[string]string{"kubernetes.io/arch": "arm64"}, Containers: []corev1.Container{{Name: "dev", Image: "x"}}}}}}
+	if err := k8sClient.Create(ctx, arm); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = k8sClient.Delete(ctx, arm) })
+	waitDevPod(t, arm.Name)
+	code, v := submitJob(t, p.s, p.as("jp-alice"), map[string]any{"from": map[string]any{"devpod": arm.Name}, "nodes": 1, "gpus": 1, "command": "true"})
+	if code != http.StatusConflict || v.Code != "NO_MACHINE" {
+		t.Fatalf("arm64 only, no such machine: %d %+v", code, v)
+	}
+}

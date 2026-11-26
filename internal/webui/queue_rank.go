@@ -245,24 +245,91 @@ func jobGPUKind(job *devpodv1alpha1.Job) corev1.ResourceName {
 // ranks ask for is tolerated for them by the cluster (extended resource
 // tolerations): neither keeps a rank off.
 func machineFits(job *devpodv1alpha1.Job, n *corev1.Node) bool {
-	if n.Spec.Unschedulable {
+	if n.Spec.Unschedulable || !placementAdmits(&job.Spec.Template.Spec, n) {
 		return false
+	}
+	if !taintsTolerated(&job.Spec.Template.Spec, job.Spec.GPUsPerNode > 0, n) {
+		return false
+	}
+	if job.Spec.GPUsPerNode > 0 {
+		q := n.Status.Allocatable[jobGPUKind(job)]
+		if q.Value() < int64(job.Spec.GPUsPerNode) {
+			return false
+		}
+	}
+	return true
+}
+
+// placementAdmits: spec's own placement lets it on n — its nodeSelector
+// and its required node affinity, but for the machine they name (each
+// rank is given its own: its hostname is not the source's to say).
+func placementAdmits(spec *corev1.PodSpec, n *corev1.Node) bool {
+	for k, v := range spec.NodeSelector {
+		if k != hostnameLabel && n.Labels[k] != v {
+			return false
+		}
+	}
+	a := spec.Affinity
+	if a == nil || a.NodeAffinity == nil || a.NodeAffinity.RequiredDuringSchedulingIgnoredDuringExecution == nil {
+		return true
+	}
+	terms := a.NodeAffinity.RequiredDuringSchedulingIgnoredDuringExecution.NodeSelectorTerms
+	if len(terms) == 0 {
+		return true
+	}
+	return slices.ContainsFunc(terms, func(t corev1.NodeSelectorTerm) bool { // or'ed
+		return !slices.ContainsFunc(t.MatchExpressions, func(r corev1.NodeSelectorRequirement) bool { // and'ed
+			return r.Key != hostnameLabel && !requirementHolds(r, n.Labels)
+		})
+	})
+}
+
+// requirementHolds: r holds for a machine labelled labels.
+func requirementHolds(r corev1.NodeSelectorRequirement, labels map[string]string) bool {
+	v, has := labels[r.Key]
+	switch r.Operator {
+	case corev1.NodeSelectorOpIn:
+		return has && slices.Contains(r.Values, v)
+	case corev1.NodeSelectorOpNotIn:
+		return !has || !slices.Contains(r.Values, v)
+	case corev1.NodeSelectorOpExists:
+		return has
+	case corev1.NodeSelectorOpDoesNotExist:
+		return !has
+	case corev1.NodeSelectorOpGt, corev1.NodeSelectorOpLt:
+		if !has || len(r.Values) != 1 {
+			return false
+		}
+		got, err1 := strconv.ParseInt(v, 10, 64)
+		want, err2 := strconv.ParseInt(r.Values[0], 10, 64)
+		if err1 != nil || err2 != nil {
+			return false
+		}
+		if r.Operator == corev1.NodeSelectorOpGt {
+			return got > want
+		}
+		return got < want
+	}
+	return false
+}
+
+// taintsTolerated: spec tolerates n's taints that keep Pods off — but
+// the node.kubernetes.io/ ones (conditions, judged apart) and, for a Pod
+// asking cards, the one named for them (extended resource tolerations).
+func taintsTolerated(spec *corev1.PodSpec, cards bool, n *corev1.Node) bool {
+	kind := corev1.ResourceName(gpures.NVIDIA)
+	if len(spec.Containers) > 0 {
+		kind = gpuKindOf(&spec.Containers[0])
 	}
 	for i := range n.Spec.Taints {
 		t := &n.Spec.Taints[i]
 		if t.Effect != corev1.TaintEffectNoSchedule && t.Effect != corev1.TaintEffectNoExecute {
 			continue
 		}
-		if strings.HasPrefix(t.Key, "node.kubernetes.io/") || (job.Spec.GPUsPerNode > 0 && t.Key == string(jobGPUKind(job))) {
+		if strings.HasPrefix(t.Key, "node.kubernetes.io/") || (cards && t.Key == string(kind)) {
 			continue
 		}
-		if !slices.ContainsFunc(job.Spec.Template.Spec.Tolerations, func(tol corev1.Toleration) bool { return tol.ToleratesTaint(t) }) {
-			return false
-		}
-	}
-	if job.Spec.GPUsPerNode > 0 {
-		q := n.Status.Allocatable[jobGPUKind(job)]
-		if q.Value() < int64(job.Spec.GPUsPerNode) {
+		if !slices.ContainsFunc(spec.Tolerations, func(tol corev1.Toleration) bool { return tol.ToleratesTaint(t) }) {
 			return false
 		}
 	}
