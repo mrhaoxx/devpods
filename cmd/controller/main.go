@@ -164,6 +164,7 @@ func main() {
 
 	if err := (&controllers.DevPodReconciler{
 		Client:             mgr.GetClient(),
+		APIReader:          mgr.GetAPIReader(),
 		Scheme:             mgr.GetScheme(),
 		GwConfig:           gw,
 		GatewayNamespace:   gatewayNamespace,

@@ -73,6 +73,7 @@ func setupSuiteWith(t *testing.T, opt func(*controllers.DevPodReconciler)) {
 	}
 	dpr := &controllers.DevPodReconciler{
 		Client:             mgr.GetClient(),
+		APIReader:          mgr.GetAPIReader(),
 		Scheme:             mgr.GetScheme(),
 		GwConfig:           defaultGwConfig(),
 		GatewayNamespace:   "devpod-system",

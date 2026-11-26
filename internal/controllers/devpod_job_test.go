@@ -206,3 +206,73 @@ func TestJobRankWithoutCommand(t *testing.T) {
 		t.Fatal("a Pod was made")
 	}
 }
+
+// A job rank takes no Pod it did not make: one of the same name left by a
+// former start of its job is waited out — its end is not the rank's.
+func TestJobRankWaitsForAnotherPod(t *testing.T) {
+	setupSuite(t)
+	env := newTestEnv(t)
+	stray := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "jw-a-0", Namespace: "devpods"},
+		Spec: corev1.PodSpec{Containers: []corev1.Container{{Name: "dev", Image: "x"}}}}
+	if err := env.Client.Create(env.Ctx, stray); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = env.Client.Delete(env.Ctx, stray) })
+	patch := client.MergeFrom(stray.DeepCopy())
+	stray.Status.Phase, stray.Status.PodIP = corev1.PodRunning, "10.0.0.9"
+	if err := env.Client.Status().Patch(env.Ctx, stray, patch); err != nil {
+		t.Fatal(err)
+	}
+	dp := jobDevPod("jw-a-0", "jw", "a1b2c", 0, "true")
+	if err := env.Client.Create(env.Ctx, dp); err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(2 * time.Second)
+	endPod(t, env, stray, corev1.PodFailed, 143)
+	time.Sleep(2 * time.Second)
+	var got devpodv1alpha1.DevPod
+	if err := env.Client.Get(env.Ctx, clientKey(dp), &got); err != nil {
+		t.Fatal(err)
+	}
+	if got.Status.Phase == devpodv1alpha1.DevPodRunning || got.Status.Phase == devpodv1alpha1.DevPodFailed || got.Status.ExitCode != nil {
+		t.Fatalf("took the stray Pod: phase %q exit %v", got.Status.Phase, got.Status.ExitCode)
+	}
+	if err := env.Client.Delete(env.Ctx, stray, client.GracePeriodSeconds(0)); err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.Now().Add(30 * time.Second)
+	for {
+		var pod corev1.Pod
+		if env.Client.Get(env.Ctx, clientKey(dp), &pod) == nil && metav1.IsControlledBy(&pod, &got) {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("the rank never made its own Pod")
+		}
+		time.Sleep(200 * time.Millisecond)
+	}
+}
+
+// A job rank whose Pod goes away before it ends has failed: its command
+// is never run a second time.
+func TestJobRankPodGoneFails(t *testing.T) {
+	setupSuite(t)
+	env := newTestEnv(t)
+	dp := jobDevPod("jv-a-0", "jv", "a1b2c", 0, "true")
+	if err := env.Client.Create(env.Ctx, dp); err != nil {
+		t.Fatal(err)
+	}
+	pod := waitPod(t, env, dp)
+	devPodBecomes(t, env, dp, "its Pod seen", func(d *devpodv1alpha1.DevPod) bool { return d.Status.WorkloadRef != nil })
+	if err := env.Client.Delete(env.Ctx, &pod, client.GracePeriodSeconds(0)); err != nil {
+		t.Fatal(err)
+	}
+	devPodBecomes(t, env, dp, "Failed for its Pod gone", func(d *devpodv1alpha1.DevPod) bool {
+		return d.Status.Phase == devpodv1alpha1.DevPodFailed && strings.Contains(d.Status.Message, "went away") && d.Status.FinishedAt != nil
+	})
+	time.Sleep(2 * time.Second)
+	var again corev1.Pod
+	if err := env.Client.Get(env.Ctx, clientKey(dp), &again); err == nil && again.UID != pod.UID && again.DeletionTimestamp == nil {
+		t.Fatal("a new Pod was made")
+	}
+}

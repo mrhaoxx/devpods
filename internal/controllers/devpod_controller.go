@@ -39,6 +39,11 @@ type DevPodReconciler struct {
 	client.Client
 	Scheme *runtime.Scheme
 
+	// APIReader reads past the cache (nil: the cache): whether a job
+	// rank ever had a Pod is asked of the API, the cache's copy of the
+	// rank possibly not having caught up with what was written of it.
+	APIReader client.Reader
+
 	// GwConfig is the (typically singleton) GatewayConfig used at render
 	// time. In this skeleton plan we inject the value directly; a
 	// follow-up plan will wire it from a real GatewayConfig Get.
@@ -431,7 +436,9 @@ func (r *DevPodReconciler) updateStatus(ctx context.Context, dp *devpodv1alpha1.
 		if err != nil && !apierrors.IsNotFound(err) {
 			return fmt.Errorf("get rendered pod: %w", err)
 		}
-		if err == nil {
+		// a job rank's Pod is the one it made (one of a former start of
+		// its job is not)
+		if err == nil && (dp.Spec.Job == nil || metav1.IsControlledBy(&pod, dp)) {
 			desired.WorkloadRef = &devpodv1alpha1.WorkloadRef{APIVersion: "v1", Kind: "Pod", Name: pod.Name}
 			switch {
 			case pod.Status.Phase == corev1.PodRunning && pod.Status.PodIP != "":
@@ -452,6 +459,11 @@ func (r *DevPodReconciler) updateStatus(ctx context.Context, dp *devpodv1alpha1.
 		} else {
 			desired.Phase = devpodv1alpha1.DevPodPending
 			desired.Message = reservedMessage(dp) // waiting for a reserved node
+			if dp.Spec.Job != nil {
+				// a job rank that had a Pod keeps saying so: its Pod gone
+				// ends it, and nothing makes it a second one
+				desired.WorkloadRef = dp.Status.WorkloadRef
+			}
 		}
 	}
 
@@ -691,6 +703,13 @@ func (r *DevPodReconciler) applyPodWithDriftRecreate(ctx context.Context, dp *de
 	switch {
 	case err == nil:
 		if dp.Spec.Job != nil {
+			// a Pod of this name that is not this rank's — a former start's
+			// of the job, still in its grace — is not taken for it: the
+			// rank waits for it to go
+			if !metav1.IsControlledBy(&live, dp) {
+				r.requeueAfter = 5 * time.Second
+				return nil
+			}
 			// a job rank runs once: its Pod ending ends it; nor is it made
 			// again for a changed spec
 			if live.Status.Phase == corev1.PodSucceeded || live.Status.Phase == corev1.PodFailed {
@@ -716,6 +735,21 @@ func (r *DevPodReconciler) applyPodWithDriftRecreate(ctx context.Context, dp *de
 		// was created with, whatever credentials its owner has now
 		pod.Spec.ImagePullSecrets = live.Spec.ImagePullSecrets
 	case apierrors.IsNotFound(err):
+		if dp.Spec.Job != nil {
+			had, ended, err := r.rankHadPod(ctx, dp)
+			if err != nil {
+				return err
+			}
+			if ended {
+				return nil // it ended (the cache has not caught up): how stays as written
+			}
+			if had {
+				// a job rank's Pod, seen once, gone before it was seen to
+				// end (deleted, evicted, its node removed): the rank has
+				// ended — its command is never run a second time
+				return r.jobGone(ctx, dp)
+			}
+		}
 		// First create — check backoff before recreating.
 		if dp.Status.LastFailureAt != nil {
 			backoff := failureBackoff(int(dp.Status.RetryCount))
@@ -887,6 +921,34 @@ func (r *DevPodReconciler) jobFinished(ctx context.Context, dp *devpodv1alpha1.D
 			}
 		}
 	}
+	dp.Status.FinishedAt = &finished
+	return r.Status().Patch(ctx, dp, patch)
+}
+
+// rankHadPod: the job rank dp has had a Pod (its status names one, and
+// keeps naming it), and whether it has ended — as the API has it: the
+// cache's copy may not have caught up with what was written of it.
+func (r *DevPodReconciler) rankHadPod(ctx context.Context, dp *devpodv1alpha1.DevPod) (had, ended bool, err error) {
+	cur := dp
+	if r.APIReader != nil {
+		var fresh devpodv1alpha1.DevPod
+		if err := r.APIReader.Get(ctx, client.ObjectKeyFromObject(dp), &fresh); err != nil {
+			return false, false, fmt.Errorf("get devpod: %w", err)
+		}
+		cur = &fresh
+	}
+	return cur.Status.WorkloadRef != nil, jobEnded(cur), nil
+}
+
+// jobGone: a job rank whose Pod went away before it ended has failed.
+func (r *DevPodReconciler) jobGone(ctx context.Context, dp *devpodv1alpha1.DevPod) error {
+	log.FromContext(ctx).Info("job rank's pod went away", "devpod", dp.Name)
+	patch := client.MergeFrom(dp.DeepCopy())
+	dp.Status.Phase = devpodv1alpha1.DevPodFailed
+	dp.Status.Message = "its Pod went away before it ended (deleted, evicted, or its node removed)"
+	dp.Status.Endpoint = ""
+	dp.Status.ExitCode = nil
+	finished := metav1.Now()
 	dp.Status.FinishedAt = &finished
 	return r.Status().Patch(ctx, dp, patch)
 }
