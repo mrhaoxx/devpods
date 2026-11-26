@@ -14,6 +14,12 @@ const dp: DevPod = {
 };
 
 const rankDp: DevPod = { ...dp, metadata: { name: "alice-x", uid: "u2" }, spec: { ...dp.spec, job: { name: "abc12", rank: 1 } } };
+const queuedDp: DevPod = {
+  ...dp,
+  metadata: { name: "alice-x", uid: "u3", annotations: { "devpod.io/queued-at": "2026-11-10T11:00:00Z", "devpod.io/queue-state": JSON.stringify({ position: 2, reason: "capacity" }) } },
+  spec: { ...dp.spec, running: false },
+  status: { phase: "Stopped" },
+};
 
 function Where() {
   const l = useLocation();
@@ -22,10 +28,11 @@ function Where() {
 
 let calls: ReturnType<typeof stubFetch> = [];
 
-function setup(opts: { route?: string; admin?: boolean; live?: boolean; user?: string; rank?: boolean } = {}) {
+function setup(opts: { route?: string; admin?: boolean; live?: boolean; user?: string; rank?: boolean; queued?: boolean } = {}) {
+  const the = opts.rank ? rankDp : opts.queued ? queuedDp : dp;
   const cs = stubFetch({
-    "PATCH /api/devpods/alice-x": { devpod: opts.rank ? rankDp : dp, rebuild: false },
-    "/api/devpods/alice-x": { devpod: opts.rank ? rankDp : dp, pod: { node: "g206", ip: "10.1.2.3", startedAt: "2026-11-10T10:00:00Z" } },
+    "PATCH /api/devpods/alice-x": { devpod: the, rebuild: false },
+    "/api/devpods/alice-x": { devpod: the, pod: opts.queued ? undefined : { node: "g206", ip: "10.1.2.3", startedAt: "2026-11-10T10:00:00Z" } },
     "/api/audit/sessions": { items: [], next: "" },
     "/api/devpods/alice-x/history": {
       items: [{ ts: "2026-11-27T09:00:00Z", kind: "devpod", object: "alice-x", owner: "alice", actor: "alice", via: "web", action: "create", detail: "image ubuntu" }],
@@ -113,6 +120,14 @@ describe("DevPod detail", () => {
     expect(screen.getByRole("tab", { name: "事件" }).getAttribute("aria-selected")).toBe("true");
     fireEvent.click(screen.getByRole("tab", { name: "会话" }));
     expect(screen.getByTestId("where").textContent).toBe("?tab=sessions");
+  });
+
+  it("a DevPod waiting in line says where it stands, and 取消排队 takes it out", async () => {
+    setup({ route: "/devpods/-/alice-x", queued: true });
+    await screen.findByRole("heading", { name: "alice-x" });
+    fireEvent.click(screen.getByRole("button", { name: "取消排队" }));
+    await waitFor(() => expect(calls.some((c) => c.method === "PATCH")).toBe(true));
+    expect(JSON.parse(calls.find((c) => c.method === "PATCH")!.body!)).toEqual({ running: false });
   });
 
   it("记录 lists what was done to this DevPod, by whom", async () => {

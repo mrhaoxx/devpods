@@ -64,6 +64,21 @@ describe("QueuePage", () => {
     expect(screen.getByText(/run01 · sft/)).toBeTruthy();
   });
 
+  it("DevPods waiting in line are listed in it, marked so, in their place", async () => {
+    const waiting = { ...jobs[0], id: "qq111", title: "", phase: "Queued", position: 1, reason: "capacity", ranks: undefined, startedAt: undefined };
+    stubFetch({
+      "/api/jobs": { items: [waiting], devpods: [{ name: "u-dev", owner: "u", mine: true, priority: 0, position: 2, reason: "behind", detail: { head: "qq111" }, queuedAt: "2026-11-27T01:00:00Z", gpus: 1, cpus: 4 }] },
+      "/api/jobs/free": { items: [] },
+    });
+    page();
+    expect(await screen.findByText(/DevPod u-dev/)).toBeTruthy();
+    const rows = screen.getAllByRole("row").map((r) => r.textContent ?? "");
+    const job = rows.findIndex((t) => t.includes("qq111") && t.includes("#1"));
+    const devpod = rows.findIndex((t) => t.includes("DevPod u-dev") && t.includes("#2"));
+    expect(job).toBeGreaterThan(0);
+    expect(devpod).toBeGreaterThan(job);
+  });
+
   it("the form submits what it says, shows where it would stand, and holds the priority to the cap", async () => {
     const calls = stubFetch({
       "/api/jobs": { items: [] },

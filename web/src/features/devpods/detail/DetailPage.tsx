@@ -5,7 +5,7 @@ import { LoadMore, usePaged } from "../../audit/common";
 import { Provenance } from "./Provenance";
 import { preloadYamlEditor } from "../../../design/yaml/YamlEditor";
 import { Notice } from "../../../design/Form";
-import { pinnedNode, reservationNotes } from "../status";
+import { phaseSummary, pinnedNode, queueOf, reservationNotes } from "../status";
 import { useReservationsNow } from "../../reservations/useReservationsNow";
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
@@ -258,9 +258,15 @@ export function DetailPage() {
             </Button>
           </>
         )}
-        <Button onClick={() => (dp.spec.job && dp.spec.running ? setConfirmStop(true) : setRunning.mutate({ ref: r, running: !dp.spec.running }))}>
-          {dp.spec.running ? "休眠" : "启动"}
-        </Button>
+        {queueOf(dp) && !dp.spec.running ? (
+          <Button onClick={() => setRunning.mutate({ ref: r, running: false })} title="离开队列：它不再等着启动">
+            取消排队
+          </Button>
+        ) : (
+          <Button onClick={() => (dp.spec.job && dp.spec.running ? setConfirmStop(true) : setRunning.mutate({ ref: r, running: !dp.spec.running }))}>
+            {dp.spec.running ? "休眠" : "启动"}
+          </Button>
+        )}
         <Button variant="danger" onClick={() => setConfirmDelete(true)}>
           删除
         </Button>
@@ -275,7 +281,10 @@ export function DetailPage() {
         <Meta k="协作者">{dp.spec.collaborators?.join(", ")}</Meta>
         <Meta k="Kore">{kore}</Meta>
       </div>
-      {dp.status?.message && !runningPhase && <div className="rounded-md bg-warm-soft px-3 py-1.5 text-xs text-warm">{dp.status.message}</div>}
+      {queueOf(dp) && !dp.spec.running && (
+        <div className="rounded-md bg-warm-soft px-3 py-1.5 text-xs text-warm">{phaseSummary(dp, undefined, new Date())}：轮到它时会自动启动，并分到一台合适的机器。</div>
+      )}
+      {dp.status?.message && !runningPhase && !queueOf(dp) && <div className="rounded-md bg-warm-soft px-3 py-1.5 text-xs text-warm">{dp.status.message}</div>}
 
       <LiveCards row={live ? metrics.row : undefined} hist={recent.data} ceiling={ceiling} />
 

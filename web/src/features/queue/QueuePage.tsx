@@ -51,7 +51,29 @@ export function QueuePage() {
     .join("；");
 
   const rows = useMemo(() => {
-    const items = (q.data?.items ?? []).filter(matches);
+    // DevPods waiting in line stand in it as one-machine entries, marked so
+    const devpods: Job[] = ended
+      ? []
+      : (q.data?.devpods ?? []).filter(matches).map((d) => ({
+          id: d.name ? `DevPod ${d.name}` : "DevPod",
+          devpod: d.name ?? "",
+          owner: d.owner,
+          phase: "Queued",
+          reason: d.reason,
+          detail: d.detail,
+          position: d.position,
+          nodes: 1,
+          gpus: d.gpus,
+          cpus: d.cpus,
+          priority: d.priority,
+          timeLimitSeconds: 0,
+          mine: d.mine,
+          canManage: false,
+          submitted: d.queuedAt,
+          expectedStart: d.expectedStart,
+          cluster: d.cluster,
+        }));
+    const items = [...(q.data?.items ?? []).filter(matches), ...devpods];
     // running first, then the waiting in their order, then the ended (latest first)
     const rank = (j: Job) => (j.phase === "Running" || j.phase === "Starting" ? 0 : j.phase === "Queued" ? 1 : 2);
     return [...items].sort(
@@ -60,7 +82,7 @@ export function QueuePage() {
         (a.position ?? 0) - (b.position ?? 0) ||
         Date.parse(b.finishedAt ?? b.submitted) - Date.parse(a.finishedAt ?? a.submitted),
     );
-  }, [q.data, matches]);
+  }, [q.data, matches, ended]);
 
   const columns = useMemo<ColumnDef<Job>[]>(
     () => [
@@ -85,7 +107,7 @@ export function QueuePage() {
       { id: "owner", header: "用户", accessorKey: "owner", meta: { priority: 1, width: 100, mono: true } },
       { id: "size", header: "规模", accessorFn: (j) => j.nodes * Math.max(j.gpus, 1), meta: { priority: 1, width: 100 }, cell: ({ row }) => sizeText(row.original) },
       { id: "priority", header: "优先级", accessorKey: "priority", meta: { priority: 2, width: 64 } },
-      { id: "limit", header: "时长上限", accessorKey: "timeLimitSeconds", meta: { priority: 2, width: 80 }, cell: ({ row }) => fmtHours(row.original.timeLimitSeconds * 1000) },
+      { id: "limit", header: "时长上限", accessorKey: "timeLimitSeconds", meta: { priority: 2, width: 80 }, cell: ({ row }) => (row.original.devpod !== undefined ? "—" : fmtHours(row.original.timeLimitSeconds * 1000)) },
       { id: "state", header: "状态", accessorFn: (j) => j.phase, meta: { priority: 1, width: 400 }, cell: ({ row }) => stateText(row.original, now) },
     ],
     [several, now],
@@ -131,7 +153,10 @@ export function QueuePage() {
           sorting={sorting}
           onSortingChange={setSorting}
           empty={<EmptyState title={q.isLoading ? "加载中…" : ended ? "没有任务" : "队列是空的"} hint={q.isLoading ? undefined : "点「提交任务…」，或在 DevPod 里运行 dp job submit。"} />}
-          onRowClick={(j) => navigate(`/queue/${clusterSeg(j.cluster)}/${j.id}`)}
+          onRowClick={(j) => {
+            if (j.devpod === undefined) navigate(`/queue/${clusterSeg(j.cluster)}/${j.id}`);
+            else if (j.devpod) navigate(`/devpods/${clusterSeg(j.cluster)}/${j.devpod}`);
+          }}
         />
       )}
       {submitting && <SubmitDialog onClose={() => setSubmitting(false)} />}

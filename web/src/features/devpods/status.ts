@@ -4,9 +4,43 @@ import type { DevPod, PodInfo, Reservation } from "../../data/api";
 import { failureRetryIn, fmtAge } from "../../lib/format";
 import { fmtClock } from "../../lib/reservations";
 
+/** QueueState: where a DevPod waiting in the queue's line stands. */
+export type QueueState = { position?: number; reason?: string; detail?: Record<string, string>; expected?: string };
+
+/** queueOf: a DevPod's place in the queue's line (null: not in it). */
+export function queueOf(dp: DevPod): QueueState | null {
+  const a = dp.metadata.annotations ?? {};
+  if (!a["devpod.io/queued-at"]) return null;
+  try {
+    return JSON.parse(a["devpod.io/queue-state"] ?? "{}") as QueueState;
+  } catch {
+    return {};
+  }
+}
+
+/** queueWhy: why it waits, in a few words. */
+export function queueWhy(q: QueueState): string {
+  switch (q.reason) {
+    case "capacity":
+      return "等空闲资源";
+    case "behind":
+      return `排在 ${(q.detail?.head ?? "前面的").replace(/^devpod\//, "DevPod ")} 后`;
+    case "quota":
+      return "超出配额";
+    case "preempting":
+      return "正在让出资源";
+  }
+  return "";
+}
+
 export function phaseSummary(dp: DevPod, _pod: PodInfo | undefined, now: Date): string | null {
   const st = dp.status ?? {};
   const phase = st.phase;
+  const q = queueOf(dp);
+  if (q && !dp.spec.running) {
+    const why = queueWhy(q);
+    return `排队中${q.position ? ` #${q.position}` : ""}${why ? ` · ${why}` : ""}`;
+  }
   if (phase === "Running") return null;
   if (phase === "Failed") {
     const msg = st.message || "启动失败";
@@ -74,5 +108,16 @@ export function reservationNotes(dp: DevPod, where: { node?: string; cluster?: s
     notes.push({ type: "HibernatedByReservation", label: "被预约清场休眠", tone: "warm", message: "这台节点被预约，DevPod 已自动休眠，数据保留。预约结束后可以重新启动，或改到其他节点。" });
   if (!dp.spec.running && by.startsWith("reservation-end/"))
     notes.push({ type: "HibernatedAtReservationEnd", label: "预约结束休眠", tone: "warm", message: "节点预约已结束，DevPod 已自动休眠。可以重新启动，或再预约这台节点。" });
+  if (!dp.spec.running && by === "machine-closed")
+    notes.push({ type: "HibernatedMachineClosed", label: "机器关闭预约", tone: "warm", message: "这台机器不再开放预约，只能靠预约在上面运行的 DevPod 已自动休眠，数据保留。重新启动会排队分到其他机器。" });
+  // the queue put it where a reservation will want its room later
+  const expectClear = dp.metadata.annotations?.["devpod.io/expect-clear"];
+  if (dp.spec.running && expectClear && !clearAt)
+    notes.push({
+      type: "ExpectClear",
+      label: "预计被清场",
+      tone: "warm",
+      message: `${where.node || pinnedNode(dp)} 在 ${fmtClock(expectClear)} 有预约需要这台机器的资源，届时这个 DevPod 会被自动休眠${lossWarning(dp)}；先停下再启动，会排到别的机器。`,
+    });
   return notes;
 }

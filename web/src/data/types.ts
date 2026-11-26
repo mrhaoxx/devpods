@@ -192,7 +192,7 @@ export type SpecPatch = {
   /** migrate (admin): pin to this node; "" unpins */
   node?: string;
 };
-export type PatchResult = { devpod: DevPod; rebuild: boolean };
+export type PatchResult = { devpod: DevPod; rebuild: boolean; queued?: boolean };
 
 /* api_admin_users*.go */
 export type QuotaForm = { maxDevPods?: number | null; cpu?: string; memory?: string; gpu?: string; storage?: string };

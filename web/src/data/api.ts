@@ -729,6 +729,8 @@ export type JobRank = { rank: number; node?: string; devpod?: string; phase?: st
 export type Job = {
   cluster?: string;
   id: string;
+  /** set on a queue row that stands for a DevPod waiting in line: its name ("" not shown) */
+  devpod?: string;
   title?: string;
   owner: string;
   phase: JobPhase;
@@ -784,7 +786,25 @@ export const listJobs = (q: { mine?: boolean; ended?: boolean } = {}) => {
   if (q.mine) p.set("mine", "1");
   if (q.ended) p.set("ended", "1");
   const qs = p.toString();
-  return req<{ items: Job[] }>("GET", `/api/jobs${qs ? `?${qs}` : ""}`);
+  return req<{ items: Job[]; devpods?: QueuedDevPod[] }>("GET", `/api/jobs${qs ? `?${qs}` : ""}`);
+};
+
+/** QueuedDevPod: a DevPod waiting in the queue's line (its name only to
+ *  its owner and admins). */
+export type QueuedDevPod = {
+  name?: string;
+  cluster?: string;
+  owner: string;
+  mine: boolean;
+  priority: number;
+  position?: number;
+  reason?: string;
+  detail?: Record<string, string>;
+  expectedStart?: string;
+  queuedAt: string;
+  gpus: number;
+  cpus: number;
+  node?: string;
 };
 export const getJob = (id: string) => req<Job>("GET", `/api/jobs/${id}`);
 export const submitJob = (cluster: string | undefined, body: JobRequest) => req<Job & JobEstimate>("POST", apiIn(cluster, "/api/jobs"), body);

@@ -24,6 +24,12 @@ describe("phaseSummary", () => {
   it("Stopped without persistence says just 已休眠", () => {
     expect(phaseSummary(dp({ running: false }, { phase: "Stopped" }), undefined, now)).toBe("已休眠");
   });
+  it("in the queue's line: its place and why it waits", () => {
+    const q = (state: object) => ({ ...dp({ running: false }, { phase: "Stopped" }), metadata: { name: "alice-x", annotations: { "devpod.io/queued-at": "2026-11-10T11:00:00Z", "devpod.io/queue-state": JSON.stringify(state) } } });
+    expect(phaseSummary(q({ position: 3, reason: "capacity" }), undefined, now)).toBe("排队中 #3 · 等空闲资源");
+    expect(phaseSummary(q({ position: 2, reason: "behind", detail: { head: "abc12" } }), undefined, now)).toBe("排队中 #2 · 排在 abc12 后");
+    expect(phaseSummary(q({}), undefined, now)).toBe("排队中");
+  });
   it("Failed shows the reason and the retry countdown", () => {
     const s = phaseSummary(dp({}, { phase: "Failed", message: "ImagePullBackOff", retryCount: 2, lastFailureAt: "2026-11-10T11:59:50Z" }), undefined, now);
     expect(s).toBe("ImagePullBackOff · 10s 后重试");
@@ -65,5 +71,10 @@ describe("reservationNotes", () => {
     expect(labels(dp({ running: false, ann: { "devpod.io/hibernated-by": "reservation/r1" } }), {})).toEqual(["被预约清场休眠"]);
     expect(labels(dp({ running: false, ann: { "devpod.io/hibernated-by": "reservation-end/r1" } }), {})).toEqual(["预约结束休眠"]);
     expect(labels(dp({ running: true, ann: { "devpod.io/hibernated-by": "reservation/r1" } }), {})).toEqual([]);
+    expect(labels(dp({ running: false, ann: { "devpod.io/hibernated-by": "machine-closed" } }), {})).toEqual(["机器关闭预约"]);
+  });
+  it("says when a reservation will clear it, where the queue put it", () => {
+    expect(labels(dp({ running: true, pin: "g1", ann: { "devpod.io/expect-clear": "2026-11-12T08:00:00Z" } }), {})).toEqual(["预计被清场"]);
+    expect(labels(dp({ running: false, pin: "g1", ann: { "devpod.io/expect-clear": "2026-11-12T08:00:00Z" } }), {})).toEqual([]);
   });
 });
