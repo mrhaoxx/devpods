@@ -1347,6 +1347,11 @@ func (in *JobSpec) DeepCopyInto(out *JobSpec) {
 	}
 	out.CPUsPerNode = in.CPUsPerNode.DeepCopy()
 	out.TimeLimit = in.TimeLimit
+	if in.Requeue != nil {
+		in, out := &in.Requeue, &out.Requeue
+		*out = new(bool)
+		**out = **in
+	}
 	if in.Cancelled != nil {
 		in, out := &in.Cancelled, &out.Cancelled
 		*out = new(ReservationCancel)

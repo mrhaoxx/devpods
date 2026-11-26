@@ -99,6 +99,12 @@ type JobSpec struct {
 	//
 	// +optional
 	Preemptible bool `json:"preemptible,omitempty"`
+	// Requeue: stopped by the system through no doing of its own — for a
+	// job of higher priority, a reservation's start, its machine closed —
+	// it waits in line again (unset or true), or ends (false).
+	//
+	// +optional
+	Requeue *bool `json:"requeue,omitempty"`
 	// Cancelled: asked to end — by whom, when.
 	//
 	// +optional
@@ -197,3 +203,7 @@ type JobList struct {
 func init() {
 	SchemeBuilder.Register(&Job{}, &JobList{})
 }
+
+// Requeues: a job stopped by the system waits in line again (its
+// Requeue unset or true).
+func (s JobSpec) Requeues() bool { return s.Requeue == nil || *s.Requeue }

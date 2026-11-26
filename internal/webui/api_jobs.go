@@ -53,6 +53,7 @@ type JobRequest struct {
 	TimeLimitSeconds int64                    `json:"timeLimitSeconds"`
 	Priority         int32                    `json:"priority"`
 	Preemptible      bool                     `json:"preemptible"`
+	Requeue          *bool                    `json:"requeue"`
 	Privileges       *JobPrivileges           `json:"privileges"`
 	Env              map[string]string        `json:"env"`
 	DryRun           bool                     `json:"dryRun"`
@@ -84,6 +85,7 @@ type jobView struct {
 	TimeLimitSeconds int64                     `json:"timeLimitSeconds"`
 	Priority         int32                     `json:"priority"`
 	Preemptible      bool                      `json:"preemptible,omitempty"`
+	Requeue          bool                      `json:"requeue"`
 	Mine             bool                      `json:"mine"`
 	CanManage        bool                      `json:"canManage"`
 	Submitted        time.Time                 `json:"submitted"`
@@ -112,7 +114,7 @@ func viewOfJob(j *devpodv1alpha1.Job, me string, admin bool) jobView {
 		ID: j.Name, Title: j.Spec.Title, Owner: j.Spec.Owner, Phase: j.Status.Phase, Reason: j.Status.Reason, Detail: j.Status.Detail,
 		Position: j.Status.Position, Nodes: j.Spec.Nodes, GPUs: j.Spec.GPUsPerNode, CPUs: float64(j.Spec.CPUsPerNode.MilliValue()) / 1000,
 		TimeLimitSeconds: int64(j.Spec.TimeLimit.Duration / time.Second), Priority: j.Spec.Priority, Preemptible: j.Spec.Preemptible,
-		Mine: j.Spec.Owner == me, Submitted: j.CreationTimestamp.Time.UTC(), ExpectedStart: timeOf(j.Status.ExpectedStart),
+		Requeue: j.Spec.Requeues(), Mine: j.Spec.Owner == me, Submitted: j.CreationTimestamp.Time.UTC(), ExpectedStart: timeOf(j.Status.ExpectedStart),
 		StartedAt: timeOf(j.Status.StartedAt), FinishedAt: timeOf(j.Status.FinishedAt), Attempts: j.Status.Attempts,
 		Preemptions: j.Status.Preemptions, Ranks: j.Status.Ranks,
 	}
@@ -562,7 +564,7 @@ func (s *Server) buildJob(ctx context.Context, sess Session, req JobRequest) (*d
 			Cluster: cluster, Owner: owner, Title: title, Source: req.From, Template: tmpl, Shell: shell,
 			Command: command, Args: req.Args, Workdir: req.Workdir, Env: env, Nodes: req.Nodes, GPUsPerNode: req.GPUs,
 			CPUsPerNode: *resource.NewMilliQuantity(cpuMilli, resource.DecimalSI), TimeLimit: metav1.Duration{Duration: limit},
-			Priority: req.Priority, Preemptible: req.Preemptible,
+			Priority: req.Priority, Preemptible: req.Preemptible, Requeue: req.Requeue,
 		},
 	}
 	if apiErr := s.jobQuota(ctx, job); apiErr != nil {

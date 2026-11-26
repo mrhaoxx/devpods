@@ -168,7 +168,7 @@ func (s *Server) queueIn(ctx context.Context, cluster string, jobs, ended []*dev
 	plan := planQueue(v)
 	for _, victim := range plan.Preempt {
 		s.recordJob(ctx, systemEvent("system:queue"), victim, "preempted", "for "+preemptedFor(plan, victim.Name))
-		s.requeueJob(ctx, cc, victim, "preempted")
+		s.stopForOthers(ctx, cc, victim, "preempted")
 	}
 	// the port blocks running jobs have, by machine
 	ports := map[string]map[int32]bool{}
@@ -403,6 +403,17 @@ func (s *Server) stopInBackground(ctx context.Context, cc *clusters.ClusterClien
 		defer cancel()
 		s.keepAndStop(ctx, cc, j, key)
 	}()
+}
+
+// stopForOthers stops j, which did nothing wrong (stopped for a job of
+// higher priority, a reservation, its machine closed: reason): it waits
+// in line again, or — submitted without requeue — ends Cancelled.
+func (s *Server) stopForOthers(ctx context.Context, cc *clusters.ClusterClients, j *devpodv1alpha1.Job, reason string) {
+	if j.Spec.Requeues() {
+		s.requeueJob(ctx, cc, j, reason)
+		return
+	}
+	s.endJob(ctx, cc, j, devpodv1alpha1.JobCancelled, reason, nil, s.Queue.now())
 }
 
 // requeueJob puts j back in the queue, keeping its place (its submission

@@ -26,7 +26,7 @@ type jobV struct {
 	ID, Owner, Phase, Reason, Command string
 	Nodes, GPUs, Priority             int32
 	CPUs                              float64
-	Mine, CanManage                   bool
+	Mine, CanManage, Requeue          bool
 	Position                          int32
 	Code, Message                     string
 }

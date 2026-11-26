@@ -234,6 +234,12 @@ spec:
                   owner's cap (JobPriorityRule) when it was submitted.
                 format: int32
                 type: integer
+              requeue:
+                description: |-
+                  Requeue: stopped by the system through no doing of its own — for a
+                  job of higher priority, a reservation's start, its machine closed —
+                  it waits in line again (unset or true), or ends (false).
+                type: boolean
               shell:
                 description: 'Shell: the ranks'' DevPod shell, as the source''s.'
                 type: string

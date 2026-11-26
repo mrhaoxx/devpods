@@ -257,7 +257,7 @@ func (s *Server) clearIn(ctx context.Context, cluster string, all []devpodv1alph
 	}
 	for id := range requeue {
 		if j := jobs[id]; j != nil {
-			s.requeueJob(ctx, cc, j, "preempted")
+			s.stopForOthers(ctx, cc, j, "preempted")
 		}
 	}
 	cleared := map[string][]string{} // by reservation
