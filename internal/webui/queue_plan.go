@@ -202,11 +202,13 @@ func planQueue(v queueView) queuePlan {
 		quota := v.QuotaOK == nil || v.QuotaOK(j, planned)
 		if head != nil {
 			// behind the head (EASY backfill): a job may start now on
-			// machines the head is not promised, or on any if it has ended
-			// by the promise — either way the head is not put off
+			// machines the head holds nothing on, or on any if it has ended
+			// by the promise — either way the head is not put off (a head
+			// holding machines with no promise has no time to end by)
 			away := slices.DeleteFunc(slices.Clone(cands), func(m string) bool { return slices.Contains(headOn, m) })
+			anywhere := len(headOn) == 0 || (promised && limit > 0 && !v.Now.Add(limit).After(promise))
 			switch {
-			case fits && quota && (!promised || (limit > 0 && !v.Now.Add(limit).After(promise))):
+			case fits && quota && anywhere:
 				start(j, cands[:n])
 				continue
 			case fits && quota && len(away) >= n:
@@ -250,6 +252,10 @@ func planQueue(v queueView) queuePlan {
 		if t, on, ok := v.earliest(j, runs); ok {
 			promise, promised, headOn = t, true, on
 			w.Expected = &t
+		} else {
+			// no time in sight (what is in its way has no end): it holds
+			// the machines nearest to taking it all the same
+			headOn = v.nearest(j, runs)
 		}
 		wait(j, w)
 	}
@@ -458,4 +464,36 @@ func (v queueView) soonCleared(e qEntry, runs []qRun) ([]string, map[string]time
 		names[i], at[c.name] = c.name, c.at
 	}
 	return names, at
+}
+
+// nearest: the machines e may have that could ever take one of its ranks,
+// those one rank lacks the least on now first (cards, then cores), as
+// many as it has ranks — what a head no time can be promised holds.
+func (v queueView) nearest(e qEntry, runs []qRun) []string {
+	type cand struct {
+		name string
+		lack amount
+	}
+	var cs []cand
+	for _, m := range v.Machines {
+		if !v.mayHave(e, m.Name) || !e.Ask.fits(m.Cap) {
+			continue
+		}
+		free := freeFor(m, runs, v.Now, v.window(e)).clamped()
+		cs = append(cs, cand{m.Name, e.Ask.sub(free).clamped()})
+	}
+	sort.Slice(cs, func(a, b int) bool {
+		if cs[a].lack.GPU != cs[b].lack.GPU {
+			return cs[a].lack.GPU < cs[b].lack.GPU
+		}
+		if cs[a].lack.CPU != cs[b].lack.CPU {
+			return cs[a].lack.CPU < cs[b].lack.CPU
+		}
+		return cs[a].name < cs[b].name
+	})
+	var out []string
+	for i := 0; i < len(cs) && i < int(e.Nodes); i++ {
+		out = append(out, cs[i].name)
+	}
+	return out
 }

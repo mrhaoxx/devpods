@@ -61,8 +61,13 @@ func TestPlanGangAllOrNone(t *testing.T) {
 	if started(p, "x") != nil || p.Waits["x"].Reason != "capacity" || p.Waits["x"].Detail["need"] != "16" || p.Waits["x"].Detail["free"] != "12" || p.Waits["x"].Detail["fit"] != "1" {
 		t.Fatalf("x: %v %+v", started(p, "x"), p.Waits["x"])
 	}
-	if m := started(p, "y"); len(m) != 2 {
-		t.Fatalf("y: %v", m)
+	// x holds both machines (no time can be promised it): y waits behind
+	if started(p, "y") != nil || p.Waits["y"].Reason != "behind" {
+		t.Fatalf("y: %v %+v", started(p, "y"), p.Waits["y"])
+	}
+	// alone, y's two ranks start together
+	if m := started(planQueue(view([]qMachine{a, machine8("b")}, nil, qjob("y", 0, 2, 4, time.Hour, time.Minute))), "y"); len(m) != 2 {
+		t.Fatalf("y alone: %v", m)
 	}
 }
 
@@ -297,5 +302,33 @@ func TestPlanDevPodHeadPreempts(t *testing.T) {
 	p := planQueue(entriesView([]qMachine{machine8("a")}, runs, qdev("d", 5, 1, 0)))
 	if len(p.Preempt) != 1 || p.Preempt[0].Name != "low" {
 		t.Fatalf("preempt %v wait %+v", p.Preempt, p.Waits["devpod/d"])
+	}
+}
+
+// A head no time can be promised (what is in its way has no end) still
+// holds the machine nearest to taking it: what comes behind does not
+// start there, and the cards freed there wait for it.
+func TestPlanUnpromisedHeadHolds(t *testing.T) {
+	a, b := machine8("a"), machine8("b")
+	a.Interactive, b.Interactive = amount{6, 0}, amount{7, 0} // 2 free, 1 free
+	p := planQueue(view([]qMachine{a, b}, nil, qjob("head", 0, 1, 8, time.Hour, 0), qjob("two", 0, 1, 2, time.Hour, time.Minute)))
+	if w := p.Waits["head"]; w.Reason != "capacity" || w.Expected != nil {
+		t.Fatalf("head %+v", w)
+	}
+	// two fits only on a, which is the head's
+	if m := started(p, "two"); m != nil || p.Waits["two"].Reason != "behind" {
+		t.Fatalf("two on %v, %+v", m, p.Waits["two"])
+	}
+}
+
+// It holds as many as it has ranks — the least short first.
+func TestPlanUnpromisedHeadHoldsAsManyAsRanks(t *testing.T) {
+	a, b, c := machine8("a"), machine8("b"), machine8("c")
+	a.Interactive, b.Interactive, c.Interactive = amount{5, 0}, amount{6, 0}, amount{6, 0} // 3, 2, 2 free
+	p := planQueue(view([]qMachine{a, b, c}, nil, qjob("head", 0, 2, 8, time.Hour, 0), qjob("two", 0, 1, 2, time.Hour, time.Minute)))
+	// the head holds a and b (c is as short as b: by name); two, which b
+	// would suit as well, starts on c
+	if m := started(p, "two"); !slices.Equal(m, []string{"c"}) {
+		t.Fatalf("two on %v, %+v", m, p.Waits["two"])
 	}
 }
