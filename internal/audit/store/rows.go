@@ -278,8 +278,11 @@ type EventRow struct {
 	Action string `ch:"action" json:"action"`
 	Node   string `ch:"node" json:"node,omitempty"`
 	// Reason: why, for what the system did; Detail: what changed
-	Reason    string `ch:"reason" json:"reason,omitempty"`
-	Detail    string `ch:"detail" json:"detail,omitempty"`
+	Reason string `ch:"reason" json:"reason,omitempty"`
+	Detail string `ch:"detail" json:"detail,omitempty"`
+	// Origin: the DevPod a dp call came from (<cluster>/<name>), which
+	// acts as its owner
+	Origin    string `ch:"origin" json:"origin,omitempty"`
 	ClientIP  string `ch:"client_ip" json:"client_ip,omitempty"`
 	RequestID string `ch:"request_id" json:"request_id,omitempty"`
 }

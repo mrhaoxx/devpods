@@ -6,6 +6,7 @@ package webui
 
 import (
 	"context"
+	"github.com/mrhaoxx/devpod/internal/audit/store"
 
 	"net/http"
 	"time"
@@ -206,4 +207,10 @@ func (s *Server) SetQueueBeforeStartsForTest(f func()) { s.queueBeforeStarts = f
 // of a cluster (the agent's word otherwise).
 func (s *Server) SetOtherUsageForTest(f func(cluster string) map[string]agent.NodeUsage) {
 	s.otherUsage = f
+}
+
+func (s *Server) RecordForTest(ctx context.Context, ev store.EventRow) { s.record(ctx, ev) }
+func (s *Server) SetEventRetryForTest(d time.Duration)                 { s.eventRetry = d }
+func (s *Server) EventFromForTest(r *http.Request, sess Session) store.EventRow {
+	return eventFrom(r, sess)
 }

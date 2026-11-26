@@ -464,3 +464,25 @@ func TestServeLimits(t *testing.T) {
 		t.Fatal("the idle connection was not closed")
 	}
 }
+
+// From inside a DevPod the CLI says from which one, for the console's
+// record of what was done.
+func TestAPIOriginHeader(t *testing.T) {
+	var got string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		got = r.Header.Get(OriginHeader)
+		_, _ = w.Write([]byte("{}"))
+	}))
+	t.Cleanup(srv.Close)
+	var out, errw bytes.Buffer
+	cli := &Server{API: NewAPI(srv.URL, "k")}
+	cli.Exec(context.Background(), Meta{User: "al"}, []string{"jobs"}, &Origin{Cluster: "st", DevPod: "al-dev"}, nil, &out, &errw)
+	if got != "st/al-dev" {
+		t.Fatalf("origin header %q (%s %s)", got, out.String(), errw.String())
+	}
+	got = "unset"
+	cli.Exec(context.Background(), Meta{User: "al"}, []string{"jobs"}, nil, nil, &out, &errw)
+	if got != "" {
+		t.Fatalf("no origin: header %q", got)
+	}
+}

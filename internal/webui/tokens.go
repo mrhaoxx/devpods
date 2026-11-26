@@ -297,8 +297,13 @@ func (s *Server) bearerSession(w http.ResponseWriter, r *http.Request, bearer st
 				slog.Warn("user object for a gateway user", "user", name, "err", err)
 			}
 		}
-		// a command from inside a DevPod asks to be no admin (dp)
-		return Session{User: name, Admin: s.adminFor(name, userPtr) && r.Header.Get(gatewaycli.DropAdminHeader) != "1"}, true
+		// a command from inside a DevPod asks to be no admin (dp), and says
+		// from which one (the record of what was done)
+		sess := Session{User: name, Admin: s.adminFor(name, userPtr) && r.Header.Get(gatewaycli.DropAdminHeader) != "1", Via: "cli"}
+		if o := r.Header.Get(gatewaycli.OriginHeader); o != "" {
+			sess.Via, sess.Origin = "dp", o
+		}
+		return sess, true
 	}
 	rest, ok := strings.CutPrefix(bearer, tokenPrefix)
 	id, secret, ok2 := strings.Cut(rest, "_")
@@ -365,7 +370,7 @@ func (s *Server) bearerSession(w http.ResponseWriter, r *http.Request, bearer st
 	} else {
 		admin = admin && g.has("admin:write")
 	}
-	return Session{User: owner.Name, Admin: admin, Token: g}, true
+	return Session{User: owner.Name, Admin: admin, Token: g, Via: "token:" + g.ID}, true
 }
 
 /* ---- managing tokens (browser session only) ---- */

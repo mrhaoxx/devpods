@@ -252,6 +252,7 @@ func (s *Server) Exec(ctx context.Context, m Meta, argv []string, o *Origin, fil
 		// from inside a DevPod: its owner's own rights, never an admin's
 		dropped := *api
 		dropped.DropAdmin = true
+		dropped.Origin = o.Cluster + "/" + o.DevPod
 		api = &dropped
 	}
 	env := &Env{Ctx: cctx, User: m.User, API: api, Out: out, Err: errw, Session: ctx, Interrupt: ctx.Done(),

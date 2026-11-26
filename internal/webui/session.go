@@ -30,6 +30,11 @@ type Session struct {
 	// Token is set when the request came with a personal access token
 	// (never part of the cookie): its scopes and DevPod limits apply.
 	Token *TokenGrant `json:"-"`
+	// Via: how the request came, for the record of what was done — "" a
+	// cookie (the web), cli, dp, token:<id>; Origin: the DevPod a dp call
+	// came from (never part of the cookie)
+	Via    string `json:"-"`
+	Origin string `json:"-"`
 }
 
 // SessionManager mints and verifies HMAC-SHA256-signed session tokens.

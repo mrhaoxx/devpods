@@ -41,6 +41,44 @@ type fakeAuditStore struct {
 	accessErr error
 	alertsHit bool
 	resv      []store.ReservationEventRow // reservation history written
+	events    []store.EventRow            // events written
+	eventErrs int                         // the next so many event writes fail
+	eventHold chan struct{}               // non-nil: event writes wait for it
+	eventF    store.EventFilter
+}
+
+func (f *fakeAuditStore) InsertEvent(_ context.Context, r store.EventRow) error {
+	if f.eventHold != nil {
+		<-f.eventHold
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.eventErrs > 0 {
+		f.eventErrs--
+		return errors.New("store down")
+	}
+	f.events = append(f.events, r)
+	return nil
+}
+
+func (f *fakeAuditStore) SearchEvents(_ context.Context, ef store.EventFilter) ([]store.EventRow, string, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.eventF = ef
+	var out []store.EventRow
+	for i := len(f.events) - 1; i >= 0; i-- {
+		if r := f.events[i]; (ef.ObjectUID == "" || r.ObjectUID == ef.ObjectUID) && (ef.Kind == "" || r.Kind == ef.Kind) && (ef.Object == "" || r.Object == ef.Object) {
+			out = append(out, r)
+		}
+	}
+	return out, "", nil
+}
+
+// written: the events written so far.
+func (f *fakeAuditStore) written() []store.EventRow {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]store.EventRow(nil), f.events...)
 }
 
 func (f *fakeAuditStore) ListSessions(_ context.Context, sf store.SessionFilter) ([]store.SessionSummary, string, error) {

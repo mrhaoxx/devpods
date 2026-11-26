@@ -41,6 +41,12 @@ import (
 // fixed sequence: session → ownership → (mutations) quota → execute
 // under the webui ServiceAccount.
 type Server struct {
+	// events: the record of what was done, on its way to the audit store
+	// (events.go); eventRetry how often what it did not take is tried
+	// again (0: 10 s)
+	events     eventWriter
+	eventRetry time.Duration
+
 	Client client.Client // cached manager client
 	Reader client.Reader // uncached APIReader: events, live Pod readback
 	// accessLogged: the access rules' problems logged already (once each)

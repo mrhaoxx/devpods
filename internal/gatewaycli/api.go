@@ -29,6 +29,11 @@ const UserHeader = "X-DevPod-User"
 // never an admin's — anyone using the DevPod could otherwise use them.
 const DropAdminHeader = "X-DevPod-Drop-Admin"
 
+// OriginHeader names the DevPod (<cluster>/<name>) a command from inside a
+// DevPod (dp) came from, for the console's record of what was done; the
+// console hears it only with the shared key.
+const OriginHeader = "X-DevPod-Origin"
+
 // API calls the console's REST API on a user's behalf.
 type API struct {
 	BaseURL string // e.g. http://devpod-webui.devpod-system.svc:80
@@ -37,6 +42,8 @@ type API struct {
 	MaxBody int64 // response size cap; default 8 MiB
 	// DropAdmin: every request asks to be no admin (DropAdminHeader)
 	DropAdmin bool
+	// Origin: the DevPod every request comes from (OriginHeader; "" none)
+	Origin string
 }
 
 // NewAPI returns an API with a 10 s request timeout.
@@ -85,6 +92,9 @@ func (a *API) Do(ctx context.Context, user, method, path string, body any) ([]by
 	req.Header.Set(UserHeader, user)
 	if a.DropAdmin {
 		req.Header.Set(DropAdminHeader, "1")
+	}
+	if a.Origin != "" {
+		req.Header.Set(OriginHeader, a.Origin)
 	}
 	req.Header.Set("Accept", "application/json")
 	if body != nil {
@@ -143,6 +153,9 @@ func (a *API) Stream(ctx context.Context, user, path string, idle time.Duration,
 	req.Header.Set(UserHeader, user)
 	if a.DropAdmin {
 		req.Header.Set(DropAdminHeader, "1")
+	}
+	if a.Origin != "" {
+		req.Header.Set(OriginHeader, a.Origin)
 	}
 	req.Header.Set("Accept", "text/event-stream")
 	hc := &http.Client{} // a.HTTP's total timeout would cut the stream

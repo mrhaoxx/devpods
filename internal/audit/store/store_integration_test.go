@@ -134,16 +134,16 @@ func TestReservationEvents_Purpose(t *testing.T) {
 func TestEvents(t *testing.T) {
 	ctx := context.Background()
 	c := openTestCH(t, "audit_events")
-	if err := Migrate(ctx, c, DefaultRetention(180)); err != nil {
+	// the test database outlives a run: start from none
+	if err := c.conn.Exec(ctx, "DROP DATABASE IF EXISTS audit_events"); err != nil {
 		t.Fatal(err)
 	}
-	// the test database outlives a run: start from an empty table
-	if err := c.conn.Exec(ctx, "TRUNCATE TABLE audit_events.events"); err != nil {
+	if err := Migrate(ctx, c, DefaultRetention(180)); err != nil {
 		t.Fatal(err)
 	}
 	now := time.Now().UTC().Truncate(time.Millisecond)
 	for _, r := range []EventRow{
-		{TS: now.Add(-2 * time.Second), Cluster: "st", Kind: "devpod", Object: "al-dev", ObjectUID: "uid-1", Owner: "al", Actor: "al", Via: "web", Action: "create"},
+		{TS: now.Add(-2 * time.Second), Cluster: "st", Kind: "devpod", Object: "al-dev", ObjectUID: "uid-1", Owner: "al", Actor: "al", Via: "dp", Action: "create", Origin: "st/al-dev"},
 		{TS: now.Add(-time.Second), Cluster: "st", Kind: "devpod", Object: "al-dev", ObjectUID: "uid-1", Owner: "al", Actor: "root", Via: "web", Action: "stop", Detail: "测试"},
 		{TS: now, Cluster: "st", Kind: "job", Object: "abc12", Owner: "bo", Actor: "system:queue", Via: "system", Action: "start", Node: "g1"},
 	} {
@@ -155,7 +155,7 @@ func TestEvents(t *testing.T) {
 	f := span
 	f.ObjectUID = "uid-1"
 	rows, _, err := c.SearchEvents(ctx, f)
-	if err != nil || len(rows) != 2 || rows[0].Action != "stop" || rows[0].Detail != "测试" || rows[1].Action != "create" {
+	if err != nil || len(rows) != 2 || rows[0].Action != "stop" || rows[0].Detail != "测试" || rows[1].Action != "create" || rows[1].Origin != "st/al-dev" {
 		t.Fatalf("by object: %+v %v", rows, err)
 	}
 	f = span
