@@ -80,6 +80,13 @@ rules:
   resources: ["nodes"]
   verbs: ["patch"]
 {{- end }}
+{{- if dig "enabled" false (.Values.queue | default dict) }}
+# The queue: jobs and the priority caps, kept by the console in its own
+# cluster.
+- apiGroups: ["devpod.io"]
+  resources: ["jobs", "jobs/status", "jobpriorityrules"]
+  verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+{{- end }}
 {{- if dig "clusters" "enabled" false .Values.webui }}
 # The clusters this console manages.
 - apiGroups: ["devpod.io"]
@@ -107,11 +114,11 @@ metadata:
 roleRef: {apiGroup: rbac.authorization.k8s.io, kind: ClusterRole, name: devpod-webui}
 subjects:
 - {kind: ServiceAccount, name: devpod-webui, namespace: {{ .Values.namespaces.system }}}
-{{- if or (include "devpod.telemetry.on" $) (dig "enabled" false ($.Values.reservation | default dict)) }}
+{{- if or (include "devpod.telemetry.on" $) (dig "enabled" false ($.Values.reservation | default dict)) (dig "enabled" false ($.Values.queue | default dict)) }}
 ---
 # Leader election (telemetry's, and the replica that carries the
-# reservations out), and the ingest EndpointSlice the leader points at
-# itself.
+# reservations out and schedules the queue), and the ingest EndpointSlice
+# the leader points at itself.
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
 metadata:

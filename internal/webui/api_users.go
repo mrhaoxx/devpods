@@ -140,6 +140,7 @@ func (s *Server) handleMe(w http.ResponseWriter, r *http.Request) {
 			"snapshotDefaultRegistry": s.Snapshots != nil && s.Snapshots.ImageTemplate != "",
 			// node reservations arrive with the reservation backend
 			"reservations": s.Reservations != nil,
+			"queue":        s.Queue != nil,
 		},
 		"hasPassword": hasPassword,
 		"ssh":         map[string]any{"host": s.SSHHost, "port": s.SSHPort, "loginSuffix": s.SSHLoginSuffix},

@@ -102,6 +102,7 @@ func main() {
 	cf := addCLIFlags(flag.CommandLine)
 	snf := addSnapshotFlags(flag.CommandLine)
 	rf := addReservationFlags(flag.CommandLine)
+	qf := addQueueFlags(flag.CommandLine)
 	wf := addWebshellFlags(flag.CommandLine)
 	clf := addClusterFlags(flag.CommandLine)
 	gcName := flag.String("gateway-config-name", "default", "GatewayConfig holding the cluster default audit policy")
@@ -257,6 +258,10 @@ func main() {
 	}
 	if srv.Reservations, err = rf.build(); err != nil {
 		slog.Error("reservations", "err", err)
+		os.Exit(1)
+	}
+	if srv.Queue, err = qf.build(); err != nil {
+		slog.Error("queue", "err", err)
 		os.Exit(1)
 	}
 	if srv.Snapshots, err = snf.build(restCfg); err != nil {

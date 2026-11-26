@@ -170,3 +170,13 @@ func LoginWaitForTest(n int) time.Duration { return loginWait(n) }
 
 // LoseLeadForTest: as when this replica stops leading.
 func (s *Server) LoseLeadForTest() { s.loseLead() }
+
+// PriorityCapForTest is priorityCap.
+func (s *Server) PriorityCapForTest(ctx context.Context, user string, groups map[string]bool, cluster string) (int32, bool, error) {
+	return s.priorityCap(ctx, user, groups, cluster)
+}
+
+// MaxTimeLimitForTest is maxTimeLimit.
+func (s *Server) MaxTimeLimitForTest(ctx context.Context, cluster string) time.Duration {
+	return s.maxTimeLimit(ctx, cluster)
+}

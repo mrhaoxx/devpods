@@ -41,6 +41,12 @@ type ClusterSpec struct {
 	//
 	// +optional
 	Paused bool `json:"paused,omitempty"`
+
+	// JobMaxTimeLimit: the longest time limit a queue job may have here
+	// (the console's --job-max-time-limit when unset).
+	//
+	// +optional
+	JobMaxTimeLimit *metav1.Duration `json:"jobMaxTimeLimit,omitempty"`
 }
 
 // ClusterStatus is what the console last heard from the cluster's agent.

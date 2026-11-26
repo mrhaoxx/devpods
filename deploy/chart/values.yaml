@@ -265,6 +265,13 @@ webui:
     maxDevPods: 3
     compute: {cpu: "8", memory: "16Gi"}
     storage: "50Gi"
+# The queue (console): users submit jobs that wait for the reservable
+# machines' unreserved GPUs and cores and run as job ranks in clusters
+# that run them (jobs.enabled there).
+queue:
+  enabled: false
+  maxTimeLimit: 72h        # longest time limit a job may ask (a cluster may say less)
+
 # Queue jobs (job ranks: run-to-completion DevPods). On a cluster whose
 # controller runs them, the agent says so (capability "jobs") and the
 # console's queue places jobs there.

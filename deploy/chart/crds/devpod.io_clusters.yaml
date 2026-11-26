@@ -107,6 +107,11 @@ spec:
                   Gateway names the Gateway whose SSH address and port-link domain
                   are shown for this cluster's DevPods. Empty: the console's own.
                 type: string
+              jobMaxTimeLimit:
+                description: |-
+                  JobMaxTimeLimit: the longest time limit a queue job may have here
+                  (the console's --job-max-time-limit when unset).
+                type: string
               paused:
                 description: 'Paused: the agent''s connections are refused and dropped.'
                 type: boolean

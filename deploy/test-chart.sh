@@ -352,6 +352,14 @@ docHas reservation ClusterRole devpod-webui 'resources: ["reservations"]'
 docHas reservation ClusterRole devpod-webui 'verbs: ["patch"]'
 lacks defaults "--reservation"
 
+# the queue: off by default; on, the console schedules jobs and keeps them
+lacks defaults "--queue"
+render queue "${WEBUI[@]}" --set queue.enabled=true
+docHas queue Deployment devpod-webui "- --queue=true"
+docHas queue Deployment devpod-webui "- --job-max-time-limit=72h"
+docHas queue ClusterRole devpod-webui 'resources: ["jobs", "jobs/status", "jobpriorityrules"]'
+docHas queue Role devpod-webui-leader 'resources: ["leases"]'
+
 # Several clusters. Nothing of it renders unless asked for: a release of
 # one cluster with its own console is what it was.
 lacks defaults "devpod-agent"

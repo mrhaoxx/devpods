@@ -124,6 +124,14 @@ spec:
         - --snapshot-max-per-user={{ .maxPerUser | default 10 }}
         {{- end }}
         {{- end }}
+        {{- if dig "enabled" false (.Values.queue | default dict) }}
+        - --queue=true
+        - --job-max-time-limit={{ .Values.queue.maxTimeLimit }}
+        {{- if not (or (include "devpod.telemetry.on" $) (dig "enabled" false (.Values.reservation | default dict))) }}
+        # the replica that schedules holds a Lease there
+        - --leader-election-namespace={{ .Values.namespaces.system }}
+        {{- end }}
+        {{- end }}
         {{- if dig "enabled" false (.Values.reservation | default dict) }}
         - --reservations=true
         - --reservation-granularity={{ .Values.reservation.granularity }}
