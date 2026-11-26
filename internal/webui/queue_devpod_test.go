@@ -12,6 +12,7 @@ import (
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 
@@ -370,5 +371,55 @@ func TestEditAutoPinnedTooBigRefused(t *testing.T) {
 	}
 	if code, _, ec := patchAs(t, p, "eb-alice", "eb-alice-g1", `{"gpu":"2"}`); code != http.StatusOK {
 		t.Fatalf("2 cards: %d %q", code, ec)
+	}
+}
+
+// runQueue runs p's queue loop (a tick of an hour: only nudges start
+// rounds) until the test ends.
+func runQueue(t *testing.T, p *placeRig) {
+	t.Helper()
+	p.s.Queue.Tick = time.Hour
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() { p.s.RunQueue(ctx, nil); close(done) }()
+	t.Cleanup(func() { cancel(); <-done })
+}
+
+// A start with room starts at once: the replica that took it asks for a
+// round, not waiting for the tick.
+func TestNudgeStartsSoon(t *testing.T) {
+	p := jobRig(t, "ns", "")
+	runQueue(t, p)
+	name := p.create("ns-alice", http.StatusCreated)
+	deadline := time.Now().Add(3 * time.Second)
+	for !p.get(name).Spec.Running {
+		if time.Now().After(deadline) {
+			t.Fatal("not started within 3 s")
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+}
+
+// Put in line by another replica (as its handler would), it starts as
+// soon: the leader sees it in its cache.
+func TestQueuedByOtherReplicaStartsSoon(t *testing.T) {
+	p := jobRig(t, "nr", "")
+	ctx := context.Background()
+	dp := &devpodv1alpha1.DevPod{ObjectMeta: metav1.ObjectMeta{Name: "nr-alice-x", Namespace: "devpods", Annotations: map[string]string{
+		devpodv1alpha1.QueuedAtAnnotation: time.Now().UTC().Format(time.RFC3339Nano), devpodv1alpha1.QueuePriorityAnnotation: "0"}},
+		Spec: devpodv1alpha1.DevPodSpec{Owner: "nr-alice", Pod: &devpodv1alpha1.PodWorkloadSpec{Spec: corev1.PodSpec{Containers: []corev1.Container{{Name: "dev", Image: "x",
+			Resources: corev1.ResourceRequirements{Limits: corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("2")}}}}}}}}
+	runQueue(t, p)
+	time.Sleep(200 * time.Millisecond)
+	if err := k8sClient.Create(ctx, dp); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = k8sClient.Delete(ctx, dp) })
+	deadline := time.Now().Add(3 * time.Second)
+	for !p.get(dp.Name).Spec.Running {
+		if time.Now().After(deadline) {
+			t.Fatal("not started within 3 s")
+		}
+		time.Sleep(50 * time.Millisecond)
 	}
 }

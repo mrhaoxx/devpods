@@ -46,6 +46,9 @@ type Server struct {
 	// again (0: 10 s)
 	events     eventWriter
 	eventRetry time.Duration
+	// nudge: a round asked for soon (a start waits in line); made once
+	nudge     chan struct{}
+	nudgeOnce sync.Once
 
 	Client client.Client // cached manager client
 	Reader client.Reader // uncached APIReader: events, live Pod readback

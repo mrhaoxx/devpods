@@ -19,6 +19,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/types"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	"github.com/mrhaoxx/devpod/internal/access"
 
@@ -226,8 +227,68 @@ func avoiding(dp *devpodv1alpha1.DevPod, now time.Time) string {
 	return node
 }
 
-// nudgeQueue asks the queue for a round soon (a start waits in line).
-func (s *Server) nudgeQueue() {}
+// nudges: the channel a round is asked for on.
+func (s *Server) nudges() chan struct{} {
+	s.nudgeOnce.Do(func() { s.nudge = make(chan struct{}, 1) })
+	return s.nudge
+}
+
+// nudgeQueue asks this replica's queue for a round soon (a start waits
+// in line); asked already, once is enough.
+func (s *Server) nudgeQueue() {
+	select {
+	case s.nudges() <- struct{}{}:
+	default:
+	}
+}
+
+// queuedPoll: how often the leader looks in its caches for DevPods put in
+// line (by another replica, whose nudge it does not hear).
+var queuedPoll = time.Second
+
+// watchQueued nudges the queue whenever, while this replica leads, a
+// DevPod appears in line in any cluster's cache that it has not seen in
+// line before — a start another replica took.
+func (s *Server) watchQueued(ctx context.Context, leads func() bool) {
+	seen := map[string]bool{}
+	t := time.NewTicker(queuedPoll)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+		}
+		if leads != nil && !leads() {
+			continue
+		}
+		now := map[string]bool{}
+		fresh := false
+		for _, cluster := range s.knownClusters(ctx) {
+			cc := s.clientsOf(cluster)
+			if cc == nil {
+				continue
+			}
+			var dps devpodv1alpha1.DevPodList
+			if err := cc.Client.List(ctx, &dps, client.InNamespace(s.NS)); err != nil {
+				continue
+			}
+			for i := range dps.Items {
+				if v, ok := dps.Items[i].Annotations[devpodv1alpha1.QueuedAtAnnotation]; ok && !dps.Items[i].Spec.Running {
+					key := cluster + "/" + dps.Items[i].Name + "@" + v
+					now[key] = true
+					if !seen[key] {
+						fresh = true
+					}
+				}
+			}
+		}
+		seen = now
+		if fresh {
+			s.nudgeQueue()
+		}
+	}
+}
 
 // admitStart: dp is asked to start (its spec says running). A VM, or a
 // DevPod the queue has no say over, starts as before (false). With the

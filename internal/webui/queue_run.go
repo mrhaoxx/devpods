@@ -57,6 +57,8 @@ func (s *Server) RunQueue(ctx context.Context, leads func() bool) {
 	}
 	t := time.NewTicker(s.Queue.Tick)
 	defer t.Stop()
+	go s.watchQueued(ctx, leads)
+	nudged := s.nudges()
 	for {
 		if leads == nil || leads() {
 			s.QueueRound(ctx)
@@ -65,6 +67,7 @@ func (s *Server) RunQueue(ctx context.Context, leads func() bool) {
 		case <-ctx.Done():
 			return
 		case <-t.C:
+		case <-nudged:
 		}
 	}
 }
