@@ -150,8 +150,14 @@ func (s *Server) replaceDevPodSpec(r *http.Request, sess Session, dp *devpodv1al
 	if apiErr := normalizeNodeName(dp); apiErr != nil {
 		return PatchResponse{}, apiErr
 	}
+	// in the queue's line, it stays there as it is (its YAML says it is
+	// stopped; a start asked there is the one it waits for)
+	_, wasQueued := queuedAt(before)
+	if wasQueued {
+		dp.Spec.Running = false
+	}
 	if equality.Semantic.DeepEqual(before.Spec, dp.Spec) && maps.Equal(before.Annotations, dp.Annotations) {
-		return PatchResponse{DevPod: dp}, nil // nothing changed
+		return PatchResponse{DevPod: dp, Queued: wasQueued}, nil // nothing changed
 	}
 	// a new node, or starting on the one it has: it has to be there
 	if node := pinnedNode(dp); node != "" && (node != pinnedNode(before) || (dp.Spec.Running && !before.Spec.Running)) {
@@ -160,13 +166,23 @@ func (s *Server) replaceDevPodSpec(r *http.Request, sess Session, dp *devpodv1al
 			return PatchResponse{}, badRequest("node %q not found", node)
 		}
 	}
-	// where it may run (the access rules): when it starts, moves, or its
-	// Pod is made anew; a stopped one moved only needs leave to be there
-	if apiErr := s.placeOnChange(r.Context(), before, dp); apiErr != nil {
-		return PatchResponse{}, apiErr
-	}
 	if dp.Spec.Running {
 		if apiErr := s.quotaErrFor(r, sess, dp, dp.Name); apiErr != nil {
+			return PatchResponse{}, apiErr
+		}
+	}
+	// a start goes through the queue's line (or is placed at once)
+	queued := false
+	if !before.Spec.Running && dp.Spec.Running {
+		var apiErr *serverErr
+		if queued, apiErr = s.admitStart(r.Context(), dp, 0); apiErr != nil {
+			return PatchResponse{}, apiErr
+		}
+	}
+	// where it may run (the access rules): when it starts, moves, or its
+	// Pod is made anew; a stopped one moved only needs leave to be there
+	if !queued {
+		if apiErr := s.placeOnChange(r.Context(), before, dp); apiErr != nil {
 			return PatchResponse{}, apiErr
 		}
 	}
@@ -179,7 +195,8 @@ func (s *Server) replaceDevPodSpec(r *http.Request, sess Session, dp *devpodv1al
 		}
 		return PatchResponse{}, &serverErr{http.StatusBadRequest, "BAD_REQUEST", rejected("update", err), err.Error()}
 	}
-	return PatchResponse{DevPod: dp, Rebuild: rebuild}, nil
+	_, inLine := queuedAt(dp)
+	return PatchResponse{DevPod: dp, Rebuild: rebuild, Queued: inLine}, nil
 }
 
 // handlePutDevPodYAML serves PUT /api/devpods/{name}/yaml: {"yaml": …}.

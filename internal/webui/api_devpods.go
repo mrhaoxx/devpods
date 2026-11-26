@@ -547,10 +547,17 @@ func (s *Server) prepareDevPod(r *http.Request, sess Session, req CreateRequest,
 			return nil, &serverErr{http.StatusBadRequest, "BAD_REQUEST", fmt.Sprintf("node %q not found", node), nil}
 		}
 	}
-	// where it may run (the access rules)
+	// where it may run (the access rules): made running, it starts as any
+	// start does — through the queue's line
 	if dp.Spec.Running {
-		if apiErr := s.placeDevPod(r.Context(), dp); apiErr != nil {
+		queued, apiErr := s.admitStart(r.Context(), dp, 0)
+		if apiErr != nil {
 			return nil, apiErr
+		}
+		if !queued {
+			if apiErr := s.placeDevPod(r.Context(), dp); apiErr != nil {
+				return nil, apiErr
+			}
 		}
 	} else if node := pinnedNode(dp); node != "" {
 		if apiErr := s.nodeErr(r.Context(), dp.Spec.Owner, node, false); apiErr != nil {
@@ -739,12 +746,15 @@ func setLimit(limits corev1.ResourceList, res corev1.ResourceName, val string) *
 // fields of the edit drawer (UI spec §5.6). Absent fields stay as they
 // are; persistence is immutable after creation.
 type PatchRequest struct {
-	Running *bool   `json:"running,omitempty"`
-	Image   *string `json:"image,omitempty"`
-	CPU     *string `json:"cpu,omitempty"`
-	Memory  *string `json:"memory,omitempty"`
-	GPU     *string `json:"gpu,omitempty"`
-	GPUType *string `json:"gpuType,omitempty"` // with GPU: which kind ("": the default)
+	Running *bool `json:"running,omitempty"`
+	// Priority: with running true, the DevPod's priority in the queue's
+	// line (at most the owner's cap; 0 when not given)
+	Priority *int32  `json:"priority,omitempty"`
+	Image    *string `json:"image,omitempty"`
+	CPU      *string `json:"cpu,omitempty"`
+	Memory   *string `json:"memory,omitempty"`
+	GPU      *string `json:"gpu,omitempty"`
+	GPUType  *string `json:"gpuType,omitempty"` // with GPU: which kind ("": the default)
 	// GPUs sets several kinds at once (kind → how many, "0" for none).
 	// A kind not named keeps what it has: a DevPod may have several.
 	GPUs          map[string]string `json:"gpus,omitempty"`
@@ -762,6 +772,8 @@ type PatchRequest struct {
 type PatchResponse struct {
 	DevPod  *devpodv1alpha1.DevPod `json:"devpod"`
 	Rebuild bool                   `json:"rebuild"`
+	// Queued: the start waits in the queue's line (the DevPod says where)
+	Queued bool `json:"queued"`
 }
 
 func (req *PatchRequest) editsSpec() bool {
@@ -881,8 +893,21 @@ func (s *Server) handlePatchDevPod(w http.ResponseWriter, r *http.Request) {
 func (s *Server) patchDevPod(r *http.Request, sess Session, dp *devpodv1alpha1.DevPod, req *PatchRequest) (PatchResponse, *serverErr) {
 	before := dp.DeepCopy()
 	dp = dp.DeepCopy()
+	_, wasQueued := queuedAt(dp)
 	if req.Running != nil {
-		dp.Spec.Running = *req.Running
+		switch {
+		case wasQueued && !*req.Running:
+			clearQueued(dp) // it leaves the line
+		case wasQueued:
+			// in line already: it keeps its place
+		default:
+			dp.Spec.Running = *req.Running
+		}
+	}
+	if before.Spec.Running && !dp.Spec.Running {
+		if _, _, ok := autoPin(dp); ok {
+			unpinAuto(dp) // the queue's pin lasts one run
+		}
 	}
 	if sess.Token != nil {
 		edits := req.editsSpec() || req.Shell != nil || req.Collaborators != nil || req.Node != nil
@@ -898,13 +923,33 @@ func (s *Server) patchDevPod(r *http.Request, sess Session, dp *devpodv1alpha1.D
 			return PatchResponse{}, apiErr
 		}
 	}
-	if equality.Semantic.DeepEqual(before.Spec, dp.Spec) {
-		return PatchResponse{DevPod: dp}, nil // no-op
+	if equality.Semantic.DeepEqual(before.Spec, dp.Spec) && maps.Equal(before.Annotations, dp.Annotations) {
+		return PatchResponse{DevPod: dp, Queued: wasQueued}, nil // no-op
+	}
+	queued := false
+	if !before.Spec.Running && dp.Spec.Running {
+		// a start: through the queue's line (or placed at once, the queue
+		// off); its quota is judged now, as a start's always was
+		if s.Queue != nil && dp.Spec.Pod != nil {
+			if apiErr := s.quotaErrFor(r, sess, dp, dp.Name); apiErr != nil {
+				return PatchResponse{}, apiErr
+			}
+		}
+		var prio int32
+		if req.Priority != nil {
+			prio = *req.Priority
+		}
+		var apiErr *serverErr
+		if queued, apiErr = s.admitStart(r.Context(), dp, prio); apiErr != nil {
+			return PatchResponse{}, apiErr
+		}
 	}
 	// where it may run (the access rules): when it starts, moves, or its
 	// Pod is made anew; a stopped one moved only needs leave to be there
-	if apiErr := s.placeOnChange(r.Context(), before, dp); apiErr != nil {
-		return PatchResponse{}, apiErr
+	if !queued {
+		if apiErr := s.placeOnChange(r.Context(), before, dp); apiErr != nil {
+			return PatchResponse{}, apiErr
+		}
 	}
 	// waking, or resizing a running DevPod, re-enters the compute quota
 	if dp.Spec.Running && (!before.Spec.Running || req.editsSpec()) {
@@ -924,7 +969,8 @@ func (s *Server) patchDevPod(r *http.Request, sess Session, dp *devpodv1alpha1.D
 	for _, c := range devPodActions(before, dp) {
 		s.devPodEvent(r, sess, dp, c.action, c.detail)
 	}
-	return PatchResponse{DevPod: dp, Rebuild: rebuild}, nil
+	_, inLine := queuedAt(dp)
+	return PatchResponse{DevPod: dp, Rebuild: rebuild, Queued: inLine}, nil
 }
 
 const hostnameLabel = "kubernetes.io/hostname"

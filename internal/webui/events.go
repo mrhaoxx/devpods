@@ -145,8 +145,15 @@ type devPodChange struct{ action, detail string }
 // rest of the spec edited, a start or a stop — in that order.
 func devPodActions(before, after *devpodv1alpha1.DevPod) []devPodChange {
 	var out []devPodChange
+	autoNode, _, wasAuto := autoPin(before)
+	_, _, isAuto := autoPin(after)
+	startedOn := "" // placed at its start by the console itself
 	switch b, a := pinnedNode(before), pinnedNode(after); {
 	case b == a:
+	case wasAuto && a == "":
+		out = append(out, devPodChange{"auto-unpin", autoNode})
+	case isAuto && b == "":
+		startedOn = a
 	case a == "":
 		out = append(out, devPodChange{"unpin", b})
 	case b == "":
@@ -157,7 +164,15 @@ func devPodActions(before, after *devpodv1alpha1.DevPod) []devPodChange {
 	if d := devPodChanges(before, after, false); d != "" {
 		out = append(out, devPodChange{"edit", d})
 	}
+	_, wasQ := queuedAt(before)
+	_, isQ := queuedAt(after)
 	switch {
+	case !wasQ && isQ:
+		out = append(out, devPodChange{"queue", fmt.Sprintf("priority %d", queuePriority(after))})
+	case wasQ && !isQ && !after.Spec.Running:
+		out = append(out, devPodChange{"dequeue", ""})
+	case !before.Spec.Running && after.Spec.Running && startedOn != "":
+		out = append(out, devPodChange{"start", "on " + startedOn + " (auto)"})
 	case !before.Spec.Running && after.Spec.Running:
 		out = append(out, devPodChange{"start", ""})
 	case before.Spec.Running && !after.Spec.Running:
@@ -333,6 +348,9 @@ func createSummary(dp *devpodv1alpha1.DevPod) string {
 	}
 	if dp.Spec.Running {
 		parts = append(parts, "running")
+	}
+	if _, ok := queuedAt(dp); ok {
+		parts = append(parts, "queued")
 	}
 	return strings.Join(parts, "; ")
 }

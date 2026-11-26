@@ -7,7 +7,9 @@ package webui
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"maps"
+	"net/http"
 	"reflect"
 	"strconv"
 	"strings"
@@ -15,6 +17,8 @@ import (
 
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/types"
+
+	"github.com/mrhaoxx/devpod/internal/access"
 
 	devpodv1alpha1 "github.com/mrhaoxx/devpod/api/v1alpha1"
 	"github.com/mrhaoxx/devpod/internal/render"
@@ -209,4 +213,169 @@ func avoiding(dp *devpodv1alpha1.DevPod, now time.Time) string {
 		return ""
 	}
 	return node
+}
+
+// nudgeQueue asks the queue for a round soon (a start waits in line).
+func (s *Server) nudgeQueue() {}
+
+// admitStart: dp is asked to start (its spec says running). A VM, or a
+// DevPod the queue has no say over, starts as before (false). With the
+// queue on: refused at once for what a wait would not mend (its pin's
+// access rules, a priority over the owner's cap, a size no machine could
+// ever take); started at once inside its owner's own reservation in force
+// on its pinned machine (false); else stopped and put in line (true).
+// With the queue off, an unpinned one is pinned now where it fits
+// (placeNow; false), or refused.
+func (s *Server) admitStart(ctx context.Context, dp *devpodv1alpha1.DevPod, prio int32) (bool, *serverErr) {
+	if dp.Spec.Pod == nil {
+		return false, nil
+	}
+	if _, _, ok := autoPin(dp); ok {
+		unpinAuto(dp) // the queue's pin of a former run: placed anew
+	}
+	if s.Queue == nil {
+		if pinnedNode(dp) != "" {
+			return false, nil
+		}
+		known, ever := s.machinesFor(ctx, dp)
+		if !known {
+			return false, nil // no machine known to place it on: as before
+		}
+		if !ever {
+			return false, s.neverFits(ctx, dp)
+		}
+		return false, s.placeNow(ctx, dp)
+	}
+	owner := dp.Spec.Owner
+	if prio < 0 {
+		return false, badRequest("a priority is 0 or more")
+	}
+	if prio > 0 {
+		_, groups, err := s.accessFor(ctx, owner)
+		if err != nil {
+			return false, &serverErr{http.StatusInternalServerError, "INTERNAL", err.Error(), nil}
+		}
+		c, unlimited, err := s.priorityCap(ctx, owner, groups, s.resCluster(ctx))
+		if err != nil {
+			return false, &serverErr{http.StatusInternalServerError, "INTERNAL", err.Error(), nil}
+		}
+		if !unlimited && prio > c {
+			return false, &serverErr{http.StatusForbidden, "PRIORITY_TOO_HIGH", fmt.Sprintf("%s may give at most priority %d here", owner, c), map[string]any{"max": c}}
+		}
+	}
+	spec := &dp.Spec.Pod.Spec
+	if node := pinnedNode(dp); node != "" {
+		j, err := s.judgeFor(ctx, owner)
+		if err != nil {
+			return false, &serverErr{http.StatusInternalServerError, "INTERNAL", err.Error(), nil}
+		}
+		var n corev1.Node
+		if err := s.kc(ctx).Client.Get(ctx, types.NamespacedName{Name: node}, &n); err != nil {
+			return false, badRequest("node %q not found", node)
+		}
+		needs := access.NeedsOf(spec)
+		if e := j.refusal(&n, &needs, true); e != nil {
+			return false, e
+		}
+		// inside its owner's own reservation there: that room is theirs
+		if j.reserved[node] {
+			if rm, err := s.roomsIn(ctx, []corev1.Node{n}); err == nil && rm.refusal(&n, owner, true, dp.Name, askOfPod(spec)) == nil {
+				return false, nil
+			}
+		}
+	} else {
+		known, ever := s.machinesFor(ctx, dp)
+		if !known {
+			return false, nil // no machine known to place it on: as before
+		}
+		if !ever {
+			return false, s.neverFits(ctx, dp)
+		}
+	}
+	dp.Spec.Running = false
+	markQueued(dp, s.Queue.now(), prio)
+	s.nudgeQueue()
+	return true, nil
+}
+
+// machinesFor: whether the console knows the cluster's machines at all —
+// one that reports what it has (none: the cluster cannot be read, nor its
+// machines' capacity, and the queue has no say where a DevPod goes) — and
+// whether one could ever take dp: its owner may use it, its spec fits it,
+// it is big enough, load aside.
+func (s *Server) machinesFor(ctx context.Context, dp *devpodv1alpha1.DevPod) (known, ever bool) {
+	e := devPodEntry(dp, time.Now(), 0, "", "")
+	v, _, err := s.queueViewFor(ctx, s.kc(ctx), nil, []qEntry{e}, time.Now())
+	if err != nil {
+		return false, false
+	}
+	for _, m := range v.Machines {
+		if m.Cap.GPU == 0 && m.Cap.CPU == 0 {
+			continue
+		}
+		known = true
+		if v.Allowed(e, m.Name) && e.Ask.fits(m.Cap) {
+			ever = true
+		}
+	}
+	return known, ever
+}
+
+// neverFits: why dp, which no machine could ever take, is refused — the
+// access rules' refusal when it is theirs (as placement always said),
+// else NO_MACHINE (too big, or its own placement fits nowhere).
+func (s *Server) neverFits(ctx context.Context, dp *devpodv1alpha1.DevPod) *serverErr {
+	if e := s.placeDevPod(ctx, dp.DeepCopy()); e != nil {
+		return e
+	}
+	return &serverErr{http.StatusConflict, "NO_MACHINE",
+		fmt.Sprintf("no machine in this cluster could ever take this DevPod of %s's (what it asks, the access rules, its own placement)", dp.Spec.Owner), nil}
+}
+
+// unpinAuto takes off dp's pin the queue set (and what came with it).
+func unpinAuto(dp *devpodv1alpha1.DevPod) {
+	if dp.Spec.Pod != nil {
+		delete(dp.Spec.Pod.Spec.NodeSelector, hostnameLabel)
+		if len(dp.Spec.Pod.Spec.NodeSelector) == 0 {
+			dp.Spec.Pod.Spec.NodeSelector = nil
+		}
+	}
+	delete(dp.Annotations, devpodv1alpha1.AutoPinAnnotation)
+	delete(dp.Annotations, devpodv1alpha1.ExpectClearAnnotation)
+}
+
+// placeNow pins dp, unpinned, where the queue's planner would start it
+// now (the queue off: no line) — beside the reservations and what runs —
+// or refuses it, saying when there may be room.
+func (s *Server) placeNow(ctx context.Context, dp *devpodv1alpha1.DevPod) *serverErr {
+	kc := s.kc(ctx)
+	now := time.Now()
+	if s.Reservations != nil {
+		now = s.Reservations.now()
+	}
+	e := devPodEntry(dp, now, 0, s.homeNode(ctx, kc, dp), "")
+	v, _, err := s.queueViewFor(ctx, kc, nil, []qEntry{e}, now)
+	if err != nil {
+		return &serverErr{http.StatusServiceUnavailable, "CLUSTER_UNAVAILABLE", err.Error(), nil}
+	}
+	plan := planQueue(v)
+	for _, st := range plan.Starts {
+		if st.Entry.Key == e.Key {
+			setAutoPin(dp, st.Machines[0], now)
+			if st.ClearsAt != nil {
+				annotate(dp, devpodv1alpha1.ExpectClearAnnotation, st.ClearsAt.UTC().Format(time.RFC3339))
+			}
+			return nil
+		}
+	}
+	if _, ever := s.machinesFor(ctx, dp); !ever {
+		return s.neverFits(ctx, dp)
+	}
+	detail := map[string]any{}
+	msg := fmt.Sprintf("no machine in this cluster has room for this DevPod of %s's now", dp.Spec.Owner)
+	if w, ok := plan.Waits[e.Key]; ok && w.Expected != nil {
+		detail["expected"] = w.Expected.UTC()
+		msg += "; there may be at " + w.Expected.UTC().Format(time.RFC3339)
+	}
+	return &serverErr{http.StatusConflict, "NO_ROOM", msg, detail}
 }

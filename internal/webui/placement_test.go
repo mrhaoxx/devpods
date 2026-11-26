@@ -129,12 +129,14 @@ func TestPlacementPinned(t *testing.T) {
 	}
 }
 
+// Not pinned, a DevPod is pinned at its start to a machine the rules let
+// its owner use (design 2026-11-27: no allow-list for the scheduler).
 func TestPlacementUnpinned(t *testing.T) {
 	p := newPlaceRig(t, "pu")
 	setRules(t, onNode(p.n1, denied))
 	dp := p.create("pu-carol", http.StatusCreated)
-	if in := allowedOf(p.get(dp)); slices.Contains(in, p.n1) || !slices.Contains(in, p.n2) {
-		t.Fatalf("allowed %v", in)
+	if got := p.get(dp); pinnedOf(&got) != p.n2 || allowedOf(got) != nil {
+		t.Fatalf("pinned %q, allowed %v", pinnedOf(&got), allowedOf(got))
 	}
 	p.patch("pu-carol", dp, `{"running":false}`, http.StatusOK)
 	setRules(t, devpodv1alpha1.AccessRule{Subject: &devpodv1alpha1.AccessSubject{Kind: "everyone"}, Effect: denied}) // every machine
@@ -144,8 +146,8 @@ func TestPlacementUnpinned(t *testing.T) {
 	setRules(t)
 	p.patch("pu-carol", dp, `{"running":true}`, http.StatusOK)
 	got := p.get(dp)
-	if allowedOf(got) != nil || got.Spec.Pod.Spec.Affinity != nil {
-		t.Fatalf("allow-list left: %v %+v", allowedOf(got), got.Spec.Pod.Spec.Affinity)
+	if allowedOf(got) != nil || got.Spec.Pod.Spec.Affinity != nil || pinnedOf(&got) == "" {
+		t.Fatalf("allow-list left: %v %+v, pinned %q", allowedOf(got), got.Spec.Pod.Spec.Affinity, pinnedOf(&got))
 	}
 }
 
@@ -154,8 +156,8 @@ func TestPlacementAdminOwner(t *testing.T) {
 	p.s.Admins = map[string]bool{"pa-root": true}
 	setRules(t, devpodv1alpha1.AccessRule{Subject: &devpodv1alpha1.AccessSubject{Kind: "everyone"}, Effect: denied})
 	dp := p.create("pa-root", http.StatusCreated)
-	if in := allowedOf(p.get(dp)); in != nil {
-		t.Fatalf("an admin's DevPod got an allow-list: %v", in)
+	if got := p.get(dp); allowedOf(got) != nil || pinnedOf(&got) == "" {
+		t.Fatalf("an admin's DevPod: allowed %v, pinned %q", allowedOf(got), pinnedOf(&got))
 	}
 }
 
@@ -240,8 +242,8 @@ func TestPlacementReservedMachineByPinOnly(t *testing.T) {
 	setRules(t, onNode(p.n1, needsReservation))
 	reserveAs(t, p.s, p.as("pk-alice"), p.n1, p.slot, p.slot.Add(time.Hour))
 	dp := p.create("pk-alice", http.StatusCreated)
-	if in := allowedOf(p.get(dp)); slices.Contains(in, p.n1) || !slices.Contains(in, p.n2) {
-		t.Fatalf("allowed %v", in)
+	if got := p.get(dp); pinnedOf(&got) != p.n2 {
+		t.Fatalf("pinned %q, not the machine free of reservations", pinnedOf(&got))
 	}
 	p.patch("pk-alice", dp, fmt.Sprintf(`{"node":%q}`, p.n1), http.StatusOK) // pinned, it may
 	p.patch("pk-alice", dp, `{"node":""}`, http.StatusOK)
@@ -304,8 +306,9 @@ func TestPlacementYAML(t *testing.T) {
 	edited := spec.DeepCopy()
 	edited.Pod.Spec.Containers[0].Env = append(edited.Pod.Spec.Containers[0].Env, corev1.EnvVar{Name: "X", Value: "1"})
 	p.putYAML("py-carol", dp, *edited, http.StatusOK)
-	if in := allowedOf(p.get(dp)); slices.Contains(in, p.n1) || !slices.Contains(in, p.n2) {
-		t.Fatalf("a running spec edit kept the old allow-list: %v", in)
+	// the machine it was pinned to at its start holds while it runs
+	if got := p.get(dp); pinnedOf(&got) != p.n2 || allowedOf(got) != nil {
+		t.Fatalf("after a running spec edit: pinned %q, allowed %v", pinnedOf(&got), allowedOf(got))
 	}
 }
 
@@ -336,19 +339,31 @@ func TestPlacementRedeploy(t *testing.T) {
 		}
 		time.Sleep(100 * time.Millisecond)
 	}
-	if in := allowedOf(p.get(dp)); slices.Contains(in, p.n1) || !slices.Contains(in, p.n2) {
-		t.Fatalf("redeployed with the old allow-list: %v", in)
+	if got := p.get(dp); pinnedOf(&got) != p.n2 || allowedOf(got) != nil {
+		t.Fatalf("redeployed: pinned %q, allowed %v", pinnedOf(&got), allowedOf(got))
 	}
 }
 
-// The console writes "only on these machines", not "not on those": a
-// machine that joins later is closed to a DevPod the rules restrict until
-// it is started again — even when no machine the rules forbid is there now.
+// A DevPod running unpinned from before (the scheduler placed it) and
+// remade is held, as it always was, to an allow-list — "only on these
+// machines", not "not on those": a machine that joins later is closed to
+// it until it is started again (and pinned then).
 func TestPlacementAllowListClosesLaterMachines(t *testing.T) {
 	p := newPlaceRig(t, "pj")
 	later := "pj-n3"
 	setRules(t, onNode(later, denied))
-	dp := p.create("pj-carol", http.StatusCreated)
+	ctx := context.Background()
+	dp := "pj-carol-old"
+	old := &devpodv1alpha1.DevPod{ObjectMeta: metav1.ObjectMeta{Name: dp, Namespace: "devpods"}, Spec: devpodv1alpha1.DevPodSpec{Owner: "pj-carol", Running: true,
+		Pod: &devpodv1alpha1.PodWorkloadSpec{Spec: corev1.PodSpec{Containers: []corev1.Container{{Name: "dev", Image: "ubuntu:24.04",
+			Resources: corev1.ResourceRequirements{Requests: corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("2")}, Limits: corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("2")}}}}}}}}
+	if err := k8sClient.Create(ctx, old); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = k8sClient.Delete(ctx, old) })
+	waitDevPod(t, dp)
+	p.patch("pj-carol", dp, `{"cpu":"3"}`, http.StatusOK) // its Pod made anew
+	waitFor(t, func() bool { return len(allowedOf(p.get(dp))) > 0 })
 	if in := allowedOf(p.get(dp)); !slices.Contains(in, p.n1) || !slices.Contains(in, p.n2) || slices.Contains(in, later) {
 		t.Fatalf("allowed %v", in)
 	}
@@ -496,20 +511,18 @@ func TestUnpinnedKeptOffFullMachines(t *testing.T) {
 		waitDevPod(t, owner+"-"+name)
 		return p.get(owner + "-" + name)
 	}
-	if in := allowedOf(create(root, "uk-root", "u1", http.StatusCreated)); in != nil {
-		t.Fatalf("nothing reserved, yet an allow-list: %v", in)
+	if got := create(root, "uk-root", "u1", http.StatusCreated); allowedOf(got) != nil || pinnedOf(&got) != p.n1 {
+		t.Fatalf("nothing reserved: allowed %v, pinned %q", allowedOf(got), pinnedOf(&got))
 	}
 	if code, _ := reserveAs(t, p.s, p.as("uk-alice"), p.n1, p.slot, p.slot.Add(time.Hour)); code != http.StatusCreated {
 		t.Fatalf("reserve n1: %d", code)
 	}
-	if in := allowedOf(create(root, "uk-root", "u2", http.StatusCreated)); slices.Contains(in, p.n1) || !slices.Contains(in, p.n2) {
-		t.Fatalf("admin's, n1 reserved whole: %v", in)
-	}
-	// bob, whom some rule restricts
+	// the one machine with cards reserved whole: no room for a card now
+	// (it would have waited on n2, which has none, before)
+	create(root, "uk-root", "u2", http.StatusConflict)
+	// bob, whom some rule restricts, alike
 	setRules(t, devpodv1alpha1.AccessRule{Machines: []string{"uk-elsewhere"}, Subject: &devpodv1alpha1.AccessSubject{Kind: "some", Users: []string{"uk-bob"}}, Effect: denied})
-	if in := allowedOf(create(p.as("uk-bob"), "uk-bob", "u3", http.StatusCreated)); slices.Contains(in, p.n1) || !slices.Contains(in, p.n2) {
-		t.Fatalf("bob's, n1 reserved whole: %v", in)
-	}
+	create(p.as("uk-bob"), "uk-bob", "u3", http.StatusConflict)
 	// n2 reservable and reserved too: nowhere left
 	var n corev1.Node
 	if err := k8sClient.Get(context.Background(), types.NamespacedName{Name: p.n2}, &n); err != nil {
