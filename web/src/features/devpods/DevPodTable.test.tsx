@@ -58,6 +58,21 @@ describe("DevPodTable", () => {
     await waitFor(() => expect(calls.filter((c) => c.method === "PATCH").map((c) => c.url.pathname)).toEqual(["/api/devpods/alice-a"]));
   });
 
+  it("a queue job's rank: marked with its job, and stopping or deleting it says the job fails", async () => {
+    const rank = { ...mk("alice-abc12-1", "alice", "Running"), spec: { ...mk("alice-abc12-1", "alice", "Running").spec, job: { name: "abc12", rank: 1 } } };
+    const calls = stubFetch({ "/api/devpods": { items: [rank], pods: {} }, "PATCH /api/devpods/alice-abc12-1": rank });
+    renderWithProviders(<DevPodTable scope="mine" />);
+    const row = (await screen.findByRole("link", { name: "alice-abc12-1" })).closest("tr") as HTMLElement;
+    expect(within(row).getByRole("link", { name: "任务 abc12 · 第 1 台" }).getAttribute("href")).toBe("/queue/-/abc12");
+    fireEvent.keyDown(within(row).getByRole("button", { name: "alice-abc12-1 操作" }), { key: "Enter" });
+    fireEvent.click(within(await screen.findByRole("menu")).getByRole("menuitem", { name: "休眠" }));
+    const dialog = within(await screen.findByRole("dialog"));
+    expect(dialog.getByText(/整个任务失败/)).toBeTruthy();
+    expect(calls.some((c) => c.method === "PATCH")).toBe(false);
+    fireEvent.click(dialog.getByRole("button", { name: "仍然休眠" }));
+    await waitFor(() => expect(calls.some((c) => c.method === "PATCH")).toBe(true));
+  });
+
   it("filters by the q param user:alice phase:running", async () => {
     stubFetch({ "/api/devpods": list });
     renderWithProviders(<DevPodTable scope="all" />, { me: stubMe({ admin: true }), route: "/admin/devpods?q=user:alice%20phase:running" });

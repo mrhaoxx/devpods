@@ -12,6 +12,7 @@ import { Button } from "../../design/Button";
 import { Chip } from "../../design/Chip";
 import { DataTable } from "../../design/DataTable";
 import { EmptyState } from "../../design/EmptyState";
+import { Notice } from "../../design/Form";
 import { useNow } from "../../lib/useNow";
 import { fmtHours, sizeText, stateText } from "./jobs";
 import { SubmitDialog } from "./SubmitDialog";
@@ -109,10 +110,15 @@ export function QueuePage() {
         </Button>
       </div>
       <p className="border-b border-line px-3 py-1.5 text-[11px] text-muted">
-        任务排队等开放预约的机器上没被预约的卡和核：优先级高的先运行，同级按提交先后；一个任务的几台一起开始。命令行里也可以用 <span className="mono">job submit</span> 或{" "}
-        <span className="mono">sbatch</span> 提交。
+        任务排队等开放预约的机器上没被预约的卡和核：优先级高的先运行，同级按提交先后；一个任务的几台一起开始。在 DevPod 里也可以用 <span className="mono">dp job submit</span> 或{" "}
+        <span className="mono">sbatch</span> 提交，SSH 命令行里是 <span className="mono">job submit</span>。
       </p>
-      {q.isError ? (
+      {q.isError && q.data && (
+        <div className="border-b border-line px-3 py-1.5">
+          <Notice tone="warm">刷新失败（{failure(q.error)}），显示的是上次的数据。</Notice>
+        </div>
+      )}
+      {q.isError && !q.data ? (
         <EmptyState tone="error" title="队列不可用" hint={failure(q.error)} />
       ) : (
         <DataTable<Job>
@@ -124,7 +130,7 @@ export function QueuePage() {
           getRowId={(j) => `${j.cluster ?? ""}/${j.id}`}
           sorting={sorting}
           onSortingChange={setSorting}
-          empty={<EmptyState title={q.isLoading ? "加载中…" : ended ? "没有任务" : "队列是空的"} hint={q.isLoading ? undefined : "点「提交任务…」或在 DevPod 里运行 job submit。"} />}
+          empty={<EmptyState title={q.isLoading ? "加载中…" : ended ? "没有任务" : "队列是空的"} hint={q.isLoading ? undefined : "点「提交任务…」，或在 DevPod 里运行 dp job submit。"} />}
           onRowClick={(j) => navigate(`/queue/${clusterSeg(j.cluster)}/${j.id}`)}
         />
       )}

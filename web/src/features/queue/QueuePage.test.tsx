@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { fireEvent, screen, waitFor, within } from "@testing-library/react";
+import { act, fireEvent, screen, waitFor, within } from "@testing-library/react";
 import { Route, Routes } from "react-router-dom";
 import { QueuePage } from "./QueuePage";
 import { renderWithProviders, stubFetch, stubMe } from "../../test/render";
@@ -30,6 +30,7 @@ describe("QueuePage", () => {
     const calls = stubFetch({ "/api/jobs": { items: jobs }, "/api/jobs/free": { items: [{ gpu: 4, cpu: 188, maxGPU: 4, machines: 1 }] } });
     page();
     expect(await screen.findByText("队列现在可用：4 卡 · 188 核（单台最多 4 卡）")).toBeTruthy();
+    expect(screen.getByText("dp job submit")).toBeTruthy(); // inside a DevPod it is dp's
     await screen.findByText(/run01 · sft/);
     const table = screen.getByRole("table");
     for (const h of ["排位", "任务", "用户", "规模", "优先级", "时长上限", "状态"]) expect(within(table).getByText(h)).toBeTruthy();
@@ -49,6 +50,18 @@ describe("QueuePage", () => {
     expect(screen.getByRole("button", { name: "已结束" }).getAttribute("aria-pressed")).toBe("false");
     fireEvent.click(await screen.findByText(/run01 · sft/));
     expect(await screen.findByText("job page")).toBeTruthy();
+  });
+
+  it("a failed refresh keeps what was shown, saying so", async () => {
+    let n = 0;
+    stubFetch({
+      "/api/jobs": () => (n++ === 0 ? { items: jobs } : new Response(JSON.stringify({ code: "UNAVAILABLE", message: "down" }), { status: 503 })),
+    });
+    const { client } = page();
+    await screen.findByText(/run01 · sft/);
+    await act(() => client.refetchQueries({ queryKey: ["jobs"] }));
+    expect(await screen.findByText(/刷新失败/)).toBeTruthy();
+    expect(screen.getByText(/run01 · sft/)).toBeTruthy();
   });
 
   it("the form submits what it says, shows where it would stand, and holds the priority to the cap", async () => {

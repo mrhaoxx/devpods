@@ -2,7 +2,7 @@
 // their own row of the live stream, so a per-second update re-renders
 // only them.
 import type { Cluster } from "../clusters/api";
-import { devpodHref, keyOf } from "../../data/cluster";
+import { clusterSeg, devpodHref, keyOf } from "../../data/cluster";
 import { createContext, useContext } from "react";
 import { Spinner } from "../../design/Spinner";
 import { Link } from "react-router-dom";
@@ -368,6 +368,11 @@ export function devpodColumns(opts: {
           ) : (
             <Link to={devpodHref(r)} className="mono truncate hover:text-accent">
               {r.name}
+            </Link>
+          )}
+          {r.dp.spec.job && (
+            <Link to={`/queue/${clusterSeg(r.cluster)}/${r.dp.spec.job.name}`} title="队列任务的一台：它随任务开始、随任务结束">
+              <Badge>{`任务 ${r.dp.spec.job.name} · 第 ${r.dp.spec.job.rank} 台`}</Badge>
             </Link>
           )}
           <PhaseNote r={r} />

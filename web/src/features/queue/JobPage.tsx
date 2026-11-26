@@ -50,7 +50,7 @@ export function JobPage() {
     onError: (e) => setError(failure(e)),
   });
 
-  if (q.isError) return <EmptyState tone="error" title="读不到这个任务" hint={failure(q.error)} />;
+  if (q.isError && !q.data) return <EmptyState tone="error" title="读不到这个任务" hint={failure(q.error)} />;
   const j = q.data;
   if (!j) return <EmptyState title="加载中…" />;
   const ended = jobEnded(j);
@@ -88,6 +88,7 @@ export function JobPage() {
         )}
       </header>
       {error && <Notice>{error}</Notice>}
+      {q.isError && <Notice tone="warm">刷新失败（{failure(q.error)}），显示的是上次的数据。</Notice>}
       <dl className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-1 text-xs sm:grid-cols-[auto_1fr_auto_1fr]">
         <dt className="text-muted">用户</dt>
         <dd className="mono">{j.owner}</dd>

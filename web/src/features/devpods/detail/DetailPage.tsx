@@ -23,7 +23,7 @@ import {
   type ProcLive,
   type SessionSummary,
 } from "../../../data/api";
-import { segCluster } from "../../../data/cluster";
+import { clusterSeg, segCluster } from "../../../data/cluster";
 import { useClusterList } from "../../../data/clusterFilter";
 import { qk, useAuditSessions, useDevPod, useDevPodMutations, useMe, useMetrics, useNodeCeilings } from "../../../data/queries";
 import { devpodStream } from "../../../data/live/streams";
@@ -87,6 +87,7 @@ export function DetailPage() {
   const [deleted, setDeleted] = useState(false);
   const [events, setEvents] = useState<Record<string, K8sEvent>>({});
   const [confirmDelete, setConfirmDelete] = useState(false);
+  const [confirmStop, setConfirmStop] = useState(false); // a queue job's rank
   const { setRunning, patchSpec, remove, redeploy } = useDevPodMutations();
   // the list's actions that need input, for this DevPod alone
   const [bulkKind, setBulkKind] = useState<BulkKind | null>(null);
@@ -198,6 +199,15 @@ export function DetailPage() {
 
   return (
     <div className="space-y-3 p-3">
+      {dp.spec.job && (
+        <Notice tone="warm">
+          这是任务{" "}
+          <Link to={`/queue/${clusterSeg(cluster)}/${dp.spec.job.name}`} className="mono text-accent hover:underline">
+            {dp.spec.job.name}
+          </Link>{" "}
+          的第 {dp.spec.job.rank} 台：它随任务开始、随任务结束。休眠或删除它会让整个任务失败；要停下任务，到任务页取消它。
+        </Notice>
+      )}
       {reservationNotes(dp, { node: d.pod?.node, cluster }, reservations).map((n) => (
         <Notice key={n.type} tone={n.tone}>
           <span className="font-medium">{n.label}</span>
@@ -245,7 +255,9 @@ export function DetailPage() {
             </Button>
           </>
         )}
-        <Button onClick={() => setRunning.mutate({ ref: r, running: !dp.spec.running })}>{dp.spec.running ? "休眠" : "启动"}</Button>
+        <Button onClick={() => (dp.spec.job && dp.spec.running ? setConfirmStop(true) : setRunning.mutate({ ref: r, running: !dp.spec.running }))}>
+          {dp.spec.running ? "休眠" : "启动"}
+        </Button>
         <Button variant="danger" onClick={() => setConfirmDelete(true)}>
           删除
         </Button>
@@ -350,7 +362,20 @@ export function DetailPage() {
           remove.mutate(r, { onSuccess: () => nav("/") });
         }}
       >
-        Pod 和持久化数据都会被移除，不能恢复。
+        Pod 和持久化数据都会被移除，不能恢复。{dp.spec.job && ` 它是任务 ${dp.spec.job.name} 的一台：删除它会让整个任务失败。`}
+      </ConfirmDialog>
+      <ConfirmDialog
+        open={confirmStop}
+        onOpenChange={setConfirmStop}
+        title={`休眠 ${dp.metadata.name}？`}
+        confirmLabel="仍然休眠"
+        danger
+        onConfirm={() => {
+          setConfirmStop(false);
+          setRunning.mutate({ ref: r, running: false });
+        }}
+      >
+        它是任务 {dp.spec.job?.name} 的一台：休眠它会让整个任务失败，其他各台也会停下。
       </ConfirmDialog>
     </div>
   );

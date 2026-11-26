@@ -124,6 +124,10 @@ export function DevPodTable({ scope }: { scope: "mine" | "all" }) {
   const ceilings = useNodeCeilings();
   const ceiling = useCallback((r: Row) => ceilings(r.cluster, r.node), [ceilings]);
   const [confirm, setConfirm] = useState<{ rows: Row[]; bulk: boolean } | null>(null);
+  // stopping a queue job's rank fails its job: asked first
+  const [stopRanks, setStopRanks] = useState<{ rows: Row[]; then?: () => void } | null>(null);
+  const stop = (rows: Row[], then?: () => void) =>
+    rows.some((x) => x.dp.spec.job) ? setStopRanks({ rows, then }) : void bulk("休眠", rows, (x) => patchDevPod(x, false), STOP).then(then);
   const [rebuildAsk, setRebuildAsk] = useState<Row | null>(null);
   // groups are open unless folded; what is folded is kept in this browser —
   // and a link to a group (?group=, where a launch of several lands) opens it
@@ -236,7 +240,7 @@ export function DevPodTable({ scope }: { scope: "mine" | "all" }) {
     { label: "复制 SSH 命令", onSelect: () => void copyText(sshCommand(me, r.owner, r.name, r.cluster)) },
     ...(me?.features.webshell && r.phase === "Running" ? [{ label: "终端", onSelect: () => window.open(shellPath(r), "_blank", "noopener") }] : []),
     r.dp.spec.running
-      ? { label: "休眠", disabled: busy(r), onSelect: () => void bulk("休眠", [r], (x) => patchDevPod(x, false), STOP) }
+      ? { label: "休眠", disabled: busy(r), onSelect: () => stop([r]) }
       : { label: "启动", disabled: busy(r), onSelect: () => void bulk("启动", [r], (x) => patchDevPod(x, true), START) },
     { label: "删除…", danger: true, disabled: busy(r), onSelect: () => setConfirm({ rows: [r], bulk: false }) },
   ];
@@ -265,7 +269,7 @@ export function DevPodTable({ scope }: { scope: "mine" | "all" }) {
         title: acrossClusters ? "所选 DevPod 分属不同集群，不能一起迁移：只选同一个集群的" : undefined,
         onSelect: () => setDialog({ kind: "migrate", rows: sel, clear }),
       },
-      { label: "休眠", onSelect: () => void bulk("休眠", sel, (r) => patchDevPod(r, false), STOP).then(clear) },
+      { label: "休眠", onSelect: () => stop(sel, clear) },
       { label: "启动", onSelect: () => void bulk("启动", sel, (r) => patchDevPod(r, true), START).then(clear) },
       { label: "协作者…", onSelect: () => setDialog({ kind: "collaborators", rows: sel, clear }) },
       { label: "设置镜像…", onSelect: () => setDialog({ kind: "image", rows: sel, clear }) },
@@ -385,6 +389,24 @@ export function DevPodTable({ scope }: { scope: "mine" | "all" }) {
         }}
       >
         删除后 Pod 和持久化数据都会被移除，不能恢复。
+        {confirm?.rows.some((r) => r.dp.spec.job) && " 其中有队列任务的一台：删除它会让整个任务失败。"}
+      </ConfirmDialog>
+      <ConfirmDialog
+        open={!!stopRanks}
+        onOpenChange={(o) => !o && setStopRanks(null)}
+        title={stopRanks?.rows.length === 1 ? `休眠 ${stopRanks.rows[0].name}？` : `休眠 ${stopRanks?.rows.length ?? 0} 个 DevPod？`}
+        confirmLabel="仍然休眠"
+        danger
+        onConfirm={() => {
+          const { rows, then } = stopRanks!;
+          setStopRanks(null);
+          void bulk("休眠", rows, (x) => patchDevPod(x, false), STOP).then(then);
+        }}
+      >
+        {(() => {
+          const j = stopRanks?.rows.find((r) => r.dp.spec.job)?.dp.spec.job;
+          return j ? `它是任务 ${j.name} 的一台：休眠它会让整个任务失败，其他各台也会停下。要停下任务，到任务页取消它。` : null;
+        })()}
       </ConfirmDialog>
       <ConfirmDialog
         open={!!rebuildAsk}

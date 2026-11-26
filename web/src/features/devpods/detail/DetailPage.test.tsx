@@ -13,6 +13,8 @@ const dp: DevPod = {
   status: { phase: "Running" },
 };
 
+const rankDp: DevPod = { ...dp, metadata: { name: "alice-x", uid: "u2" }, spec: { ...dp.spec, job: { name: "abc12", rank: 1 } } };
+
 function Where() {
   const l = useLocation();
   return <div data-testid="where">{l.search}</div>;
@@ -20,9 +22,10 @@ function Where() {
 
 let calls: ReturnType<typeof stubFetch> = [];
 
-function setup(opts: { route?: string; admin?: boolean; live?: boolean; user?: string } = {}) {
+function setup(opts: { route?: string; admin?: boolean; live?: boolean; user?: string; rank?: boolean } = {}) {
   const cs = stubFetch({
-    "/api/devpods/alice-x": { devpod: dp, pod: { node: "g206", ip: "10.1.2.3", startedAt: "2026-11-10T10:00:00Z" } },
+    "PATCH /api/devpods/alice-x": { devpod: opts.rank ? rankDp : dp, rebuild: false },
+    "/api/devpods/alice-x": { devpod: opts.rank ? rankDp : dp, pod: { node: "g206", ip: "10.1.2.3", startedAt: "2026-11-10T10:00:00Z" } },
     "/api/audit/sessions": { items: [], next: "" },
     "/api/nodes": { items: [{ name: "g206", ready: true, cpu: { allocatable: 64, allocated: 0 }, mem: { allocatable: 512 * 1024 ** 3, allocated: 0 }, gpuTotal: 0, gpuUsed: 0, reservable: false, pending: 0, access: "ok", mine: null, selectable: true }] },
     "POST /api/devpods/alice-x/redeploy": {},
@@ -63,6 +66,17 @@ const sample = {
 };
 
 describe("DevPod detail", () => {
+  it("a queue job's rank says whose it is, and stopping it asks first", async () => {
+    setup({ rank: true });
+    const note = await screen.findByText(/是任务/);
+    expect(note.textContent).toMatch(/第 1 台/);
+    expect(screen.getByRole("link", { name: "abc12" }).getAttribute("href")).toBe("/queue/-/abc12");
+    fireEvent.click(screen.getByRole("button", { name: "休眠" }));
+    const dialog = within(await screen.findByRole("dialog"));
+    expect(dialog.getByText(/整个任务失败/)).toBeTruthy();
+    expect(calls.some((c) => c.method === "PATCH")).toBe(false);
+  });
+
   afterEach(() => vi.unstubAllGlobals());
 
   it("cards show values from the metrics event", async () => {

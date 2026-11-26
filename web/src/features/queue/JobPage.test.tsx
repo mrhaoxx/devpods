@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { fireEvent, screen, waitFor, within } from "@testing-library/react";
+import { act, fireEvent, screen, waitFor, within } from "@testing-library/react";
 import { Route, Routes } from "react-router-dom";
 import { JobPage } from "./JobPage";
 import { renderWithProviders, stubFetch, stubMe } from "../../test/render";
@@ -55,6 +55,19 @@ describe("JobPage", () => {
     expect(await screen.findByText(/attempt 1/)).toBeTruthy();
     expect(calls.some((c) => c.url.pathname === "/api/jobs/abc12/logs" && c.url.searchParams.get("attempt") === "1")).toBe(true);
     expect(screen.getByRole("link", { name: "下载" }).getAttribute("href")).toBe("/api/jobs/abc12/logs?rank=0&attempt=1");
+  });
+
+  it("a failed refresh keeps the job shown, saying so", async () => {
+    let n = 0;
+    stubFetch({
+      "/api/jobs/abc12": () => (n++ === 0 ? ended : new Response(JSON.stringify({ code: "UNAVAILABLE", message: "down" }), { status: 503 })),
+      "/api/jobs/abc12/logs": new Response("x", { status: 200 }),
+    });
+    const { client } = page();
+    expect(await screen.findByText("失败（退出码 3）")).toBeTruthy();
+    await act(() => client.refetchQueries({ queryKey: ["job", "abc12"] }));
+    expect(await screen.findByText(/刷新失败/)).toBeTruthy();
+    expect(screen.getByText("失败（退出码 3）")).toBeTruthy();
   });
 
   it("another user's job: no output, no command, no buttons", async () => {

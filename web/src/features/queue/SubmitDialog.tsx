@@ -277,7 +277,7 @@ export function SubmitDialog({ onClose }: { onClose(): void }) {
                   特权容器
                 </label>
                 <Field label="工作目录（选填）">
-                  <Input aria-label="工作目录" className="mono text-xs" placeholder="默认：来源的工作目录" value={workdir} onChange={(e) => setWorkdir(e.target.value)} />
+                  <Input aria-label="工作目录" className="mono text-xs" placeholder="留空：镜像的默认目录；须在共享存储上，如你的 home" value={workdir} onChange={(e) => setWorkdir(e.target.value)} />
                 </Field>
                 <Field label="名称（选填）">
                   <Input aria-label="名称" value={title} onChange={(e) => setTitle(e.target.value)} />
