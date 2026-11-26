@@ -51,7 +51,13 @@ export function stateText(j: Job, now: number): string {
   let why = "等待";
   switch (j.reason) {
     case "capacity":
-      why = j.gpus > 0 ? `空闲卡不够（要 ${d.need ?? "?"}，剩 ${d.free ?? "?"}）` : `空闲核不够（要 ${d.needCPU ?? "?"}，剩 ${d.freeCPU ?? "?"}）`;
+      if (d.fit !== undefined)
+        // how many machines have room for one rank: free cards spread thin show
+        why =
+          j.gpus > 0
+            ? `空闲卡不够（${j.nodes} 台 × ${j.gpus} 卡，只有 ${d.fit} 台放得下，共空 ${d.free ?? "?"} 卡）`
+            : `空闲核不够（${j.nodes} 台 × ${j.cpus} 核，只有 ${d.fit} 台放得下，共空 ${d.freeCPU ?? "?"} 核）`;
+      else why = j.gpus > 0 ? `空闲卡不够（要 ${d.need ?? "?"}，剩 ${d.free ?? "?"}）` : `空闲核不够（要 ${d.needCPU ?? "?"}，剩 ${d.freeCPU ?? "?"}）`;
       break;
     case "behind":
       why = `排在 ${d.head ?? "前面的任务"} 后`;

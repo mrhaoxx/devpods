@@ -146,12 +146,38 @@ func (s *Server) ownerIsAdmin(ctx context.Context, owner string) bool {
 // decide is what applies to owner on n in cluster; true for an admin, to
 // whom everything is allowed.
 func (s *Server) decide(ctx context.Context, owner, cluster string, n access.Node) (access.Decision, bool, error) {
-	if s.ownerIsAdmin(ctx, owner) {
-		return access.Decision{AccessEffect: devpodv1alpha1.DefaultAccessEffect(), Rule: -1}, true, nil
-	}
-	p, groups, err := s.accessFor(ctx, owner)
+	oa, err := s.ownerAccess(ctx, owner)
 	if err != nil {
 		return access.Decision{}, false, err
 	}
-	return p.Decide(owner, groups, cluster, n), false, nil
+	d, admin := oa.decide(cluster, n)
+	return d, admin, nil
+}
+
+// ownerAccessOf: one owner's way through the access rules, read once —
+// for judging many machines (the queue: every job's every machine).
+type ownerAccessOf struct {
+	owner  string
+	admin  bool
+	policy *access.Policy
+	groups map[string]bool
+}
+
+func (s *Server) ownerAccess(ctx context.Context, owner string) (*ownerAccessOf, error) {
+	if s.ownerIsAdmin(ctx, owner) {
+		return &ownerAccessOf{owner: owner, admin: true}, nil
+	}
+	p, groups, err := s.accessFor(ctx, owner)
+	if err != nil {
+		return nil, err
+	}
+	return &ownerAccessOf{owner: owner, policy: p, groups: groups}, nil
+}
+
+// decide: as Server.decide, for this owner.
+func (o *ownerAccessOf) decide(cluster string, n access.Node) (access.Decision, bool) {
+	if o.admin {
+		return access.Decision{AccessEffect: devpodv1alpha1.DefaultAccessEffect(), Rule: -1}, true
+	}
+	return o.policy.Decide(o.owner, o.groups, cluster, n), false
 }

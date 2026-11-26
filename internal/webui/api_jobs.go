@@ -283,6 +283,10 @@ func (s *Server) jobMachines(ctx context.Context, owner string, needs access.Nee
 		return nil, 0, err
 	}
 	cluster := s.resCluster(ctx)
+	oa, err := s.ownerAccess(ctx, owner) // read once for every machine
+	if err != nil {
+		return nil, 0, err
+	}
 	var ok []corev1.Node
 	usable := 0
 	for i := range nodes.Items {
@@ -290,10 +294,7 @@ func (s *Server) jobMachines(ctx context.Context, owner string, needs access.Nee
 		if n.Labels[devpodv1alpha1.ReservableNodeLabel] != "true" {
 			continue
 		}
-		d, admin, err := s.decide(ctx, owner, cluster, access.Node{Name: n.Name, Labels: n.Labels})
-		if err != nil {
-			return nil, 0, err
-		}
+		d, admin := oa.decide(cluster, access.Node{Name: n.Name, Labels: n.Labels})
 		if !admin && !d.Allow {
 			continue
 		}

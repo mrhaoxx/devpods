@@ -322,8 +322,9 @@ func (v queueView) victimsFor(j *devpodv1alpha1.Job, runs []qRun) ([]qRun, []str
 	return out, on
 }
 
-// shortfall: what j needs in all and what its machines have free now, for
-// saying why it waits.
+// shortfall: what j needs in all, what its machines have free now, and
+// how many of them have room for one rank (free cards spread thin show),
+// for saying why it waits.
 func (v queueView) shortfall(j *devpodv1alpha1.Job, runs []qRun) map[string]string {
 	ask := jobAsk(j)
 	var free amount
@@ -337,5 +338,6 @@ func (v queueView) shortfall(j *devpodv1alpha1.Job, runs []qRun) map[string]stri
 	return map[string]string{
 		"need": strconv.FormatInt(ask.GPU*n, 10), "free": strconv.FormatInt(free.GPU, 10),
 		"needCPU": coresOf(ask.CPU * n), "freeCPU": coresOf(free.CPU),
+		"fit": strconv.Itoa(len(v.candidates(j, runs, v.Now))),
 	}
 }

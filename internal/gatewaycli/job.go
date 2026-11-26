@@ -436,7 +436,14 @@ func jobState(j jobView, now time.Time) string {
 	s := fmt.Sprintf("#%d ", j.Position)
 	switch j.Reason {
 	case "capacity":
-		s += fmt.Sprintf("capacity: needs %s, %s free", j.Detail["need"], j.Detail["free"])
+		switch fit := j.Detail["fit"]; {
+		case fit == "":
+			s += fmt.Sprintf("capacity: needs %s, %s free", j.Detail["need"], j.Detail["free"])
+		case j.GPUs > 0:
+			s += fmt.Sprintf("capacity: %s, %s %s room (%s free)", jobSize(j), fit, plural(fit, "machine has", "machines have"), j.Detail["free"])
+		default:
+			s += fmt.Sprintf("capacity: %s, %s %s room (%s cores free)", jobSize(j), fit, plural(fit, "machine has", "machines have"), j.Detail["freeCPU"])
+		}
 	case "behind":
 		s += "behind " + j.Detail["head"]
 	case "quota":
@@ -649,4 +656,12 @@ func shellJoin(words []string) string {
 		out[i] = "'" + strings.ReplaceAll(w, "'", `'\''`) + "'"
 	}
 	return strings.Join(out, " ")
+}
+
+// plural: one when n is "1", else many.
+func plural(n, one, many string) string {
+	if n == "1" {
+		return one
+	}
+	return many
 }

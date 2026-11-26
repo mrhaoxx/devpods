@@ -12,6 +12,9 @@ describe("jobs", () => {
     expect(stateText(job({ phase: "Starting" }), now)).toBe("● 启动中");
     expect(stateText(job({ reason: "capacity", detail: { need: "32", free: "18" }, expectedStart: "2026-11-27T18:10:00Z" }), now)).toBe("○ 等待 · 空闲卡不够（要 32，剩 18）· 预计 明天 02:10 前后");
     expect(stateText(job({ reason: "capacity", detail: { need: "4", free: "0" }, expectedStart: "2026-11-27T06:00:00Z" }), now)).toBe("○ 等待 · 空闲卡不够（要 4，剩 0）· 预计 今天 14:00 前后");
+    // how many machines have room for a rank: free cards spread thin are said
+    expect(stateText(job({ nodes: 4, gpus: 8, reason: "capacity", detail: { need: "32", free: "18", fit: "1" } }), now)).toBe("○ 等待 · 空闲卡不够（4 台 × 8 卡，只有 1 台放得下，共空 18 卡）");
+    expect(stateText(job({ nodes: 2, gpus: 0, cpus: 64, reason: "capacity", detail: { needCPU: "128", freeCPU: "100", fit: "0" } }), now)).toBe("○ 等待 · 空闲核不够（2 台 × 64 核，只有 0 台放得下，共空 100 核）");
     expect(stateText(job({ gpus: 0, reason: "capacity", detail: { needCPU: "64", freeCPU: "16" } }), now)).toBe("○ 等待 · 空闲核不够（要 64，剩 16）");
     expect(stateText(job({ reason: "behind", detail: { head: "xyz34" } }), now)).toBe("○ 等待 · 排在 xyz34 后");
     expect(stateText(job({ reason: "quota" }), now)).toBe("○ 等待 · 超出配额");

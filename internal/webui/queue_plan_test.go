@@ -54,7 +54,7 @@ func TestPlanGangAllOrNone(t *testing.T) {
 	a := machine8("a")
 	a.Interactive = amount{4, 0}
 	p := planQueue(view([]qMachine{a, machine8("b")}, nil, qjob("x", 0, 2, 8, time.Hour, 0), qjob("y", 0, 2, 4, time.Hour, time.Minute)))
-	if started(p, "x") != nil || p.Waits["x"].Reason != "capacity" || p.Waits["x"].Detail["need"] != "16" || p.Waits["x"].Detail["free"] != "12" {
+	if started(p, "x") != nil || p.Waits["x"].Reason != "capacity" || p.Waits["x"].Detail["need"] != "16" || p.Waits["x"].Detail["free"] != "12" || p.Waits["x"].Detail["fit"] != "1" {
 		t.Fatalf("x: %v %+v", started(p, "x"), p.Waits["x"])
 	}
 	if m := started(p, "y"); len(m) != 2 {

@@ -573,17 +573,28 @@ func (s *Server) queueViewFor(ctx context.Context, cc *clusters.ClusterClients, 
 		running = append(running, qRun{Job: j, Machines: ms, Ask: jobAsk(j), Until: since.Add(j.Spec.TimeLimit.Duration),
 			Preemptible: j.Spec.Preemptible, Priority: j.Spec.Priority, Started: since})
 	}
+	// the access rules: each owner's read once, each job's judged per
+	// machine in memory
+	owners := map[string]*ownerAccessOf{}
 	allowed := map[string]bool{}
 	mayRun := func(j *devpodv1alpha1.Job, machine string) bool {
 		key := j.Name + "/" + machine
 		if v, seen := allowed[key]; seen {
 			return v
 		}
+		oa, seen := owners[j.Spec.Owner]
+		if !seen {
+			var err error
+			if oa, err = s.ownerAccess(ctx, j.Spec.Owner); err != nil {
+				slog.Warn("queue_access", "owner", j.Spec.Owner, "err", err)
+			}
+			owners[j.Spec.Owner] = oa
+		}
 		n := byName[machine]
 		ok := false
-		if n != nil && machineFits(j, n) {
-			d, admin, err := s.decide(ctx, j.Spec.Owner, cluster, access.Node{Name: n.Name, Labels: n.Labels})
-			ok = err == nil && (admin || (d.Allow && d.Admits(access.NeedsOf(&j.Spec.Template.Spec)) == nil))
+		if n != nil && oa != nil && machineFits(j, n) {
+			d, admin := oa.decide(cluster, access.Node{Name: n.Name, Labels: n.Labels})
+			ok = admin || (d.Allow && d.Admits(access.NeedsOf(&j.Spec.Template.Spec)) == nil)
 		}
 		allowed[key] = ok
 		return ok

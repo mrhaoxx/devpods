@@ -98,13 +98,13 @@ func TestJobList(t *testing.T) {
 		map[string]any{"cluster": "st", "id": "run01", "owner": "alice", "phase": "Running", "nodes": 2, "gpus": 8, "priority": 200, "timeLimitSeconds": 43200,
 			"startedAt": "2026-11-27T01:00:00Z", "preemptible": true},
 		map[string]any{"cluster": "st", "id": "wait1", "owner": "carol", "phase": "Queued", "nodes": 4, "gpus": 8, "priority": 500, "timeLimitSeconds": 86400,
-			"position": 1, "reason": "capacity", "detail": map[string]any{"need": "32", "free": "18"}, "expectedStart": "2026-11-27T18:10:00Z"},
+			"position": 1, "reason": "capacity", "detail": map[string]any{"need": "32", "free": "18", "fit": "1"}, "expectedStart": "2026-11-27T18:10:00Z"},
 	}}
 	code, out, errs := f.runFrom("job list", nil, nil)
 	if code != 0 {
 		t.Fatalf("list: %d %q", code, errs)
 	}
-	for _, want := range []string{"ID", "USER", "SIZE", "PRIORITY", "LIMIT", "STATE", "st/run01⚡", "2×8 GPU", "running 3h (≤9h)", "#1 capacity: needs 32, 18 free", "~02:10"} {
+	for _, want := range []string{"ID", "USER", "SIZE", "PRIORITY", "LIMIT", "STATE", "st/run01⚡", "2×8 GPU", "running 3h (≤9h)", "#1 capacity: 4×8 GPU, 1 machine has room (18 free)", "~02:10"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("no %q in\n%s", want, out)
 		}
