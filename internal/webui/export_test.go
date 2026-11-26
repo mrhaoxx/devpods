@@ -180,3 +180,12 @@ func (s *Server) PriorityCapForTest(ctx context.Context, user string, groups map
 func (s *Server) MaxTimeLimitForTest(ctx context.Context, cluster string) time.Duration {
 	return s.maxTimeLimit(ctx, cluster)
 }
+
+func (s *Server) HandleSubmitJobForTest() http.HandlerFunc        { return s.handleSubmitJob }
+func (s *Server) HandleListJobsForTest() http.HandlerFunc         { return s.handleListJobs }
+func (s *Server) HandleGetJobForTest() http.HandlerFunc           { return s.handleGetJob }
+func (s *Server) HandleCancelJobForTest() http.HandlerFunc        { return s.handleCancelJob }
+func (s *Server) HandleResubmitJobForTest() http.HandlerFunc      { return s.handleResubmitJob }
+func (s *Server) HandleJobLimitsForTest() http.HandlerFunc        { return s.handleJobLimits }
+func (s *Server) HandleGetPriorityRulesForTest() http.HandlerFunc { return s.handleGetPriorityRules }
+func (s *Server) HandlePutPriorityRulesForTest() http.HandlerFunc { return s.handlePutPriorityRules }
