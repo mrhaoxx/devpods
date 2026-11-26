@@ -595,7 +595,7 @@ func (s *Server) jobQuota(ctx context.Context, job *devpodv1alpha1.Job) *serverE
 
 // createJob keeps job, Queued.
 func (s *Server) createJob(ctx context.Context, job *devpodv1alpha1.Job) *serverErr {
-	if apiErr := s.jobCountErr(ctx, job.Spec.Owner); apiErr != nil {
+	if apiErr := s.jobCountErr(ctx, job.Spec.Owner, job.Spec.Cluster); apiErr != nil {
 		return apiErr
 	}
 	id, err := s.newJobID(ctx)
@@ -613,11 +613,22 @@ func (s *Server) createJob(ctx context.Context, job *devpodv1alpha1.Job) *server
 	return nil
 }
 
-// jobCountErr: owner may not have another job — they have the most jobs
-// waiting or running one person may (nil: they may; an admin always).
-// Two submitted at once may both pass: the cap is a guard, not an account.
-func (s *Server) jobCountErr(ctx context.Context, owner string) *serverErr {
-	if s.Queue == nil || s.Queue.MaxJobsPerUser <= 0 || s.ownerIsAdmin(ctx, owner) {
+// jobCountErr: owner may not have another job in cluster — they have as
+// many waiting or running there as they may (jobCap; nil: they may). Two
+// submitted at once may both pass: the cap is a guard, not an account.
+func (s *Server) jobCountErr(ctx context.Context, owner, cluster string) *serverErr {
+	if s.Queue == nil {
+		return nil
+	}
+	_, groups, err := s.accessFor(ctx, owner)
+	if err != nil {
+		return &serverErr{http.StatusInternalServerError, "INTERNAL", err.Error(), nil}
+	}
+	max, err := s.jobCap(ctx, owner, groups, cluster)
+	if err != nil {
+		return &serverErr{http.StatusInternalServerError, "INTERNAL", err.Error(), nil}
+	}
+	if max <= 0 {
 		return nil
 	}
 	var all devpodv1alpha1.JobList
@@ -626,14 +637,14 @@ func (s *Server) jobCountErr(ctx context.Context, owner string) *serverErr {
 	}
 	n := 0
 	for i := range all.Items {
-		if j := &all.Items[i]; j.Spec.Owner == owner && !jobEnded(j.Status.Phase) && j.DeletionTimestamp == nil {
+		if j := &all.Items[i]; j.Spec.Owner == owner && j.Spec.Cluster == cluster && !jobEnded(j.Status.Phase) && j.DeletionTimestamp == nil {
 			n++
 		}
 	}
-	if n >= s.Queue.MaxJobsPerUser {
+	if n >= max {
 		return &serverErr{http.StatusTooManyRequests, "JOB_LIMIT",
-			fmt.Sprintf("you have %d jobs waiting or running, the most one person may: wait for one to end, or cancel one", n),
-			map[string]any{"jobs": n, "max": s.Queue.MaxJobsPerUser}}
+			fmt.Sprintf("you have %d jobs waiting or running here, and may have at most %d: wait for one to end, or cancel one", n, max),
+			map[string]any{"jobs": n, "max": max}}
 	}
 	return nil
 }
@@ -879,6 +890,7 @@ func (s *Server) handleJobLimits(w http.ResponseWriter, r *http.Request) {
 type priorityRuleView struct {
 	Condition   string `json:"condition"`
 	MaxPriority int32  `json:"maxPriority"`
+	MaxJobs     *int32 `json:"maxJobs"` // null: the rule says nothing of it
 }
 
 // handleGetPriorityRules serves GET /api/admin/job-priority-rules.
@@ -894,7 +906,7 @@ func (s *Server) handleGetPriorityRules(w http.ResponseWriter, r *http.Request) 
 	sort.Slice(l.Items, func(i, j int) bool { return l.Items[i].Name < l.Items[j].Name })
 	items := []priorityRuleView{}
 	for _, it := range l.Items {
-		items = append(items, priorityRuleView{it.Spec.Condition, it.Spec.MaxPriority})
+		items = append(items, priorityRuleView{it.Spec.Condition, it.Spec.MaxPriority, it.Spec.MaxJobs})
 	}
 	s.writeJSON(w, http.StatusOK, map[string]any{"items": items})
 }
@@ -909,12 +921,16 @@ func (s *Server) handlePutPriorityRules(w http.ResponseWriter, r *http.Request) 
 		Items []priorityRuleView `json:"items"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		s.writeErr(w, http.StatusBadRequest, "BAD_REQUEST", "send {items: [{condition, maxPriority}]}", nil)
+		s.writeErr(w, http.StatusBadRequest, "BAD_REQUEST", "send {items: [{condition, maxPriority, maxJobs}]}", nil)
 		return
 	}
 	for i, it := range req.Items {
 		if _, err := access.Parse(it.Condition); err != nil {
 			s.writeErr(w, http.StatusBadRequest, "BAD_CONDITION", fmt.Sprintf("rule %d: %v", i+1, err), map[string]any{"index": i})
+			return
+		}
+		if it.MaxJobs != nil && *it.MaxJobs < 1 {
+			s.writeErr(w, http.StatusBadRequest, "BAD_REQUEST", fmt.Sprintf("rule %d: the most jobs is at least 1 (leave it empty for the default)", i+1), map[string]any{"index": i})
 			return
 		}
 	}
@@ -927,9 +943,9 @@ func (s *Server) handlePutPriorityRules(w http.ResponseWriter, r *http.Request) 
 		err := s.Reader.Get(ctx, types.NamespacedName{Name: name}, &cur)
 		switch {
 		case apierrors.IsNotFound(err):
-			err = s.Client.Create(ctx, &devpodv1alpha1.JobPriorityRule{ObjectMeta: metav1.ObjectMeta{Name: name}, Spec: devpodv1alpha1.JobPriorityRuleSpec{Condition: it.Condition, MaxPriority: it.MaxPriority}})
+			err = s.Client.Create(ctx, &devpodv1alpha1.JobPriorityRule{ObjectMeta: metav1.ObjectMeta{Name: name}, Spec: devpodv1alpha1.JobPriorityRuleSpec{Condition: it.Condition, MaxPriority: it.MaxPriority, MaxJobs: it.MaxJobs}})
 		case err == nil:
-			cur.Spec = devpodv1alpha1.JobPriorityRuleSpec{Condition: it.Condition, MaxPriority: it.MaxPriority}
+			cur.Spec = devpodv1alpha1.JobPriorityRuleSpec{Condition: it.Condition, MaxPriority: it.MaxPriority, MaxJobs: it.MaxJobs}
 			err = s.Client.Update(ctx, &cur)
 		}
 		if err != nil {

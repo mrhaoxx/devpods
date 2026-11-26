@@ -21,6 +21,9 @@ spec:
     - jsonPath: .spec.maxPriority
       name: Max
       type: integer
+    - jsonPath: .spec.maxJobs
+      name: Jobs
+      type: integer
     name: v1alpha1
     schema:
       openAPIV3Schema:
@@ -58,6 +61,15 @@ spec:
                 maxLength: 1024
                 minLength: 1
                 type: string
+              maxJobs:
+                description: |-
+                  MaxJobs: how many jobs they may have waiting or running in a
+                  cluster at once (unset: the rule says nothing of it). The most of
+                  the rules that hold and say counts; none saying, the console's
+                  default.
+                format: int32
+                minimum: 1
+                type: integer
               maxPriority:
                 description: 'MaxPriority: the highest priority they may give.'
                 format: int32

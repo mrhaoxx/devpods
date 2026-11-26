@@ -30,7 +30,7 @@ type QueueRules struct {
 	PreemptGrace     time.Duration // a stopped rank's time to finish
 	Tick             time.Duration // how often the scheduler goes round
 	KeepEnded        time.Duration // an ended job's object is kept so long
-	MaxJobsPerUser   int           // jobs one person may have waiting or running (0: no cap; admins none)
+	MaxJobsPerUser   int           // jobs one person may have waiting or running in a cluster, unless a job rule says (0: no cap; admins none)
 	Now              func() time.Time
 }
 
@@ -66,6 +66,38 @@ func (s *Server) priorityCap(ctx context.Context, user string, groups map[string
 		}
 	}
 	return best, false, nil
+}
+
+// jobCap: how many jobs user (in groups) may have waiting or running in
+// cluster — the most of the JobPriorityRules that hold for them there and
+// say (MaxJobs), else the console's default (0: no cap); none for an
+// admin. A rule that does not parse gives nothing.
+func (s *Server) jobCap(ctx context.Context, user string, groups map[string]bool, cluster string) (int, error) {
+	if s.ownerIsAdmin(ctx, user) {
+		return 0, nil
+	}
+	var rules devpodv1alpha1.JobPriorityRuleList
+	if err := s.Client.List(ctx, &rules); err != nil {
+		return 0, err
+	}
+	best, said := 0, false
+	for i := range rules.Items {
+		r := &rules.Items[i]
+		if r.Spec.MaxJobs == nil {
+			continue
+		}
+		e, err := access.Parse(r.Spec.Condition)
+		if err != nil {
+			continue // priorityCap warns of it
+		}
+		if e.Eval(access.Facts{User: &user, Groups: groups, Cluster: &cluster}) == access.True && int(*r.Spec.MaxJobs) > best {
+			best, said = int(*r.Spec.MaxJobs), true
+		}
+	}
+	if !said {
+		return s.Queue.MaxJobsPerUser, nil
+	}
+	return best, nil
 }
 
 // maxTimeLimit: the longest time limit a job may ask in cluster — its

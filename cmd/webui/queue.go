@@ -32,7 +32,7 @@ func addQueueFlags(fs *flag.FlagSet) *queueFlags {
 	fs.BoolVar(&f.enabled, "queue", false, "enable the job queue (needs the Job and JobPriorityRule CRDs in the console's cluster; clusters take jobs when their agent says \"jobs\")")
 	fs.DurationVar(&f.defaultLimit, "job-default-time-limit", 24*time.Hour, "a job's time limit when it says none")
 	fs.DurationVar(&f.maxLimit, "job-max-time-limit", 72*time.Hour, "the longest time limit a job may ask (a Cluster's spec.jobMaxTimeLimit may say less)")
-	fs.IntVar(&f.maxJobsPerUser, "job-max-per-user", 20, "jobs one person may have waiting or running at once (0: no cap; admins are not held to it)")
+	fs.IntVar(&f.maxJobsPerUser, "job-max-per-user", 20, "jobs one person may have waiting or running in a cluster at once, where no job rule says (0: no cap; admins are not held to it)")
 	return f
 }
 

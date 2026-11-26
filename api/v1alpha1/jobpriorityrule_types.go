@@ -20,6 +20,14 @@ type JobPriorityRuleSpec struct {
 	Condition string `json:"condition"`
 	// MaxPriority: the highest priority they may give.
 	MaxPriority int32 `json:"maxPriority"`
+	// MaxJobs: how many jobs they may have waiting or running in a
+	// cluster at once (unset: the rule says nothing of it). The most of
+	// the rules that hold and say counts; none saying, the console's
+	// default.
+	//
+	// +optional
+	// +kubebuilder:validation:Minimum=1
+	MaxJobs *int32 `json:"maxJobs,omitempty"`
 }
 
 // JobPriorityRule is one priority cap, kept by the console in its own
@@ -29,6 +37,7 @@ type JobPriorityRuleSpec struct {
 // +kubebuilder:resource:scope=Cluster
 // +kubebuilder:printcolumn:name="Condition",type=string,JSONPath=`.spec.condition`
 // +kubebuilder:printcolumn:name="Max",type=integer,JSONPath=`.spec.maxPriority`
+// +kubebuilder:printcolumn:name="Jobs",type=integer,JSONPath=`.spec.maxJobs`
 type JobPriorityRule struct {
 	metav1.TypeMeta   `json:",inline"`
 	metav1.ObjectMeta `json:"metadata,omitempty"`

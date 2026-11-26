@@ -214,13 +214,21 @@ func TestPriorityRulesAdmin(t *testing.T) {
 		_ = json.Unmarshal(rec.Body.Bytes(), &out)
 		return len(out.Items) == 2
 	})
-	if code := put(root, `{"items":[{"condition":"group = lab","maxPriority":10}]}`); code != http.StatusOK {
+	if code := put(root, `{"items":[{"condition":"group = lab","maxPriority":1,"maxJobs":0}]}`); code != http.StatusBadRequest {
+		t.Fatalf("maxJobs 0: %d", code)
+	}
+	if code := put(root, `{"items":[{"condition":"group = lab","maxPriority":10,"maxJobs":30}]}`); code != http.StatusOK {
 		t.Fatalf("replace: %d", code)
 	}
 	waitFor(t, func() bool {
 		var l devpodv1alpha1.JobPriorityRuleList
-		return k8sClient.List(context.Background(), &l) == nil && len(l.Items) == 1 && l.Items[0].Spec.MaxPriority == 10
+		return k8sClient.List(context.Background(), &l) == nil && len(l.Items) == 1 && l.Items[0].Spec.MaxPriority == 10 &&
+			l.Items[0].Spec.MaxJobs != nil && *l.Items[0].Spec.MaxJobs == 30
 	})
+	rec := doJSON(t, p.s.HandleGetPriorityRulesForTest(), "GET", "/api/admin/job-priority-rules", nil, root, "")
+	if !strings.Contains(rec.Body.String(), `"maxJobs":30`) {
+		t.Fatalf("get: %s", rec.Body)
+	}
 }
 
 // A job runs where the machines share storage: under the owner's shared
@@ -324,5 +332,50 @@ func TestJobEnvBounded(t *testing.T) {
 		"env": map[string]any{"BIG": strings.Repeat("x", 70<<10)}})
 	if code != http.StatusBadRequest {
 		t.Fatalf("70 KiB: %d %+v", code, v)
+	}
+}
+
+// How many jobs one may have is the job rules' as priority is: the most of
+// those whose condition holds for them (none: the console's default), in
+// the cluster submitted to — jobs elsewhere are not counted there.
+func TestJobCountCapRules(t *testing.T) {
+	p := jobRig(t, "jr", "jr-alice")
+	p.s.Queue.MaxJobsPerUser = 1
+	alice := p.as("jr-alice")
+	body := map[string]any{"from": map[string]any{"devpod": "jr-alice-dev1"}, "nodes": 1, "gpus": 1, "command": "true"}
+	ctx := context.Background()
+	code, a := submitJob(t, p.s, alice, body)
+	if code != http.StatusCreated {
+		t.Fatalf("submit: %d %+v", code, a)
+	}
+	var job devpodv1alpha1.Job
+	if err := k8sClient.Get(ctx, client_key(a.ID), &job); err != nil {
+		t.Fatal(err)
+	}
+	elsewhere := &devpodv1alpha1.Job{ObjectMeta: metav1.ObjectMeta{Name: a.ID + "x", Namespace: job.Namespace}, Spec: *job.Spec.DeepCopy()}
+	elsewhere.Spec.Cluster = "elsewhere"
+	if err := k8sClient.Create(ctx, elsewhere); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = k8sClient.Delete(ctx, elsewhere) })
+	if rec := doJSON(t, p.s.HandleCancelJobForTest(), "DELETE", "/api/jobs/"+a.ID, map[string]string{"id": a.ID}, alice, ""); rec.Code != http.StatusNoContent {
+		t.Fatalf("cancel: %d", rec.Code)
+	}
+	waitFor(t, func() bool { code, _ := submitJob(t, p.s, alice, body); return code == http.StatusCreated })
+	if code, v := submitJob(t, p.s, alice, body); code != http.StatusTooManyRequests || v.Code != "JOB_LIMIT" {
+		t.Fatalf("over the default: %d %+v", code, v)
+	}
+	three := int32(3)
+	rule := &devpodv1alpha1.JobPriorityRule{ObjectMeta: metav1.ObjectMeta{Name: "jr-cap"}, Spec: devpodv1alpha1.JobPriorityRuleSpec{Condition: "user = jr-alice", MaxJobs: &three}}
+	if err := k8sClient.Create(ctx, rule); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = k8sClient.Delete(ctx, rule) })
+	waitFor(t, func() bool { code, _ := submitJob(t, p.s, alice, body); return code == http.StatusCreated })
+	if code, v := submitJob(t, p.s, alice, body); code != http.StatusCreated {
+		t.Fatalf("the third: %d %+v", code, v)
+	}
+	if code, v := submitJob(t, p.s, alice, body); code != http.StatusTooManyRequests || !strings.Contains(v.Message, "3") {
+		t.Fatalf("a fourth: %d %+v", code, v)
 	}
 }

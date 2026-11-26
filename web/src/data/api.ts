@@ -767,7 +767,7 @@ export const submitJob = (cluster: string | undefined, body: JobRequest) => req<
 export const cancelJob = (id: string) => req<void>("DELETE", `/api/jobs/${id}`);
 export const resubmitJob = (id: string) => req<Job>("POST", `/api/jobs/${id}/resubmit`);
 export const jobLimits = (cluster: string | undefined) => req<JobLimits>("GET", apiIn(cluster, "/api/jobs/limits"));
-export type PriorityRule = { condition: string; maxPriority: number };
+export type PriorityRule = { condition: string; maxPriority: number; maxJobs?: number | null };
 export const getPriorityRules = () => req<{ items: PriorityRule[] }>("GET", "/api/admin/job-priority-rules");
 export const putPriorityRules = (items: PriorityRule[]) => req<{ items: PriorityRule[] }>("PUT", "/api/admin/job-priority-rules", { items });
 /** what the queue can use now in a cluster: free cards and cores, the most cards one machine has */
