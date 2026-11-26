@@ -8,7 +8,6 @@ import (
 	"hash/fnv"
 	"slices"
 	"strconv"
-	"strings"
 
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
@@ -239,11 +238,8 @@ func jobGPUKind(job *devpodv1alpha1.Job) corev1.ResourceName {
 }
 
 // machineFits: n could take one of job's ranks at all — it is not
-// cordoned, its taints are tolerated, and it has the job's kind of card,
-// enough of them. The node.kubernetes.io/ taints mirror the machine's
-// conditions (readiness is judged apart), and one named for the cards the
-// ranks ask for is tolerated for them by the cluster (extended resource
-// tolerations): neither keeps a rank off.
+// cordoned, its source's placement admits it, its taints are tolerated
+// (taintsTolerated), and it has the job's kind of card, enough of them.
 func machineFits(job *devpodv1alpha1.Job, n *corev1.Node) bool {
 	if n.Spec.Unschedulable || !placementAdmits(&job.Spec.Template.Spec, n) {
 		return false
@@ -313,10 +309,14 @@ func requirementHolds(r corev1.NodeSelectorRequirement, labels map[string]string
 	return false
 }
 
-// taintsTolerated: spec tolerates n's taints that keep Pods off — but
-// the node.kubernetes.io/ ones (conditions, judged apart) and, for a Pod
-// asking cards, the one named for them (extended resource tolerations).
+// taintsTolerated: spec tolerates n's taints that keep Pods off — those
+// of its conditions too (disk, memory or PID pressure keep a rank Pending
+// as they keep any Pod), but for not-ready and unreachable on a machine
+// that says nothing of its readiness (readiness is judged apart, and
+// unknown counts as ready), and, for a Pod asking cards, the one named
+// for them (extended resource tolerations).
 func taintsTolerated(spec *corev1.PodSpec, cards bool, n *corev1.Node) bool {
+	saysReady := slices.ContainsFunc(n.Status.Conditions, func(c corev1.NodeCondition) bool { return c.Type == corev1.NodeReady })
 	kind := corev1.ResourceName(gpures.NVIDIA)
 	if len(spec.Containers) > 0 {
 		kind = gpuKindOf(&spec.Containers[0])
@@ -326,7 +326,7 @@ func taintsTolerated(spec *corev1.PodSpec, cards bool, n *corev1.Node) bool {
 		if t.Effect != corev1.TaintEffectNoSchedule && t.Effect != corev1.TaintEffectNoExecute {
 			continue
 		}
-		if strings.HasPrefix(t.Key, "node.kubernetes.io/") || (cards && t.Key == string(kind)) {
+		if (!saysReady && (t.Key == corev1.TaintNodeNotReady || t.Key == corev1.TaintNodeUnreachable)) || (cards && t.Key == string(kind)) {
 			continue
 		}
 		if !slices.ContainsFunc(spec.Tolerations, func(tol corev1.Toleration) bool { return tol.ToleratesTaint(t) }) {

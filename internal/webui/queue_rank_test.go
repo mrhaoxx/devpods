@@ -149,7 +149,17 @@ func TestMachineFits(t *testing.T) {
 		t.Error("cordoned")
 	}
 	if !machineFits(j, node(nv8, corev1.Taint{Key: "node.kubernetes.io/not-ready", Effect: corev1.TaintEffectNoSchedule})) {
-		t.Error("a condition's taint (readiness is judged apart)")
+		t.Error("not-ready on a machine that says nothing of its readiness (judged apart)")
+	}
+	// a machine under pressure keeps Pods off: so does the queue (zjusct's
+	// m701, disk pressure: a rank waited there until its job gave up)
+	if machineFits(j, node(nv8, corev1.Taint{Key: "node.kubernetes.io/disk-pressure", Effect: corev1.TaintEffectNoSchedule})) {
+		t.Error("disk pressure")
+	}
+	notReady := node(nv8, corev1.Taint{Key: "node.kubernetes.io/not-ready", Effect: corev1.TaintEffectNoSchedule})
+	notReady.Status.Conditions = []corev1.NodeCondition{{Type: corev1.NodeReady, Status: corev1.ConditionFalse}}
+	if machineFits(j, notReady) {
+		t.Error("not ready, and it says so")
 	}
 	if !machineFits(j, node(nv8, corev1.Taint{Key: string(gpures.NVIDIA), Effect: corev1.TaintEffectNoSchedule})) {
 		t.Error("the cards' own taint")
