@@ -196,3 +196,7 @@ func (s *Server) HandleJobLogsForTest() http.HandlerFunc { return s.handleJobLog
 func (s *Server) WriteJobStatusForTest(ctx context.Context, j *devpodv1alpha1.Job) bool {
 	return s.writeJobStatus(ctx, j)
 }
+
+// SetQueueBeforeStartsForTest runs f in each round after the plan, before
+// its jobs are started.
+func (s *Server) SetQueueBeforeStartsForTest(f func()) { s.queueBeforeStarts = f }

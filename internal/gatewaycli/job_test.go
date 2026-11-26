@@ -120,3 +120,14 @@ func TestJobLogsFollow(t *testing.T) {
 		t.Fatalf("logs -f: %d %q %q", code, out, errs)
 	}
 }
+
+// A job that gave way to a reservation made as it started says so.
+func TestJobStateReserved(t *testing.T) {
+	now := time.Date(2026, 11, 27, 4, 0, 0, 0, time.UTC)
+	if s := jobState(jobView{Phase: "Queued", Position: 2, Reason: "reserved"}, now); s != "#2 a reservation took its place; waiting again" {
+		t.Fatalf("%q", s)
+	}
+	if st := map[string]string{"reserved": "(Reservation)"}; squeueReason("reserved") != st["reserved"] {
+		t.Fatalf("squeue: %q", squeueReason("reserved"))
+	}
+}

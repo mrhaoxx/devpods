@@ -180,8 +180,29 @@ func (s *Server) queueIn(ctx context.Context, cluster string, jobs, ended []*dev
 			ports[r.Node][lo] = true
 		}
 	}
+	if s.queueBeforeStarts != nil {
+		s.queueBeforeStarts()
+	}
+	// what runs while the jobs start: not the jobs stopped for others, and
+	// each started one from its start on
+	runs := slices.DeleteFunc(slices.Clone(v.Running), func(r qRun) bool {
+		return slices.ContainsFunc(plan.Preempt, func(p *devpodv1alpha1.Job) bool { return p.Name == r.Job.Name })
+	})
 	for _, st := range plan.Starts {
-		s.startJob(ctx, cc, st.Job, st.Machines, nodes, ports, now)
+		if !s.startJob(ctx, cc, st.Job, st.Machines, nodes, ports, now) {
+			continue
+		}
+		// a job that may not be stopped, once it has said it starts, looks
+		// at the reservations afresh: one made since the plan was read
+		// (whose own look did not see this job yet) is given way to
+		if !st.Job.Spec.Preemptible && s.Reservations != nil {
+			if fresh, err := s.nodeReservations(ctx); err == nil && !keptBesideReservations(v, st, fresh, s.resCluster(ctx), runs) {
+				s.requeueJob(ctx, cc, st.Job, "reserved")
+				continue
+			}
+		}
+		runs = append(runs, qRun{Job: st.Job, Machines: st.Machines, Ask: jobAsk(st.Job), Until: now.Add(st.Job.Spec.TimeLimit.Duration),
+			Preemptible: st.Job.Spec.Preemptible, Priority: st.Job.Spec.Priority, Started: now})
 	}
 	for _, j := range queued {
 		w, ok := plan.Waits[j.Name]
@@ -389,7 +410,7 @@ func (s *Server) requeueJob(ctx context.Context, cc *clusters.ClusterClients, j 
 // startJob makes j's ranks on machines and marks it Starting. A rank
 // found made already (a round that did not get to say so) is taken as
 // it is; any other failure takes back what was made.
-func (s *Server) startJob(ctx context.Context, cc *clusters.ClusterClients, j *devpodv1alpha1.Job, machines []string, nodes map[string]*corev1.Node, ports map[string]map[int32]bool, now time.Time) {
+func (s *Server) startJob(ctx context.Context, cc *clusters.ClusterClients, j *devpodv1alpha1.Job, machines []string, nodes map[string]*corev1.Node, ports map[string]map[int32]bool, now time.Time) bool {
 	// a port block no job on these machines has
 	j.Status.PortBase = pickPorts(j, machines, ports)
 	rank0 := rankName(j.Spec.Owner, j.Name, 0)
@@ -409,7 +430,7 @@ func (s *Server) startJob(ctx context.Context, cc *clusters.ClusterClients, j *d
 			if !apierrors.IsAlreadyExists(err) {
 				slog.Warn("queue_start", "job", j.Name, "rank", r, "err", err)
 				undo()
-				return
+				return false
 			}
 			// made already: taken as it is only if it is this start's
 			// (one of a former start is going: this start waits for it)
@@ -418,7 +439,7 @@ func (s *Server) startJob(ctx context.Context, cc *clusters.ClusterClients, j *d
 				!isRankOf(&cur, j) || cur.DeletionTimestamp != nil || attemptOf(&cur) != j.Status.Attempts+1 {
 				slog.Info("queue_start_waits", "job", j.Name, "devpod", dp.Name)
 				undo()
-				return
+				return false
 			}
 			if pinnedNode(&cur) != "" {
 				m = pinnedNode(&cur)
@@ -439,7 +460,8 @@ func (s *Server) startJob(ctx context.Context, cc *clusters.ClusterClients, j *d
 	j.Status.Phase, j.Status.AttemptAt, j.Status.Ranks = devpodv1alpha1.JobStarting, &t, ranks
 	j.Status.Attempts++
 	j.Status.Reason, j.Status.Detail, j.Status.Position, j.Status.ExpectedStart, j.Status.StartedAt = "", nil, 0, nil, nil
-	if s.writeJobStatus(ctx, j) {
+	written := s.writeJobStatus(ctx, j)
+	if written {
 		slog.Info("queue_job_start", "job", j.Name, "owner", j.Spec.Owner, "machines", machines)
 	}
 	for _, m := range ranksMachines(ranks) {
@@ -450,6 +472,7 @@ func (s *Server) startJob(ctx context.Context, cc *clusters.ClusterClients, j *d
 	}
 	// not written (cancelled meanwhile): its ranks are cleaned up by the
 	// rounds that find them, as an ended job's
+	return written
 }
 
 // writeJobStatus writes j's status, worked out from j as it was read:
@@ -821,4 +844,27 @@ func ranksMachines(ranks []devpodv1alpha1.JobRank) []string {
 		out = append(out, r.Node)
 	}
 	return out
+}
+
+// keptBesideReservations: st's ranks still have room on each of their
+// machines beside the reservations as they are now (fresh) and runs.
+func keptBesideReservations(v queueView, st qStart, fresh []devpodv1alpha1.NodeReservation, cluster string, runs []qRun) bool {
+	ask, limit := jobAsk(st.Job), st.Job.Spec.TimeLimit.Duration
+	for _, name := range st.Machines {
+		i := slices.IndexFunc(v.Machines, func(m qMachine) bool { return m.Name == name })
+		if i < 0 {
+			continue
+		}
+		m := v.Machines[i]
+		m.Rs = nil
+		for k := range fresh {
+			if fresh[k].Spec.Cluster == cluster && fresh[k].Spec.Node == name {
+				m.Rs = append(m.Rs, &fresh[k])
+			}
+		}
+		if !ask.fits(freeFor(m, runs, v.Now, limit)) {
+			return false
+		}
+	}
+	return true
 }

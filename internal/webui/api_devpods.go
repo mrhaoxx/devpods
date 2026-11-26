@@ -93,6 +93,8 @@ type Server struct {
 	// queueCleaning: ended jobs whose output is being kept and ranks
 	// deleted, in the background (by id)
 	queueCleaning sync.Map
+	// queueBeforeStarts: tests' hook, after a round's plan, before starts
+	queueBeforeStarts func()
 	// Snapshots: saving a DevPod as an image; nil = off.
 	Snapshots *Snapshots
 	// HTTPProxy: DevPod ports published through the gateway; nil = off.

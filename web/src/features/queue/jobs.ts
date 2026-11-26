@@ -74,6 +74,9 @@ export function stateText(j: Job, now: number): string {
     case "gang-timeout":
       why = "上次没能全部启动，重新排队";
       break;
+    case "reserved":
+      why = "刚有预约占了位置，重新排队";
+      break;
   }
   // no space after a full-width bracket: （要 32，剩 18）· 预计 …
   const sep = why.endsWith("）") ? "· " : " · ";

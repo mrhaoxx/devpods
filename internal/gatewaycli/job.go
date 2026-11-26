@@ -454,6 +454,8 @@ func jobState(j jobView, now time.Time) string {
 		s += "preempted, waiting again"
 	case "gang-timeout":
 		s += "its ranks did not all start; waiting again"
+	case "reserved":
+		s += "a reservation took its place; waiting again"
 	default:
 		s += "waiting"
 	}

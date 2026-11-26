@@ -182,9 +182,13 @@ func TestQueueQuotaCountsSameRound(t *testing.T) {
 	a := submit(t, p, "qq-alice", 1, 8, nil)
 	b := submit(t, p, "qq-alice", 1, 8, nil)
 	p.s.QueueRound(context.Background())
+	// submitted in one second, their order is by id: one starts, either
 	ja, jb := jobNow(t, a), jobNow(t, b)
+	if ja.Status.Phase == devpodv1alpha1.JobQueued {
+		ja, jb = jb, ja
+	}
 	if ja.Status.Phase != devpodv1alpha1.JobStarting || jb.Status.Phase != devpodv1alpha1.JobQueued || jb.Status.Reason != "quota" {
-		t.Fatalf("a %s, b %s %s", ja.Status.Phase, jb.Status.Phase, jb.Status.Reason)
+		t.Fatalf("one %s, the other %s %s", ja.Status.Phase, jb.Status.Phase, jb.Status.Reason)
 	}
 }
 

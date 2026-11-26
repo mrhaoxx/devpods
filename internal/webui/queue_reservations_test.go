@@ -139,3 +139,26 @@ func TestJobsFreeAndHolds(t *testing.T) {
 		t.Fatalf("hold %+v", h)
 	}
 }
+
+// A reservation made between the round's plan and its start of a job
+// that may not be stopped is not run over: the job, seeing it once
+// started, waits again.
+func TestStartGivesWayToReservationMadeMeanwhile(t *testing.T) {
+	p, _ := queueRig(t, "rm", "rm-alice")
+	id := submit(t, p, "rm-alice", 1, 8, map[string]any{"timeLimitSeconds": 7200})
+	made := false
+	p.s.SetQueueBeforeStartsForTest(func() {
+		if made {
+			return
+		}
+		made = true
+		if code, v := reserveAs(t, p.s, p.as("rm-bob"), p.n1, p.slot, p.slot.Add(time.Hour)); code != http.StatusCreated {
+			t.Errorf("reserve meanwhile: %d %+v", code, v)
+		}
+	})
+	p.s.QueueRound(context.Background())
+	j := jobNow(t, id)
+	if j.Status.Phase != devpodv1alpha1.JobQueued || j.Status.Reason != "reserved" {
+		t.Fatalf("job %s %s", j.Status.Phase, j.Status.Reason)
+	}
+}

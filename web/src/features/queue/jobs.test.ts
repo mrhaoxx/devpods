@@ -20,6 +20,7 @@ describe("jobs", () => {
     expect(stateText(job({ reason: "quota" }), now)).toBe("○ 等待 · 超出配额");
     expect(stateText(job({ reason: "preempting" }), now)).toBe("○ 等待 · 正在让出资源");
     expect(stateText(job({ reason: "preempted" }), now)).toBe("○ 等待 · 被抢占，重新排队");
+    expect(stateText(job({ reason: "reserved" }), now)).toBe("○ 等待 · 刚有预约占了位置，重新排队");
     expect(stateText(job({ phase: "Succeeded" }), now)).toBe("已完成");
     expect(stateText(job({ phase: "Failed", detail: { exit: "3" } }), now)).toBe("失败（退出码 3）");
     expect(stateText(job({ phase: "Failed", reason: "rank-stopped" }), now)).toBe("失败（有一台被停止）");

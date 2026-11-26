@@ -310,11 +310,7 @@ func runSqueue(e *Env, a *parsed) int {
 				}
 				where = strings.Join(nodes, ",")
 			} else {
-				where = "(" + map[string]string{"capacity": "Resources", "behind": "Priority", "quota": "QOSMaxResources", "preempting": "Resources",
-					"preempted": "Priority", "gang-timeout": "Resources"}[j.Reason] + ")"
-				if where == "()" {
-					where = "(None)"
-				}
+				where = squeueReason(j.Reason)
 			}
 			fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\t%d\t%s\n", j.ID, dash(j.Cluster), dash(j.Title), j.Owner, slurmState(j.Phase), ran, j.Nodes, where)
 		}
@@ -336,4 +332,14 @@ func runScancel(e *Env, a *parsed) int {
 		}
 	}
 	return status
+}
+
+// squeueReason: why a job waits, as squeue says it.
+func squeueReason(reason string) string {
+	r := map[string]string{"capacity": "Resources", "behind": "Priority", "quota": "QOSMaxResources", "preempting": "Resources",
+		"preempted": "Priority", "gang-timeout": "Resources", "reserved": "Reservation"}[reason]
+	if r == "" {
+		r = "None"
+	}
+	return "(" + r + ")"
 }
