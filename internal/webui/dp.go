@@ -34,6 +34,7 @@ type dpRequest struct {
 	Argv  []string          `json:"argv"`
 	Cwd   string            `json:"cwd"`
 	Files map[string]string `json:"files"`
+	Env   map[string]string `json:"env"` // the shell's, with a submit
 }
 
 // HandleDP serves POST /dp/v1/cli.
@@ -78,7 +79,7 @@ func (s *Server) HandleDP(w http.ResponseWriter, r *http.Request) {
 			fl.Flush()
 		}
 	}
-	origin := &gatewaycli.Origin{Cluster: cluster, DevPod: dp.Name, Cwd: req.Cwd}
+	origin := &gatewaycli.Origin{Cluster: cluster, DevPod: dp.Name, Cwd: req.Cwd, Env: req.Env}
 	code := s.CLI.Exec(r.Context(), gatewaycli.Meta{User: dp.Spec.Owner, Remote: r.RemoteAddr, AuthKind: "dp"}, req.Argv, origin, req.Files, fw.stream("o"), fw.stream("e"))
 	fw.frame(map[string]any{"x": code})
 }

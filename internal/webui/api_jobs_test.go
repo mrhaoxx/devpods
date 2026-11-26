@@ -7,6 +7,7 @@ package webui_test
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"strings"
 	"testing"
@@ -306,4 +307,22 @@ func TestJobCountCap(t *testing.T) {
 		t.Fatalf("cancel: %d", rec.Code)
 	}
 	waitFor(t, func() bool { code, _ := submitJob(t, p.s, alice, body); return code == http.StatusCreated })
+}
+
+// A job's environment is bounded: at most 512 variables, 64 KiB.
+func TestJobEnvBounded(t *testing.T) {
+	p := jobRig(t, "je", "je-alice")
+	env := map[string]any{}
+	for i := range 600 {
+		env[fmt.Sprintf("V%d", i)] = "1"
+	}
+	code, v := submitJob(t, p.s, p.as("je-alice"), map[string]any{"from": map[string]any{"devpod": "je-alice-dev1"}, "nodes": 1, "gpus": 1, "command": "true", "env": env})
+	if code != http.StatusBadRequest || !strings.Contains(v.Message, "environment") {
+		t.Fatalf("600 variables: %d %+v", code, v)
+	}
+	code, v = submitJob(t, p.s, p.as("je-alice"), map[string]any{"from": map[string]any{"devpod": "je-alice-dev1"}, "nodes": 1, "gpus": 1, "command": "true",
+		"env": map[string]any{"BIG": strings.Repeat("x", 70<<10)}})
+	if code != http.StatusBadRequest {
+		t.Fatalf("70 KiB: %d %+v", code, v)
+	}
 }

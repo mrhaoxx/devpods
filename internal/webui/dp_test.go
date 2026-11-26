@@ -168,3 +168,38 @@ func TestHandleDPNeverAdmin(t *testing.T) {
 		t.Fatalf("the admin's own command line: %q %q", out.String(), errw.String())
 	}
 }
+
+// What dp sends of the shell's environment reaches the command as its
+// origin's (a job takes it along).
+func TestHandleDPPassesEnv(t *testing.T) {
+	setupSuite(t)
+	s, _ := newServer(t)
+	var posted map[string]any
+	api := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPost {
+			_ = json.NewDecoder(r.Body).Decode(&posted)
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{"id": "abc12"})
+	}))
+	t.Cleanup(api.Close)
+	s.CLI = &gatewaycli.Server{API: gatewaycli.NewAPI(api.URL, "k")}
+	s.IngestKey = []byte("ingest-key")
+	ctx := context.Background()
+	dp := &devpodv1alpha1.DevPod{ObjectMeta: metav1.ObjectMeta{Name: "dpe-dev", Namespace: "devpods"}, Spec: devpodv1alpha1.DevPodSpec{Owner: "dpe",
+		Pod: &devpodv1alpha1.PodWorkloadSpec{Spec: corev1.PodSpec{Containers: []corev1.Container{{Name: "dev", Image: "x"}}}}}}
+	if err := k8sClient.Create(ctx, dp); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = k8sClient.Delete(ctx, dp) })
+	waitFor(t, func() bool { _, _, ok := s.DevPodByUID(ctx, string(dp.UID)); return ok })
+	body, _ := json.Marshal(map[string]any{"argv": []string{"job", "submit", "--", "true"}, "cwd": "/home/x", "env": map[string]string{"OMP_NUM_THREADS": "8"}})
+	r := httptest.NewRequest(http.MethodPost, "/dp/v1/cli", strings.NewReader(string(body)))
+	r.Header.Set("Authorization", "Bearer "+wire.DPToken(s.IngestKey, string(dp.UID)))
+	r.Header.Set("X-DevPod-UID", string(dp.UID))
+	w := httptest.NewRecorder()
+	s.HandleDP(w, r)
+	env, _ := posted["env"].(map[string]any)
+	if w.Code != http.StatusOK || env["OMP_NUM_THREADS"] != "8" {
+		t.Fatalf("%d %s posted %v", w.Code, w.Body, posted)
+	}
+}

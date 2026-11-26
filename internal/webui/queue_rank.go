@@ -26,6 +26,9 @@ import (
 // jobBash: the shell a rank's command runs in.
 const jobBash = "/opt/devpod/bin/bash"
 
+// submitPathEnv: the variable a job's submitting shell's PATH travels in.
+const submitPathEnv = "DEVPOD_SUBMIT_PATH"
+
 // jobDeadlineSlack: seconds a rank's Pod may run past its job's time
 // limit before Kubernetes ends it (activeDeadlineSeconds) — the console
 // ends it at the limit; this is for when the console cannot.
@@ -138,7 +141,13 @@ func rankDevPod(job *devpodv1alpha1.Job, rank int32, node, ns, master string) *d
 	spec.ActiveDeadlineSeconds = &deadline
 
 	c := &spec.Containers[0]
-	c.Command = append([]string{jobBash, "-lc", job.Spec.Command, jobArg0(job)}, job.Spec.Args...)
+	script := job.Spec.Command
+	if slices.ContainsFunc(job.Spec.Env, func(e corev1.EnvVar) bool { return e.Name == submitPathEnv }) {
+		// the PATH of the shell it was submitted from, in front of the one
+		// the ranks' login shell sets
+		script = `export PATH="$` + submitPathEnv + `:$PATH"` + "\n" + script
+	}
+	c.Command = append([]string{jobBash, "-lc", script, jobArg0(job)}, job.Spec.Args...)
 	c.Args = nil
 	if job.Spec.Workdir != "" {
 		c.WorkingDir = job.Spec.Workdir

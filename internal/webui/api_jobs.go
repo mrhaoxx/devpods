@@ -542,6 +542,15 @@ func (s *Server) buildJob(ctx context.Context, sess Session, req JobRequest) (*d
 	if len(rankName(owner, "xxxxx", req.Nodes-1)) > 22 {
 		return nil, badRequest("the user name is too long for job DevPod names (%s-<job>-<rank>: at most 22 characters)", owner)
 	}
+	// the environment it takes along (a submitting shell's, often): bounded
+	size := 0
+	for k, v := range req.Env {
+		size += len(k) + len(v)
+	}
+	if len(req.Env) > maxJobEnvVars || size > maxJobEnvBytes {
+		return nil, badRequest("the job's environment is %d variables, %d bytes: at most %d variables, %d bytes (submit with --export NONE and give what it needs with --env)",
+			len(req.Env), size, maxJobEnvVars, maxJobEnvBytes)
+	}
 	env := make([]corev1.EnvVar, 0, len(req.Env))
 	for k, v := range req.Env {
 		env = append(env, corev1.EnvVar{Name: k, Value: v})
@@ -938,3 +947,9 @@ func (s *Server) handlePutPriorityRules(w http.ResponseWriter, r *http.Request) 
 	}
 	s.writeJSON(w, http.StatusOK, map[string]any{"items": req.Items})
 }
+
+// maxJobEnvVars / maxJobEnvBytes bound a job's environment.
+const (
+	maxJobEnvVars  = 512
+	maxJobEnvBytes = 64 << 10
+)

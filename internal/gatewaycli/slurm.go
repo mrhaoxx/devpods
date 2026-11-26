@@ -36,14 +36,15 @@ command line wins): -N/--nodes, --gpus-per-node, -G/--gpus (in all),
 -c/--cpus-per-task (cores per machine), -t/--time, -J/--job-name,
 -o/--output and -e/--error (default slurm-%j.out in the directory it was
 submitted from; %j the job, %x its name), -p/--partition (the cluster),
-and the queue's own --priority N and --preemptible. -n/--ntasks may not be
+--export ALL|NONE (the shell's environment, ALL by default), and the
+queue's own --priority N and --preemptible. -n/--ntasks may not be
 more than the machines (one rank each). Anything else (--array,
 --dependency, --mem, …) is refused by name.`
 
 // sbatchValue / sbatchFlag: what sbatch takes, by its long names (the
 // short ones map onto them).
 var sbatchValue = map[string]bool{"nodes": true, "gpus-per-node": true, "gpus": true, "cpus-per-task": true, "time": true,
-	"job-name": true, "output": true, "error": true, "partition": true, "priority": true, "ntasks": true}
+	"job-name": true, "output": true, "error": true, "partition": true, "priority": true, "ntasks": true, "export": true}
 var sbatchShort = map[string]string{"N": "nodes", "G": "gpus", "c": "cpus-per-task", "t": "time", "J": "job-name", "o": "output",
 	"e": "error", "p": "partition", "n": "ntasks"}
 
@@ -172,6 +173,9 @@ func parseSbatch(script string, argv []string) (submitOpts, error) {
 		o.title = o.script
 	}
 	o.partition = vals["partition"]
+	if o.export = vals["export"]; !validExport(o.export) {
+		return o, fmt.Errorf("sbatch: --export takes ALL or NONE here (not %q)", o.export)
+	}
 	o.preemptible = bools["preemptible"]
 	out, errFile := vals["output"], vals["error"]
 	if out == "" {

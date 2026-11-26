@@ -41,6 +41,8 @@ submit options:
                     reservation; starts sooner
   --host-network --privileged --cap-add CAP   what of the host the ranks ask
   --env K=V  --workdir DIR  --title T  --dry-run (where it would stand)
+  --export ALL|NONE take the shell's environment along (inside a DevPod;
+                    ALL, as sbatch's): PATH goes in front of the ranks' own
 Each rank runs the command in a login bash with RANK, WORLD_SIZE, MASTER_ADDR,
 MASTER_PORT (and DEVPOD_JOB_PORTS) set; the job ends when every rank has.`
 
@@ -53,7 +55,7 @@ func jobCommands() []*command {
 		brief: "[submit|list|show|cancel|logs|ssh …]",
 		short: "the queue: submit jobs, see the queue, cancel, read a job's output",
 		long:  jobLong,
-		vals:  []string{"title", "from-devpod", "from-config", "var", "N", "nodes", "gpus", "cpus", "t", "time", "priority", "cap-add", "env", "workdir", "script", "rank", "attempt"},
+		vals:  []string{"title", "from-devpod", "from-config", "var", "N", "nodes", "gpus", "cpus", "t", "time", "priority", "cap-add", "env", "workdir", "script", "rank", "attempt", "export"},
 		bools: []string{"preemptible", "host-network", "privileged", "dry-run", "mine", "ended", "f", "follow"}, run: runJob}}
 }
 
@@ -129,6 +131,7 @@ type submitOpts struct {
 	scriptText                                     string
 	args                                           []string // after the script
 	partition                                      string   // sbatch -p: the cluster
+	export                                         string   // ALL ("" too) or NONE
 }
 
 // submitOptsOf reads job submit's flags.
@@ -189,6 +192,9 @@ func submitOptsOf(a *parsed) (submitOpts, error) {
 		return o, err
 	}
 	o.capAdd = a.all["cap-add"]
+	if o.export = a.val["export"]; !validExport(o.export) {
+		return o, errors.New("--export takes ALL or NONE")
+	}
 	o.preemptible, o.hostNetwork, o.privileged, o.dryRun = a.has["preemptible"], a.has["host-network"], a.has["privileged"], a.has["dry-run"]
 	o.command = a.pos
 	return o, nil
@@ -255,8 +261,23 @@ func submitBody(e *Env, o submitOpts) (string, map[string]any, error) {
 	if len(priv) > 0 {
 		body["privileges"] = priv
 	}
-	if len(o.env) > 0 {
-		body["env"] = o.env
+	// the shell's environment, as dp sent it (sbatch's --export=ALL); PATH
+	// as DEVPOD_SUBMIT_PATH: the ranks' login shell sets PATH anew, and
+	// puts this in front; --env over it all
+	env := map[string]string{}
+	if e.Origin != nil && !strings.EqualFold(o.export, "NONE") {
+		for k, v := range e.Origin.Env {
+			if k == "PATH" {
+				k = "DEVPOD_SUBMIT_PATH"
+			}
+			env[k] = v
+		}
+	}
+	for k, v := range o.env {
+		env[k] = v
+	}
+	if len(env) > 0 {
+		body["env"] = env
 	}
 	workdir := o.workdir
 	if workdir == "" && e.Origin != nil {
@@ -677,4 +698,9 @@ func plural(n, one, many string) string {
 		return one
 	}
 	return many
+}
+
+// validExport: an --export the queue takes — ALL (the default) or NONE.
+func validExport(v string) bool {
+	return v == "" || strings.EqualFold(v, "ALL") || strings.EqualFold(v, "NONE")
 }

@@ -71,6 +71,9 @@ type Env struct {
 // its name, the working directory there.
 type Origin struct {
 	Cluster, DevPod, Cwd string
+	// Env: the shell's environment dp sent (a submit's), which a job
+	// takes along unless --export NONE
+	Env map[string]string
 }
 
 // OriginCommands are the commands dp may run from inside a DevPod: the

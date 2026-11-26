@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"reflect"
+	"strings"
 	"testing"
 )
 
@@ -33,7 +34,7 @@ func TestDPCall(t *testing.T) {
 	}))
 	defer srv.Close()
 	var out, errw bytes.Buffer
-	code := dpCall(srv.URL, "uid-1", "tok", []string{"job", "list"}, "/home/a", map[string]string{"t.sh": "echo"}, &out, &errw)
+	code := dpCall(srv.URL, "uid-1", "tok", []string{"job", "list"}, "/home/a", map[string]string{"t.sh": "echo"}, nil, &out, &errw)
 	if code != 3 || out.String() != "hi\n" || errw.String() != "warn\n" {
 		t.Fatalf("exit %d out %q err %q", code, out.String(), errw.String())
 	}
@@ -46,7 +47,7 @@ func TestDPCall(t *testing.T) {
 	}))
 	defer refuse.Close()
 	errw.Reset()
-	if code := dpCall(refuse.URL, "uid-1", "tok", []string{"whoami"}, "/", nil, &out, &errw); code != 1 || !bytes.Contains(errw.Bytes(), []byte("not a DevPod's dp")) {
+	if code := dpCall(refuse.URL, "uid-1", "tok", []string{"whoami"}, "/", nil, nil, &out, &errw); code != 1 || !bytes.Contains(errw.Bytes(), []byte("not a DevPod's dp")) {
 		t.Fatalf("refused: %d %q", code, errw.String())
 	}
 }
@@ -88,5 +89,28 @@ func TestDPArgvAndFiles(t *testing.T) {
 func TestDPBase(t *testing.T) {
 	if b := dpBase("http://a:8081/ingest/v1/batch"); b != "http://a:8081" {
 		t.Fatalf("base %q", b)
+	}
+}
+
+// A job's submit (job submit, sbatch) takes the shell's environment along
+// (sbatch's --export=ALL), less what is the session's own; other commands
+// take none.
+func TestDPEnv(t *testing.T) {
+	environ := []string{"HOME=/root", "PATH=/opt/conda/bin:/usr/bin", "OMP_NUM_THREADS=8", "SSH_TTY=/dev/pts/0", "DEVPOD_JOB=old",
+		"SUPERVISOR_JOB=true", "KUBERNETES_SERVICE_HOST=10.0.0.1", "PWD=/w", "SHLVL=2", "_=/usr/bin/dp", "bad-name=1", "LANG=C.UTF-8"}
+	got := dpEnv([]string{"sbatch", "x.sh"}, environ)
+	want := map[string]string{"PATH": "/opt/conda/bin:/usr/bin", "OMP_NUM_THREADS": "8", "LANG": "C.UTF-8"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("sbatch: %v", got)
+	}
+	if got := dpEnv([]string{"job", "submit", "--", "true"}, environ); !reflect.DeepEqual(got, want) {
+		t.Fatalf("job submit: %v", got)
+	}
+	if got := dpEnv([]string{"squeue"}, environ); got != nil {
+		t.Fatalf("squeue: %v", got)
+	}
+	big := []string{"HUGE=" + strings.Repeat("x", 70<<10), "SMALL=1"}
+	if got := dpEnv([]string{"sbatch"}, big); got["HUGE"] != "" || got["SMALL"] != "1" {
+		t.Fatalf("over the size: %v", got)
 	}
 }

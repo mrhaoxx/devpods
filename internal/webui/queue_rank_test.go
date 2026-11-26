@@ -229,3 +229,14 @@ func TestMachineFitsPlacement(t *testing.T) {
 		t.Error("terms are or'ed")
 	}
 }
+
+// The shell's PATH a job took along goes in front of the ranks' own (their
+// login shell sets PATH anew).
+func TestRankDevPodSubmitPath(t *testing.T) {
+	j := testJob()
+	j.Spec.Env = append(j.Spec.Env, corev1.EnvVar{Name: "DEVPOD_SUBMIT_PATH", Value: "/opt/conda/bin:/usr/bin"})
+	c := rankDevPod(j, 0, "g1", "devpods", "").Spec.Pod.Spec.Containers[0]
+	if len(c.Command) < 3 || !strings.HasPrefix(c.Command[2], `export PATH="$DEVPOD_SUBMIT_PATH:$PATH"`+"\n") || !strings.HasSuffix(c.Command[2], "python t.py") {
+		t.Fatalf("command %q", c.Command)
+	}
+}

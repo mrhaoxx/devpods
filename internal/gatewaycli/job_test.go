@@ -143,3 +143,37 @@ func TestJobLogsAttempt(t *testing.T) {
 		t.Fatalf("-f --attempt: %d %q", code, errs)
 	}
 }
+
+// From a DevPod a job takes the shell's environment (as sbatch's
+// --export=ALL): PATH as DEVPOD_SUBMIT_PATH (the ranks' login shell resets
+// PATH), --env over it; --export NONE takes only --env.
+func TestJobSubmitExportsEnv(t *testing.T) {
+	f := newFakeAPI(t)
+	f.routes["POST /api/clusters/st/jobs"] = map[string]any{"id": "abc12", "cluster": "st"}
+	o := &Origin{Cluster: "st", DevPod: "alice-dev", Cwd: "/home/alice/x", Env: map[string]string{"PATH": "/opt/conda/bin:/usr/bin", "OMP_NUM_THREADS": "8", "FOO": "shell"}}
+	if code, _, errs := f.runFrom("job submit --env FOO=flag -- python t.py", o, nil); code != 0 {
+		t.Fatalf("submit: %d %q", code, errs)
+	}
+	env, _ := lastBody(t, f, "POST", "/api/clusters/st/jobs")["env"].(map[string]any)
+	if env["DEVPOD_SUBMIT_PATH"] != "/opt/conda/bin:/usr/bin" || env["OMP_NUM_THREADS"] != "8" || env["FOO"] != "flag" || env["PATH"] != nil {
+		t.Fatalf("env %v", env)
+	}
+	if code, _, errs := f.runFrom("job submit --export NONE --env FOO=flag -- true", o, nil); code != 0 {
+		t.Fatalf("submit NONE: %d %q", code, errs)
+	}
+	if env, _ := lastBody(t, f, "POST", "/api/clusters/st/jobs")["env"].(map[string]any); len(env) != 1 || env["FOO"] != "flag" {
+		t.Fatalf("NONE: %v", env)
+	}
+	if code, _, errs := f.runFrom("sbatch train.sh", o, map[string]string{"train.sh": trainScript}); code != 0 {
+		t.Fatalf("sbatch: %d %q", code, errs)
+	}
+	if env, _ := lastBody(t, f, "POST", "/api/clusters/st/jobs")["env"].(map[string]any); env["OMP_NUM_THREADS"] != "8" {
+		t.Fatalf("sbatch env %v", env)
+	}
+	if code, _, errs := f.runFrom("sbatch --export=NONE train.sh", o, map[string]string{"train.sh": trainScript}); code != 0 {
+		t.Fatalf("sbatch NONE: %d %q", code, errs)
+	}
+	if env := lastBody(t, f, "POST", "/api/clusters/st/jobs")["env"]; env != nil {
+		t.Fatalf("sbatch NONE env %v", env)
+	}
+}

@@ -13,6 +13,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 
 	"github.com/mrhaoxx/devpod/internal/telemetry/config"
@@ -35,7 +36,7 @@ var dpNames = []string{"dp", "sbatch", "squeue", "scancel"}
 // (so it is not the script).
 var sbatchValueFlags = map[string]bool{"-N": true, "-n": true, "-t": true, "-J": true, "-o": true, "-e": true, "-p": true, "-c": true, "-G": true,
 	"--nodes": true, "--ntasks": true, "--gpus": true, "--gpus-per-node": true, "--cpus-per-task": true, "--time": true, "--job-name": true,
-	"--output": true, "--error": true, "--partition": true, "--priority": true}
+	"--output": true, "--error": true, "--partition": true, "--priority": true, "--export": true}
 
 // sbatchBoolFlags: sbatch's flags that take no value.
 var sbatchBoolFlags = map[string]bool{"--preemptible": true}
@@ -47,6 +48,50 @@ type dpRequest struct {
 	Argv  []string          `json:"argv"`
 	Cwd   string            `json:"cwd"`
 	Files map[string]string `json:"files,omitempty"`
+	// Env: the shell's environment, for a job's submit (sbatch's
+	// --export=ALL), less the session's own
+	Env map[string]string `json:"env,omitempty"`
+}
+
+// dpEnvMax bounds the environment dp sends with a submit.
+const dpEnvMax = 64 << 10
+
+// envName: a variable name a job may take (a plain identifier).
+var envName = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
+
+// dpEnvSkip: the session's own variables, and a rank's (a job's own
+// rank submitting another), which a job does not take along.
+func dpEnvSkip(k string) bool {
+	switch k {
+	case "HOME", "USER", "LOGNAME", "PWD", "OLDPWD", "SHELL", "SHLVL", "HOSTNAME", "TERM", "MAIL", "_",
+		"RANK", "NODE_RANK", "LOCAL_RANK", "WORLD_SIZE", "MASTER_ADDR", "MASTER_PORT":
+		return true
+	}
+	for _, p := range []string{"SSH_", "KUBERNETES_", "DEVPOD_", "SUPERVISOR_"} {
+		if strings.HasPrefix(k, p) {
+			return true
+		}
+	}
+	return false
+}
+
+// dpEnv: of environ, what a job submitted by argv takes along — for
+// job submit and sbatch only, at most dpEnvMax of it (nil: none).
+func dpEnv(argv, environ []string) map[string]string {
+	submit := (len(argv) > 0 && argv[0] == "sbatch") || (len(argv) > 1 && (argv[0] == "job" || argv[0] == "jobs") && argv[1] == "submit")
+	if !submit {
+		return nil
+	}
+	out, size := map[string]string{}, 0
+	for _, kv := range environ {
+		k, v, ok := strings.Cut(kv, "=")
+		if !ok || !envName.MatchString(k) || dpEnvSkip(k) || size+len(k)+len(v) > dpEnvMax {
+			continue
+		}
+		size += len(k) + len(v)
+		out[k] = v
+	}
+	return out
 }
 
 // runDP is dp (or sbatch, squeue, scancel: name) with args.
@@ -68,7 +113,7 @@ func runDP(name string, args []string) int {
 		fmt.Fprintf(os.Stderr, "%s: %v\n", name, err)
 		return 2
 	}
-	return dpCall(dpBase(c.IngestURL), c.DevPodUID, strings.TrimSpace(string(tok)), argv, cwd, files, os.Stdout, os.Stderr)
+	return dpCall(dpBase(c.IngestURL), c.DevPodUID, strings.TrimSpace(string(tok)), argv, cwd, files, dpEnv(argv, os.Environ()), os.Stdout, os.Stderr)
 }
 
 // dpBase: the console's address from the DevPod's ingest URL.
@@ -135,8 +180,8 @@ func dpArgs(name string, args []string, cwd string, read func(string) ([]byte, e
 // dpCall posts argv to the console at base as the DevPod uid (token) and
 // writes what it says back to out and errw as it comes; it returns the
 // command's exit code (1 when the console refused or went away).
-func dpCall(base, uid, token string, argv []string, cwd string, files map[string]string, out, errw io.Writer) int {
-	body, _ := json.Marshal(dpRequest{Argv: argv, Cwd: cwd, Files: files})
+func dpCall(base, uid, token string, argv []string, cwd string, files, env map[string]string, out, errw io.Writer) int {
+	body, _ := json.Marshal(dpRequest{Argv: argv, Cwd: cwd, Files: files, Env: env})
 	req, err := http.NewRequest(http.MethodPost, base+"/dp/v1/cli", bytes.NewReader(body))
 	if err != nil {
 		fmt.Fprintf(errw, "dp: %v\n", err)
