@@ -29,12 +29,13 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/yaml"
 
+	"golang.org/x/crypto/ssh"
+
 	devpodv1alpha1 "github.com/mrhaoxx/devpod/api/v1alpha1"
 	"github.com/mrhaoxx/devpod/internal/agent"
 	"github.com/mrhaoxx/devpod/internal/gatewaycli"
 	"github.com/mrhaoxx/devpod/internal/gpures"
 	"github.com/mrhaoxx/devpod/internal/webui/clusters"
-	"golang.org/x/crypto/ssh"
 )
 
 // Server carries the webui backend's dependencies. Handlers run the

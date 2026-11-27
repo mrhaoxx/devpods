@@ -105,7 +105,7 @@ type frameStream struct {
 	key string
 }
 
-func (fw *frameWriter) stream(key string) io.Writer { return frameStream{fw, key} }
+func (f *frameWriter) stream(key string) io.Writer { return frameStream{f, key} }
 
 func (s frameStream) Write(p []byte) (int, error) {
 	s.f.frame(map[string]string{s.key: string(p)})

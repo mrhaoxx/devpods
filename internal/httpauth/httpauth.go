@@ -21,8 +21,9 @@ import (
 	"strings"
 	"time"
 
-	devpodv1alpha1 "github.com/mrhaoxx/devpod/api/v1alpha1"
 	"net/url"
+
+	devpodv1alpha1 "github.com/mrhaoxx/devpod/api/v1alpha1"
 )
 
 const (

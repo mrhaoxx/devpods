@@ -5,9 +5,10 @@
 package webui
 
 import (
-	devpodv1alpha1 "github.com/mrhaoxx/devpod/api/v1alpha1"
 	"net/http"
 	"net/url"
+
+	devpodv1alpha1 "github.com/mrhaoxx/devpod/api/v1alpha1"
 
 	"github.com/mrhaoxx/devpod/internal/audit"
 )

@@ -146,7 +146,7 @@ func jobEnded(p devpodv1alpha1.JobPhase) bool {
 }
 
 // queueOK: the queue is on, and ctx's cluster takes jobs.
-func (s *Server) queueOK(w http.ResponseWriter, ctx context.Context) bool {
+func (s *Server) queueOK(ctx context.Context, w http.ResponseWriter) bool {
 	if s.Queue == nil {
 		s.writeErr(w, http.StatusNotFound, "QUEUE_OFF", "the queue is not on in this console", nil)
 		return false
@@ -393,7 +393,7 @@ func (s *Server) handleSubmitJob(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	ctx := r.Context()
-	if !s.queueOK(w, ctx) {
+	if !s.queueOK(ctx, w) {
 		return
 	}
 	var req JobRequest
@@ -911,7 +911,7 @@ func (s *Server) handleResubmitJob(w http.ResponseWriter, r *http.Request) {
 		s.writeErr(w, http.StatusServiceUnavailable, "CLUSTER_OFFLINE", "the job's cluster is away", nil)
 		return
 	}
-	if !s.queueOK(w, ctx) {
+	if !s.queueOK(ctx, w) {
 		return
 	}
 	_, groups, err := s.accessFor(ctx, j.Spec.Owner)
@@ -957,7 +957,7 @@ func (s *Server) handleJobLimits(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	ctx := r.Context()
-	if !s.queueOK(w, ctx) {
+	if !s.queueOK(ctx, w) {
 		return
 	}
 	_, groups, err := s.accessFor(ctx, sess.User)
