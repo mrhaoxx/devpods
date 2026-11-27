@@ -8,6 +8,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -50,6 +51,61 @@ func TestRecordRetriesWhenStoreDown(t *testing.T) {
 	waitFor(t, func() bool { return len(f.written()) == 2 })
 	if w := f.written(); w[0].Action != "create" || w[1].Action != "start" || w[0].TS.IsZero() {
 		t.Fatalf("written %+v", w)
+	}
+}
+
+// What waited while the store was away goes in a few writes, not one
+// each.
+func TestRecordBatchesAfterOutage(t *testing.T) {
+	setupSuite(t)
+	s, _ := newServer(t)
+	f := &fakeAuditStore{eventHold: make(chan struct{})}
+	s.Audit = &webui.AuditDeps{Store: f}
+	for i := range 50 {
+		s.RecordForTest(context.Background(), store.EventRow{Kind: "devpod", Object: fmt.Sprintf("o%d", i), Actor: "al", Via: "web", Action: "start"})
+	}
+	close(f.eventHold)
+	waitFor(t, func() bool { return len(f.written()) == 50 })
+	if n := f.eventCalls(); n > 3 {
+		t.Fatalf("50 records in %d writes", n)
+	}
+}
+
+// A record the store refuses on its own, while it takes the others, holds
+// none of them up and is given up.
+func TestRecordGivesUpRefusedRecord(t *testing.T) {
+	setupSuite(t)
+	s, _ := newServer(t)
+	f := &fakeAuditStore{eventBad: "bad"}
+	s.Audit = &webui.AuditDeps{Store: f}
+	s.SetEventRetryForTest(10 * time.Millisecond)
+	for _, o := range []string{"bad", "a", "b"} {
+		s.RecordForTest(context.Background(), store.EventRow{Kind: "devpod", Object: o, Actor: "al", Via: "web", Action: "start"})
+	}
+	waitFor(t, func() bool { return len(f.written()) == 2 })
+	s.RecordForTest(context.Background(), store.EventRow{Kind: "devpod", Object: "c", Actor: "al", Via: "web", Action: "start"})
+	waitFor(t, func() bool { return len(f.written()) == 3 })
+	for _, e := range f.written() {
+		if e.Object == "bad" {
+			t.Fatalf("the refused record written: %+v", f.written())
+		}
+	}
+}
+
+// A write that went in though it failed (timed out) is sent again as it
+// was: the store keeps one copy.
+func TestRecordRetryKeepsOneCopy(t *testing.T) {
+	setupSuite(t)
+	s, _ := newServer(t)
+	f := &fakeAuditStore{eventLost: 1}
+	s.Audit = &webui.AuditDeps{Store: f}
+	s.SetEventRetryForTest(10 * time.Millisecond)
+	s.RecordForTest(context.Background(), store.EventRow{Kind: "devpod", Object: "a", Actor: "al", Via: "web", Action: "create"})
+	s.RecordForTest(context.Background(), store.EventRow{Kind: "devpod", Object: "a", Actor: "al", Via: "web", Action: "start"})
+	waitFor(t, func() bool { return f.eventCalls() >= 2 && len(f.written()) >= 2 })
+	time.Sleep(100 * time.Millisecond)
+	if w := f.written(); len(w) != 2 {
+		t.Fatalf("written %d: %+v", len(w), w)
 	}
 }
 

@@ -147,7 +147,14 @@ func TestEvents(t *testing.T) {
 		{TS: now.Add(-time.Second), Cluster: "st", Kind: "devpod", Object: "al-dev", ObjectUID: "uid-1", Owner: "al", Actor: "root", Via: "web", Action: "stop", Detail: "测试"},
 		{TS: now, Cluster: "st", Kind: "job", Object: "abc12", Owner: "bo", Actor: "system:queue", Via: "system", Action: "start", Node: "g1"},
 	} {
-		if err := c.InsertEvent(ctx, r); err != nil {
+		if err := c.InsertEvents(ctx, []EventRow{r}, r.Action+r.Object); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// a batch sent again with its token is kept once
+	again := EventRow{TS: now.Add(-3 * time.Second), Cluster: "st", Kind: "devpod", Object: "al-dev", ObjectUID: "uid-1", Owner: "al", Actor: "al", Via: "web", Action: "edit"}
+	for range 2 {
+		if err := c.InsertEvents(ctx, []EventRow{again}, "retried"); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -155,7 +162,7 @@ func TestEvents(t *testing.T) {
 	f := span
 	f.ObjectUID = "uid-1"
 	rows, _, err := c.SearchEvents(ctx, f)
-	if err != nil || len(rows) != 2 || rows[0].Action != "stop" || rows[0].Detail != "测试" || rows[1].Action != "create" || rows[1].Origin != "st/al-dev" {
+	if err != nil || len(rows) != 3 || rows[0].Action != "stop" || rows[0].Detail != "测试" || rows[1].Action != "create" || rows[1].Origin != "st/al-dev" || rows[2].Action != "edit" {
 		t.Fatalf("by object: %+v %v", rows, err)
 	}
 	f = span

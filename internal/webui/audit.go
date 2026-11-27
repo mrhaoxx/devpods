@@ -27,7 +27,7 @@ type AuditStore interface {
 	ListAccessLog(context.Context, store.TimeFilter) ([]store.AccessLogRow, string, error)
 	InsertAccessLog(context.Context, store.AccessLogRow) error
 	InsertReservationEvent(context.Context, store.ReservationEventRow) error
-	InsertEvent(context.Context, store.EventRow) error
+	InsertEvents(context.Context, []store.EventRow, string) error
 	SearchEvents(context.Context, store.EventFilter) ([]store.EventRow, string, error)
 	Presence(context.Context, []string) (map[string][]string, error)
 }

@@ -589,17 +589,11 @@ type EventFilter struct {
 // eventKey orders events of one moment, for paging.
 const eventKey = "concat(kind, '|', object, '|', action, '|', actor)"
 
-// InsertEvent records one thing done to a DevPod, a job or a machine.
-func (c *CH) InsertEvent(ctx context.Context, r EventRow) error {
-	ctx = clickhouse.Context(ctx, clickhouse.WithSettings(clickhouse.Settings{"insert_deduplicate": 0}))
-	batch, err := c.conn.PrepareBatch(ctx, fmt.Sprintf("INSERT INTO %s.events (%s)", c.db, c.known(ctx, "events", columns[EventRow]())))
-	if err != nil {
-		return err
-	}
-	if err := batch.AppendStruct(&r); err != nil {
-		return err
-	}
-	return batch.Send()
+// InsertEvents records things done to DevPods, jobs and machines in one
+// insert, carrying token: the same rows sent again with it (a write that
+// went in, yet timed out) are kept once.
+func (c *CH) InsertEvents(ctx context.Context, rows []EventRow, token string) error {
+	return insertRows(ctx, c, "events", token, rows)
 }
 
 // SearchEvents lists events, newest first.

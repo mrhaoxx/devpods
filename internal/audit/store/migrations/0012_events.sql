@@ -1,6 +1,6 @@
 -- What was done to DevPods, jobs and machines, through the console or by
 -- it: one row each — who (actor) did what (action) to which object, how
--- (via: web, cli, dp, token:<name>, system) and why (reason), with what
+-- (via: web, cli, dp, token:<ID>, system) and why (reason), with what
 -- changed (detail); origin is the DevPod a dp call came from. The objects
 -- themselves live in their clusters; this is their history.
 

@@ -6,6 +6,8 @@ package webui
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"log/slog"
@@ -30,17 +32,36 @@ import (
 // The record of what was done to DevPods, jobs and machines (the audit
 // store's events): written after the change itself, and never holding it
 // up — a record the store does not take now waits in memory and is tried
-// again, the oldest going first when too many wait.
+// again, the oldest going first when too many wait. What waits goes in
+// batches; a batch failed is sent again as it was, with its token, so one
+// that went in though it timed out is kept once. A record the store
+// refuses while it takes others lets them go first, and is given up after
+// eventRefusals.
 
 // eventBuffer: how many records may wait for the store.
 const eventBuffer = 10000
 
+// eventBatch: the most records one write carries.
+const eventBatch = 500
+
+// eventRefusals: how many times a record the store refuses alone, while
+// it takes others, is tried before it is given up.
+const eventRefusals = 3
+
+// pendingEvent is a record waiting for the store, numbered in order.
+type pendingEvent struct {
+	seq uint64
+	row store.EventRow
+}
+
 // eventWriter keeps the records not written yet, in order.
 type eventWriter struct {
 	mu      sync.Mutex
-	pending []store.EventRow
-	running bool // a writer goroutine is at work
-	dropped int  // records given up, all told
+	pending []pendingEvent
+	seq     uint64 // the last record's number
+	id      string // this console's writer, in its batches' tokens
+	running bool   // a writer goroutine is at work
+	dropped int    // records given up, all told
 }
 
 // record writes ev to the audit store, now or later; without a store it
@@ -62,46 +83,130 @@ func (s *Server) record(ctx context.Context, ev store.EventRow) {
 			slog.Warn("events_dropped", "dropped", w.dropped, "why", "the audit store has not taken them")
 		}
 	}
-	w.pending = append(w.pending, ev)
+	if w.id == "" {
+		b := make([]byte, 8)
+		_, _ = rand.Read(b)
+		w.id = hex.EncodeToString(b)
+	}
+	w.seq++
+	w.pending = append(w.pending, pendingEvent{w.seq, ev})
 	if !w.running {
 		w.running = true
 		go s.writeEvents(context.WithoutCancel(ctx))
 	}
 }
 
-// writeEvents writes what waits, in order, until nothing does; what the
-// store does not take is tried again after eventRetry.
+// writeEvents writes what waits, in batches in order, until nothing
+// does; a batch the store does not take is sent again as it was after
+// eventRetry — unless the store takes another record alone (takesProbe),
+// when a batch failed twice goes one record at a time, and one record
+// refused so eventRefusals times is given up. Twice: the second time the
+// batch went with its token, and would have gone (kept once) had the first
+// gone in though it failed — what goes one at a time is never in already.
 func (s *Server) writeEvents(ctx context.Context) {
 	w := &s.events
 	retry := s.eventRetry
 	if retry <= 0 {
 		retry = 10 * time.Second
 	}
+	var batch []pendingEvent // being written: sent again as it is until it goes
+	var alone uint64         // records up to this one go one at a time
+	fails, refused := 0, 0   // batch's failed writes; of those, while the store took another
 	for {
-		w.mu.Lock()
-		if len(w.pending) == 0 {
-			w.running = false
+		if batch == nil {
+			w.mu.Lock()
+			if len(w.pending) == 0 {
+				w.running = false
+				w.mu.Unlock()
+				return
+			}
+			n := min(len(w.pending), eventBatch)
+			if w.pending[0].seq <= alone {
+				n = 1
+			}
+			batch, fails, refused = slices.Clone(w.pending[:n]), 0, 0
 			w.mu.Unlock()
-			return
 		}
-		ev := w.pending[0]
-		w.mu.Unlock()
-		wctx, cancel := context.WithTimeout(ctx, 10*time.Second)
-		err := s.Audit.Store.InsertEvent(wctx, ev)
-		cancel()
-		if err != nil {
-			slog.Warn("event_write", "kind", ev.Kind, "object", ev.Object, "action", ev.Action, "err", err)
-			time.Sleep(retry)
+		err := s.insertEvents(ctx, batch)
+		if err == nil {
+			w.taken(batch)
+			batch = nil
 			continue
 		}
-		w.mu.Lock()
-		// it may have been dropped meanwhile (the buffer full): take it
-		// off only if it is still the first
-		if len(w.pending) > 0 && w.pending[0] == ev {
-			w.pending = w.pending[1:]
+		fails++
+		first := batch[0].row
+		slog.Warn("event_write", "records", len(batch), "kind", first.Kind, "object", first.Object, "action", first.Action, "err", err)
+		if (len(batch) == 1 || fails >= 2) && s.takesProbe(ctx, batch) {
+			// the store is there, and refuses this batch: one of its records
+			switch refused++; {
+			case len(batch) > 1:
+				alone, batch = batch[len(batch)-1].seq, nil
+				continue
+			case refused >= eventRefusals:
+				slog.Warn("event_given_up", "kind", first.Kind, "object", first.Object, "action", first.Action, "err", err)
+				w.mu.Lock()
+				w.dropped++
+				w.mu.Unlock()
+				w.taken(batch)
+				batch = nil
+				continue
+			}
 		}
-		w.mu.Unlock()
+		time.Sleep(retry)
 	}
+}
+
+// insertEvents writes batch, its token naming this writer and the
+// batch's first and last records (the same batch, the same token).
+func (s *Server) insertEvents(ctx context.Context, batch []pendingEvent) error {
+	rows := make([]store.EventRow, len(batch))
+	for i := range batch {
+		rows[i] = batch[i].row
+	}
+	token := fmt.Sprintf("%s-%d-%d", s.events.id, batch[0].seq, batch[len(batch)-1].seq)
+	wctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	return s.Audit.Store.InsertEvents(wctx, rows, token)
+}
+
+// takesProbe: the store takes a record written alone (which is then taken
+// off) — batch's first of several (the order kept when the store was only
+// away), else the first waiting after batch, else batch's last of several;
+// false when it takes none, or there is none to try.
+func (s *Server) takesProbe(ctx context.Context, batch []pendingEvent) bool {
+	w := &s.events
+	var probes []pendingEvent
+	if len(batch) > 1 {
+		probes = append(probes, batch[0])
+	}
+	last := batch[len(batch)-1].seq
+	w.mu.Lock()
+	if i := slices.IndexFunc(w.pending, func(p pendingEvent) bool { return p.seq > last }); i >= 0 {
+		probes = append(probes, w.pending[i])
+	}
+	w.mu.Unlock()
+	if len(batch) > 1 {
+		probes = append(probes, batch[len(batch)-1])
+	}
+	for _, p := range probes {
+		if s.insertEvents(ctx, []pendingEvent{p}) == nil {
+			w.taken([]pendingEvent{p})
+			return true
+		}
+	}
+	return false
+}
+
+// taken takes batch's records off what waits (any dropped meanwhile, the
+// buffer full, are gone already).
+func (w *eventWriter) taken(batch []pendingEvent) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	done := map[uint64]bool{}
+	for _, p := range batch {
+		done[p.seq] = true
+	}
+	w.pending = slices.DeleteFunc(w.pending, func(p pendingEvent) bool { return done[p.seq] })
 }
 
 // eventFrom: a record of what a request does — who, how, from where.

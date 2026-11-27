@@ -191,12 +191,12 @@ func (l *lazyCH) InsertReservationEvent(ctx context.Context, r store.Reservation
 	return c.InsertReservationEvent(ctx, r)
 }
 
-func (l *lazyCH) InsertEvent(ctx context.Context, r store.EventRow) error {
+func (l *lazyCH) InsertEvents(ctx context.Context, rows []store.EventRow, token string) error {
 	c, err := l.get(ctx)
 	if err != nil {
 		return err
 	}
-	return c.InsertEvent(ctx, r)
+	return c.InsertEvents(ctx, rows, token)
 }
 
 func (l *lazyCH) SearchEvents(ctx context.Context, f store.EventFilter) ([]store.EventRow, string, error) {

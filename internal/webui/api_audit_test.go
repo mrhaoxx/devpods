@@ -44,21 +44,48 @@ type fakeAuditStore struct {
 	events    []store.EventRow            // events written
 	eventErrs int                         // the next so many event writes fail
 	eventHold chan struct{}               // non-nil: event writes wait for it
+	eventBad  string                      // a write holding a record of this object fails
+	eventLost int                         // the next so many writes go in, yet fail (timed out)
+	tokens    map[string]bool             // the writes' tokens seen: one again is a no-op
+	calls     int                         // event writes made
 	eventF    store.EventFilter
 }
 
-func (f *fakeAuditStore) InsertEvent(_ context.Context, r store.EventRow) error {
+func (f *fakeAuditStore) InsertEvents(_ context.Context, rows []store.EventRow, token string) error {
 	if f.eventHold != nil {
 		<-f.eventHold
 	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	f.calls++
 	if f.eventErrs > 0 {
 		f.eventErrs--
 		return errors.New("store down")
 	}
-	f.events = append(f.events, r)
+	for _, r := range rows {
+		if f.eventBad != "" && r.Object == f.eventBad {
+			return errors.New("refused")
+		}
+	}
+	if f.tokens[token] {
+		return nil // sent again: the store keeps it once
+	}
+	if f.tokens == nil {
+		f.tokens = map[string]bool{}
+	}
+	f.tokens[token] = true
+	f.events = append(f.events, rows...)
+	if f.eventLost > 0 {
+		f.eventLost--
+		return errors.New("timed out")
+	}
 	return nil
+}
+
+func (f *fakeAuditStore) eventCalls() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.calls
 }
 
 func (f *fakeAuditStore) SearchEvents(_ context.Context, ef store.EventFilter) ([]store.EventRow, string, error) {
