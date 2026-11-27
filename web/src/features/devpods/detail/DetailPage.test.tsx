@@ -34,10 +34,10 @@ function setup(opts: { route?: string; admin?: boolean; live?: boolean; user?: s
     "PATCH /api/devpods/alice-x": { devpod: the, rebuild: false },
     "/api/devpods/alice-x": { devpod: the, pod: opts.queued ? undefined : { node: "g206", ip: "10.1.2.3", startedAt: "2026-11-10T10:00:00Z" } },
     "/api/audit/sessions": { items: [], next: "" },
-    "/api/devpods/alice-x/history": {
-      items: [{ ts: "2026-11-27T09:00:00Z", kind: "devpod", object: "alice-x", owner: "alice", actor: "alice", via: "web", action: "create", detail: "image ubuntu" }],
-      next: "",
-    },
+    "/api/devpods/alice-x/history": (u: URL) =>
+      u.searchParams.get("cursor") === "c2"
+        ? { items: [{ ts: "2026-11-27T08:00:00Z", kind: "devpod", object: "alice-x", owner: "alice", actor: "root", via: "web", action: "stop", detail: "older" }], next: "" }
+        : { items: [{ ts: "2026-11-27T09:00:00Z", kind: "devpod", object: "alice-x", owner: "alice", actor: "alice", via: "web", action: "create", detail: "image ubuntu" }], next: "c2" },
     "/api/nodes": { items: [{ name: "g206", ready: true, cpu: { allocatable: 64, allocated: 0 }, mem: { allocatable: 512 * 1024 ** 3, allocated: 0 }, gpuTotal: 0, gpuUsed: 0, reservable: false, pending: 0, access: "ok", mine: null, selectable: true }] },
     "POST /api/devpods/alice-x/redeploy": {},
     "/api/devpods/alice-x/metrics": (u: URL) => ({ step: u.searchParams.get("range") === "15m" ? 1 : 5, ts: [Math.floor(Date.now() / 1000) - 60], series: { cpu: [2.5] } }),
@@ -134,6 +134,14 @@ describe("DevPod detail", () => {
     setup({ route: "/devpods/-/alice-x?tab=history" });
     expect(await screen.findByText("创建")).toBeTruthy();
     expect(screen.getByText("image ubuntu")).toBeTruthy();
+  });
+
+  it("记录 goes on past its first page", async () => {
+    setup({ route: "/devpods/-/alice-x?tab=history" });
+    expect(await screen.findByText("创建")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "加载更多" }));
+    expect(await screen.findByText("older")).toBeTruthy();
+    expect(calls.some((c) => c.url.pathname === "/api/devpods/alice-x/history" && c.url.searchParams.get("cursor") === "c2")).toBe(true);
   });
 
   it("协作者 adds collaborators to this DevPod", async () => {

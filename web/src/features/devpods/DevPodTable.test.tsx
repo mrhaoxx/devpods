@@ -254,6 +254,38 @@ describe("DevPodTable", () => {
     expect((await screen.findByRole("menuitem", { name: "启动" })).getAttribute("aria-disabled")).toBe("true");
   });
 
+  it("a DevPod waiting in line offers 取消排队, not 启动, and it takes it out", async () => {
+    const queued = mk("alice-q", "alice", "Stopped", false);
+    queued.metadata.annotations = { "devpod.io/queued-at": "2026-11-27T01:00:00Z", "devpod.io/queue-state": JSON.stringify({ position: 1, reason: "capacity" }) };
+    const calls = stubFetch({ "/api/devpods": { items: [queued], pods: {} }, "PATCH /api/devpods/alice-q": { devpod: mk("alice-q", "alice", "Stopped", false), rebuild: false } });
+    renderWithProviders(<DevPodTable scope="all" />, { me: stubMe({ admin: true }), route: "/admin/devpods" });
+    const row = (await screen.findByRole("link", { name: "alice-q" })).closest("tr")!;
+    fireEvent.keyDown(within(row).getByRole("button", { name: "alice-q 操作" }), { key: "Enter" });
+    expect(screen.queryByRole("menuitem", { name: "启动" })).toBeNull();
+    fireEvent.click(await screen.findByRole("menuitem", { name: "取消排队" }));
+    await waitFor(() => expect(calls.some((c) => c.method === "PATCH")).toBe(true));
+    expect(JSON.parse(calls.find((c) => c.method === "PATCH")!.body!)).toEqual({ running: false });
+  });
+
+  it("a start that waits in line: its row says 排队中, not 启动中", async () => {
+    const waiting = mk("alice-b", "alice", "Stopped", false);
+    waiting.metadata.annotations = { "devpod.io/queued-at": "2026-11-27T01:00:00Z", "devpod.io/queue-state": JSON.stringify({ position: 2, reason: "capacity" }) };
+    let started = false;
+    stubFetch({
+      "/api/devpods": () => (started ? { ...list, items: list.items.map((d) => (d.metadata.name === "alice-b" ? waiting : d)) } : list),
+      "PATCH /api/devpods/alice-b": () => {
+        started = true;
+        return { devpod: waiting, rebuild: false, queued: true };
+      },
+    });
+    renderWithProviders(<DevPodTable scope="all" />, { me: stubMe({ admin: true }), route: "/admin/devpods" });
+    const row = (await screen.findByRole("link", { name: "alice-b" })).closest("tr")!;
+    fireEvent.keyDown(within(row).getByRole("button", { name: "alice-b 操作" }), { key: "Enter" });
+    fireEvent.click(await screen.findByRole("menuitem", { name: "启动" }));
+    expect(await within(row).findByText(/排队中/)).toBeTruthy();
+    expect(within(row).queryByText(/启动中/)).toBeNull();
+  });
+
   it("a start that fails says so on the row and why", async () => {
     stubFetch({
       "/api/devpods": list,

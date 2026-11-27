@@ -6,7 +6,7 @@ import { Link } from "react-router-dom";
 import { useQueryClient } from "@tanstack/react-query";
 import type { SortingState } from "@tanstack/react-table";
 import { devpodHref, keyOf } from "../../data/cluster";
-import { deleteDevPod, podKey, patchDevPod, patchDevPodSpec, rebuildFromConfig, redeployDevPod, sshCommand, type LiveItem, shellPath } from "../../data/api";
+import { deleteDevPod, podKey, patchDevPod, patchDevPodSpec, rebuildFromConfig, redeployDevPod, sshCommand, type LiveItem, type PatchResult, shellPath } from "../../data/api";
 import { useDevPods, useMe, useNodeCeilings, useRecent } from "../../data/queries";
 import { devpodsStream } from "../../data/live/streams";
 import { useLiveEnabled, useLiveRow, useLiveValues } from "../../data/live/hooks";
@@ -29,6 +29,7 @@ import { TableCtx, devpodColumns, sharedWithMe, toRow, type Pending, type Row } 
 import { useReservationsNow } from "../reservations/useReservationsNow";
 import { groupRows } from "./groups";
 import { groupUsage, usage, usageKeys, type UsageKey } from "./usage";
+import { queueOf } from "./status";
 
 const PHASES = ["Running", "Pending", "Stopped", "Failed"] as const;
 
@@ -182,15 +183,17 @@ export function DevPodTable({ scope }: { scope: "mine" | "all" }) {
     setOutcome(null);
     setProgress({ action, done: 0, failed: 0, total: items.length });
     const results = await runBulk(items, async (r) => {
+      let res: unknown;
       try {
-        await fn(r);
+        res = await fn(r);
       } catch (e) {
         const error = e instanceof Error ? e.message : String(e);
         setPending((cur) => new Map(cur).set(keyOf(r), { label: how.label, error, since: Date.now() }));
         setProgress((p) => p && { ...p, done: p.done + 1, failed: p.failed + 1 });
         throw e;
       }
-      if (!how.want)
+      // done — or, a start, waiting in line: the row says 排队中 itself
+      if (!how.want || (res as PatchResult | undefined)?.queued)
         setPending((cur) => {
           const next = new Map(cur);
           next.delete(keyOf(r));
@@ -241,7 +244,9 @@ export function DevPodTable({ scope }: { scope: "mine" | "all" }) {
     ...(me?.features.webshell && r.phase === "Running" ? [{ label: "终端", onSelect: () => window.open(shellPath(r), "_blank", "noopener") }] : []),
     r.dp.spec.running
       ? { label: "休眠", disabled: busy(r), onSelect: () => stop([r]) }
-      : { label: "启动", disabled: busy(r), onSelect: () => void bulk("启动", [r], (x) => patchDevPod(x, true), START) },
+      : queueOf(r.dp)
+        ? { label: "取消排队", disabled: busy(r), onSelect: () => void bulk("取消排队", [r], (x) => patchDevPod(x, false)) }
+        : { label: "启动", disabled: busy(r), onSelect: () => void bulk("启动", [r], (x) => patchDevPod(x, true), START) },
     { label: "删除…", danger: true, disabled: busy(r), onSelect: () => setConfirm({ rows: [r], bulk: false }) },
   ];
   const groupActions = (r: Row): RowAction[] =>

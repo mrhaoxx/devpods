@@ -3,6 +3,7 @@
 import type { DevPod, PodInfo, Reservation } from "../../data/api";
 import { failureRetryIn, fmtAge } from "../../lib/format";
 import { fmtClock } from "../../lib/reservations";
+import { whenText } from "../queue/jobs";
 
 /** QueueState: where a DevPod waiting in the queue's line stands. */
 export type QueueState = { position?: number; reason?: string; detail?: Record<string, string>; expected?: string };
@@ -41,7 +42,8 @@ export function phaseSummary(dp: DevPod, _pod: PodInfo | undefined, now: Date): 
   const q = queueOf(dp);
   if (q && !dp.spec.running) {
     const why = queueWhy(q);
-    return `排队中${q.position ? ` #${q.position}` : ""}${why ? ` · ${why}` : ""}`;
+    const when = q.expected ? ` · 预计 ${whenText(q.expected, now.getTime())} 前后` : "";
+    return `排队中${q.position ? ` #${q.position}` : ""}${why ? ` · ${why}` : ""}${when}`;
   }
   if (phase === "Running") return null;
   if (phase === "Failed") {

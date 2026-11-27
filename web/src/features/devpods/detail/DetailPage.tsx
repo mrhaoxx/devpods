@@ -351,7 +351,7 @@ export function DetailPage() {
       )}
       {tab === "history" && audit && (
         <Panel title="记录">
-          <HistoryList queryKey={["devpod-history", r.cluster, r.name]} load={() => getDevPodHistory(r)} />
+          <HistoryList queryKey={["devpod-history", r.cluster, r.name]} load={(cursor) => getDevPodHistory(r, cursor)} />
         </Panel>
       )}
 

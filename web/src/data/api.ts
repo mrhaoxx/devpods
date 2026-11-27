@@ -413,8 +413,8 @@ export type AuditEvent = {
   request_id?: string;
 };
 export const searchEvents = (q: Record<string, string | undefined>) => req<Page<AuditEvent>>("GET", `/api/audit/events?${qs(q)}`);
-export const getDevPodHistory = (r: Ref) => req<Page<AuditEvent>>("GET", apiIn(r.cluster, `/api/devpods/${r.name}/history`));
-export const getJobHistory = (id: string) => req<Page<AuditEvent>>("GET", `/api/jobs/${id}/history`);
+export const getDevPodHistory = (r: Ref, cursor?: string) => req<Page<AuditEvent>>("GET", apiIn(r.cluster, `/api/devpods/${r.name}/history${cursor ? `?${qs({ cursor })}` : ""}`));
+export const getJobHistory = (id: string, cursor?: string) => req<Page<AuditEvent>>("GET", `/api/jobs/${id}/history${cursor ? `?${qs({ cursor })}` : ""}`);
 export const listAlerts = (q: Record<string, string | undefined>) => req<Page<AlertRow>>("GET", `/api/audit/alerts?${qs(q)}`);
 export const listAccessLog = (q: Record<string, string | undefined>) => req<Page<AccessLogRow>>("GET", `/api/audit/access-log?${qs(q)}`);
 export const castURL = (id: string, ch: number) => `/api/audit/sessions/${id}/channels/${ch}/cast`;

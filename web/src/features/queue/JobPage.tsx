@@ -175,7 +175,7 @@ export function JobPage() {
       {j.canManage && (j.ranks ?? []).length > 0 && <RankLogs job={j} />}
       {me?.features.audit && (
         <Panel title="记录">
-          <HistoryList queryKey={["job-history", j.id]} load={() => getJobHistory(j.id)} />
+          <HistoryList queryKey={["job-history", j.id]} load={(cursor) => getJobHistory(j.id, cursor)} />
         </Panel>
       )}
       <ConfirmDialog

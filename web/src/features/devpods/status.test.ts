@@ -31,6 +31,10 @@ describe("phaseSummary", () => {
     expect(phaseSummary(q({}), undefined, now)).toBe("排队中");
     expect(phaseSummary(q({ position: 4, reason: "never" }), undefined, now)).toBe("排队中 #4 · 没有机器放得下（看看要的资源，或绑定的机器）");
   });
+  it("in the queue's line with a promise: when it is expected to start", () => {
+    const q = { ...dp({ running: false }, { phase: "Stopped" }), metadata: { name: "alice-x", annotations: { "devpod.io/queued-at": "2026-11-10T11:00:00Z", "devpod.io/queue-state": JSON.stringify({ position: 3, reason: "capacity", expected: "2026-11-10T13:30:00Z" }) } } };
+    expect(phaseSummary(q, undefined, now)).toBe("排队中 #3 · 等空闲资源 · 预计 今天 21:30 前后");
+  });
   it("Failed shows the reason and the retry countdown", () => {
     const s = phaseSummary(dp({}, { phase: "Failed", message: "ImagePullBackOff", retryCount: 2, lastFailureAt: "2026-11-10T11:59:50Z" }), undefined, now);
     expect(s).toBe("ImagePullBackOff · 10s 后重试");
