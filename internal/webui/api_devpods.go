@@ -49,6 +49,9 @@ type Server struct {
 	// homeUnread: the clusters whose home volumes could not be read, said
 	// once each
 	homeUnread sync.Map
+	// closedSaid: the machines (cluster/node) whose closing is recorded
+	// while their stamp is still on — taken off, the closing is over
+	closedSaid sync.Map
 	// nudge: a round asked for soon (a start waits in line); made once
 	nudge     chan struct{}
 	nudgeOnce sync.Once

@@ -91,8 +91,10 @@ func (s *Server) EnforceReservations(ctx context.Context) {
 		return
 	}
 	now := s.Reservations.now()
-	// machines closed first: what relied on them goes now, not by the
-	// ends and clearings below (which read the reservations as they were)
+	// machines closed first: what relied on them goes now. Their
+	// reservations, cancelled meanwhile, are still in force in all: they
+	// clear nobody below (clearIn clears only on a machine still labelled
+	// reservable), and their ends are carried out next round.
 	for _, cluster := range s.knownClusters(ctx) {
 		s.sweepClosed(ctx, cluster, all, now)
 	}
@@ -566,20 +568,23 @@ func (s *Server) sweepClosed(ctx context.Context, cluster string, all []devpodv1
 		case reservable && !seen:
 			s.annotateNode(ctx, cc, n.Name, map[string]any{devpodv1alpha1.ReservableSeenAnnotation: "true"})
 		case !reservable && seen:
-			if s.closeMachine(ctx, cc, cluster, n, all, now) {
-				s.annotateNode(ctx, cc, n.Name, map[string]any{devpodv1alpha1.ReservableSeenAnnotation: nil, devpodv1alpha1.ClosedByAnnotation: nil})
+			if s.closeMachine(ctx, cc, cluster, n, all, now) &&
+				s.annotateNode(ctx, cc, n.Name, map[string]any{devpodv1alpha1.ReservableSeenAnnotation: nil, devpodv1alpha1.ClosedByAnnotation: nil}) {
+				s.closedSaid.Delete(cluster + "/" + n.Name)
 			}
 		}
 	}
 }
 
 // annotateNode merges ann into the annotations of the machine name (a
-// null takes one off).
-func (s *Server) annotateNode(ctx context.Context, cc *clusters.ClusterClients, name string, ann map[string]any) {
+// null takes one off); false when it could not.
+func (s *Server) annotateNode(ctx context.Context, cc *clusters.ClusterClients, name string, ann map[string]any) bool {
 	patch, _ := json.Marshal(map[string]any{"metadata": map[string]any{"annotations": ann}})
 	if err := cc.Client.Patch(ctx, &corev1.Node{ObjectMeta: metav1.ObjectMeta{Name: name}}, client.RawPatch(types.MergePatchType, patch)); err != nil {
 		slog.Warn("node_annotate", "node", name, "err", err)
+		return false
 	}
+	return true
 }
 
 // closeMachine ends what relied on n being reservable, n closed: its
@@ -658,7 +663,10 @@ func (s *Server) closeMachine(ctx context.Context, cc *clusters.ClusterClients, 
 			detail = append(detail, part.what+": "+strings.Join(part.names, ","))
 		}
 	}
-	s.recordMachine(ctx, s.clusterLabel(cc), store.EventRow{Actor: closer, Via: "system"}, n.Name, "closed", strings.Join(detail, "; "))
-	slog.Info("machine_closed", "cluster", cluster, "node", n.Name, "by", closer, "reservations", cancelled, "jobs", stopped, "devpods", hibernated)
+	// once: a stamp that could not be taken off brings it here again
+	if _, said := s.closedSaid.LoadOrStore(cluster+"/"+n.Name, true); !said {
+		s.recordMachine(ctx, s.clusterLabel(cc), store.EventRow{Actor: closer, Via: "system"}, n.Name, "closed", strings.Join(detail, "; "))
+		slog.Info("machine_closed", "cluster", cluster, "node", n.Name, "by", closer, "reservations", cancelled, "jobs", stopped, "devpods", hibernated)
+	}
 	return true
 }

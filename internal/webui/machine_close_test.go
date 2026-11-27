@@ -7,6 +7,7 @@ package webui_test
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"testing"
 	"time"
@@ -171,5 +172,55 @@ func TestUnstampedUnlabelledNodeIsNotClosed(t *testing.T) {
 	}
 	if nr, ok := reservationNow(t, r.ID); !ok || nr.Spec.Cancelled != nil {
 		t.Fatalf("the reservation was touched: %v %+v", ok, nr.Spec.Cancelled)
+	}
+}
+
+// noNodePatch is a client whose patches of machines fail (a role that
+// may not patch nodes).
+type noNodePatch struct{ client.Client }
+
+func (c noNodePatch) Patch(ctx context.Context, obj client.Object, patch client.Patch, opts ...client.PatchOption) error {
+	if _, ok := obj.(*corev1.Node); ok {
+		return errors.New("forbidden")
+	}
+	return c.Client.Patch(ctx, obj, patch, opts...)
+}
+
+// A machine closed while its stamp cannot be taken off is recorded
+// closed once, not every round.
+func TestClosedRecordedOnce(t *testing.T) {
+	p, _ := clearRig(t, "mr")
+	f := &fakeAuditStore{}
+	p.s.Audit = &webui.AuditDeps{Store: f}
+	stamp(t, p.s, p.n1)
+	p.s.Client = noNodePatch{p.s.Client}
+	unlabel(t, p.n1)
+	for range 3 {
+		p.s.EnforceReservations(context.Background())
+	}
+	eventsOf(t, f, p.n1, "closed")
+	time.Sleep(300 * time.Millisecond)
+	eventsOf(t, f, p.n1, "closed")
+}
+
+// A reservation the closing of its machine just cancelled clears nobody
+// in the same round.
+func TestClosedReservationClearsNobody(t *testing.T) {
+	p, clock := clearRig(t, "mk")
+	ctx := context.Background()
+	stamp(t, p.s, p.n1)
+	p.createGPU("mk-bob", "g2", 2, p.n1, http.StatusCreated)
+	start := clock.Add(20 * time.Minute)
+	if code, r := reserveAs(t, p.s, p.as("mk-alice"), p.n1, start, start.Add(time.Hour)); code != http.StatusCreated {
+		t.Fatalf("reserve: %d %+v", code, r)
+	}
+	unlabel(t, p.n1)
+	p.s.EnforceReservations(ctx)
+	var dp devpodv1alpha1.DevPod
+	if err := k8sClient.Get(ctx, types.NamespacedName{Namespace: "devpods", Name: "mk-bob-g2"}, &dp); err != nil {
+		t.Fatal(err)
+	}
+	if !unmarked(&dp) {
+		t.Fatalf("cleared for a reservation of a closed machine: running %v annotations %v", dp.Spec.Running, dp.Annotations)
 	}
 }
