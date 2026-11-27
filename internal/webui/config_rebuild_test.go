@@ -133,8 +133,13 @@ func TestRebuildFromConfig(t *testing.T) {
 		group += "# a note\n"
 		edit("g", group)
 		rebuild("rb-bob-g-0", bob, `{}`, http.StatusOK)
-		if got := outdated("rb-bob-g-0", bob); got != false {
-			t.Fatalf("after a comment-only rebuild: configOutdated %v", got)
+		// read through the cache: the new hash shows a moment later
+		deadline := time.Now().Add(10 * time.Second)
+		for outdated("rb-bob-g-0", bob) != false {
+			if time.Now().After(deadline) {
+				t.Fatalf("after a comment-only rebuild: still configOutdated")
+			}
+			time.Sleep(100 * time.Millisecond)
 		}
 	})
 
