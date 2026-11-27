@@ -436,6 +436,13 @@ func (r *DevPodReconciler) updateStatus(ctx context.Context, dp *devpodv1alpha1.
 		if err != nil && !apierrors.IsNotFound(err) {
 			return fmt.Errorf("get rendered pod: %w", err)
 		}
+		// a job rank's Pod that ended since the Pod was applied in this
+		// reconcile: recorded as its end is (its exit code and when) —
+		// an ended rank is not looked at again
+		if err == nil && dp.Spec.Job != nil && metav1.IsControlledBy(&pod, dp) &&
+			(pod.Status.Phase == corev1.PodFailed || pod.Status.Phase == corev1.PodSucceeded) {
+			return r.jobFinished(ctx, dp, &pod)
+		}
 		// a job rank's Pod is the one it made (one of a former start of
 		// its job is not)
 		if err == nil && (dp.Spec.Job == nil || metav1.IsControlledBy(&pod, dp)) {
