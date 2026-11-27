@@ -618,7 +618,11 @@ func jobList(e *Env, a *parsed) int {
 			if j.Preemptible {
 				id += "⚡"
 			}
-			fmt.Fprintf(w, "%s\t%s\t%s\t%d\t%s\t%s\n", id, j.Owner, jobSize(j), j.Priority, fmtDur(time.Duration(j.TimeLimitSeconds)*time.Second), jobState(j, now))
+			limit := "—" // a DevPod's: it has none
+			if j.TimeLimitSeconds > 0 {
+				limit = fmtDur(time.Duration(j.TimeLimitSeconds) * time.Second)
+			}
+			fmt.Fprintf(w, "%s\t%s\t%s\t%d\t%s\t%s\n", id, j.Owner, jobSize(j), j.Priority, limit, jobState(j, now))
 		}
 	})
 	return ExitOK

@@ -354,4 +354,10 @@ func TestJobListShowsDevPods(t *testing.T) {
 	if code != 0 || !strings.Contains(out, "devpod/alice-a") || strings.Index(out, "abc12") > strings.Index(out, "devpod/alice-a") {
 		t.Fatalf("list: %d %q %q", code, out, errs)
 	}
+	// a DevPod has no time limit: its LIMIT is a dash, not 0m
+	for _, line := range strings.Split(out, "\n") {
+		if strings.Contains(line, "devpod/alice-a") && (strings.Contains(line, "0m") || !strings.Contains(line, "—")) {
+			t.Fatalf("the DevPod's row: %q", line)
+		}
+	}
 }
