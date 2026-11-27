@@ -901,12 +901,19 @@ func (s *Server) patchDevPod(r *http.Request, sess Session, dp *devpodv1alpha1.D
 	before := dp.DeepCopy()
 	dp = dp.DeepCopy()
 	_, wasQueued := queuedAt(dp)
+	if wasQueued && s.Queue == nil {
+		clearQueued(dp) // the queue off: there is no line to be in
+		wasQueued = false
+	}
 	if req.Running != nil {
 		switch {
-		case wasQueued && !*req.Running:
-			clearQueued(dp) // it leaves the line
-		case wasQueued:
+		case wasQueued && *req.Running && !dp.Spec.Running:
 			// in line already: it keeps its place
+		case wasQueued:
+			// it leaves the line (one running with a mark left over: the
+			// mark goes, and a stop stops it)
+			clearQueued(dp)
+			dp.Spec.Running = *req.Running
 		default:
 			dp.Spec.Running = *req.Running
 		}
@@ -915,6 +922,7 @@ func (s *Server) patchDevPod(r *http.Request, sess Session, dp *devpodv1alpha1.D
 		if _, _, ok := autoPin(dp); ok {
 			unpinAuto(dp) // the queue's pin lasts one run
 		}
+		delete(dp.Annotations, devpodv1alpha1.ExpectClearAnnotation) // nothing runs to be cleared
 	}
 	if sess.Token != nil {
 		edits := req.editsSpec() || req.Shell != nil || req.Collaborators != nil || req.Node != nil
@@ -933,14 +941,15 @@ func (s *Server) patchDevPod(r *http.Request, sess Session, dp *devpodv1alpha1.D
 	if equality.Semantic.DeepEqual(before.Spec, dp.Spec) && maps.Equal(before.Annotations, dp.Annotations) {
 		return PatchResponse{DevPod: dp, Queued: wasQueued}, nil // no-op
 	}
-	queued := false
+	queued, quotaJudged := false, false
 	if !before.Spec.Running && dp.Spec.Running {
 		// a start: through the queue's line (or placed at once, the queue
-		// off); its quota is judged now, as a start's always was
-		if s.Queue != nil && dp.Spec.Pod != nil {
+		// off); its quota is judged first, as a start's always was
+		if dp.Spec.Pod != nil {
 			if apiErr := s.quotaErrFor(r, sess, dp, dp.Name); apiErr != nil {
 				return PatchResponse{}, apiErr
 			}
+			quotaJudged = true
 		}
 		var prio int32
 		if req.Priority != nil {
@@ -948,6 +957,15 @@ func (s *Server) patchDevPod(r *http.Request, sess Session, dp *devpodv1alpha1.D
 		}
 		var apiErr *serverErr
 		if queued, apiErr = s.admitStart(r.Context(), dp, prio); apiErr != nil {
+			return PatchResponse{}, apiErr
+		}
+	}
+	// edited while in line: held to what its start was held to (a machine
+	// that could ever take it, leave to be on its pinned one)
+	if _, inLine := queuedAt(dp); inLine && wasQueued && !equality.Semantic.DeepEqual(before.Spec.Pod, dp.Spec.Pod) {
+		started := dp.DeepCopy()
+		started.Spec.Running = true
+		if _, apiErr := s.admitStart(r.Context(), started, 0); apiErr != nil {
 			return PatchResponse{}, apiErr
 		}
 	}
@@ -959,7 +977,7 @@ func (s *Server) patchDevPod(r *http.Request, sess Session, dp *devpodv1alpha1.D
 		}
 	}
 	// waking, or resizing a running DevPod, re-enters the compute quota
-	if dp.Spec.Running && (!before.Spec.Running || req.editsSpec()) {
+	if dp.Spec.Running && (!before.Spec.Running || req.editsSpec()) && !quotaJudged {
 		if apiErr := s.quotaErrFor(r, sess, dp, dp.Name); apiErr != nil {
 			return PatchResponse{}, apiErr
 		}
@@ -987,6 +1005,8 @@ func (s *Server) applyNode(r *http.Request, sess Session, dp *devpodv1alpha1.Dev
 	if dp.Spec.Pod == nil {
 		return &serverErr{http.StatusBadRequest, "BAD_REQUEST", "only pod workloads can be migrated", nil}
 	}
+	// a pin set by its user is theirs, the queue's (if it was) no more
+	delete(dp.Annotations, devpodv1alpha1.AutoPinAnnotation)
 	sel := dp.Spec.Pod.Spec.NodeSelector
 	if node == "" {
 		delete(sel, hostnameLabel)

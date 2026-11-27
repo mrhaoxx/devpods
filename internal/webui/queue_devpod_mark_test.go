@@ -57,7 +57,7 @@ func TestSetQueueStateChanged(t *testing.T) {
 func TestAutoPinOnlyWhileItsPin(t *testing.T) {
 	dp := markDP()
 	since := time.Date(2026, 11, 27, 1, 0, 0, 0, time.UTC)
-	setAutoPin(dp, "n1", since)
+	setAutoPin(dp, "n1", since, 0)
 	if node, at, ok := autoPin(dp); !ok || node != "n1" || !at.Equal(since) || pinnedNode(dp) != "n1" {
 		t.Fatalf("auto pin %q %v %v (pin %q)", node, at, ok, pinnedNode(dp))
 	}

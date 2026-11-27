@@ -149,6 +149,8 @@ func devPodActions(before, after *devpodv1alpha1.DevPod) []devPodChange {
 	_, _, isAuto := autoPin(after)
 	startedOn := "" // placed at its start by the console itself
 	switch b, a := pinnedNode(before), pinnedNode(after); {
+	case b == a && wasAuto && !isAuto && a != "":
+		out = append(out, devPodChange{"pin", a}) // the queue's pin made its user's
 	case b == a:
 	case wasAuto && a == "":
 		out = append(out, devPodChange{"auto-unpin", autoNode})

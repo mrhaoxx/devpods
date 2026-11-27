@@ -213,24 +213,39 @@ func timeUTC(t *time.Time) *time.Time {
 }
 
 // setAutoPin pins dp to node for the queue, recording since when it was
-// in line (to keep its place should it go back).
-func setAutoPin(dp *devpodv1alpha1.DevPod, node string, since time.Time) {
+// in line and at what priority (to keep its place should it go back):
+// <node>@<since>[@<priority>, when not 0].
+func setAutoPin(dp *devpodv1alpha1.DevPod, node string, since time.Time, prio int32) {
 	if dp.Spec.Pod.Spec.NodeSelector == nil {
 		dp.Spec.Pod.Spec.NodeSelector = map[string]string{}
 	}
 	dp.Spec.Pod.Spec.NodeSelector[hostnameLabel] = node
-	annotate(dp, devpodv1alpha1.AutoPinAnnotation, node+"@"+since.UTC().Format(time.RFC3339Nano))
+	v := node + "@" + since.UTC().Format(time.RFC3339Nano)
+	if prio != 0 {
+		v += "@" + strconv.Itoa(int(prio))
+	}
+	annotate(dp, devpodv1alpha1.AutoPinAnnotation, v)
 }
 
 // autoPin: the node the queue pinned dp to and since when it was in line
 // — ok only while that is still dp's pin (a pin its user set is theirs).
 func autoPin(dp *devpodv1alpha1.DevPod) (string, time.Time, bool) {
-	node, at, found := strings.Cut(dp.Annotations[devpodv1alpha1.AutoPinAnnotation], "@")
+	node, rest, found := strings.Cut(dp.Annotations[devpodv1alpha1.AutoPinAnnotation], "@")
 	if !found || node == "" || node != pinnedNode(dp) {
 		return "", time.Time{}, false
 	}
+	at, _, _ := strings.Cut(rest, "@")
 	t, _ := time.Parse(time.RFC3339Nano, at)
 	return node, t, true
+}
+
+// autoPinPriority: the priority dp waited at before the queue pinned it
+// (0: none recorded).
+func autoPinPriority(dp *devpodv1alpha1.DevPod) int32 {
+	_, rest, _ := strings.Cut(dp.Annotations[devpodv1alpha1.AutoPinAnnotation], "@")
+	_, p, _ := strings.Cut(rest, "@")
+	n, _ := strconv.Atoi(p)
+	return int32(n)
 }
 
 // avoidFor keeps the queue from giving dp node until until.
@@ -328,6 +343,7 @@ func (s *Server) admitStart(ctx context.Context, dp *devpodv1alpha1.DevPod, prio
 	if _, _, ok := autoPin(dp); ok {
 		unpinAuto(dp) // the queue's pin of a former run: placed anew
 	}
+	delete(dp.Annotations, devpodv1alpha1.ExpectClearAnnotation) // a former run's
 	if s.Queue == nil {
 		if pinnedNode(dp) != "" {
 			return false, nil
@@ -458,7 +474,7 @@ func (s *Server) placeNow(ctx context.Context, dp *devpodv1alpha1.DevPod) *serve
 	plan := planQueue(v)
 	for _, st := range plan.Starts {
 		if st.Entry.Key == e.Key {
-			setAutoPin(dp, st.Machines[0], now)
+			setAutoPin(dp, st.Machines[0], now, 0)
 			if st.ClearsAt != nil {
 				annotate(dp, devpodv1alpha1.ExpectClearAnnotation, st.ClearsAt.UTC().Format(time.RFC3339))
 			}
@@ -493,7 +509,7 @@ func (s *Server) startQueuedDevPod(ctx context.Context, cc *clusters.ClusterClie
 	}
 	auto := false
 	if _, _, former := autoPin(&dp); former || pinnedNode(&dp) == "" {
-		setAutoPin(&dp, machine, since)
+		setAutoPin(&dp, machine, since, queuePriority(&dp))
 		auto = true
 	} else if pinnedNode(&dp) != machine {
 		return false
@@ -590,7 +606,7 @@ func (s *Server) sweepAutoPins(ctx context.Context, cc *clusters.ClusterClients,
 				break
 			}
 			cp.Spec.Running = false
-			markQueued(cp, since, 0)
+			markQueued(cp, since, autoPinPriority(dp))
 		}
 		if err := cc.Client.Update(ctx, cp); err != nil {
 			if !apierrors.IsConflict(err) {
