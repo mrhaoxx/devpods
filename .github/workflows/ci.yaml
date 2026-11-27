@@ -44,7 +44,8 @@ jobs:
       run: |
         # envtest's API server and etcd for the controller tests
         export KUBEBUILDER_ASSETS="$(go run sigs.k8s.io/controller-runtime/tools/setup-envtest@release-0.20 use 1.31.0 --bin-dir "$PWD/bin" -p path)"
-        go test ./... -count=1 -race -timeout 45m   # internal/webui alone takes ~13 min under -race on 8 cores
+        # internal/webui, the longest, in shards beside the other packages
+        SHARDS=2 bash deploy/test-go.sh -count=1 -race -timeout 45m
 
   web:
     runs-on: ubuntu-22.04

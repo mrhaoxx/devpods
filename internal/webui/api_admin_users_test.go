@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"strings"
 	"testing"
+	"time"
 
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -171,10 +172,18 @@ func TestUsersBatch(t *testing.T) {
 		if len(rs[0].Password) != 16 {
 			t.Fatalf("password %q", rs[0].Password)
 		}
-		rec := doJSON(t, s.HandlePasswordLoginForTest(), "POST", "/api/auth/password", nil, nil,
-			fmt.Sprintf(`{"username":"bt-b","password":%q}`, rs[0].Password))
-		if rec.Code != http.StatusOK && rec.Code != http.StatusNoContent {
-			t.Fatalf("login with the new password: %d %s", rec.Code, rec.Body)
+		// the login reads the user through the cache: the new hash shows a moment later
+		deadline := time.Now().Add(10 * time.Second)
+		for {
+			rec := doJSON(t, s.HandlePasswordLoginForTest(), "POST", "/api/auth/password", nil, nil,
+				fmt.Sprintf(`{"username":"bt-b","password":%q}`, rs[0].Password))
+			if rec.Code == http.StatusOK || rec.Code == http.StatusNoContent {
+				break
+			}
+			if time.Now().After(deadline) {
+				t.Fatalf("login with the new password: %d %s", rec.Code, rec.Body)
+			}
+			time.Sleep(50 * time.Millisecond)
 		}
 	})
 	t.Run("hibernateAll stops running DevPods and reports the count", func(t *testing.T) {

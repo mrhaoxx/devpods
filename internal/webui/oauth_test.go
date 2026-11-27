@@ -163,10 +163,11 @@ func TestOAuth(t *testing.T) {
 		if err != nil || sess.User != "gl-alice" || sess.Admin {
 			t.Fatalf("sess=%+v err=%v", sess, err)
 		}
-		var u devpodv1alpha1.User
-		if err := k8sClient.Get(context.Background(), types.NamespacedName{Name: "gl-alice"}, &u); err != nil {
-			t.Fatalf("auto-provisioned User missing: %v", err)
-		}
+		// the User reaches the cache a moment after it is made
+		waitFor(t, func() bool {
+			var u devpodv1alpha1.User
+			return k8sClient.Get(context.Background(), types.NamespacedName{Name: "gl-alice"}, &u) == nil
+		})
 		// Second login must not fail on AlreadyExists.
 		rec2 := loginThenCallback(t, o)
 		if rec2.Code != http.StatusFound {

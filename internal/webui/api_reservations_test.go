@@ -235,15 +235,9 @@ func TestReservationRoom(t *testing.T) {
 func TestReservationAmountsInvalid(t *testing.T) {
 	s, sm, _, node := rsvRig(t, "ai")
 	n2 := "ai-n2"
-	var n corev1.Node
-	if err := k8sClient.Get(context.Background(), client_key_cluster(n2), &n); err != nil {
-		t.Fatal(err)
-	}
-	if n.Labels == nil {
-		n.Labels = map[string]string{}
-	}
-	n.Labels[devpodv1alpha1.ReservableNodeLabel] = "true"
-	if err := k8sClient.Update(context.Background(), &n); err != nil {
+	// a patch: the cache's copy of the node may trail its status write
+	label, _ := json.Marshal(map[string]any{"metadata": map[string]any{"labels": map[string]string{devpodv1alpha1.ReservableNodeLabel: "true"}}})
+	if err := k8sClient.Patch(context.Background(), &corev1.Node{ObjectMeta: metav1.ObjectMeta{Name: n2}}, client.RawPatch(types.MergePatchType, label)); err != nil {
 		t.Fatal(err)
 	}
 	waitFor(t, func() bool {
