@@ -190,6 +190,49 @@ func TestEvents(t *testing.T) {
 	}
 }
 
+// A machine's auditor sees what was done on it, and what else was done to
+// what was on it (a job's submission, a DevPod made before it had a
+// machine) — not what never was.
+func TestEventsMachineScope(t *testing.T) {
+	ctx := context.Background()
+	c := openTestCH(t, "audit_events_scope")
+	if err := c.conn.Exec(ctx, "DROP DATABASE IF EXISTS audit_events_scope"); err != nil {
+		t.Fatal(err)
+	}
+	if err := Migrate(ctx, c, DefaultRetention(180)); err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().UTC().Truncate(time.Millisecond)
+	rows := []EventRow{
+		{TS: now.Add(-3 * time.Second), Cluster: "st", Kind: "job", Object: "abc12", Owner: "bo", Actor: "bo", Via: "web", Action: "submit"},
+		{TS: now.Add(-2 * time.Second), Cluster: "st", Kind: "job", Object: "abc12", Owner: "bo", Actor: "system:queue", Via: "system", Action: "start", Node: "g1"},
+		{TS: now.Add(-time.Second), Cluster: "st", Kind: "devpod", Object: "al-dev", ObjectUID: "u1", Owner: "al", Actor: "al", Via: "web", Action: "create"},
+		{TS: now, Cluster: "st", Kind: "devpod", Object: "al-dev", ObjectUID: "u1", Owner: "al", Actor: "system:queue", Via: "system", Action: "queue-start", Node: "g1"},
+		{TS: now, Cluster: "st", Kind: "devpod", Object: "al-dev", ObjectUID: "u0", Owner: "al", Actor: "al", Via: "web", Action: "delete"},
+		{TS: now, Cluster: "st", Kind: "job", Object: "zzz99", Owner: "bo", Actor: "bo", Via: "web", Action: "submit"},
+	}
+	if err := c.InsertEvents(ctx, rows, "scope"); err != nil {
+		t.Fatal(err)
+	}
+	got, _, err := c.SearchEvents(ctx, EventFilter{From: now.Add(-time.Hour), To: now.Add(time.Hour), Scope: &Scope{User: "x", Machines: []ClusterNode{{Cluster: "st", Node: "g1"}}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var seen []string
+	for _, r := range got {
+		seen = append(seen, r.Object+"/"+r.ObjectUID+"/"+r.Action)
+	}
+	want := map[string]bool{"abc12//submit": true, "abc12//start": true, "al-dev/u1/create": true, "al-dev/u1/queue-start": true}
+	if len(seen) != len(want) {
+		t.Fatalf("seen %v", seen)
+	}
+	for _, k := range seen {
+		if !want[k] {
+			t.Fatalf("seen %v", seen)
+		}
+	}
+}
+
 func sampleBatch(sid string) Batch {
 	now := time.Now().UTC().Truncate(time.Millisecond)
 	exit := int32(3)

@@ -374,3 +374,64 @@ func TestDevPodHistory(t *testing.T) {
 		t.Errorf("from %s, after it was made (%s)", from, dp.CreationTimestamp.Time)
 	}
 }
+
+// Who did something from where is the auditors' (and admins') to see: an
+// owner or a collaborator reading a history sees their own client IP, not
+// another's. The history is asked by the DevPod's name too (the store's
+// order key).
+func TestHistoryClientIPs(t *testing.T) {
+	s, sm, st := scopeRig(t)
+	viewAudit(t, s, "as-bob", "user = as-bob and machine = as-n1")
+	ctx := context.Background()
+	dp := &devpodv1alpha1.DevPod{ObjectMeta: metav1.ObjectMeta{Name: "as-carol-ip", Namespace: "devpods"}, Spec: devpodv1alpha1.DevPodSpec{Owner: "as-carol", Collaborators: []string{"as-cat"},
+		Pod: &devpodv1alpha1.PodWorkloadSpec{Spec: corev1.PodSpec{NodeSelector: map[string]string{"kubernetes.io/hostname": "as-n1"}, Containers: []corev1.Container{{Name: "dev", Image: "x"}}}}}}
+	if err := k8sClient.Create(ctx, dp); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = k8sClient.Delete(ctx, dp) })
+	waitFor(t, func() bool { return waitDevPod(t, dp.Name).UID != "" })
+	row := func(actor, action, ip string) store.EventRow {
+		return store.EventRow{Kind: "devpod", Object: dp.Name, ObjectUID: string(dp.UID), Owner: "as-carol", Actor: actor, Action: action, ClientIP: ip}
+	}
+	st.mu.Lock()
+	st.events = []store.EventRow{row("as-carol", "create", "10.0.0.1"), row("as-cat", "edit", "10.0.0.5"), row("as-root", "stop", "10.0.0.9")}
+	st.mu.Unlock()
+	ips := func(path, user string, admin bool) map[string]string {
+		t.Helper()
+		rec := route(t, s, "GET", path, forge(sm, user, admin), "")
+		var out struct{ Items []store.EventRow }
+		if rec.Code != http.StatusOK || json.Unmarshal(rec.Body.Bytes(), &out) != nil {
+			t.Fatalf("%s as %s: %d %s", path, user, rec.Code, rec.Body)
+		}
+		m := map[string]string{}
+		for _, e := range out.Items {
+			m[e.Actor] = e.ClientIP
+		}
+		return m
+	}
+	history := "/api/devpods/" + dp.Name + "/history"
+	all := map[string]string{"as-carol": "10.0.0.1", "as-cat": "10.0.0.5", "as-root": "10.0.0.9"}
+	for _, c := range []struct {
+		path, user string
+		admin      bool
+		want       map[string]string
+	}{
+		{history, "as-carol", false, map[string]string{"as-carol": "10.0.0.1", "as-cat": "", "as-root": ""}},
+		{history, "as-cat", false, map[string]string{"as-carol": "", "as-cat": "10.0.0.5", "as-root": ""}},
+		{history, "as-bob", false, all},
+		{history, "as-root", true, all},
+		{"/api/audit/events", "as-carol", false, map[string]string{"as-carol": "10.0.0.1", "as-cat": "", "as-root": ""}},
+		{"/api/audit/events", "as-root", true, all},
+	} {
+		if got := ips(c.path, c.user, c.admin); !reflect.DeepEqual(got, c.want) {
+			t.Errorf("%s as %s: %v, want %v", c.path, c.user, got, c.want)
+		}
+	}
+	ips(history, "as-carol", false)
+	st.mu.Lock()
+	f := st.eventF
+	st.mu.Unlock()
+	if f.Object != dp.Name || f.Kind != "devpod" || f.ObjectUID != string(dp.UID) {
+		t.Errorf("the history asked %+v", f)
+	}
+}

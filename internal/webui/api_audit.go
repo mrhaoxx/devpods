@@ -646,12 +646,20 @@ func (s *Server) handleAuditEvents(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	q := r.URL.Query()
-	s.answerEvents(w, r, store.EventFilter{Scope: sc, Kind: q.Get("kind"), Cluster: q.Get("cluster"), Owner: q.Get("owner"),
+	s.answerEvents(w, r, sess, auditor(sc), store.EventFilter{Scope: sc, Kind: q.Get("kind"), Cluster: q.Get("cluster"), Owner: q.Get("owner"),
 		Actor: q.Get("actor"), Object: q.Get("object"), Action: q.Get("action"), From: from, To: to})
 }
 
-// answerEvents answers with a page of the events f asks.
-func (s *Server) answerEvents(w http.ResponseWriter, r *http.Request, f store.EventFilter) {
+// auditor: a viewer of scope sc may see where others acted from (client
+// IPs) — an admin, or one an audit grant gives a cluster or a machine.
+func auditor(sc *store.Scope) bool {
+	return sc == nil || len(sc.Clusters) > 0 || len(sc.Machines) > 0
+}
+
+// answerEvents answers sess with a page of the events f asks; the client
+// IPs of what others did only to an auditor (an owner or a collaborator
+// sees their own).
+func (s *Server) answerEvents(w http.ResponseWriter, r *http.Request, sess Session, auditor bool, f store.EventFilter) {
 	f.Cursor, f.Limit = r.URL.Query().Get("cursor"), queryLimit(r)
 	items, next, err := s.Audit.Store.SearchEvents(r.Context(), f)
 	if err != nil {
@@ -660,6 +668,11 @@ func (s *Server) answerEvents(w http.ResponseWriter, r *http.Request, f store.Ev
 	}
 	if items == nil {
 		items = []store.EventRow{}
+	}
+	for i := range items {
+		if !auditor && items[i].Actor != sess.User {
+			items[i].ClientIP = ""
+		}
 	}
 	s.writeJSON(w, http.StatusOK, page[store.EventRow]{Items: items, Next: next})
 }
@@ -675,24 +688,21 @@ func historySince(r *http.Request, since time.Time) (time.Time, time.Time, error
 
 // mayReadHistory: sess may read the history of what owner (with
 // collaborators) has in cluster on nodes — theirs, a collaborator's, an
-// admin's, or one whose audit scope takes in the cluster or a node.
-func (s *Server) mayReadHistory(ctx context.Context, sess Session, cluster, owner string, collaborators, nodes []string) bool {
-	if sess.Admin || sess.User == owner || slices.Contains(collaborators, sess.User) {
-		return true
+// admin's, or one whose audit scope takes in the cluster or a node — and
+// whether as an auditor (who sees where others acted from).
+func (s *Server) mayReadHistory(ctx context.Context, sess Session, cluster, owner string, collaborators, nodes []string) (may, asAuditor bool) {
+	if sess.Admin {
+		return true, true
 	}
 	sc, err := s.auditScope(ctx, sess, false)
 	if err != nil {
-		return false
+		sc = &store.Scope{}
 	}
-	if sc == nil || slices.Contains(sc.Clusters, cluster) {
-		return true
-	}
+	asAuditor = slices.Contains(sc.Clusters, cluster)
 	for _, m := range sc.Machines {
-		if m.Cluster == cluster && slices.Contains(nodes, m.Node) {
-			return true
-		}
+		asAuditor = asAuditor || (m.Cluster == cluster && slices.Contains(nodes, m.Node))
 	}
-	return false
+	return asAuditor || sess.User == owner || slices.Contains(collaborators, sess.User), asAuditor
 }
 
 // handleDevPodHistory serves GET /api/devpods/{name}/history: what was
@@ -711,7 +721,11 @@ func (s *Server) handleDevPodHistory(w http.ResponseWriter, r *http.Request) {
 		nodes = append(nodes, pod.Spec.NodeName)
 	}
 	cluster := s.clusterLabel(s.k(r))
-	if err != nil || !s.mayReadHistory(ctx, sess, cluster, dp.Spec.Owner, dp.Spec.Collaborators, nodes) {
+	may, asAuditor := false, false
+	if err == nil {
+		may, asAuditor = s.mayReadHistory(ctx, sess, cluster, dp.Spec.Owner, dp.Spec.Collaborators, nodes)
+	}
+	if !may {
 		s.writeErr(w, http.StatusNotFound, "NOT_FOUND", "no such DevPod", nil)
 		return
 	}
@@ -720,7 +734,8 @@ func (s *Server) handleDevPodHistory(w http.ResponseWriter, r *http.Request) {
 		s.writeErr(w, http.StatusBadRequest, "BAD_REQUEST", err.Error(), nil)
 		return
 	}
-	s.answerEvents(w, r, store.EventFilter{Kind: "devpod", ObjectUID: string(dp.UID), From: from, To: to})
+	// by its cluster and name too: the store's order key
+	s.answerEvents(w, r, sess, asAuditor, store.EventFilter{Kind: "devpod", Cluster: cluster, Object: dp.Name, ObjectUID: string(dp.UID), From: from, To: to})
 }
 
 // handleJobHistory serves GET /api/jobs/{id}/history: what was done to
@@ -731,8 +746,11 @@ func (s *Server) handleJobHistory(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var j devpodv1alpha1.Job
-	if err := s.Reader.Get(r.Context(), types.NamespacedName{Name: r.PathValue("id")}, &j); err != nil ||
-		!s.mayReadHistory(r.Context(), sess, j.Spec.Cluster, j.Spec.Owner, nil, ranksMachines(j.Status.Ranks)) {
+	may, asAuditor := false, false
+	if err := s.Reader.Get(r.Context(), types.NamespacedName{Name: r.PathValue("id")}, &j); err == nil {
+		may, asAuditor = s.mayReadHistory(r.Context(), sess, j.Spec.Cluster, j.Spec.Owner, nil, ranksMachines(j.Status.Ranks))
+	}
+	if !may {
 		s.writeErr(w, http.StatusNotFound, "NOT_FOUND", "no such job", nil)
 		return
 	}
@@ -741,5 +759,5 @@ func (s *Server) handleJobHistory(w http.ResponseWriter, r *http.Request) {
 		s.writeErr(w, http.StatusBadRequest, "BAD_REQUEST", err.Error(), nil)
 		return
 	}
-	s.answerEvents(w, r, store.EventFilter{Kind: "job", Object: j.Name, Cluster: j.Spec.Cluster, From: from, To: to})
+	s.answerEvents(w, r, sess, asAuditor, store.EventFilter{Kind: "job", Object: j.Name, Cluster: j.Spec.Cluster, From: from, To: to})
 }

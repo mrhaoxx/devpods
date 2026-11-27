@@ -29,8 +29,10 @@ func TestScopeCond(t *testing.T) {
 			"(user = ? OR session_id IN (SELECT session_id FROM db.sessions WHERE concat(cluster, '/', node) IN ?))", []any{"a", []string{"st/g1"}}},
 		{"alerts: no user", &Scope{User: "a", Clusters: []string{"st"}}, scopeAlerts, "(cluster IN ?)", []any{[]string{"st"}}},
 		{"events: one's own is what one owns or did", &Scope{User: "a"}, scopeEvents, "(owner = ? OR actor = ?)", []any{"a", "a"}},
-		{"events: machines by their own node", &Scope{User: "a", Machines: m[:1]}, scopeEvents,
-			"(owner = ? OR actor = ? OR concat(cluster, '/', node) IN ?)", []any{"a", "a", []string{"st/g1"}}},
+		{"events: machines by their own node, and what else was done to what was on them", &Scope{User: "a", Machines: m[:1]}, scopeEvents,
+			"(owner = ? OR actor = ? OR concat(cluster, '/', node) IN ? OR concat(cluster, '/', kind, '/', object, '/', object_uid) IN " +
+				"(SELECT concat(cluster, '/', kind, '/', object, '/', object_uid) FROM db.events WHERE concat(cluster, '/', node) IN ?))",
+			[]any{"a", "a", []string{"st/g1"}, []string{"st/g1"}}},
 		{"alerts: only own is nothing", &Scope{User: "a"}, scopeAlerts, "0", nil},
 	} {
 		sql, args := scopeCond(c.s, c.k, "db")

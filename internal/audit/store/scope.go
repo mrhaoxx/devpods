@@ -34,7 +34,9 @@ const (
 	// session, and no user — never one's own
 	scopeAlerts
 	// scopeEvents: rows with an owner and an actor (one's own: what one
-	// owns or did), a cluster and a node
+	// owns or did), a cluster and a node — a machine's take in, too, what
+	// else was done to what was on it (made before it had a machine, a
+	// job's submission and end)
 	scopeEvents
 )
 
@@ -64,6 +66,11 @@ func scopeCond(s *Scope, k scopeKind, db string) (string, []any) {
 			on = fmt.Sprintf("session_id IN (SELECT session_id FROM %s.sessions WHERE %s)", db, on)
 		}
 		parts, args = append(parts, on), append(args, keys)
+		if k == scopeEvents {
+			const object = "concat(cluster, '/', kind, '/', object, '/', object_uid)"
+			parts = append(parts, fmt.Sprintf("%s IN (SELECT %s FROM %s.events WHERE %s)", object, object, db, on))
+			args = append(args, keys)
+		}
 	}
 	if len(parts) == 0 {
 		return "0", nil
