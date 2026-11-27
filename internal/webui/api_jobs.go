@@ -679,7 +679,22 @@ func (s *Server) estimate(ctx context.Context, job *devpodv1alpha1.Job) map[stri
 	for _, j := range append(queued, probe) {
 		entries = append(entries, jobEntry(j))
 	}
-	v, _, err := s.queueViewFor(ctx, s.kc(ctx), active, entries, now)
+	// and the DevPods waiting in line there, as a round would see them
+	kc := s.kc(ctx)
+	var dps devpodv1alpha1.DevPodList
+	if err := kc.Client.List(ctx, &dps, client.InNamespace(s.NS)); err == nil {
+		for i := range dps.Items {
+			dp := &dps.Items[i]
+			since, inLine := queuedAt(dp)
+			if !inLine || dp.Spec.Running || dp.DeletionTimestamp != nil || dp.Spec.Pod == nil {
+				continue
+			}
+			if e, ok := s.lineEntry(ctx, kc, dp, since, now); ok {
+				entries = append(entries, e)
+			}
+		}
+	}
+	v, _, err := s.queueViewFor(ctx, kc, active, entries, now)
 	if err != nil {
 		return out
 	}

@@ -6,6 +6,7 @@ package webui_test
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"testing"
 	"time"
@@ -170,5 +171,23 @@ func TestEditQueuedNeverFitsRefused(t *testing.T) {
 	}
 	if code, _, ec := patchAs(t, p, "mv-alice", name, `{"gpu":"2"}`); code != http.StatusOK {
 		t.Fatalf("2 cards while in line: %d %q", code, ec)
+	}
+}
+
+// A dry run counts the DevPods waiting in line ahead of the job.
+func TestEstimateCountsDevPodsInLine(t *testing.T) {
+	p := jobRig(t, "md", "md-alice")
+	p.createGPU("md-bob", "g8", 8, "", http.StatusCreated) // in line, all of n1's cards
+	if dp := p.get("md-bob-g8"); !queuedNow(dp) {
+		t.Fatalf("not in line: %v", dp.Annotations)
+	}
+	body := `{"from":{"devpod":"md-alice-dev1"},"nodes":1,"gpus":8,"command":"true","dryRun":true}`
+	rec := doJSON(t, p.s.HandleSubmitJobForTest(), "POST", "/api/jobs", nil, p.as("md-alice"), body)
+	var v struct {
+		StartsNow bool
+		Position  int32
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &v); rec.Code != http.StatusOK || err != nil || v.StartsNow || v.Position < 1 {
+		t.Fatalf("dry run behind a DevPod taking every card: %d %s", rec.Code, rec.Body)
 	}
 }

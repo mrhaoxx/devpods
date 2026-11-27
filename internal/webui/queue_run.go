@@ -197,18 +197,9 @@ func (s *Server) queueIn(ctx context.Context, cluster string, jobs, ended []*dev
 		if s.startInOwnReservation(ctx, cc, dp) {
 			continue
 		}
-		only := pinnedNode(dp)
-		if _, _, auto := autoPin(dp); auto {
-			only = "" // a former run's: placed anew
+		if e, ok := s.lineEntry(ctx, cc, dp, since, now); ok {
+			waiting = append(waiting, e)
 		}
-		if only == "" {
-			home, told := s.homeNodeOf(ctx, cc, dp)
-			if !told {
-				continue // where its home is cannot be told now: it waits
-			}
-			only = home
-		}
-		waiting = append(waiting, devPodEntry(dp, since, queuePriority(dp), only, avoiding(dp, now)))
 	}
 	if len(queued) == 0 && len(waiting) == 0 {
 		return
@@ -1013,4 +1004,22 @@ func preemptedFor(plan queuePlan, victim string) string {
 		}
 	}
 	return ""
+}
+
+// lineEntry: dp, in line since since, as an entry of the line at now —
+// held to its pin (not a former run's from the queue) or its home's
+// machine; false when where its home is cannot be told now (it waits).
+func (s *Server) lineEntry(ctx context.Context, cc *clusters.ClusterClients, dp *devpodv1alpha1.DevPod, since, now time.Time) (qEntry, bool) {
+	only := pinnedNode(dp)
+	if _, _, auto := autoPin(dp); auto {
+		only = "" // a former run's: placed anew
+	}
+	if only == "" {
+		home, told := s.homeNodeOf(ctx, cc, dp)
+		if !told {
+			return qEntry{}, false
+		}
+		only = home
+	}
+	return devPodEntry(dp, since, queuePriority(dp), only, avoiding(dp, now)), true
 }
