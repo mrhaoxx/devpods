@@ -79,7 +79,7 @@ func jobCommands() []*command {
 		short: "the queue: submit jobs, see the queue, cancel, read a job's output",
 		long:  jobLong,
 		vals:  []string{"title", "from-devpod", "from-config", "var", "N", "nodes", "gpus", "cpus", "t", "time", "priority", "cap-add", "env", "workdir", "script", "rank", "attempt", "export"},
-		bools: []string{"preemptible", "host-network", "privileged", "dry-run", "mine", "ended", "f", "follow", "d", "detach", "requeue", "no-requeue", "no-workdir-warning"}, run: runJob}}
+		bools: []string{"preemptible", "host-network", "privileged", "dry-run", "mine", "ended", "f", "follow", "d", "detach", "requeue", "no-requeue", "no-workdir-warning", "pty"}, run: runJob}}
 }
 
 type jobView struct {
@@ -100,6 +100,7 @@ type jobView struct {
 	Mine             bool              `json:"mine"`
 	Submitted        time.Time         `json:"submitted"`
 	ExpectedStart    *time.Time        `json:"expectedStart"`
+	Attempts         int               `json:"attempts"`
 	StartedAt        *time.Time        `json:"startedAt"`
 	FinishedAt       *time.Time        `json:"finishedAt"`
 	Ranks            []struct {
@@ -230,6 +231,7 @@ type submitOpts struct {
 	limit                                          time.Duration
 	preemptible, hostNetwork, privileged, dryRun   bool
 	noWorkdirWarning                               bool
+	pty                                            bool  // srun --pty: rank 0 on a terminal, attached
 	requeue                                        *bool // nil: the console's default (requeued)
 	detach                                         bool  // job submit -d: submit and be done (else as srun)
 	capAdd                                         []string
@@ -302,7 +304,7 @@ func submitOptsOf(a *parsed) (submitOpts, error) {
 		return o, errors.New("--export takes ALL or NONE")
 	}
 	o.preemptible, o.hostNetwork, o.privileged, o.dryRun = a.has["preemptible"], a.has["host-network"], a.has["privileged"], a.has["dry-run"]
-	o.noWorkdirWarning = a.has["no-workdir-warning"]
+	o.noWorkdirWarning, o.pty = a.has["no-workdir-warning"], a.has["pty"]
 	switch {
 	case a.has["requeue"] && a.has["no-requeue"]:
 		return o, errors.New("--requeue and --no-requeue say opposite things")
@@ -434,9 +436,43 @@ func jobSubmit(e *Env, a *parsed, c *command) int {
 		}
 		o.scriptText = text
 	}
+	return submitJob(e, a, c, o)
+}
+
+// submitJob submits what o asks and, unless -d, waits for it as srun does:
+// attached to its ranks when dp can attach (on rank 0's terminal with
+// --pty), else following their output.
+func submitJob(e *Env, a *parsed, c *command, o submitOpts) int {
+	attach := ""
+	switch canAttach := e.Origin != nil && e.Origin.Attach != nil; {
+	case o.pty && (o.detach || o.dryRun):
+		return usage(e, c, "--pty is for a job you stay attached to (not with -d or --dry-run)")
+	case o.pty && !canAttach:
+		return usage(e, c, "--pty needs dp inside a DevPod, to attach to the job's terminal")
+	case o.pty && !e.Origin.TTY:
+		return usage(e, c, "--pty needs a terminal: run it in an interactive shell")
+	case o.pty:
+		attach = "tty"
+	case canAttach && !o.detach && !o.dryRun:
+		attach = "stdin"
+	}
 	cluster, body, err := submitBody(e, o)
 	if err != nil {
 		return usage(e, c, err.Error())
+	}
+	if attach != "" {
+		body["attach"] = attach
+	}
+	if attach == "tty" && e.Origin.Term != "" {
+		// the job's terminal is the caller's kind (unless --env says)
+		env, _ := body["env"].(map[string]string)
+		if env == nil {
+			env = map[string]string{}
+		}
+		if _, set := o.env["TERM"]; !set {
+			env["TERM"] = e.Origin.Term
+		}
+		body["env"] = env
 	}
 	if !o.detach && !o.dryRun {
 		var v jobView
@@ -446,7 +482,7 @@ func jobSubmit(e *Env, a *parsed, c *command) int {
 		sayWarnings(e, o.noWorkdirWarning, v.Warnings)
 		ref := joinRef(v.Cluster, v.ID)
 		fmt.Fprintf(e.Err, "submitted job %s\n", ref)
-		return waitJob(e, ref, v.ID, o.nodes)
+		return waitJob(e, ref, v.ID, o.nodes, attach)
 	}
 	return postJob(e, a, scoped(e, cluster, "/api/jobs"), body, o.noWorkdirWarning)
 }
@@ -497,7 +533,7 @@ var waitPoll = 2 * time.Second
 // log is followed from its start, so nothing is missed), and returns the
 // job's exit code once it has ended. Interrupted — Ctrl-C, or dp's caller
 // gone — it cancels the job.
-func waitJob(e *Env, ref, id string, nodes int) int {
+func waitJob(e *Env, ref, id string, nodes int, attach string) int {
 	ctx := e.Session
 	if ctx == nil {
 		ctx = e.Ctx
@@ -592,6 +628,11 @@ func waitJob(e *Env, ref, id string, nodes int) int {
 					case <-time.After(30 * time.Second):
 					}
 					return jobExit(j)
+				case j.Phase == "Running" && !following && attach != "":
+					// dp attaches to the ranks (they wait for it): what they
+					// write, live; their stdin, rank 0's terminal
+					following = true
+					e.Origin.Attach(AttachTo{Job: id, Cluster: j.Cluster, Nodes: nodes, TTY: attach == "tty", Attempt: j.Attempts})
 				case j.Phase == "Running" && !following:
 					following = true
 					follow(j)

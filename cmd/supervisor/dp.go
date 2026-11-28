@@ -15,6 +15,9 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"time"
+
+	"golang.org/x/term"
 
 	"github.com/mrhaoxx/devpod/internal/telemetry/config"
 )
@@ -30,7 +33,7 @@ import (
 const dpTokenPath = "/etc/devpod/dp-token"
 
 // dpNames: the names the supervisor answers as dp.
-var dpNames = []string{"dp", "sbatch", "squeue", "scancel"}
+var dpNames = []string{"dp", "srun", "sbatch", "squeue", "scancel"}
 
 // sbatchValueFlags: sbatch's flags that take the next word as their value
 // (so it is not the script).
@@ -78,7 +81,7 @@ func dpEnvSkip(k string) bool {
 // dpEnv: of environ, what a job submitted by argv takes along — for
 // job submit and sbatch only, at most dpEnvMax of it (nil: none).
 func dpEnv(argv, environ []string) map[string]string {
-	submit := (len(argv) > 0 && argv[0] == "sbatch") || (len(argv) > 1 && (argv[0] == "job" || argv[0] == "jobs") && argv[1] == "submit")
+	submit := (len(argv) > 0 && (argv[0] == "sbatch" || argv[0] == "srun")) || (len(argv) > 1 && (argv[0] == "job" || argv[0] == "jobs") && argv[1] == "submit")
 	if !submit {
 		return nil
 	}
@@ -113,7 +116,16 @@ func runDP(name string, args []string) int {
 		fmt.Fprintf(os.Stderr, "%s: %v\n", name, err)
 		return 2
 	}
-	return dpCall(dpBase(c.IngestURL), c.DevPodUID, strings.TrimSpace(string(tok)), argv, cwd, files, dpEnv(argv, os.Environ()), os.Stdout, os.Stderr)
+	base, token := dpBase(c.IngestURL), strings.TrimSpace(string(tok))
+	dio := dpIO{in: os.Stdin, out: os.Stdout, err: os.Stderr}
+	// a job it stays with: attached to its ranks, when the console's
+	// attach is reachable from here (dp_attach.go)
+	if attachable(argv) && probeAttach(base, c.DevPodUID, token) {
+		dio.attach = true
+		dio.tty = term.IsTerminal(0) && term.IsTerminal(1)
+		dio.term = os.Getenv("TERM")
+	}
+	return dpCall(base, c.DevPodUID, token, argv, cwd, files, dpEnv(argv, os.Environ()), dio)
 }
 
 // dpBase: the console's address from the DevPod's ingest URL.
@@ -180,7 +192,8 @@ func dpArgs(name string, args []string, cwd string, read func(string) ([]byte, e
 // dpCall posts argv to the console at base as the DevPod uid (token) and
 // writes what it says back to out and errw as it comes; it returns the
 // command's exit code (1 when the console refused or went away).
-func dpCall(base, uid, token string, argv []string, cwd string, files, env map[string]string, out, errw io.Writer) int {
+func dpCall(base, uid, token string, argv []string, cwd string, files, env map[string]string, dio dpIO) int {
+	errw := dio.err
 	body, _ := json.Marshal(dpRequest{Argv: argv, Cwd: cwd, Files: files, Env: env})
 	req, err := http.NewRequest(http.MethodPost, base+"/dp/v1/cli", bytes.NewReader(body))
 	if err != nil {
@@ -190,6 +203,15 @@ func dpCall(base, uid, token string, argv []string, cwd string, files, env map[s
 	req.Header.Set("Authorization", "Bearer "+token)
 	req.Header.Set("X-DevPod-UID", uid)
 	req.Header.Set("Content-Type", "application/json")
+	if dio.attach {
+		req.Header.Set("X-DP-Attach", "1")
+		if dio.tty {
+			req.Header.Set("X-DP-TTY", "1")
+			if dio.term != "" {
+				req.Header.Set("X-DP-Term", dio.term)
+			}
+		}
+	}
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		fmt.Fprintf(errw, "dp: the console cannot be reached: %v\n", err)
@@ -201,22 +223,30 @@ func dpCall(base, uid, token string, argv []string, cwd string, files, env map[s
 		fmt.Fprintf(errw, "dp: the console refused (%d): %s\n", resp.StatusCode, strings.TrimSpace(string(msg)))
 		return 1
 	}
+	att := &attacher{base: base, uid: uid, token: token, io: dio}
+	if dio.in != nil {
+		att.stdin = &stdinRouter{in: dio.in}
+	}
 	rd := bufio.NewReaderSize(resp.Body, 64<<10)
 	for {
 		line, err := rd.ReadBytes('\n')
 		if len(bytes.TrimSpace(line)) > 0 {
 			var f struct {
-				O *string `json:"o"`
-				E *string `json:"e"`
-				X *int    `json:"x"`
+				O *string   `json:"o"`
+				E *string   `json:"e"`
+				X *int      `json:"x"`
+				A *attachTo `json:"a"`
 			}
 			if json.Unmarshal(line, &f) == nil {
 				switch {
 				case f.O != nil:
-					_, _ = io.WriteString(out, *f.O)
+					att.say("o", *f.O)
 				case f.E != nil:
-					_, _ = io.WriteString(errw, *f.E)
+					att.say("e", *f.E)
+				case f.A != nil:
+					att.start(*f.A)
 				case f.X != nil:
+					att.wait(30 * time.Second) // what the ranks wrote is out
 					return *f.X
 				}
 			}

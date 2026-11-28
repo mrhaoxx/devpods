@@ -125,3 +125,31 @@ func TestSbatchRequeueFlags(t *testing.T) {
 		t.Fatalf("command line body %v", b)
 	}
 }
+
+// srun's command is the words after its options — or after "--", which
+// ends them (srun -c 1 -- sh -c '…'); its options' output files are
+// refused, its title is the command's name.
+func TestParseSrun(t *testing.T) {
+	for _, argv := range [][]string{
+		{"-c", "1", "-t", "5", "--", "sh", "-c", "echo hi"},
+		{"-c", "1", "-t", "5", "sh", "-c", "echo hi"},
+		{"-c1", "-t5", "--", "sh", "-c", "echo hi"},
+	} {
+		o, err := parseSlurm("srun", "", argv)
+		if err != nil {
+			t.Fatalf("%q: %v", argv, err)
+		}
+		if !slices.Equal(o.command, []string{"sh", "-c", "echo hi"}) || o.cpus == nil || *o.cpus != 1 || o.title != "sh" {
+			t.Fatalf("%q: command %q cpus %v title %q", argv, o.command, o.cpus, o.title)
+		}
+	}
+	if o, err := parseSlurm("srun", "", []string{"--pty", "--", "/bin/bash", "-l"}); err != nil || !o.pty || !slices.Equal(o.command, []string{"/bin/bash", "-l"}) || o.title != "bash" {
+		t.Fatalf("--pty: %+v %v", o, err)
+	}
+	if o, err := parseSlurm("srun", "", []string{"-c", "1", "--"}); err != nil || len(o.command) != 0 {
+		t.Fatalf("nothing after --: %+v %v", o, err)
+	}
+	if _, err := parseSlurm("srun", "", []string{"-o", "x.log", "true"}); err == nil || !strings.Contains(err.Error(), "terminal") {
+		t.Fatalf("-o: %v", err)
+	}
+}

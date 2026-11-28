@@ -203,3 +203,75 @@ func TestHandleDPPassesEnv(t *testing.T) {
 		t.Fatalf("%d %s posted %v", w.Code, w.Body, posted)
 	}
 }
+
+// dp that says it can attach (and on a terminal) is told to attach once
+// the job's ranks run, a frame of its own; one that does not say so gets
+// no --pty.
+func TestHandleDPAttachFrame(t *testing.T) {
+	setupSuite(t)
+	s, _ := newServer(t)
+	n := 0
+	var posted map[string]any
+	api := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPost {
+			_ = json.NewDecoder(r.Body).Decode(&posted)
+			_ = json.NewEncoder(w).Encode(map[string]any{"id": "abc12", "phase": "Queued", "nodes": 1})
+			return
+		}
+		n++
+		phase := "Running"
+		if n > 1 {
+			phase = "Succeeded"
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{"id": "abc12", "phase": phase, "nodes": 1, "attempts": 1})
+	}))
+	t.Cleanup(api.Close)
+	s.CLI = &gatewaycli.Server{API: gatewaycli.NewAPI(api.URL, "k")}
+	s.IngestKey = []byte("ingest-key")
+	ctx := context.Background()
+	dp := &devpodv1alpha1.DevPod{ObjectMeta: metav1.ObjectMeta{Name: "dpt-dev", Namespace: "devpods"}, Spec: devpodv1alpha1.DevPodSpec{Owner: "dpt",
+		Pod: &devpodv1alpha1.PodWorkloadSpec{Spec: corev1.PodSpec{Containers: []corev1.Container{{Name: "dev", Image: "x"}}}}}}
+	if err := k8sClient.Create(ctx, dp); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = k8sClient.Delete(ctx, dp) })
+	waitFor(t, func() bool { _, _, ok := s.DevPodByUID(ctx, string(dp.UID)); return ok })
+	call := func(attach bool) []map[string]any {
+		body, _ := json.Marshal(map[string]any{"argv": []string{"job", "submit", "--pty", "--", "bash"}, "cwd": "/home/x"})
+		r := httptest.NewRequest(http.MethodPost, "/dp/v1/cli", strings.NewReader(string(body)))
+		r.Header.Set("Authorization", "Bearer "+wire.DPToken(s.IngestKey, string(dp.UID)))
+		r.Header.Set("X-DevPod-UID", string(dp.UID))
+		if attach {
+			r.Header.Set("X-DP-Attach", "1")
+			r.Header.Set("X-DP-TTY", "1")
+			r.Header.Set("X-DP-Term", "xterm-256color")
+		}
+		w := httptest.NewRecorder()
+		s.HandleDP(w, r)
+		var frames []map[string]any
+		sc := bufio.NewScanner(strings.NewReader(w.Body.String()))
+		for sc.Scan() {
+			var f map[string]any
+			if json.Unmarshal(sc.Bytes(), &f) == nil {
+				frames = append(frames, f)
+			}
+		}
+		return frames
+	}
+	frames := call(true)
+	var told map[string]any
+	for _, f := range frames {
+		if a, ok := f["a"].(map[string]any); ok {
+			told = a
+		}
+	}
+	if told == nil || told["job"] != "abc12" || told["tty"] != true || frames[len(frames)-1]["x"] != float64(0) {
+		t.Fatalf("frames %v", frames)
+	}
+	if env, _ := posted["env"].(map[string]any); env["TERM"] != "xterm-256color" {
+		t.Fatalf("the terminal's kind did not go along: %v", posted["env"])
+	}
+	if frames := call(false); frames[len(frames)-1]["x"] != float64(gatewaycli.ExitUsage) {
+		t.Fatalf("--pty with no attach: %v", frames)
+	}
+}

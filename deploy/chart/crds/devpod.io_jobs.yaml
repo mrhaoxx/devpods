@@ -64,6 +64,17 @@ spec:
                 items:
                   type: string
                 type: array
+              attach:
+                description: |-
+                  Attach: how its submitter is attached to its ranks while they run
+                  (srun's way): stdin — each rank waits for the attach to start its
+                  command, rank 0's stdin the submitter's; tty — rank 0 waits for it
+                  and runs on a terminal (srun --pty). Empty: nobody attaches (its
+                  output is followed, and kept).
+                enum:
+                - stdin
+                - tty
+                type: string
               cancelled:
                 description: 'Cancelled: asked to end — by whom, when.'
                 properties:

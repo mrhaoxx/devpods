@@ -538,6 +538,13 @@ func (s *Server) startJob(ctx context.Context, cc *clusters.ClusterClients, j *d
 	}
 	for r, m := range machines {
 		dp := rankDevPod(j, int32(r), m, s.NS, master)
+		if j.Spec.Attach != "" && s.Queue.GangTimeout > 0 {
+			// it waits for its submitter as long as this start may take (the
+			// others' images may be slow to come) and a little: it is gone
+			// with the start, if that times out
+			c := &dp.Spec.Pod.Spec.Containers[0]
+			c.Env = append(c.Env, corev1.EnvVar{Name: "SUPERVISOR_ATTACH_WAIT", Value: (s.Queue.GangTimeout + time.Minute).String()})
+		}
 		if err := cc.Client.Create(ctx, dp); err != nil {
 			if !apierrors.IsAlreadyExists(err) {
 				slog.Warn("queue_start", "job", j.Name, "rank", r, "err", err)

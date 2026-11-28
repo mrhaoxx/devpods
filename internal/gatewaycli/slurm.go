@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"net/url"
+	"path"
 	"slices"
 	"strconv"
 	"strings"
@@ -25,6 +26,9 @@ func slurmCommands() []*command {
 		{group: "Queue", name: "sbatch", raw: true, args: "[options] script [args…]",
 			short: "submit a batch script, as Slurm's sbatch (-N, --gpus-per-node, -G, -c, -t, -J, -o, -e, -p, #SBATCH lines)",
 			long:  sbatchLong, run: runSbatch},
+		{name: "srun", raw: true, args: "[options] command [args…]",
+			short: "run a job and stay attached to it, as Slurm's srun (sbatch's options, and --pty for a terminal)",
+			long:  srunLong, run: runSrun},
 		{name: "squeue", raw: true, args: "[--me | -u USER]", short: "the queue, as Slurm's squeue", run: runSqueue},
 		{name: "scancel", raw: true, args: "<jobid>…", short: "cancel jobs, as Slurm's scancel", run: runScancel},
 	}
@@ -42,6 +46,15 @@ the queue's own --priority N and --preemptible. -n/--ntasks may not be
 more than the machines (one rank each). Anything else (--array,
 --dependency, --mem, …) is refused by name.`
 
+const srunLong = `srun [options] command [args…]
+Runs the command as a job and stays attached to it until it ends: what its
+ranks write, live (marked by rank when several); your stdin to rank 0;
+Ctrl-C (and closing the terminal) cancels it; its exit code is yours.
+Options as sbatch's (-N, --gpus-per-node, -G, -c, -t, -J, -p, --export,
+--requeue / --no-requeue, --priority, --preemptible), and --pty: rank 0
+on a terminal (interactive programs, srun --pty bash) — inside a DevPod,
+from an interactive shell.`
+
 // sbatchValue / sbatchFlag: what sbatch takes, by its long names (the
 // short ones map onto them).
 var sbatchValue = map[string]bool{"nodes": true, "gpus-per-node": true, "gpus": true, "cpus-per-task": true, "time": true,
@@ -53,6 +66,13 @@ var sbatchShort = map[string]string{"N": "nodes", "G": "gpus", "c": "cpus-per-ta
 // command), then argv's options over them; the script (its name) and the
 // arguments after it.
 func parseSbatch(script string, argv []string) (submitOpts, error) {
+	return parseSlurm("sbatch", script, argv)
+}
+
+// parseSlurm: what cmd (sbatch, srun) asks. srun takes no script and no
+// output files (its output is the terminal) but --pty; the words after its
+// options are the command.
+func parseSlurm(cmd, script string, argv []string) (submitOpts, error) {
 	o := submitOpts{nodes: 1, vars: map[string]string{}, env: map[string]string{}}
 	vals := map[string]string{}
 	bools := map[string]bool{}
@@ -60,12 +80,20 @@ func parseSbatch(script string, argv []string) (submitOpts, error) {
 	read := func(words []string, takeScript bool) error {
 		for i := 0; i < len(words); i++ {
 			w := words[i]
+			if w == "--" && takeScript && cmd == "srun" {
+				o.command = words[i+1:] // "--" ends the options
+				return nil
+			}
 			if !strings.HasPrefix(w, "-") || w == "-" {
+				if takeScript && cmd == "srun" {
+					o.command = words[i:]
+					return nil
+				}
 				if takeScript {
 					o.script, o.args = w, words[i+1:]
 					return nil
 				}
-				return fmt.Errorf("sbatch: %q is not an option", w)
+				return fmt.Errorf(cmd+": %q is not an option", w)
 			}
 			name, value, hasValue := strings.Cut(strings.TrimLeft(w, "-"), "=")
 			if !strings.HasPrefix(w, "--") {
@@ -73,7 +101,7 @@ func parseSbatch(script string, argv []string) (submitOpts, error) {
 				short := name[:1]
 				long, ok := sbatchShort[short]
 				if !ok {
-					return fmt.Errorf("sbatch: -%s is not supported here", short)
+					return fmt.Errorf(cmd+": -%s is not supported here", short)
 				}
 				if len(name) > 1 && !hasValue {
 					value, hasValue = name[1:], true
@@ -81,6 +109,11 @@ func parseSbatch(script string, argv []string) (submitOpts, error) {
 				name = long
 			}
 			switch {
+			case name == "pty" && cmd == "srun":
+				bools[name] = true
+				continue
+			case cmd == "srun" && (name == "output" || name == "error"):
+				return fmt.Errorf("srun: --%s is not supported here: srun's output is your terminal", name)
 			case name == "preemptible":
 				bools[name] = true
 				continue
@@ -88,11 +121,11 @@ func parseSbatch(script string, argv []string) (submitOpts, error) {
 				requeue = ptrBool(name == "requeue")
 				continue
 			case !sbatchValue[name]:
-				return fmt.Errorf("sbatch: --%s is not supported here", name)
+				return fmt.Errorf(cmd+": --%s is not supported here", name)
 			}
 			if !hasValue {
 				if i+1 >= len(words) {
-					return fmt.Errorf("sbatch: --%s needs a value", name)
+					return fmt.Errorf(cmd+": --%s needs a value", name)
 				}
 				i++
 				value = words[i]
@@ -111,7 +144,7 @@ func parseSbatch(script string, argv []string) (submitOpts, error) {
 		}
 		words, err := Split(strings.TrimSpace(strings.TrimPrefix(t, "#SBATCH")))
 		if err != nil {
-			return o, fmt.Errorf("sbatch: %s: %v", t, err)
+			return o, fmt.Errorf(cmd+": %s: %v", t, err)
 		}
 		if err := read(words, false); err != nil {
 			return o, err
@@ -127,7 +160,7 @@ func parseSbatch(script string, argv []string) (submitOpts, error) {
 		}
 		n, err := strconv.Atoi(v)
 		if err != nil || n < 0 {
-			return 0, true, fmt.Errorf("sbatch: --%s takes a number", name)
+			return 0, true, fmt.Errorf(cmd+": --%s takes a number", name)
 		}
 		return n, true, nil
 	}
@@ -145,14 +178,14 @@ func parseSbatch(script string, argv []string) (submitOpts, error) {
 		return o, err
 	} else if ok {
 		if o.nodes == 0 || n%o.nodes != 0 {
-			return o, fmt.Errorf("sbatch: --gpus %d does not split over %d machines", n, o.nodes)
+			return o, fmt.Errorf(cmd+": --gpus %d does not split over %d machines", n, o.nodes)
 		}
 		o.gpus = n / o.nodes
 	}
 	if n, ok, err := num("ntasks"); err != nil {
 		return o, err
 	} else if ok && n > o.nodes {
-		return o, fmt.Errorf("sbatch: --ntasks %d is more than the machines (%d): the queue runs one rank on each", n, o.nodes)
+		return o, fmt.Errorf(cmd+": --ntasks %d is more than the machines (%d): the queue runs one rank on each", n, o.nodes)
 	}
 	if n, ok, err := num("priority"); err != nil {
 		return o, err
@@ -162,14 +195,14 @@ func parseSbatch(script string, argv []string) (submitOpts, error) {
 	if v, ok := vals["cpus-per-task"]; ok {
 		c, err := strconv.ParseFloat(v, 64)
 		if err != nil || !(c > 0) {
-			return o, errors.New("sbatch: --cpus-per-task takes a number of cores")
+			return o, errors.New(cmd + ": --cpus-per-task takes a number of cores")
 		}
 		o.cpus = &c
 	}
 	if v, ok := vals["time"]; ok {
 		d, err := parseTime(v)
 		if err != nil {
-			return o, fmt.Errorf("sbatch: %v", err)
+			return o, fmt.Errorf(cmd+": %v", err)
 		}
 		o.limit = d
 	}
@@ -177,12 +210,19 @@ func parseSbatch(script string, argv []string) (submitOpts, error) {
 	if o.title == "" && o.script != "" {
 		o.title = o.script
 	}
+	if o.title == "" && len(o.command) > 0 {
+		o.title = path.Base(o.command[0])
+	}
 	o.partition = vals["partition"]
 	if o.export = vals["export"]; !validExport(o.export) {
-		return o, fmt.Errorf("sbatch: --export takes ALL or NONE here (not %q)", o.export)
+		return o, fmt.Errorf(cmd+": --export takes ALL or NONE here (not %q)", o.export)
 	}
 	o.preemptible = bools["preemptible"]
 	o.requeue = requeue
+	if cmd == "srun" {
+		o.pty = bools["pty"]
+		return o, nil
+	}
 	out, errFile := vals["output"], vals["error"]
 	if out == "" {
 		out = "slurm-%j.out"
@@ -353,4 +393,18 @@ func squeueReason(reason string) string {
 		r = "None"
 	}
 	return "(" + r + ")"
+}
+
+// runSrun is Slurm's srun: a job you stay attached to (submitJob).
+func runSrun(e *Env, a *parsed) int {
+	c := find("srun")
+	o, err := parseSlurm("srun", "", a.pos)
+	if err != nil {
+		fmt.Fprintf(e.Err, "%v\n", err)
+		return ExitUsage
+	}
+	if len(o.command) == 0 {
+		return usage(e, c, "say what to run: srun [options] command [args…]")
+	}
+	return submitJob(e, a, c, o)
 }

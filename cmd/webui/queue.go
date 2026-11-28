@@ -11,6 +11,8 @@ import (
 	"io"
 	"time"
 
+	"github.com/mrhaoxx/devpod/internal/kattach"
+
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
@@ -46,6 +48,18 @@ func (f *queueFlags) build() (*webui.QueueRules, error) {
 	}
 	return &webui.QueueRules{DefaultTimeLimit: f.defaultLimit, MaxTimeLimit: f.maxLimit, GangTimeout: 5 * time.Minute,
 		PreemptGrace: 2 * time.Minute, Tick: 5 * time.Second, KeepEnded: 30 * 24 * time.Hour, MaxJobsPerUser: f.maxJobsPerUser}, nil
+}
+
+// podAttach attaches to a Pod's container: in the console's own cluster
+// ("") through its own config, in another through that cluster's agent.
+func podAttach(local *rest.Config, reg *clusters.Registry) webui.PodAttacher {
+	return func(ctx context.Context, cluster, ns, pod, container string, tty bool) (*kattach.Conn, error) {
+		cfg := local
+		if cluster != "" && reg != nil {
+			cfg = reg.RESTConfig(cluster)
+		}
+		return kattach.Dial(ctx, cfg, ns, pod, container, tty)
+	}
 }
 
 // podLogs reads a Pod's log: in the console's own cluster ("") through

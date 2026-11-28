@@ -165,7 +165,7 @@ func (tf *telemetryFlags) startTelemetry(ctx context.Context, cfg *rest.Config, 
 	// the same key
 	srv.IngestKey = key
 	link := http.NewServeMux()
-	link.Handle("POST /dp/v1/cli", http.HandlerFunc(srv.HandleDP))
+	dpRoutes(link, srv)
 	link.Handle("/", h)
 
 	// the telemetry of the clusters that join: over their agents' links,
@@ -203,7 +203,7 @@ func (tf *telemetryFlags) startTelemetry(ctx context.Context, cfg *rest.Config, 
 
 	mux := http.NewServeMux()
 	mux.Handle("POST /ingest/v1/batch", h)
-	mux.Handle("POST /dp/v1/cli", http.HandlerFunc(srv.HandleDP))
+	dpRoutes(mux, srv)
 	mux.Handle("GET "+live.LivePath, live.LiveHandler(hub, token, el.IsLeader))
 	mux.Handle("GET "+live.DevPodPath, live.DevPodHandler(state, token, el.IsLeader))
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write([]byte("ok")) })
@@ -326,4 +326,11 @@ func requireToken(token string, next http.Handler) http.Handler {
 		r2.URL.Path = strings.Replace(r.URL.Path, "/internal/debug/pprof/", "/debug/pprof/", 1)
 		next.ServeHTTP(w, r2)
 	})
+}
+
+// dpRoutes: what dp calls, on m — the ingest listener's (DevPods of this
+// cluster) and the agents' links' (those of joined clusters) alike.
+func dpRoutes(m *http.ServeMux, srv *webui.Server) {
+	m.Handle("POST /dp/v1/cli", http.HandlerFunc(srv.HandleDP))
+	m.Handle("GET /dp/v1/attach", http.HandlerFunc(srv.HandleDPAttach))
 }

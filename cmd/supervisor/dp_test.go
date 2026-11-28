@@ -34,7 +34,7 @@ func TestDPCall(t *testing.T) {
 	}))
 	defer srv.Close()
 	var out, errw bytes.Buffer
-	code := dpCall(srv.URL, "uid-1", "tok", []string{"job", "list"}, "/home/a", map[string]string{"t.sh": "echo"}, nil, &out, &errw)
+	code := dpCall(srv.URL, "uid-1", "tok", []string{"job", "list"}, "/home/a", map[string]string{"t.sh": "echo"}, nil, dpIO{out: &out, err: &errw})
 	if code != 3 || out.String() != "hi\n" || errw.String() != "warn\n" {
 		t.Fatalf("exit %d out %q err %q", code, out.String(), errw.String())
 	}
@@ -47,7 +47,7 @@ func TestDPCall(t *testing.T) {
 	}))
 	defer refuse.Close()
 	errw.Reset()
-	if code := dpCall(refuse.URL, "uid-1", "tok", []string{"whoami"}, "/", nil, nil, &out, &errw); code != 1 || !bytes.Contains(errw.Bytes(), []byte("not a DevPod's dp")) {
+	if code := dpCall(refuse.URL, "uid-1", "tok", []string{"whoami"}, "/", nil, nil, dpIO{out: &out, err: &errw}); code != 1 || !bytes.Contains(errw.Bytes(), []byte("not a DevPod's dp")) {
 		t.Fatalf("refused: %d %q", code, errw.String())
 	}
 }

@@ -55,6 +55,9 @@ func inUserContainer(pid int, exe string) bool {
 	return pid == 1 || exe == supervisorPath
 }
 
+// jobLogPath: where a job's rank keeps what sshd and the supervisor say.
+const jobLogPath = "/tmp/.devpod-supervisor.log"
+
 func main() {
 	// sshd running root's shell for host or a login command (login.go)
 	if strings.TrimPrefix(filepath.Base(os.Args[0]), "-") == "devpod-login" {
@@ -109,9 +112,22 @@ func main() {
 		}
 	}
 	sshdArgs = append(sshdArgs, shellArgsForChosen(chosen, containerEnvForSetEnv(os.Environ()), filepath.Glob)...)
+	// jobMode: this DevPod is a queue job's rank (the controller sets it
+	// with spec.job) — its command is the point, and sshd ending does
+	// not end it. Its output is the command's alone: what sshd and the
+	// supervisor say goes to a file.
+	jobMode := os.Getenv("SUPERVISOR_JOB") == "true"
+	sshdOut := io.Writer(os.Stderr)
+	if jobMode {
+		if f, err := os.OpenFile(jobLogPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600); err == nil {
+			sshdOut, infoOut = f, f
+		} else {
+			sshdOut, infoOut = io.Discard, io.Discard
+		}
+	}
 	sshdCmd := exec.Command(sshdPath, sshdArgs...)
-	sshdCmd.Stdout = os.Stdout
-	sshdCmd.Stderr = os.Stderr
+	sshdCmd.Stdout = sshdOut
+	sshdCmd.Stderr = sshdOut
 	sshdCmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	if err := sshdCmd.Start(); err != nil {
 		fmt.Fprintf(os.Stderr, "supervisor: start sshd %q: %v\n", sshdPath, err)
@@ -120,17 +136,29 @@ func main() {
 	children := []*child{{name: "sshd", cmd: sshdCmd}}
 	workloadPid := 0
 
+	userExited := func() {}
 	if userArgs := os.Args[1:]; len(userArgs) > 0 {
 		uc := exec.Command(userArgs[0], userArgs[1:]...)
 		uc.Stdout = os.Stdout
 		uc.Stderr = os.Stderr
 		uc.Stdin = os.Stdin
 		uc.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+		// a job's rank its submitter attaches to waits for them (attach.go)
+		started := func() {}
+		if mode := os.Getenv("SUPERVISOR_ATTACH"); jobMode && mode != "" {
+			var err error
+			if started, userExited, err = attachedCommand(mode, uc); err != nil {
+				fmt.Fprintf(os.Stderr, "supervisor: %v\n", err)
+				_ = syscall.Kill(-sshdCmd.Process.Pid, syscall.SIGKILL)
+				os.Exit(1)
+			}
+		}
 		if err := uc.Start(); err != nil {
 			fmt.Fprintf(os.Stderr, "supervisor: start user cmd %q: %v\n", userArgs[0], err)
 			_ = syscall.Kill(-sshdCmd.Process.Pid, syscall.SIGKILL)
 			os.Exit(1)
 		}
+		started()
 		children = append(children, &child{name: "user", cmd: uc})
 		workloadPid = uc.Process.Pid
 	}
@@ -142,10 +170,6 @@ func main() {
 	// it from spec.exitOnUserCommandExit) to revert to first-death-
 	// wins, useful for service-style workloads.
 	exitOnUserCmd := os.Getenv("SUPERVISOR_EXIT_ON_USER_CMD") == "true"
-	// jobMode: this DevPod is a queue job's rank (the controller sets it
-	// with spec.job) — its command is the point, and sshd ending does
-	// not end it.
-	jobMode := os.Getenv("SUPERVISOR_JOB") == "true"
 
 	// Telemetry runs only when the controller handed out a config
 	// (spec §5.5), inside this process rather than as a child of its own;
@@ -154,7 +178,7 @@ func main() {
 	if path := envOr("SUPERVISOR_TELEMETRY_CONFIG", config.ConfigPath); fileExists(path) {
 		applyTelemetryLimits()
 		tel = newTelemetryRunner(agentRun(path, sshdCmd.Process.Pid, workloadPid), telemetryInitialBackoff)
-		fmt.Fprintln(os.Stderr, "supervisor: telemetry running in-process")
+		infof("supervisor: telemetry running in-process")
 		tel.start()
 	}
 
@@ -177,6 +201,7 @@ func main() {
 	}()
 
 	code := waitForChildren(children, &shuttingDown, exitOnUserCmd, jobMode)
+	userExited() // what an attached command wrote is out
 	tel.stop()
 	os.Exit(code)
 }
@@ -226,7 +251,7 @@ func waitForChildren(children []*child, shuttingDown *atomic.Bool, exitOnUserCmd
 		}
 		code := waitStatusToExit(ws)
 		hit.exit = &code
-		fmt.Fprintf(os.Stderr, "supervisor: %s (pid %d) exited code=%d\n", hit.name, pid, code)
+		infof("supervisor: %s (pid %d) exited code=%d", hit.name, pid, code)
 		if firstTrackedExit == nil {
 			firstTrackedExit = &code
 		}
@@ -242,7 +267,7 @@ func waitForChildren(children []*child, shuttingDown *atomic.Bool, exitOnUserCmd
 		// the user opted into following user-cmd exits.
 		switch {
 		case hit.name == "sshd" && jobMode && !userReaped(children):
-			fmt.Fprintf(os.Stderr, "supervisor: sshd exited with %d; the job's command runs on (no new SSH logins to this rank)\n", code)
+			infof("supervisor: sshd exited with %d; the job's command runs on (no new SSH logins to this rank)", code)
 		case hit.name == "sshd":
 			// sshd is the load-bearing process; always exit so kubelet
 			// restarts the container.

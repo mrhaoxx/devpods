@@ -59,7 +59,10 @@ type JobRequest struct {
 	Requeue          *bool                    `json:"requeue"`
 	Privileges       *JobPrivileges           `json:"privileges"`
 	Env              map[string]string        `json:"env"`
-	DryRun           bool                     `json:"dryRun"`
+	// Attach: its submitter attaches to its ranks (stdin, or tty: rank 0
+	// on a terminal); they wait for the attach to start (job_attach.go)
+	Attach string `json:"attach"`
+	DryRun bool   `json:"dryRun"`
 }
 
 // JobPrivileges: what of the host a job's ranks ask, over their source's.
@@ -512,6 +515,9 @@ func (s *Server) buildJob(ctx context.Context, sess Session, req JobRequest) (*d
 	if wd := req.Workdir; wd != "" && !path.IsAbs(wd) {
 		return nil, badRequest("the working directory is a full path (it is %q)", wd)
 	}
+	if a := req.Attach; a != "" && a != "stdin" && a != "tty" {
+		return nil, badRequest("attach is stdin or tty (it is %q)", a)
+	}
 	machines, usable, err := s.jobMachines(ctx, owner, access.NeedsOf(&tmpl.Spec))
 	if err != nil {
 		return nil, &serverErr{http.StatusServiceUnavailable, "CLUSTER_UNAVAILABLE", err.Error(), nil}
@@ -583,7 +589,7 @@ func (s *Server) buildJob(ctx context.Context, sess Session, req JobRequest) (*d
 	sort.Slice(env, func(i, j int) bool { return env[i].Name < env[j].Name })
 	job := &devpodv1alpha1.Job{
 		Spec: devpodv1alpha1.JobSpec{
-			Cluster: cluster, Owner: owner, Title: title, Source: req.From, Template: tmpl, Shell: shell,
+			Cluster: cluster, Owner: owner, Title: title, Source: req.From, Template: tmpl, Shell: shell, Attach: req.Attach,
 			Command: command, Args: req.Args, Workdir: req.Workdir, Env: env, Nodes: req.Nodes, GPUsPerNode: req.GPUs,
 			CPUsPerNode: *resource.NewMilliQuantity(cpuMilli, resource.DecimalSI), TimeLimit: metav1.Duration{Duration: limit},
 			Priority: req.Priority, Preemptible: req.Preemptible, Requeue: req.Requeue,
@@ -1000,7 +1006,7 @@ func (s *Server) handleResubmitJob(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	again := &devpodv1alpha1.Job{Spec: *j.Spec.DeepCopy()}
-	again.Spec.Cancelled, again.Spec.Held = nil, false
+	again.Spec.Cancelled, again.Spec.Held, again.Spec.Attach = nil, false, "" // nobody is attached to it
 	if apiErr := s.createJob(ctx, again); apiErr != nil {
 		s.writeServerErr(w, apiErr)
 		return

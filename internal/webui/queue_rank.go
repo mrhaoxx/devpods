@@ -161,6 +161,16 @@ func rankDevPod(job *devpodv1alpha1.Job, rank int32, node, ns, master string) *d
 	} {
 		env = append(env, corev1.EnvVar{Name: kv[0], Value: kv[1]})
 	}
+	// its submitter attached (srun's way): the rank waits for them, its
+	// stdin open once — each rank, or rank 0 alone, on a terminal
+	switch {
+	case job.Spec.Attach == "stdin":
+		c.Stdin, c.StdinOnce, c.TTY = true, true, false
+		env = append(env, corev1.EnvVar{Name: "SUPERVISOR_ATTACH", Value: "stdin"})
+	case job.Spec.Attach == "tty" && rank == 0:
+		c.Stdin, c.StdinOnce, c.TTY = true, true, true
+		env = append(env, corev1.EnvVar{Name: "SUPERVISOR_ATTACH", Value: "tty"})
+	}
 	c.Env = env
 	setJobResources(c, job)
 

@@ -109,6 +109,15 @@ type JobSpec struct {
 	//
 	// +optional
 	Cancelled *ReservationCancel `json:"cancelled,omitempty"`
+	// Attach: how its submitter is attached to its ranks while they run
+	// (srun's way): stdin — each rank waits for the attach to start its
+	// command, rank 0's stdin the submitter's; tty — rank 0 waits for it
+	// and runs on a terminal (srun --pty). Empty: nobody attaches (its
+	// output is followed, and kept).
+	//
+	// +kubebuilder:validation:Enum=stdin;tty
+	// +optional
+	Attach string `json:"attach,omitempty"`
 	// Held: its owner (or an admin) holds it back — while it waits, it is
 	// out of the queue's order and holds no machine; released, it waits in
 	// its place again (by its submission). Only a waiting job is held.

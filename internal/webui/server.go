@@ -134,6 +134,7 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("PATCH /api/jobs/{id}", s.handlePatchJob)
 	mux.HandleFunc("POST /api/jobs/{id}/resubmit", s.handleResubmitJob)
 	mux.HandleFunc("GET /api/jobs/{id}/logs", s.handleJobLogs)
+	mux.HandleFunc("GET /api/jobs/{id}/attach", s.handleJobAttach)
 	mux.HandleFunc("GET /api/admin/job-priority-rules", s.handleGetPriorityRules)
 	mux.HandleFunc("PUT /api/admin/job-priority-rules", s.handlePutPriorityRules)
 	mux.HandleFunc("PUT /api/admin/nodes/{name}/reservable", s.handleSetReservable)

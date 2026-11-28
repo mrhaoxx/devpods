@@ -5,10 +5,11 @@
 package controllers_test
 
 import (
-	"k8s.io/client-go/util/retry"
 	"strings"
 	"testing"
 	"time"
+
+	"k8s.io/client-go/util/retry"
 
 	corev1 "k8s.io/api/core/v1"
 	networkingv1 "k8s.io/api/networking/v1"

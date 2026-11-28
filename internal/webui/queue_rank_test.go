@@ -240,3 +240,34 @@ func TestRankDevPodSubmitPath(t *testing.T) {
 		t.Fatalf("command %q", c.Command)
 	}
 }
+
+// A job its submitter attaches to: each rank (stdin) — or rank 0 alone,
+// on a terminal (tty) — waits for the attach with its stdin open once;
+// one nobody attaches to has neither.
+func TestRankDevPodAttach(t *testing.T) {
+	type got struct {
+		stdin, once, tty bool
+		gate             string
+	}
+	of := func(attach string, rank int32) got {
+		j := testJob()
+		j.Spec.Attach = attach
+		c := rankDevPod(j, rank, "g1", "devpods", "").Spec.Pod.Spec.Containers[0]
+		return got{c.Stdin, c.StdinOnce, c.TTY, envValue(c, "SUPERVISOR_ATTACH")}
+	}
+	for _, c := range []struct {
+		attach string
+		rank   int32
+		want   got
+	}{
+		{"", 0, got{}},
+		{"stdin", 0, got{true, true, false, "stdin"}},
+		{"stdin", 1, got{true, true, false, "stdin"}},
+		{"tty", 0, got{true, true, true, "tty"}},
+		{"tty", 1, got{}},
+	} {
+		if g := of(c.attach, c.rank); g != c.want {
+			t.Errorf("attach %q rank %d: %+v, want %+v", c.attach, c.rank, g, c.want)
+		}
+	}
+}

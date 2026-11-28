@@ -74,12 +74,29 @@ type Origin struct {
 	// Env: the shell's environment dp sent (a submit's), which a job
 	// takes along unless --export NONE
 	Env map[string]string
+	// Attach is set when dp can attach to a job's ranks (it reaches the
+	// console's attach): it tells dp to, once they run. TTY: dp's stdin
+	// and stdout are a terminal (job submit --pty needs one), of kind Term
+	// (its TERM, a --pty job's).
+	Attach func(AttachTo) `json:"-"`
+	TTY    bool           `json:"-"`
+	Term   string         `json:"-"`
+}
+
+// AttachTo: what dp is told to attach to — the job's ranks (on rank 0's
+// terminal when TTY), in this attempt of it.
+type AttachTo struct {
+	Job     string `json:"job"`
+	Cluster string `json:"cluster,omitempty"`
+	Nodes   int    `json:"nodes"`
+	TTY     bool   `json:"tty,omitempty"`
+	Attempt int    `json:"attempt,omitempty"`
 }
 
 // OriginCommands are the commands dp may run from inside a DevPod: the
 // queue's, the reservations' and the harmless — not what touches the
 // owner's DevPods or keys (a DevPod's collaborators can call dp too).
-var OriginCommands = []string{"job", "jobs", "sbatch", "squeue", "scancel", "reserve", "reservations", "help", "whoami"}
+var OriginCommands = []string{"job", "jobs", "srun", "sbatch", "squeue", "scancel", "reserve", "reservations", "help", "whoami"}
 
 type parsed struct {
 	cluster string // --cluster, taken by every command

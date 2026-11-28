@@ -115,6 +115,10 @@ rules:
 - apiGroups: [""]
   resources: ["pods/log"]
   verbs: ["get"]
+# Job attach: the console attaches its submitter to a rank (srun's way).
+- apiGroups: [""]
+  resources: ["pods/attach"]
+  verbs: ["get", "create"]
 ---
 # Source: devpod/templates/agent-rbac.yaml
 # The agent's own key: made on its first start, kept in one Secret, read

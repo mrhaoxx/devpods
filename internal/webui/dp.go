@@ -13,6 +13,8 @@ import (
 	"strings"
 	"sync"
 
+	devpodv1alpha1 "github.com/mrhaoxx/devpod/api/v1alpha1"
+
 	"github.com/mrhaoxx/devpod/internal/gatewaycli"
 	"github.com/mrhaoxx/devpod/internal/telemetry/wire"
 	"github.com/mrhaoxx/devpod/internal/webui/clusters"
@@ -43,26 +45,12 @@ func (s *Server) HandleDP(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "POST only", http.StatusMethodNotAllowed)
 		return
 	}
-	if s.CLI == nil || len(s.IngestKey) == 0 {
+	if s.CLI == nil {
 		http.Error(w, "dp is not available on this console", http.StatusServiceUnavailable)
 		return
 	}
-	uid := r.Header.Get("X-DevPod-UID")
-	tok := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
-	if uid == "" || subtle.ConstantTimeCompare([]byte(tok), []byte(wire.DPToken(s.IngestKey, uid))) != 1 {
-		http.Error(w, "not a DevPod's dp", http.StatusUnauthorized)
-		return
-	}
-	dp, cluster, ok := s.DevPodByUID(r.Context(), uid)
+	dp, cluster, ok := s.dpCaller(w, r)
 	if !ok {
-		http.Error(w, "no such DevPod", http.StatusUnauthorized)
-		return
-	}
-	// over a cluster's link, only that cluster's DevPods: one cluster's
-	// controller (which holds the key) speaks for no other's
-	if link, over := clusters.LinkCluster(r.Context()); over && link != cluster {
-		slog.Warn("dp_refused", "devpod", dp.Name, "cluster", cluster, "link", link)
-		http.Error(w, "not a DevPod of this cluster", http.StatusUnauthorized)
 		return
 	}
 	var req dpRequest
@@ -80,8 +68,45 @@ func (s *Server) HandleDP(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	origin := &gatewaycli.Origin{Cluster: cluster, DevPod: dp.Name, Cwd: req.Cwd, Env: req.Env}
+	// dp says it can attach (it reached /dp/v1/attach first), and whether
+	// it is on a terminal: a job's ranks it submits wait for it, and it is
+	// told when to attach — a frame {"a": …} of its own
+	if r.Header.Get("X-DP-Attach") == "1" {
+		origin.Attach = func(a gatewaycli.AttachTo) { fw.frame(map[string]any{"a": a}) }
+		origin.TTY = r.Header.Get("X-DP-TTY") == "1"
+		origin.Term = r.Header.Get("X-DP-Term")
+	}
 	code := s.CLI.Exec(r.Context(), gatewaycli.Meta{User: dp.Spec.Owner, Remote: r.RemoteAddr, AuthKind: "dp"}, req.Argv, origin, req.Files, fw.stream("o"), fw.stream("e"))
 	fw.frame(map[string]any{"x": code})
+}
+
+// dpCaller: the DevPod a dp call is from — its UID and its dp credential,
+// which only a controller holding the key can make — and its cluster; an
+// answer (and false) when it is none.
+func (s *Server) dpCaller(w http.ResponseWriter, r *http.Request) (*devpodv1alpha1.DevPod, string, bool) {
+	if len(s.IngestKey) == 0 {
+		http.Error(w, "dp is not available on this console", http.StatusServiceUnavailable)
+		return nil, "", false
+	}
+	uid := r.Header.Get("X-DevPod-UID")
+	tok := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
+	if uid == "" || subtle.ConstantTimeCompare([]byte(tok), []byte(wire.DPToken(s.IngestKey, uid))) != 1 {
+		http.Error(w, "not a DevPod's dp", http.StatusUnauthorized)
+		return nil, "", false
+	}
+	dp, cluster, ok := s.DevPodByUID(r.Context(), uid)
+	if !ok {
+		http.Error(w, "no such DevPod", http.StatusUnauthorized)
+		return nil, "", false
+	}
+	// over a cluster's link, only that cluster's DevPods: one cluster's
+	// controller (which holds the key) speaks for no other's
+	if link, over := clusters.LinkCluster(r.Context()); over && link != cluster {
+		slog.Warn("dp_refused", "devpod", dp.Name, "cluster", cluster, "link", link)
+		http.Error(w, "not a DevPod of this cluster", http.StatusUnauthorized)
+		return nil, "", false
+	}
+	return dp, cluster, true
 }
 
 // frameWriter writes JSON lines, one per write, flushed at once; stdout

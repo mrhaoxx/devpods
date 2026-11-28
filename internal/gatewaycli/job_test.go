@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -422,5 +423,107 @@ func TestJobSubmitWarnings(t *testing.T) {
 	quiet := &Origin{DevPod: "alice-a", Cwd: "/root", Env: map[string]string{"DP_NO_WORKDIR_WARNING": "1"}}
 	if code, _, errs := f.runFrom("job submit -d -- true", quiet, nil); code != 0 || strings.Contains(errs, "warning") {
 		t.Fatalf("its shell asked not to: %d %q", code, errs)
+	}
+}
+
+// runWaitFrom runs line from the DevPod o says, waiting as srun does.
+func (f *fakeAPI) runWaitFrom(line string, o *Origin) (int, string, string) {
+	f.t.Helper()
+	argv, err := Split(line)
+	if err != nil {
+		f.t.Fatal(err)
+	}
+	var out, errw syncBuffer
+	code := Run(&Env{Ctx: context.Background(), Session: context.Background(), User: "alice", API: NewAPI(f.srv.URL, "k3y"), Out: &out, Err: &errw, Origin: o,
+		Now: func() time.Time { return time.Date(2026, 11, 27, 4, 0, 0, 0, time.UTC) }}, argv)
+	return code, out.String(), errw.String()
+}
+
+// attachingOrigin: a DevPod's dp that can attach (on a terminal or not),
+// the attaches it is told to make kept.
+func attachingOrigin(tty bool) (*Origin, func() []AttachTo) {
+	var mu sync.Mutex
+	var told []AttachTo
+	o := &Origin{Cluster: "st", DevPod: "alice-a", Cwd: "/home/alice", TTY: tty, Term: "xterm-256color", Attach: func(a AttachTo) {
+		mu.Lock()
+		defer mu.Unlock()
+		told = append(told, a)
+	}}
+	return o, func() []AttachTo {
+		mu.Lock()
+		defer mu.Unlock()
+		return append([]AttachTo(nil), told...)
+	}
+}
+
+// From a dp that can attach, a waiting submit asks its ranks to wait for
+// the attach (stdin; tty with --pty) and, once they run, tells dp to
+// attach — rather than follow their logs — then ends with the job's code.
+func TestJobSubmitAttaches(t *testing.T) {
+	saved := waitPoll
+	waitPoll = 20 * time.Millisecond
+	t.Cleanup(func() { waitPoll = saved })
+	for _, c := range []struct {
+		line, attach string
+		tty          bool
+	}{
+		{"job submit --gpus 1 -- python t.py", "stdin", false},
+		{"job submit --pty --gpus 1 -- bash", "tty", true},
+		{"srun -N 1 --gpus-per-node 1 -t 10 --pty bash -l", "tty", true},
+	} {
+		f := newFakeAPI(t)
+		f.routes["POST /api/clusters/st/jobs"] = map[string]any{"id": "abc12", "cluster": "st", "phase": "Queued", "nodes": 1}
+		n := 0
+		f.dyn["GET /api/jobs/abc12"] = func() any {
+			n++
+			if n < 4 {
+				return map[string]any{"id": "abc12", "cluster": "st", "phase": "Running", "nodes": 1, "attempts": 1, "ranks": []any{map[string]any{"rank": 0, "node": "m800"}}}
+			}
+			return map[string]any{"id": "abc12", "cluster": "st", "phase": "Failed", "nodes": 1, "detail": map[string]any{"exit": "4"}}
+		}
+		o, told := attachingOrigin(c.tty)
+		code, _, errs := f.runWaitFrom(c.line, o)
+		if code != 4 {
+			t.Fatalf("%s: %d %q", c.line, code, errs)
+		}
+		b := lastBody(t, f, "POST", "/api/clusters/st/jobs")
+		if b["attach"] != c.attach {
+			t.Fatalf("%s: asked attach %v", c.line, b["attach"])
+		}
+		// a terminal job's terminal is the caller's kind (TERM); others
+		// take none along
+		env, _ := b["env"].(map[string]any)
+		if term := env["TERM"]; (c.attach == "tty") != (term == "xterm-256color") {
+			t.Fatalf("%s: TERM %v", c.line, term)
+		}
+		if got := told(); len(got) != 1 || got[0].Job != "abc12" || got[0].Nodes != 1 || got[0].TTY != c.tty {
+			t.Fatalf("%s: told %+v", c.line, got)
+		}
+		f.mu.Lock()
+		followed := slices.ContainsFunc(f.calls, func(s string) bool { return strings.Contains(s, "/logs?") })
+		f.mu.Unlock()
+		if followed {
+			t.Fatalf("%s: followed the logs as well", c.line)
+		}
+	}
+}
+
+// --pty needs a terminal and a dp to attach with; -d attaches to nothing.
+func TestJobSubmitPtyNeeds(t *testing.T) {
+	f := newFakeAPI(t)
+	f.routes["POST /api/clusters/st/jobs"] = map[string]any{"id": "abc12", "cluster": "st", "phase": "Queued", "nodes": 1}
+	notTTY, _ := attachingOrigin(false)
+	if code, _, errs := f.runWaitFrom("job submit --pty -- bash", notTTY); code != ExitUsage || !strings.Contains(errs, "terminal") {
+		t.Fatalf("no terminal: %d %q", code, errs)
+	}
+	if code, _, errs := f.runWaitFrom("job submit --pty -- bash", &Origin{Cluster: "st", DevPod: "alice-a", TTY: true}); code != ExitUsage || !strings.Contains(errs, "dp") {
+		t.Fatalf("no dp to attach with: %d %q", code, errs)
+	}
+	o, told := attachingOrigin(true)
+	if code, _, errs := f.runWaitFrom("job submit -d -- true", o); code != 0 || len(told()) != 0 {
+		t.Fatalf("-d: %d %q %v", code, errs, told())
+	}
+	if b := lastBody(t, f, "POST", "/api/clusters/st/jobs"); b["attach"] != nil {
+		t.Fatalf("-d asked attach %v", b["attach"])
 	}
 }

@@ -266,6 +266,7 @@ func main() {
 	}
 	if srv.Queue != nil {
 		srv.PodLogs = podLogs(restCfg, srv.Clusters)
+		srv.PodAttach = podAttach(restCfg, srv.Clusters)
 	}
 	if srv.Snapshots, err = snf.build(restCfg); err != nil {
 		slog.Error("snapshots", "err", err)
