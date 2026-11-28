@@ -53,6 +53,23 @@ describe("nodes page", () => {
     );
   }
 
+  it("closing a machine's reservations asks first, saying what it ends", async () => {
+    const calls = stubFetch({
+      "/api/admin/nodes": nodes,
+      "/api/nodes": { items: [{ name: "g206", ready: true, cpu: { allocatable: 64, allocated: 0 }, mem: { allocatable: 1, allocated: 0 }, gpuTotal: 4, gpuUsed: 0, reservable: true }] },
+      "PUT /api/admin/nodes/g206/reservable": { reservable: false, pending: 0 },
+    });
+    renderWithProviders(<NodesPage />, { me: stubMe({ admin: true, features: { ...stubMe().features, reservations: true } }), route: "/admin/nodes" });
+    const sw = (await screen.findByRole("switch", { name: "g206 可预约" })) as HTMLInputElement;
+    await waitFor(() => expect(sw.checked).toBe(true));
+    fireEvent.click(sw);
+    const dialog = within(await screen.findByRole("dialog"));
+    expect(dialog.getByText(/还没结束的预约会被取消/)).toBeTruthy();
+    expect(calls.some((c) => c.method === "PUT")).toBe(false);
+    fireEvent.click(dialog.getByRole("button", { name: "关闭可预约" }));
+    await waitFor(() => expect(calls.some((c) => c.method === "PUT" && c.body === JSON.stringify({ reservable: false }))).toBe(true));
+  });
+
   it("opens the drawer from ?node=g206 and closing clears it", async () => {
     setup("/admin/nodes?node=g206");
     expect(await screen.findByRole("dialog", { name: /g206/ })).toBeTruthy();

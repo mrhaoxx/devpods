@@ -14,6 +14,7 @@ import (
 	"net/http"
 	"slices"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -930,7 +931,7 @@ func (s *Server) patchDevPod(r *http.Request, sess Session, dp *devpodv1alpha1.D
 	}
 	if sess.Token != nil {
 		edits := req.editsSpec() || req.Shell != nil || req.Collaborators != nil || req.Node != nil
-		if (req.Running != nil && !sess.Token.has("devpods:power")) || (edits && !sess.Token.has("devpods:update")) {
+		if ((req.Running != nil || req.Priority != nil) && !sess.Token.has("devpods:power")) || (edits && !sess.Token.has("devpods:update")) {
 			return PatchResponse{}, &serverErr{http.StatusForbidden, "SCOPE", "this token lacks the scope for this change (devpods:power to start / stop, devpods:update to edit)", nil}
 		}
 	}
@@ -941,6 +942,17 @@ func (s *Server) patchDevPod(r *http.Request, sess Session, dp *devpodv1alpha1.D
 		if apiErr := s.applyNode(r, sess, dp, *req.Node); apiErr != nil {
 			return PatchResponse{}, apiErr
 		}
+	}
+	// waiting in line: its priority there (a start's is the start's, below)
+	if starting := !before.Spec.Running && dp.Spec.Running; req.Priority != nil && !starting {
+		if _, inLine := queuedAt(dp); !inLine {
+			return PatchResponse{}, &serverErr{http.StatusConflict, "NOT_QUEUED", "only a DevPod waiting in line has a priority to change", nil}
+		}
+		if apiErr := s.priorityOK(r.Context(), sess, dp.Spec.Owner, s.resCluster(r.Context()), *req.Priority, queuePriority(dp)); apiErr != nil {
+			return PatchResponse{}, apiErr
+		}
+		annotate(dp, devpodv1alpha1.QueuePriorityAnnotation, strconv.Itoa(int(*req.Priority)))
+		s.nudgeQueue()
 	}
 	if equality.Semantic.DeepEqual(before.Spec, dp.Spec) && maps.Equal(before.Annotations, dp.Annotations) {
 		return PatchResponse{DevPod: dp, Queued: wasQueued}, nil // no-op

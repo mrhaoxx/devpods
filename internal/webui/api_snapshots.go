@@ -688,9 +688,10 @@ func (s *Server) handleSnapshotProgress(w http.ResponseWriter, r *http.Request) 
 	var mu sync.Mutex
 	fold := &logFold{}
 	logDone := make(chan struct{})
+	name := sn.Name // sn is read again below: the log follows this one
 	go func() {
 		defer close(logDone)
-		cfg.followLog(ctx, s.NS, sn.Name, &mu, fold)
+		cfg.followLog(ctx, s.NS, name, &mu, fold)
 	}()
 
 	var last string

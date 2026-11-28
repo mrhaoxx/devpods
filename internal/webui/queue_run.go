@@ -160,6 +160,10 @@ func (s *Server) queueIn(ctx context.Context, cluster string, jobs, ended []*dev
 				s.endJob(ctx, cc, j, devpodv1alpha1.JobCancelled, "cancelled", nil, now)
 				continue
 			}
+			if j.Spec.Held {
+				s.holdJob(ctx, j)
+				continue
+			}
 			// a former start's ranks still going (being deleted, their
 			// Pods in their grace): it waits for them to be gone, or its
 			// new ranks would be taken for them
@@ -1022,4 +1026,15 @@ func (s *Server) lineEntry(ctx context.Context, cc *clusters.ClusterClients, dp 
 		only = home
 	}
 	return devPodEntry(dp, since, queuePriority(dp), only, avoiding(dp, now)), true
+}
+
+// holdJob writes a held job's status — waiting, held, with no place in
+// line and no promise — when it says otherwise.
+func (s *Server) holdJob(ctx context.Context, j *devpodv1alpha1.Job) {
+	st := &j.Status
+	if st.Phase == devpodv1alpha1.JobQueued && st.Reason == "held" && st.Position == 0 && st.ExpectedStart == nil && len(st.Detail) == 0 {
+		return
+	}
+	st.Phase, st.Reason, st.Position, st.Detail, st.ExpectedStart = devpodv1alpha1.JobQueued, "held", 0, nil, nil
+	s.writeJobStatus(ctx, j)
 }

@@ -92,7 +92,8 @@ func (s *Server) record(ctx context.Context, ev store.EventRow) {
 	w.pending = append(w.pending, pendingEvent{w.seq, ev})
 	if !w.running {
 		w.running = true
-		go s.writeEvents(context.WithoutCancel(ctx))
+		// the store as it is now: the writer reads no field of s
+		go s.writeEvents(context.WithoutCancel(ctx), eventSink{s.Audit.Store, w.id})
 	}
 }
 
@@ -103,7 +104,7 @@ func (s *Server) record(ctx context.Context, ev store.EventRow) {
 // refused so eventRefusals times is given up. Twice: the second time the
 // batch went with its token, and would have gone (kept once) had the first
 // gone in though it failed — what goes one at a time is never in already.
-func (s *Server) writeEvents(ctx context.Context) {
+func (s *Server) writeEvents(ctx context.Context, sink eventSink) {
 	w := &s.events
 	retry := s.eventRetry
 	if retry <= 0 {
@@ -127,7 +128,7 @@ func (s *Server) writeEvents(ctx context.Context) {
 			batch, fails, refused = slices.Clone(w.pending[:n]), 0, 0
 			w.mu.Unlock()
 		}
-		err := s.insertEvents(ctx, batch)
+		err := sink.insert(ctx, batch)
 		if err == nil {
 			w.taken(batch)
 			batch = nil
@@ -136,7 +137,7 @@ func (s *Server) writeEvents(ctx context.Context) {
 		fails++
 		first := batch[0].row
 		slog.Warn("event_write", "records", len(batch), "kind", first.Kind, "object", first.Object, "action", first.Action, "err", err)
-		if (len(batch) == 1 || fails >= 2) && s.takesProbe(ctx, batch) {
+		if (len(batch) == 1 || fails >= 2) && s.takesProbe(ctx, sink, batch) {
 			// the store is there, and refuses this batch: one of its records
 			switch refused++; {
 			case len(batch) > 1:
@@ -156,24 +157,31 @@ func (s *Server) writeEvents(ctx context.Context) {
 	}
 }
 
-// insertEvents writes batch, its token naming this writer and the
-// batch's first and last records (the same batch, the same token).
-func (s *Server) insertEvents(ctx context.Context, batch []pendingEvent) error {
+// eventSink: where a writer writes — the store, and the writer's id in
+// its batches' tokens.
+type eventSink struct {
+	store AuditStore
+	id    string
+}
+
+// insert writes batch, its token naming the writer and the batch's first
+// and last records (the same batch, the same token).
+func (k eventSink) insert(ctx context.Context, batch []pendingEvent) error {
 	rows := make([]store.EventRow, len(batch))
 	for i := range batch {
 		rows[i] = batch[i].row
 	}
-	token := fmt.Sprintf("%s-%d-%d", s.events.id, batch[0].seq, batch[len(batch)-1].seq)
+	token := fmt.Sprintf("%s-%d-%d", k.id, batch[0].seq, batch[len(batch)-1].seq)
 	wctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
-	return s.Audit.Store.InsertEvents(wctx, rows, token)
+	return k.store.InsertEvents(wctx, rows, token)
 }
 
 // takesProbe: the store takes a record written alone (which is then taken
 // off) — batch's first of several (the order kept when the store was only
 // away), else the first waiting after batch, else batch's last of several;
 // false when it takes none, or there is none to try.
-func (s *Server) takesProbe(ctx context.Context, batch []pendingEvent) bool {
+func (s *Server) takesProbe(ctx context.Context, sink eventSink, batch []pendingEvent) bool {
 	w := &s.events
 	var probes []pendingEvent
 	if len(batch) > 1 {
@@ -189,7 +197,7 @@ func (s *Server) takesProbe(ctx context.Context, batch []pendingEvent) bool {
 		probes = append(probes, batch[len(batch)-1])
 	}
 	for _, p := range probes {
-		if s.insertEvents(ctx, []pendingEvent{p}) == nil {
+		if sink.insert(ctx, []pendingEvent{p}) == nil {
 			w.taken([]pendingEvent{p})
 			return true
 		}
@@ -274,6 +282,8 @@ func devPodActions(before, after *devpodv1alpha1.DevPod) []devPodChange {
 	_, wasQ := queuedAt(before)
 	_, isQ := queuedAt(after)
 	switch {
+	case wasQ && isQ && queuePriority(before) != queuePriority(after):
+		out = append(out, devPodChange{"queue-priority", fmt.Sprintf("%d→%d", queuePriority(before), queuePriority(after))})
 	case !wasQ && isQ:
 		out = append(out, devPodChange{"queue", fmt.Sprintf("priority %d", queuePriority(after))})
 	case wasQ && !isQ && !after.Spec.Running:

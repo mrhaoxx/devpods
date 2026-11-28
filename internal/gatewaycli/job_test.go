@@ -361,3 +361,48 @@ func TestJobListShowsDevPods(t *testing.T) {
 		}
 	}
 }
+
+// The queue's jobs are managed from the command line: their priority (a
+// DevPod's in line too), held back and released, submitted again; a
+// DevPod in line is cancelled out of it.
+func TestJobManage(t *testing.T) {
+	f := newFakeAPI(t)
+	f.routes["PATCH /api/jobs/abc12"] = map[string]any{"id": "abc12", "priority": 5}
+	f.routes["PATCH /api/devpods/alice-a"] = map[string]any{"devpod": map[string]any{}}
+	f.routes["POST /api/jobs/abc12/resubmit"] = map[string]any{"id": "def34"}
+	for _, c := range []struct{ line, call, out string }{
+		{"job priority abc12 5", `PATCH /api/jobs/abc12 {"priority":5}`, "abc12: priority 5"},
+		{"job priority devpod/alice-a 2", `PATCH /api/devpods/alice-a {"priority":2}`, "devpod/alice-a: priority 2"},
+		{"job hold abc12", `PATCH /api/jobs/abc12 {"held":true}`, "abc12: held"},
+		{"job release abc12", `PATCH /api/jobs/abc12 {"held":false}`, "abc12: released"},
+		{"job resubmit abc12", `POST /api/jobs/abc12/resubmit`, "def34"},
+		{"job cancel devpod/alice-a", `PATCH /api/devpods/alice-a {"running":false}`, "devpod/alice-a: cancelled"},
+	} {
+		f.mu.Lock()
+		f.calls = nil
+		f.mu.Unlock()
+		code, out, errs := f.run(c.line)
+		f.mu.Lock()
+		calls := append([]string(nil), f.calls...)
+		f.mu.Unlock()
+		if code != 0 || !strings.Contains(out, c.out) || len(calls) != 1 || calls[0] != c.call {
+			t.Fatalf("%s: %d %q %q calls %q", c.line, code, out, errs, calls)
+		}
+	}
+	if code, _, _ := f.run("job priority abc12 -1"); code == 0 {
+		t.Fatal("a negative priority was taken")
+	}
+	if code, _, errs := f.run("job hold devpod/alice-a"); code == 0 || !strings.Contains(errs, "job cancel") {
+		t.Fatalf("holding a DevPod: %d %q", code, errs)
+	}
+}
+
+// A held job says so in the list.
+func TestJobListHeld(t *testing.T) {
+	f := newFakeAPI(t)
+	f.routes["GET /api/jobs"] = map[string]any{"items": []any{
+		map[string]any{"id": "abc12", "owner": "alice", "phase": "Queued", "reason": "held", "held": true, "nodes": 1, "gpus": 8, "timeLimitSeconds": 3600}}}
+	if code, out, errs := f.run("job list"); code != 0 || !strings.Contains(out, "held") {
+		t.Fatalf("list: %d %q %q", code, out, errs)
+	}
+}

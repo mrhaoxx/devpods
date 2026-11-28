@@ -7,6 +7,7 @@ package webui
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"math"
@@ -87,6 +88,7 @@ type jobView struct {
 	Priority         int32                     `json:"priority"`
 	Preemptible      bool                      `json:"preemptible,omitempty"`
 	Requeue          bool                      `json:"requeue"`
+	Held             bool                      `json:"held,omitempty"`
 	Mine             bool                      `json:"mine"`
 	CanManage        bool                      `json:"canManage"`
 	Submitted        time.Time                 `json:"submitted"`
@@ -115,7 +117,7 @@ func viewOfJob(j *devpodv1alpha1.Job, me string, admin bool) jobView {
 		ID: j.Name, Title: j.Spec.Title, Owner: j.Spec.Owner, Phase: j.Status.Phase, Reason: j.Status.Reason, Detail: j.Status.Detail,
 		Position: j.Status.Position, Nodes: j.Spec.Nodes, GPUs: j.Spec.GPUsPerNode, CPUs: float64(j.Spec.CPUsPerNode.MilliValue()) / 1000,
 		TimeLimitSeconds: int64(j.Spec.TimeLimit.Duration / time.Second), Priority: j.Spec.Priority, Preemptible: j.Spec.Preemptible,
-		Requeue: j.Spec.Requeues(), Mine: j.Spec.Owner == me, Submitted: j.CreationTimestamp.Time.UTC(), ExpectedStart: timeOf(j.Status.ExpectedStart),
+		Requeue: j.Spec.Requeues(), Held: j.Spec.Held, Mine: j.Spec.Owner == me, Submitted: j.CreationTimestamp.Time.UTC(), ExpectedStart: timeOf(j.Status.ExpectedStart),
 		StartedAt: timeOf(j.Status.StartedAt), FinishedAt: timeOf(j.Status.FinishedAt), Attempts: j.Status.Attempts,
 		Preemptions: j.Status.Preemptions, Ranks: j.Status.Ranks,
 	}
@@ -668,6 +670,7 @@ func (s *Server) estimate(ctx context.Context, job *devpodv1alpha1.Job) map[stri
 		case o.Spec.Cluster != job.Spec.Cluster || o.DeletionTimestamp != nil || jobEnded(o.Status.Phase):
 		case o.Status.Phase == devpodv1alpha1.JobStarting || o.Status.Phase == devpodv1alpha1.JobRunning:
 			active = append(active, o)
+		case o.Spec.Held: // out of the order while held
 		default:
 			queued = append(queued, o)
 		}
@@ -928,7 +931,7 @@ func (s *Server) handleResubmitJob(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	again := &devpodv1alpha1.Job{Spec: *j.Spec.DeepCopy()}
-	again.Spec.Cancelled = nil
+	again.Spec.Cancelled, again.Spec.Held = nil, false
 	if apiErr := s.createJob(ctx, again); apiErr != nil {
 		s.writeServerErr(w, apiErr)
 		return
@@ -937,6 +940,129 @@ func (s *Server) handleResubmitJob(w http.ResponseWriter, r *http.Request) {
 	v := viewOfJob(again, sess.User, sess.Admin)
 	v.Cluster = again.Spec.Cluster
 	s.writeJSON(w, http.StatusCreated, v)
+}
+
+// jobPatch: what PATCH /api/jobs/{id} changes.
+type jobPatch struct {
+	Priority *int32 `json:"priority"`
+	Held     *bool  `json:"held"`
+}
+
+// errJobEnded, errJobNotWaiting: a change the job, as it is now, does not
+// take.
+var (
+	errJobEnded      = errors.New("this job has ended already")
+	errJobNotWaiting = errors.New("only a waiting job is held")
+)
+
+// handlePatchJob serves PATCH /api/jobs/{id} {priority?, held?} for its
+// owner or an admin: its priority, waiting or running (raised, within its
+// owner's cap — an admin's, past it); held back while it waits, or
+// released.
+func (s *Server) handlePatchJob(w http.ResponseWriter, r *http.Request) {
+	sess, ok := s.sessionFrom(w, r)
+	if !ok {
+		return
+	}
+	j, ok := s.jobFor(w, r, sess, true)
+	if !ok {
+		return
+	}
+	var req jobPatch
+	dec := json.NewDecoder(r.Body)
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&req); err != nil || (req.Priority == nil && req.Held == nil) {
+		s.writeErr(w, http.StatusBadRequest, "BAD_REQUEST", "say a priority, or held", nil)
+		return
+	}
+	ctx := s.inCluster(r.Context(), j.Spec.Cluster)
+	if ctx == nil {
+		s.writeErr(w, http.StatusServiceUnavailable, "CLUSTER_OFFLINE", "the job's cluster is away", nil)
+		return
+	}
+	if req.Priority != nil {
+		if apiErr := s.priorityOK(ctx, sess, j.Spec.Owner, j.Spec.Cluster, *req.Priority, j.Spec.Priority); apiErr != nil {
+			s.writeServerErr(w, apiErr)
+			return
+		}
+	}
+	var before devpodv1alpha1.Job
+	err := retry.RetryOnConflict(retry.DefaultRetry, func() error {
+		var cur devpodv1alpha1.Job
+		if err := s.Reader.Get(r.Context(), types.NamespacedName{Name: j.Name}, &cur); err != nil {
+			return err
+		}
+		if jobEnded(cur.Status.Phase) {
+			return errJobEnded
+		}
+		waiting := cur.Status.Phase == "" || cur.Status.Phase == devpodv1alpha1.JobQueued
+		if req.Held != nil && *req.Held && !waiting {
+			return errJobNotWaiting
+		}
+		before = *cur.DeepCopy()
+		if req.Priority != nil {
+			cur.Spec.Priority = *req.Priority
+		}
+		if req.Held != nil {
+			cur.Spec.Held = *req.Held
+		}
+		if cur.Spec.Priority != before.Spec.Priority || cur.Spec.Held != before.Spec.Held {
+			if err := s.Client.Update(r.Context(), &cur); err != nil {
+				return err
+			}
+		}
+		*j = cur
+		return nil
+	})
+	switch {
+	case errors.Is(err, errJobEnded):
+		s.writeErr(w, http.StatusConflict, "JOB_ENDED", err.Error(), nil)
+		return
+	case errors.Is(err, errJobNotWaiting):
+		s.writeErr(w, http.StatusConflict, "JOB_NOT_WAITING", err.Error()+": this one has started", nil)
+		return
+	case err != nil:
+		s.writeErr(w, http.StatusInternalServerError, "INTERNAL", err.Error(), nil)
+		return
+	}
+	ev := eventFrom(r, sess)
+	if j.Spec.Priority != before.Spec.Priority {
+		s.recordJob(ctx, ev, j, "priority", fmt.Sprintf("%d→%d", before.Spec.Priority, j.Spec.Priority))
+	}
+	switch {
+	case j.Spec.Held && !before.Spec.Held:
+		s.recordJob(ctx, ev, j, "hold", "")
+	case !j.Spec.Held && before.Spec.Held:
+		s.recordJob(ctx, ev, j, "release", "")
+	}
+	s.nudgeQueue() // planned anew soon
+	v := viewOfJob(j, sess.User, sess.Admin)
+	v.Cluster = j.Spec.Cluster
+	s.writeJSON(w, http.StatusOK, v)
+}
+
+// priorityOK: may sess give owner's entry (a job, a DevPod in line) in
+// cluster priority p, it having now? Lowered always; raised within its
+// owner's cap — by an admin, past it.
+func (s *Server) priorityOK(ctx context.Context, sess Session, owner, cluster string, p, now int32) *serverErr {
+	if p < 0 {
+		return badRequest("a priority is 0 or more")
+	}
+	if sess.Admin || p <= now {
+		return nil
+	}
+	_, groups, err := s.accessFor(ctx, owner)
+	if err != nil {
+		return &serverErr{http.StatusInternalServerError, "INTERNAL", err.Error(), nil}
+	}
+	c, unlimited, err := s.priorityCap(ctx, owner, groups, cluster)
+	if err != nil {
+		return &serverErr{http.StatusInternalServerError, "INTERNAL", err.Error(), nil}
+	}
+	if !unlimited && p > c {
+		return &serverErr{http.StatusForbidden, "PRIORITY_TOO_HIGH", fmt.Sprintf("%s may give at most priority %d here", owner, c), map[string]any{"max": c}}
+	}
+	return nil
 }
 
 // inCluster: ctx scoped to the cluster jobs name ("" the console's own);

@@ -156,7 +156,7 @@ export const useAuditSessions = (params: Record<string, string | undefined>, opt
 export const usePresence = (all: boolean, enabled: boolean) =>
   useQuery({ queryKey: qk.presence(all), queryFn: () => auditPresence(all), enabled, refetchInterval: 10_000 });
 
-function invalidateDevPods(qc: QueryClient, r?: Ref) {
+export function invalidateDevPods(qc: QueryClient, r?: Ref) {
   void qc.invalidateQueries({ queryKey: ["devpods"] });
   if (r) void qc.invalidateQueries({ queryKey: qk.devpod(r) });
   void qc.invalidateQueries({ queryKey: qk.me });

@@ -109,6 +109,12 @@ type JobSpec struct {
 	//
 	// +optional
 	Cancelled *ReservationCancel `json:"cancelled,omitempty"`
+	// Held: its owner (or an admin) holds it back — while it waits, it is
+	// out of the queue's order and holds no machine; released, it waits in
+	// its place again (by its submission). Only a waiting job is held.
+	//
+	// +optional
+	Held bool `json:"held,omitempty"`
 }
 
 // JobRank is one rank of a job that has been started.

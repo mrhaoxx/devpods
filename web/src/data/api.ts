@@ -242,6 +242,10 @@ export const auditPresence = (all = false) =>
 export const getDevPod = (r: Ref) => req<DevPodDetail>("GET", apiIn(r.cluster, `/api/devpods/${r.name}`));
 export const createDevPod = (cluster: string | undefined, body: unknown) => req<DevPod>("POST", apiIn(cluster, "/api/devpods"), body);
 export const patchDevPod = (r: Ref, running: boolean) => req<PatchResult>("PATCH", apiIn(r.cluster, `/api/devpods/${r.name}`), { running });
+/** startDevPodAt: start a DevPod, waiting in the queue's line at priority. */
+export const startDevPodAt = (r: Ref, priority: number) => req<PatchResult>("PATCH", apiIn(r.cluster, `/api/devpods/${r.name}`), { running: true, priority });
+/** setQueuePriority: the priority of a DevPod waiting in line. */
+export const setQueuePriority = (r: Ref, priority: number) => req<PatchResult>("PATCH", apiIn(r.cluster, `/api/devpods/${r.name}`), { priority });
 export const deleteDevPod = (r: Ref) => req<void>("DELETE", apiIn(r.cluster, `/api/devpods/${r.name}`));
 export const getEvents = (r: Ref) => req<{ items: unknown[] }>("GET", apiIn(r.cluster, `/api/devpods/${r.name}/events`));
 export const getPubkeys = () => req<{ pubkeys: string[] | null }>("GET", "/api/me/pubkeys");
@@ -746,6 +750,8 @@ export type Job = {
   priority: number;
   preemptible?: boolean;
   requeue?: boolean; // stopped for another, it waits again (false: it ends)
+  /** held back by its owner or an admin: out of the queue's order while it waits */
+  held?: boolean;
   mine: boolean;
   canManage: boolean;
   submitted: string;
@@ -810,6 +816,8 @@ export const getJob = (id: string) => req<Job>("GET", `/api/jobs/${id}`);
 export const submitJob = (cluster: string | undefined, body: JobRequest) => req<Job & JobEstimate>("POST", apiIn(cluster, "/api/jobs"), body);
 export const cancelJob = (id: string) => req<void>("DELETE", `/api/jobs/${id}`);
 export const resubmitJob = (id: string) => req<Job>("POST", `/api/jobs/${id}/resubmit`);
+/** patchJob: a job's priority (waiting or running; raised at most to its owner's cap, an admin's past it), or held back / released (waiting). */
+export const patchJob = (id: string, body: { priority?: number; held?: boolean }) => req<Job>("PATCH", `/api/jobs/${id}`, body);
 export const jobLimits = (cluster: string | undefined) => req<JobLimits>("GET", apiIn(cluster, "/api/jobs/limits"));
 export type PriorityRule = { condition: string; maxPriority: number; maxJobs?: number | null };
 export const getPriorityRules = () => req<{ items: PriorityRule[] }>("GET", "/api/admin/job-priority-rules");

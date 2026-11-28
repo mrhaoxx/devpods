@@ -971,7 +971,8 @@ func TestReservationShareSurvivesOldWriter(t *testing.T) {
 		t.Fatalf("reserve: %d %+v", code, v)
 	}
 	var nr devpodv1alpha1.NodeReservation
-	if err := k8sClient.Get(ctx, client_key_cluster(v.ID), &nr); err != nil {
+	// the API reader: the cache can trail the reservation just made
+	if err := k8sManager.GetAPIReader().Get(ctx, client_key_cluster(v.ID), &nr); err != nil {
 		t.Fatal(err)
 	}
 	nr.Spec.GPU, nr.Spec.CPU = nil, nil // as an older writer leaves it

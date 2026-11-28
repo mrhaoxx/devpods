@@ -28,8 +28,10 @@ function Where() {
 
 let calls: ReturnType<typeof stubFetch> = [];
 
-function setup(opts: { route?: string; admin?: boolean; live?: boolean; user?: string; rank?: boolean; queued?: boolean } = {}) {
-  const the = opts.rank ? rankDp : opts.queued ? queuedDp : dp;
+const stoppedDp: DevPod = { ...dp, metadata: { name: "alice-x", uid: "u4" }, spec: { ...dp.spec, running: false }, status: { phase: "Stopped" } };
+
+function setup(opts: { route?: string; admin?: boolean; live?: boolean; user?: string; rank?: boolean; queued?: boolean; stopped?: boolean } = {}) {
+  const the = opts.rank ? rankDp : opts.queued ? queuedDp : opts.stopped ? stoppedDp : dp;
   const cs = stubFetch({
     "PATCH /api/devpods/alice-x": { devpod: the, rebuild: false },
     "/api/devpods/alice-x": { devpod: the, pod: opts.queued ? undefined : { node: "g206", ip: "10.1.2.3", startedAt: "2026-11-10T10:00:00Z" } },
@@ -40,6 +42,7 @@ function setup(opts: { route?: string; admin?: boolean; live?: boolean; user?: s
         : { items: [{ ts: "2026-11-27T09:00:00Z", kind: "devpod", object: "alice-x", owner: "alice", actor: "alice", via: "web", action: "create", detail: "image ubuntu" }], next: "c2" },
     "/api/nodes": { items: [{ name: "g206", ready: true, cpu: { allocatable: 64, allocated: 0 }, mem: { allocatable: 512 * 1024 ** 3, allocated: 0 }, gpuTotal: 0, gpuUsed: 0, reservable: false, pending: 0, access: "ok", mine: null, selectable: true }] },
     "POST /api/devpods/alice-x/redeploy": {},
+    "/api/jobs/limits": { maxPriority: 5, unlimitedPriority: false, defaultTimeLimitSeconds: 3600, maxTimeLimitSeconds: 86400 },
     "/api/devpods/alice-x/metrics": (u: URL) => ({ step: u.searchParams.get("range") === "15m" ? 1 : 5, ts: [Math.floor(Date.now() / 1000) - 60], series: { cpu: [2.5] } }),
   });
   calls = cs;
@@ -128,6 +131,24 @@ describe("DevPod detail", () => {
     fireEvent.click(screen.getByRole("button", { name: "取消排队" }));
     await waitFor(() => expect(calls.some((c) => c.method === "PATCH")).toBe(true));
     expect(JSON.parse(calls.find((c) => c.method === "PATCH")!.body!)).toEqual({ running: false });
+  });
+
+  it("a DevPod waiting in line has its priority there changed", async () => {
+    setup({ route: "/devpods/-/alice-x", queued: true });
+    fireEvent.click(await screen.findByRole("button", { name: "改优先级…" }));
+    const dialog = within(await screen.findByRole("dialog"));
+    fireEvent.change(dialog.getByLabelText("优先级"), { target: { value: "2" } });
+    fireEvent.click(dialog.getByRole("button", { name: "设定" }));
+    await waitFor(() => expect(calls.some((c) => c.method === "PATCH" && c.body === JSON.stringify({ priority: 2 }))).toBe(true));
+  });
+
+  it("a stopped DevPod is started at a priority", async () => {
+    setup({ route: "/devpods/-/alice-x", stopped: true });
+    fireEvent.click(await screen.findByRole("button", { name: "按优先级启动…" }));
+    const dialog = within(await screen.findByRole("dialog"));
+    fireEvent.change(dialog.getByLabelText("优先级"), { target: { value: "4" } });
+    fireEvent.click(dialog.getByRole("button", { name: "启动" }));
+    await waitFor(() => expect(calls.some((c) => c.method === "PATCH" && c.body === JSON.stringify({ running: true, priority: 4 }))).toBe(true));
   });
 
   it("记录 lists what was done to this DevPod, by whom", async () => {

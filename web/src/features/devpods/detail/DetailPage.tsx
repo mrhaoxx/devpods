@@ -5,7 +5,8 @@ import { LoadMore, usePaged } from "../../audit/common";
 import { Provenance } from "./Provenance";
 import { preloadYamlEditor } from "../../../design/yaml/YamlEditor";
 import { Notice } from "../../../design/Form";
-import { phaseSummary, pinnedNode, queueOf, reservationNotes } from "../status";
+import { phaseSummary, pinnedNode, queueOf, queuePriorityOf, reservationNotes } from "../status";
+import { PriorityDialog } from "../../queue/PriorityDialog";
 import { useReservationsNow } from "../../reservations/useReservationsNow";
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
@@ -14,9 +15,11 @@ import {
   ApiFailure,
   getDevPodHistory,
   listAuditSessions,
+  setQueuePriority,
   shellPath,
   sshCommand,
   sshConfig,
+  startDevPodAt,
   watchDevPod,
   type DevPodDetail,
   type DevPodSample,
@@ -26,7 +29,7 @@ import {
 } from "../../../data/api";
 import { clusterSeg, segCluster } from "../../../data/cluster";
 import { useClusterList } from "../../../data/clusterFilter";
-import { qk, useAuditSessions, useDevPod, useDevPodMutations, useMe, useMetrics, useNodeCeilings } from "../../../data/queries";
+import { invalidateDevPods, qk, useAuditSessions, useDevPod, useDevPodMutations, useMe, useMetrics, useNodeCeilings } from "../../../data/queries";
 import { devpodStream } from "../../../data/live/streams";
 import { useLiveEnabled, useLiveRow } from "../../../data/live/hooks";
 import { StatusDot } from "../../../design/StatusDot";
@@ -89,6 +92,8 @@ export function DetailPage() {
   const [deleted, setDeleted] = useState(false);
   const [events, setEvents] = useState<Record<string, K8sEvent>>({});
   const [confirmDelete, setConfirmDelete] = useState(false);
+  // the priority dialog: to start at a priority, or to change the one it waits at
+  const [prioritizing, setPrioritizing] = useState<"start" | "queue" | null>(null);
   const [confirmStop, setConfirmStop] = useState(false); // a queue job's rank
   const { setRunning, patchSpec, remove, redeploy } = useDevPodMutations();
   // the list's actions that need input, for this DevPod alone
@@ -259,13 +264,25 @@ export function DetailPage() {
           </>
         )}
         {queueOf(dp) && !dp.spec.running ? (
-          <Button onClick={() => setRunning.mutate({ ref: r, running: false })} title="离开队列：它不再等着启动">
-            取消排队
-          </Button>
+          <>
+            <Button onClick={() => setPrioritizing("queue")} title="排队时的优先级：数字大的先启动">
+              改优先级…
+            </Button>
+            <Button onClick={() => setRunning.mutate({ ref: r, running: false })} title="离开队列：它不再等着启动">
+              取消排队
+            </Button>
+          </>
         ) : (
-          <Button onClick={() => (dp.spec.job && dp.spec.running ? setConfirmStop(true) : setRunning.mutate({ ref: r, running: !dp.spec.running }))}>
-            {dp.spec.running ? "休眠" : "启动"}
-          </Button>
+          <>
+            {!dp.spec.running && !dp.spec.job && (
+              <Button onClick={() => setPrioritizing("start")} title="启动，以这个优先级在队列里等">
+                按优先级启动…
+              </Button>
+            )}
+            <Button onClick={() => (dp.spec.job && dp.spec.running ? setConfirmStop(true) : setRunning.mutate({ ref: r, running: !dp.spec.running }))}>
+              {dp.spec.running ? "休眠" : "启动"}
+            </Button>
+          </>
         )}
         <Button variant="danger" onClick={() => setConfirmDelete(true)}>
           删除
@@ -368,6 +385,19 @@ export function DetailPage() {
       />
       {patchSpec.isError && <Notice>修改失败：{String(patchSpec.error)}</Notice>}
       {redeploy.isError && <Notice>重新部署失败：{String(redeploy.error)}</Notice>}
+      {prioritizing && (
+        <PriorityDialog
+          title={prioritizing === "start" ? `按优先级启动 ${name}` : `${name} 排队的优先级`}
+          current={prioritizing === "queue" ? queuePriorityOf(dp) : 0}
+          cluster={cluster}
+          confirmLabel={prioritizing === "start" ? "启动" : "设定"}
+          onSubmit={async (priority) => {
+            await (prioritizing === "start" ? startDevPodAt(r, priority) : setQueuePriority(r, priority));
+            invalidateDevPods(qc, r);
+          }}
+          onClose={() => setPrioritizing(null)}
+        />
+      )}
       <ConfirmDialog
         open={confirmDelete}
         onOpenChange={setConfirmDelete}

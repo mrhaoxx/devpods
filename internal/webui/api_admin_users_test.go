@@ -54,28 +54,42 @@ func TestAdminUserListFields(t *testing.T) {
 	})
 	mkUser(t, "lf-ldap", func(u *devpodv1alpha1.User) { u.Spec.Pubkeys = []string{testPubkey(t), testPubkey(t)} })
 
-	rec := doJSON(t, s.HandleListUsersForTest(), "GET", "/api/admin/users", nil, root, "")
-	if rec.Code != http.StatusOK {
-		t.Fatalf("list: %d %s", rec.Code, rec.Body)
+	// the list reads users through the cache: the ones just made show a moment later
+	want := map[string]string{"lf-oidc": "oidc/false/0", "lf-pw": "password/true/0", "lf-ldap": "ldap/false/2"}
+	var got map[string]string
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		rec := doJSON(t, s.HandleListUsersForTest(), "GET", "/api/admin/users", nil, root, "")
+		if rec.Code != http.StatusOK {
+			t.Fatalf("list: %d %s", rec.Code, rec.Body)
+		}
+		var body struct {
+			Items []struct {
+				Name         string `json:"name"`
+				Source       string `json:"source"`
+				CustomPolicy bool   `json:"customPolicy"`
+				Pubkeys      int    `json:"pubkeys"`
+			} `json:"items"`
+		}
+		if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+			t.Fatal(err)
+		}
+		got = map[string]string{}
+		for _, it := range body.Items {
+			got[it.Name] = fmt.Sprintf("%s/%v/%d", it.Source, it.CustomPolicy, it.Pubkeys)
+		}
+		all := true
+		for name, w := range want {
+			all = all && got[name] == w
+		}
+		if all || time.Now().After(deadline) {
+			break
+		}
+		time.Sleep(50 * time.Millisecond)
 	}
-	var body struct {
-		Items []struct {
-			Name         string `json:"name"`
-			Source       string `json:"source"`
-			CustomPolicy bool   `json:"customPolicy"`
-			Pubkeys      int    `json:"pubkeys"`
-		} `json:"items"`
-	}
-	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
-		t.Fatal(err)
-	}
-	got := map[string]string{}
-	for _, it := range body.Items {
-		got[it.Name] = fmt.Sprintf("%s/%v/%d", it.Source, it.CustomPolicy, it.Pubkeys)
-	}
-	for name, want := range map[string]string{"lf-oidc": "oidc/false/0", "lf-pw": "password/true/0", "lf-ldap": "ldap/false/2"} {
-		if got[name] != want {
-			t.Errorf("%s = %q, want %q", name, got[name], want)
+	for name, w := range want {
+		if got[name] != w {
+			t.Errorf("%s = %q, want %q", name, got[name], w)
 		}
 	}
 }

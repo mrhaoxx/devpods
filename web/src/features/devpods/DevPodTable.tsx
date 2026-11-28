@@ -6,7 +6,20 @@ import { Link } from "react-router-dom";
 import { useQueryClient } from "@tanstack/react-query";
 import type { SortingState } from "@tanstack/react-table";
 import { devpodHref, keyOf } from "../../data/cluster";
-import { deleteDevPod, podKey, patchDevPod, patchDevPodSpec, rebuildFromConfig, redeployDevPod, sshCommand, type LiveItem, type PatchResult, shellPath } from "../../data/api";
+import {
+  deleteDevPod,
+  podKey,
+  patchDevPod,
+  patchDevPodSpec,
+  rebuildFromConfig,
+  redeployDevPod,
+  setQueuePriority,
+  sshCommand,
+  startDevPodAt,
+  type LiveItem,
+  type PatchResult,
+  shellPath,
+} from "../../data/api";
 import { useDevPods, useMe, useNodeCeilings, useRecent } from "../../data/queries";
 import { devpodsStream } from "../../data/live/streams";
 import { useLiveEnabled, useLiveRow, useLiveValues } from "../../data/live/hooks";
@@ -29,7 +42,8 @@ import { TableCtx, devpodColumns, sharedWithMe, toRow, type Pending, type Row } 
 import { useReservationsNow } from "../reservations/useReservationsNow";
 import { groupRows } from "./groups";
 import { groupUsage, usage, usageKeys, type UsageKey } from "./usage";
-import { queueOf } from "./status";
+import { queueOf, queuePriorityOf } from "./status";
+import { PriorityDialog } from "../queue/PriorityDialog";
 
 const PHASES = ["Running", "Pending", "Stopped", "Failed"] as const;
 
@@ -173,6 +187,8 @@ export function DevPodTable({ scope }: { scope: "mine" | "all" }) {
 
   // every action on DevPods — one or many — goes here: their rows say
   // what is being done until it is, the bar how far it has got
+  // the priority dialog: a DevPod to start at a priority, or the one it waits in line at
+  const [prioritizing, setPrioritizing] = useState<{ row: Row; start: boolean } | null>(null);
   const bulk = async (action: string, items: Row[], fn: (r: Row) => Promise<unknown>, how: { label: string; want?: Want } = { label: "更新" }) => {
     const since = Date.now();
     setPending((cur) => {
@@ -247,6 +263,11 @@ export function DevPodTable({ scope }: { scope: "mine" | "all" }) {
       : queueOf(r.dp)
         ? { label: "取消排队", disabled: busy(r), onSelect: () => void bulk("取消排队", [r], (x) => patchDevPod(x, false)) }
         : { label: "启动", disabled: busy(r), onSelect: () => void bulk("启动", [r], (x) => patchDevPod(x, true), START) },
+    ...(queueOf(r.dp) && !r.dp.spec.running
+      ? [{ label: "改排队优先级…", disabled: busy(r), onSelect: () => setPrioritizing({ row: r, start: false }) }]
+      : !r.dp.spec.running && !r.dp.spec.job
+        ? [{ label: "按优先级启动…", disabled: busy(r), onSelect: () => setPrioritizing({ row: r, start: true }) }]
+        : []),
     { label: "删除…", danger: true, disabled: busy(r), onSelect: () => setConfirm({ rows: [r], bulk: false }) },
   ];
   const groupActions = (r: Row): RowAction[] =>
@@ -366,6 +387,20 @@ export function DevPodTable({ scope }: { scope: "mine" | "all" }) {
           />
         )}
       </div>
+      {prioritizing && (
+        <PriorityDialog
+          title={prioritizing.start ? `按优先级启动 ${prioritizing.row.name}` : `${prioritizing.row.name} 排队的优先级`}
+          current={prioritizing.start ? 0 : queuePriorityOf(prioritizing.row.dp)}
+          cluster={prioritizing.row.cluster}
+          confirmLabel={prioritizing.start ? "启动" : "设定"}
+          onSubmit={(priority) =>
+            prioritizing.start
+              ? bulk("启动", [prioritizing.row], (x) => startDevPodAt(x, priority), START)
+              : bulk("改优先级", [prioritizing.row], (x) => setQueuePriority(x, priority))
+          }
+          onClose={() => setPrioritizing(null)}
+        />
+      )}
       <BulkDialog
         key={dialog?.kind ?? "none"}
         kind={dialog?.kind ?? null}

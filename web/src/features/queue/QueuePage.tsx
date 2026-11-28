@@ -1,20 +1,23 @@
 // 队列 (design 2026-11-26): the jobs waiting for the reservable machines'
 // unreserved capacity and those running, in the order they run — why each
 // waits and when the first is expected to start. A row opens the job.
-import { useMemo, useState } from "react";
-import { keepPreviousData, useQuery } from "@tanstack/react-query";
+import { useMemo, useRef, useState } from "react";
+import { keepPreviousData, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import type { ColumnDef, SortingState } from "@tanstack/react-table";
-import { jobsFree, listJobs, type Job } from "../../data/api";
+import { cancelJob, jobsFree, listJobs, patchDevPod, patchJob, resubmitJob, setQueuePriority, type Job } from "../../data/api";
 import { clusterSeg } from "../../data/cluster";
 import { useClusterFilter } from "../../data/clusterFilter";
 import { Button } from "../../design/Button";
 import { Chip } from "../../design/Chip";
-import { DataTable } from "../../design/DataTable";
+import { ActionMenu } from "../../design/ActionMenu";
+import { ConfirmDialog } from "../../design/ConfirmDialog";
+import { DataTable, type RowAction } from "../../design/DataTable";
 import { EmptyState } from "../../design/EmptyState";
 import { Notice } from "../../design/Form";
 import { useNow } from "../../lib/useNow";
-import { fmtHours, sizeText, stateText } from "./jobs";
+import { fmtHours, jobEnded, sizeText, stateText } from "./jobs";
+import { PriorityDialog } from "./PriorityDialog";
 import { SubmitDialog } from "./SubmitDialog";
 
 const failure = (e: unknown) => (e instanceof Error ? e.message : String(e));
@@ -38,7 +41,12 @@ export function QueuePage() {
       { replace: true },
     );
   const navigate = useNavigate();
+  const qc = useQueryClient();
   const [submitting, setSubmitting] = useState(false);
+  // a manage action's dialogs: the rows they are for (and the selection to clear)
+  const [prioritizing, setPrioritizing] = useState<{ rows: Job[]; clear?: () => void } | null>(null);
+  const [cancelling, setCancelling] = useState<{ rows: Job[]; clear?: () => void } | null>(null);
+  const [actionError, setActionError] = useState("");
   const [sorting, setSorting] = useState<SortingState>([]); // none: the queue's own order
   const now = useNow(30_000).getTime();
   const { matches, several } = useClusterFilter();
@@ -84,6 +92,56 @@ export function QueuePage() {
     );
   }, [q.data, matches, ended]);
 
+  // what may be done to a row: one's own jobs (an admin's: any) not ended,
+  // a DevPod of one's own waiting in line (its name shown: one's own, or an admin's view)
+  const isDevPod = (j: Job) => j.devpod !== undefined;
+  const manageable = (j: Job) => (isDevPod(j) ? !!j.devpod : j.canManage && !jobEnded(j));
+  const ref = (j: Job) => ({ cluster: j.cluster, name: j.devpod ?? "" });
+  // run fn on each row; what fails is said, the rest goes on
+  const each = async (rows: Job[], fn: (j: Job) => Promise<unknown>, clear?: () => void) => {
+    setActionError("");
+    const failed: string[] = [];
+    for (const j of rows) {
+      try {
+        await fn(j);
+      } catch (e) {
+        failed.push(`${j.id}：${failure(e)}`);
+      }
+    }
+    if (failed.length) setActionError(failed.join("；"));
+    else clear?.();
+    void qc.invalidateQueries({ queryKey: ["jobs"] });
+  };
+  const holdAll = (rows: Job[], held: boolean, clear?: () => void) => void each(rows.filter((j) => !isDevPod(j)), (j) => patchJob(j.id, { held }), clear);
+  const rowActions = (j: Job): RowAction[] => {
+    if (isDevPod(j)) {
+      if (!j.devpod) return [];
+      return [
+        { label: "改优先级…", onSelect: () => setPrioritizing({ rows: [j] }) },
+        { label: "取消排队", danger: true, onSelect: () => void each([j], (x) => patchDevPod(ref(x), false)) },
+      ];
+    }
+    if (!j.canManage) return [];
+    if (jobEnded(j)) return [{ label: "重新提交", onSelect: () => void each([j], (x) => resubmitJob(x.id)) }];
+    return [
+      { label: "改优先级…", onSelect: () => setPrioritizing({ rows: [j] }) },
+      ...(j.phase === "Queued" ? [j.held ? { label: "恢复", onSelect: () => holdAll([j], false) } : { label: "暂停", onSelect: () => holdAll([j], true) }] : []),
+      { label: "取消任务…", danger: true, onSelect: () => setCancelling({ rows: [j] }) },
+    ];
+  };
+  const bulkActions = (rows: Job[], clear: () => void): RowAction[] => {
+    const jobs = rows.filter((j) => !isDevPod(j));
+    const waiting = jobs.filter((j) => j.phase === "Queued");
+    return [
+      { label: "改优先级…", onSelect: () => setPrioritizing({ rows, clear }) },
+      { label: "暂停", disabled: !waiting.some((j) => !j.held), onSelect: () => holdAll(waiting.filter((j) => !j.held), true, clear) },
+      { label: "恢复", disabled: !waiting.some((j) => j.held), onSelect: () => holdAll(waiting.filter((j) => j.held), false, clear) },
+      { label: "取消…", danger: true, onSelect: () => setCancelling({ rows, clear }) },
+    ];
+  };
+
+  const rowActionsNow = useRef(rowActions);
+  rowActionsNow.current = rowActions;
   const columns = useMemo<ColumnDef<Job>[]>(
     () => [
       { id: "position", header: "排位", accessorFn: (j) => j.position ?? 0, meta: { priority: 1, width: 56 }, cell: ({ row }) => (row.original.position ? `#${row.original.position}` : "") },
@@ -109,7 +167,15 @@ export function QueuePage() {
       { id: "priority", header: "优先级", accessorKey: "priority", meta: { priority: 2, width: 64 } },
       { id: "limit", header: "时长上限", accessorKey: "timeLimitSeconds", meta: { priority: 2, width: 80 }, cell: ({ row }) => (row.original.devpod !== undefined ? "—" : fmtHours(row.original.timeLimitSeconds * 1000)) },
       { id: "state", header: "状态", accessorFn: (j) => j.phase, meta: { priority: 1, width: 400 }, cell: ({ row }) => stateText(row.original, now) },
+      {
+        id: "actions",
+        header: "",
+        enableSorting: false,
+        meta: { priority: 1, width: 48, align: "right", pin: "right" },
+        cell: ({ row }) => (rowActionsNow.current(row.original).length ? <ActionMenu label={`${row.original.id} 操作`} actions={() => rowActionsNow.current(row.original)} /> : null),
+      },
     ],
+    // eslint-disable-next-line react-hooks/exhaustive-deps
     [several, now],
   );
 
@@ -135,6 +201,11 @@ export function QueuePage() {
         任务排队等开放预约的机器上没被预约的卡和核：优先级高的先运行，同级按提交先后；一个任务的几台一起开始。在 DevPod 里也可以用 <span className="mono">dp job submit</span>（像 srun：跟着输出直到结束，Ctrl-C 取消；加{" "}
         <span className="mono">-d</span> 提交完就返回）或 <span className="mono">sbatch</span> 提交，SSH 命令行里是 <span className="mono">job submit</span>。
       </p>
+      {actionError && (
+        <div className="border-b border-line px-3 py-1.5">
+          <Notice>{actionError}</Notice>
+        </div>
+      )}
       {q.isError && q.data && (
         <div className="border-b border-line px-3 py-1.5">
           <Notice tone="warm">刷新失败（{failure(q.error)}），显示的是上次的数据。</Notice>
@@ -152,6 +223,16 @@ export function QueuePage() {
           getRowId={(j) => `${j.cluster ?? ""}/${j.id}`}
           sorting={sorting}
           onSortingChange={setSorting}
+          selectable
+          canSelect={manageable}
+          bulkBar={(picked, clear) =>
+            bulkActions(picked, clear).map((a) => (
+              <Button key={a.label} variant={a.danger ? "danger" : undefined} disabled={a.disabled} onClick={a.onSelect}>
+                {a.label}
+              </Button>
+            ))
+          }
+          rowMenu={(picked, bulk, clear) => (bulk ? bulkActions(picked, clear) : rowActions(picked[0]))}
           empty={<EmptyState title={q.isLoading ? "加载中…" : ended ? "没有任务" : "队列是空的"} hint={q.isLoading ? undefined : "点「提交任务…」，或在 DevPod 里运行 dp job submit。"} />}
           onRowClick={(j) => {
             if (j.devpod === undefined) navigate(`/queue/${clusterSeg(j.cluster)}/${j.id}`);
@@ -160,6 +241,31 @@ export function QueuePage() {
         />
       )}
       {submitting && <SubmitDialog onClose={() => setSubmitting(false)} />}
+      {prioritizing && (
+        <PriorityDialog
+          title={prioritizing.rows.length === 1 ? `${prioritizing.rows[0].id} 的优先级` : `${prioritizing.rows.length} 项的优先级`}
+          current={Math.min(...prioritizing.rows.map((j) => j.priority))}
+          cluster={prioritizing.rows[0]?.cluster}
+          onSubmit={(priority) =>
+            each(prioritizing.rows, (j) => (isDevPod(j) ? setQueuePriority(ref(j), priority) : patchJob(j.id, { priority })), prioritizing.clear)
+          }
+          onClose={() => setPrioritizing(null)}
+        />
+      )}
+      <ConfirmDialog
+        open={!!cancelling}
+        onOpenChange={(o) => !o && setCancelling(null)}
+        title={cancelling?.rows.length === 1 ? `取消 ${cancelling.rows[0].id}？` : `取消这 ${cancelling?.rows.length ?? 0} 项？`}
+        confirmLabel="取消"
+        danger
+        onConfirm={() => {
+          const c = cancelling;
+          setCancelling(null);
+          if (c) void each(c.rows, (j) => (isDevPod(j) ? patchDevPod(ref(j), false) : cancelJob(j.id)), c.clear);
+        }}
+      >
+        运行中的任务会被停掉；排队中的任务和 DevPod 会离开队列。
+      </ConfirmDialog>
     </div>
   );
 }

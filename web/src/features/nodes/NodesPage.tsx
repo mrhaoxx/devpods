@@ -7,6 +7,7 @@ import { useClusterFilter } from "../../data/clusterFilter";
 import type { Cluster } from "../clusters/api";
 import { devpodHref, keyOf, refOfKey, type Ref } from "../../data/cluster";
 import { createContext, useContext, useEffect, useMemo, useRef, useState } from "react";
+import { ConfirmDialog } from "../../design/ConfirmDialog";
 import { Link } from "react-router-dom";
 import { useQueryClient } from "@tanstack/react-query";
 import type { ColumnDef, SortingState } from "@tanstack/react-table";
@@ -398,8 +399,15 @@ export function NodesPage() {
     }, 60_000);
     return () => clearTimeout(t);
   }, [pending]);
-  const setFlags = (rows: Ref[], action: string, flags: (r: Ref) => NodeFlags) =>
-    void run(action, rows, (r) => setReservable(r, flags(r).on), flags);
+  // closing a machine ends what relied on its reservations at once: asked first
+  const [closing, setClosing] = useState<{ rows: Ref[]; action: string; flags: (r: Ref) => NodeFlags; then?: () => void } | null>(null);
+  const setFlags = (rows: Ref[], action: string, flags: (r: Ref) => NodeFlags, then?: () => void) => {
+    if (rows.some((r) => !flags(r).on)) {
+      setClosing({ rows, action, flags, then });
+      return;
+    }
+    void run(action, rows, (r) => setReservable(r, flags(r).on), flags).then(then);
+  };
 
   // what can be done to a node, a selection: said once, offered by the ⋯
   // menu, the right-click menu and the bulk bar alike
@@ -427,7 +435,7 @@ export function NodesPage() {
     ...(reservations
       ? [
           { label: "开启可预约", onSelect: () => void run("开启可预约", picked, (r) => setReservable(r, true), () => ({ on: true })).then(clear) },
-          { label: "关闭可预约", onSelect: () => void run("关闭可预约", picked, (r) => setReservable(r, false), () => ({ on: false })).then(clear) },
+          { label: "关闭可预约", onSelect: () => setFlags(picked, "关闭可预约", () => ({ on: false }), clear) },
         ]
       : []),
     { label: "复制名称", onSelect: () => void copyText(picked.map((n) => n.name).join("\n")) },
@@ -494,6 +502,25 @@ export function NodesPage() {
         </NodeOps.Provider>
       )}
       <BulkToast progress={progress} outcome={outcome} onClose={() => setOutcome(null)} />
+      <ConfirmDialog
+        open={!!closing}
+        onOpenChange={(o) => !o && setClosing(null)}
+        title={closing?.rows.length === 1 ? `关闭 ${closing.rows[0].name} 的预约？` : `关闭这 ${closing?.rows.length ?? 0} 台机器的预约？`}
+        confirmLabel="关闭可预约"
+        danger
+        onConfirm={() => {
+          const c = closing;
+          setClosing(null);
+          if (c) void run(c.action, c.rows, (r) => setReservable(r, c.flags(r).on), c.flags).then(c.then);
+        }}
+      >
+        <p>关闭后马上生效：</p>
+        <ul className="mt-1 list-disc space-y-0.5 pl-4">
+          <li>这台机器上还没结束的预约会被取消；</li>
+          <li>在上面运行的队列任务会被停掉，按各自的设置重新排队或结束；</li>
+          <li>只靠预约才能在上面运行的 DevPod 会被休眠，本来就能用这台机器的照常运行。</li>
+        </ul>
+      </ConfirmDialog>
       {url.node && (
         <Drawer open onOpenChange={(o) => !o && setUrl({ node: "" }, "back")} title={`节点 ${refOfKey(url.node).name}`} width={620}>
           <NodeDrawerBody r={refOfKey(url.node)} />

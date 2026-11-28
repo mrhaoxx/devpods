@@ -188,7 +188,8 @@ func TestAccessPutNewForm(t *testing.T) {
 	r := devpodv1alpha1.AccessRule{Match: "  machine != m1 and not group = ac-ops ", Effect: devpodv1alpha1.AccessEffect{Allow: true, Privileges: &devpodv1alpha1.AccessPrivileges{HostPID: true}}}
 	readAccess(t, call("ac-root", true, "PUT", "/api/admin/access", putBody(t, accessBody{Rules: []devpodv1alpha1.AccessRule{r}, Default: devpodv1alpha1.DefaultAccessEffect()})))
 	var p devpodv1alpha1.AccessPolicy
-	if err := k8sClient.Get(context.Background(), client.ObjectKey{Name: devpodv1alpha1.AccessPolicyName}, &p); err != nil {
+	// the API reader: the cache can trail the policy just saved
+	if err := k8sManager.GetAPIReader().Get(context.Background(), client.ObjectKey{Name: devpodv1alpha1.AccessPolicyName}, &p); err != nil {
 		t.Fatal(err)
 	}
 	got := p.Spec.Rules[0]

@@ -27,6 +27,10 @@ describe("jobs", () => {
     expect(stateText(job({ phase: "TimedOut" }), now)).toBe("超时");
     expect(stateText(job({ phase: "Cancelled" }), now)).toBe("已取消");
   });
+  it("a held job says it is held, not where it waits", () => {
+    expect(stateText(job({ phase: "Queued", reason: "held", held: true }), now)).toBe("⏸ 已暂停 · 恢复后回到原来的位置");
+  });
+
   it("says sizes and spans", () => {
     expect(sizeText(job({}))).toBe("2 台 × 8 卡");
     expect(sizeText(job({ gpus: 0, cpus: 16 }))).toBe("2 台 × 16 核");

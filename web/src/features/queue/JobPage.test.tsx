@@ -44,6 +44,37 @@ describe("JobPage", () => {
     expect(screen.getByRole("link", { name: "下载" }).getAttribute("href")).toBe("/api/jobs/abc12/logs?rank=1");
   });
 
+  it("a job's owner changes its priority up to the cap, and holds and releases it while it waits", async () => {
+    const waiting = { ...ended, phase: "Queued", position: 2, reason: "capacity", priority: 0, ranks: undefined, startedAt: undefined, finishedAt: undefined, detail: undefined };
+    const calls = stubFetch({
+      "/api/jobs/abc12": waiting,
+      "PATCH /api/jobs/abc12": waiting,
+      "/api/clusters/st/jobs/limits": { maxPriority: 5, unlimitedPriority: false, defaultTimeLimitSeconds: 3600, maxTimeLimitSeconds: 86400 },
+      "/api/jobs/abc12/history": { items: [], next: "" },
+    });
+    page();
+    fireEvent.click(await screen.findByRole("button", { name: "改优先级…" }));
+    const dialog = within(await screen.findByRole("dialog"));
+    await dialog.findByText("最高可设 5");
+    fireEvent.change(dialog.getByLabelText("优先级"), { target: { value: "9" } });
+    expect(dialog.getByText("最高只能设到 5")).toBeTruthy();
+    expect((dialog.getByRole("button", { name: "设定" }) as HTMLButtonElement).disabled).toBe(true);
+    fireEvent.change(dialog.getByLabelText("优先级"), { target: { value: "3" } });
+    fireEvent.click(dialog.getByRole("button", { name: "设定" }));
+    await waitFor(() => expect(calls.some((c) => c.method === "PATCH" && c.body === JSON.stringify({ priority: 3 }))).toBe(true));
+    fireEvent.click(screen.getByRole("button", { name: "暂停" }));
+    await waitFor(() => expect(calls.some((c) => c.method === "PATCH" && c.body === JSON.stringify({ held: true }))).toBe(true));
+  });
+
+  it("a held job offers 恢复", async () => {
+    const held = { ...ended, phase: "Queued", reason: "held", held: true, ranks: undefined, startedAt: undefined, finishedAt: undefined, detail: undefined };
+    const calls = stubFetch({ "/api/jobs/abc12": held, "PATCH /api/jobs/abc12": held, "/api/jobs/abc12/history": { items: [], next: "" } });
+    page();
+    expect(await screen.findByText("⏸ 已暂停 · 恢复后回到原来的位置")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "恢复" }));
+    await waitFor(() => expect(calls.some((c) => c.method === "PATCH" && c.body === JSON.stringify({ held: false }))).toBe(true));
+  });
+
   it("a job that ends when stopped says so", async () => {
     stubFetch({
       "/api/jobs/abc12": { ...ended, requeue: false },

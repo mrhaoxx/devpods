@@ -6,7 +6,7 @@ import { EmptyState } from "../../design/EmptyState";
 import { actionLabel, viaLabel } from "./events";
 import { fmtTS, LoadMore } from "./common";
 
-/** HistoryList: load(cursor) gives a page (no cursor: the newest); 加载更多 the next. */
+/** HistoryList: load(cursor) gives a page (no cursor: the newest); the next comes when the list's end is in sight (or 加载更多). */
 export function HistoryList({ queryKey, load }: { queryKey: unknown[]; load: (cursor?: string) => Promise<Page<AuditEvent>> }) {
   const q = useInfiniteQuery({
     queryKey,
@@ -39,7 +39,7 @@ export function HistoryList({ queryKey, load }: { queryKey: unknown[]; load: (cu
           </li>
         ))}
       </ul>
-      <LoadMore hasMore={q.hasNextPage} busy={q.isFetchingNextPage} onClick={() => void q.fetchNextPage()} />
+      <LoadMore auto hasMore={q.hasNextPage} busy={q.isFetchingNextPage} onClick={() => void q.fetchNextPage()} />
     </>
   );
 }

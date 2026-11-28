@@ -48,6 +48,7 @@ export function stateText(j: Job, now: number): string {
     case "Cancelled":
       return "已取消";
   }
+  if (j.held || j.reason === "held") return "⏸ 已暂停 · 恢复后回到原来的位置";
   let why = "等待";
   switch (j.reason) {
     case "capacity":

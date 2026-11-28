@@ -19,6 +19,11 @@ export function queueOf(dp: DevPod): QueueState | null {
   }
 }
 
+/** queuePriorityOf: the priority a DevPod waits in line at (0: none said). */
+export function queuePriorityOf(dp: DevPod): number {
+  return Number(dp.metadata.annotations?.["devpod.io/queue-priority"] ?? 0) || 0;
+}
+
 /** queueWhy: why it waits, in a few words. */
 export function queueWhy(q: QueueState): string {
   switch (q.reason) {

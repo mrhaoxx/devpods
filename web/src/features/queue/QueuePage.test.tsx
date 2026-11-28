@@ -79,6 +79,35 @@ describe("QueuePage", () => {
     expect(devpod).toBeGreaterThan(job);
   });
 
+  it("one's own jobs and DevPods in line are managed from the list: a row's menu, or several picked at once", async () => {
+    const mine2 = { ...jobs[1], id: "mine2", position: 2 };
+    const calls = stubFetch({
+      "/api/jobs": { items: [...jobs, mine2], devpods: [{ name: "u-dev", owner: "u", mine: true, priority: 0, position: 3, reason: "behind", queuedAt: "2026-11-27T01:00:00Z", gpus: 1, cpus: 4 }] },
+      "/api/jobs/free": { items: [] },
+      "PATCH /api/jobs/mine1": jobs[1],
+      "PATCH /api/jobs/mine2": mine2,
+      "PATCH /api/devpods/u-dev": { devpod: {}, rebuild: false },
+    });
+    page();
+    await screen.findByText(/DevPod u-dev/);
+    // another's running job: nothing to pick, no menu
+    expect(screen.queryByLabelText("选择 /run01")).toBeNull();
+    expect(screen.queryByRole("button", { name: "run01 操作" })).toBeNull();
+    fireEvent.keyDown(screen.getByRole("button", { name: "mine1 操作" }), { key: "Enter" });
+    for (const a of ["改优先级…", "暂停", "取消任务…"]) expect(await screen.findByRole("menuitem", { name: a })).toBeTruthy();
+    fireEvent.keyDown(screen.getByRole("menu"), { key: "Escape" });
+    await waitFor(() => expect(screen.queryByRole("menu")).toBeNull());
+    fireEvent.click(screen.getByLabelText("选择 /mine1"));
+    fireEvent.click(screen.getByLabelText("选择 /mine2"));
+    fireEvent.click(await screen.findByRole("button", { name: "暂停" }));
+    await waitFor(() =>
+      expect(["mine1", "mine2"].every((id) => calls.some((c) => c.method === "PATCH" && c.url.pathname === `/api/jobs/${id}` && c.body === JSON.stringify({ held: true })))).toBe(true),
+    );
+    fireEvent.keyDown(screen.getByRole("button", { name: "DevPod u-dev 操作" }), { key: "Enter" });
+    fireEvent.click(await screen.findByRole("menuitem", { name: "取消排队" }));
+    await waitFor(() => expect(calls.some((c) => c.method === "PATCH" && c.url.pathname === "/api/devpods/u-dev" && c.body === JSON.stringify({ running: false }))).toBe(true));
+  });
+
   it("the form submits what it says, shows where it would stand, and holds the priority to the cap", async () => {
     const calls = stubFetch({
       "/api/jobs": { items: [] },

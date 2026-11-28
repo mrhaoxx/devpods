@@ -214,6 +214,12 @@ spec:
                 format: int32
                 minimum: 0
                 type: integer
+              held:
+                description: |-
+                  Held: its owner (or an admin) holds it back — while it waits, it is
+                  out of the queue's order and holds no machine; released, it waits in
+                  its place again (by its submission). Only a waiting job is held.
+                type: boolean
               nodes:
                 description: 'Nodes: how many machines, one rank on each.'
                 format: int32

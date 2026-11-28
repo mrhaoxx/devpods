@@ -5,7 +5,8 @@
 import { useEffect, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, useNavigate, useParams } from "react-router-dom";
-import { ApiFailure, cancelJob, getJob, getJobHistory, resubmitJob, sshCommand, type Job } from "../../data/api";
+import { ApiFailure, cancelJob, getJob, getJobHistory, patchJob, resubmitJob, sshCommand, type Job } from "../../data/api";
+import { PriorityDialog } from "./PriorityDialog";
 import { clusterSeg, segCluster } from "../../data/cluster";
 import { useMe } from "../../data/queries";
 import { HistoryList } from "../audit/History";
@@ -42,6 +43,8 @@ export function JobPage() {
     void qc.invalidateQueries({ queryKey: ["jobs"] });
   };
   const cancel = useMutation({ mutationFn: () => cancelJob(id), onSuccess: refresh, onError: (e) => setError(failure(e)) });
+  const hold = useMutation({ mutationFn: (held: boolean) => patchJob(id, { held }), onSuccess: refresh, onError: (e) => setError(failure(e)) });
+  const [prioritizing, setPrioritizing] = useState(false);
   const again = useMutation({
     mutationFn: () => resubmitJob(id),
     onSuccess: (j) => {
@@ -78,6 +81,16 @@ export function JobPage() {
         {j.cluster && <span className="rounded border border-line px-1.5 text-[11px] text-muted">{j.cluster}</span>}
         <span className="text-xs">{stateText(j, now)}</span>
         <span className="flex-1" />
+        {j.canManage && !ended && (
+          <Button onClick={() => setPrioritizing(true)} title="数字大的先运行；运行中的也可以改（关系到会不会被别的任务挤掉）">
+            改优先级…
+          </Button>
+        )}
+        {j.canManage && j.phase === "Queued" && (
+          <Button onClick={() => hold.mutate(!j.held)} disabled={hold.isPending} title={j.held ? "回到队列里原来的位置" : "先不参与排队：不占机器，也不挡后面的任务"}>
+            {j.held ? "恢复" : "暂停"}
+          </Button>
+        )}
         {j.canManage && !ended && (
           <Button variant="danger" onClick={() => setConfirming(true)} disabled={cancel.isPending}>
             取消任务
@@ -177,6 +190,18 @@ export function JobPage() {
         <Panel title="记录">
           <HistoryList queryKey={["job-history", j.id]} load={(cursor) => getJobHistory(j.id, cursor)} />
         </Panel>
+      )}
+      {prioritizing && (
+        <PriorityDialog
+          title={`任务 ${j.id} 的优先级`}
+          current={j.priority}
+          cluster={j.cluster}
+          onSubmit={async (priority) => {
+            await patchJob(id, { priority });
+            refresh();
+          }}
+          onClose={() => setPrioritizing(false)}
+        />
       )}
       <ConfirmDialog
         open={confirming}

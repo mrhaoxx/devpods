@@ -29,7 +29,15 @@ import (
 const jobLong = `job submit [opts] -- command…    submit a job (or --script FILE)
 job list [--mine] [--ended]       the queues (ended jobs with --ended)
 job show <id>                     one job: its ranks, where they run, how they ended
-job cancel <id>…                  cancel jobs (a running one is stopped)
+job cancel <id>…                  cancel jobs (a running one is stopped);
+                                  devpod/NAME takes a DevPod out of the line
+job priority <id> <p>             change a job's priority, waiting or running
+                                  (devpod/NAME: a DevPod's in line); raised
+                                  at most to your cap
+job hold <id>…                    hold waiting jobs back: out of the queue's
+                                  order, holding no machine
+job release <id>…                 let held jobs wait in their place again
+job resubmit <id>                 submit a job again, as it was
 job logs [-f] [--rank N] [--attempt N] <id>
                                   a rank's output (live with -f while it runs;
                                   --attempt: an earlier start's, as kept)
@@ -64,7 +72,7 @@ var consoleTZ = time.FixedZone("CST", 8*3600)
 
 func jobCommands() []*command {
 	return []*command{{group: "Queue", name: "job", aliases: []string{"jobs"},
-		args:  "[submit [opts] -- cmd… | list [--mine] [--ended] | show <id> | cancel <id>… | logs [-f] [--rank N] <id> | ssh <id> [--rank N]] [--cluster C]",
+		args:  "[submit [opts] -- cmd… | list [--mine] [--ended] | show <id> | cancel <id>… | priority <id> <p> | hold <id>… | release <id>… | resubmit <id> | logs [-f] [--rank N] <id> | ssh <id> [--rank N]] [--cluster C]",
 		brief: "[submit|list|show|cancel|logs|ssh …]",
 		short: "the queue: submit jobs, see the queue, cancel, read a job's output",
 		long:  jobLong,
@@ -119,16 +127,95 @@ func runJob(e *Env, a *parsed) int {
 		return jobShow(e, a, c)
 	case "cancel", "rm":
 		return each(e, a, c, "cancelled", func(ref string) (string, error) {
-			_, id := splitRef(ref)
-			_, err := call(e, "DELETE", "/api/jobs/"+url.PathEscape(id), nil, nil)
+			if dp, ok := devpodRef(ref); ok {
+				_, err := call(e, "PATCH", dpPath(e, dp), map[string]any{"running": false}, nil)
+				return "", err
+			}
+			_, err := call(e, "DELETE", jobPath(ref), nil, nil)
 			return "", err
 		})
+	case "priority":
+		return jobPriority(e, a, c)
+	case "hold", "release":
+		held := verb == "hold"
+		done := map[bool]string{true: "held", false: "released"}[held]
+		return each(e, a, c, done, func(ref string) (string, error) {
+			if _, ok := devpodRef(ref); ok {
+				return "", fmt.Errorf("a DevPod in line is not held: `job cancel %s` takes it out", ref)
+			}
+			_, err := call(e, "PATCH", jobPath(ref), map[string]any{"held": held}, nil)
+			return "", err
+		})
+	case "resubmit":
+		return jobResubmit(e, a, c)
 	case "logs":
 		return jobLogs(e, a, c)
 	case "ssh":
 		return jobSSH(e, a, c)
 	}
-	return usage(e, c, fmt.Sprintf("unknown job %q: submit, list, show, cancel, logs or ssh", verb))
+	return usage(e, c, fmt.Sprintf("unknown job %q: submit, list, show, cancel, priority, hold, release, resubmit, logs or ssh", verb))
+}
+
+// jobPath: the API path of the job ref names (<cluster>/<id> or <id>).
+func jobPath(ref string) string {
+	_, id := splitRef(ref)
+	return "/api/jobs/" + url.PathEscape(id)
+}
+
+// devpodRef: the DevPod a name of the queue list's is of — devpod/NAME,
+// or <cluster>/devpod/NAME — as a DevPod ref (NAME, <cluster>/NAME).
+func devpodRef(ref string) (string, bool) {
+	if name, ok := strings.CutPrefix(ref, "devpod/"); ok {
+		return name, name != ""
+	}
+	if c, name, ok := strings.Cut(ref, "/devpod/"); ok && c != "" && !strings.Contains(c, "/") && name != "" {
+		return c + "/" + name, true
+	}
+	return "", false
+}
+
+// jobPriority: job priority <id> <p>.
+func jobPriority(e *Env, a *parsed, c *command) int {
+	if len(a.pos) != 2 {
+		return usage(e, c, "job priority needs a job (or devpod/NAME) and a priority")
+	}
+	ref := a.pos[0]
+	p, err := strconv.Atoi(a.pos[1])
+	if err != nil || p < 0 {
+		return usage(e, c, fmt.Sprintf("a priority is a whole number, 0 or more: %q", a.pos[1]))
+	}
+	path := jobPath(ref)
+	if dp, ok := devpodRef(ref); ok {
+		path = dpPath(e, dp)
+	}
+	raw, err := call(e, "PATCH", path, map[string]any{"priority": p}, nil)
+	if err != nil {
+		return fail(e, err)
+	}
+	if a.json {
+		printJSON(e, raw)
+		return ExitOK
+	}
+	fmt.Fprintf(e.Out, "%s: priority %d\n", ref, p)
+	return ExitOK
+}
+
+// jobResubmit: job resubmit <id> — the same job, anew.
+func jobResubmit(e *Env, a *parsed, c *command) int {
+	if len(a.pos) != 1 {
+		return usage(e, c, "job resubmit needs one job")
+	}
+	var j jobView
+	raw, err := call(e, "POST", jobPath(a.pos[0])+"/resubmit", nil, &j)
+	if err != nil {
+		return fail(e, err)
+	}
+	if a.json {
+		printJSON(e, raw)
+		return ExitOK
+	}
+	fmt.Fprintf(e.Out, "submitted again as %s\n", joinRef(j.Cluster, j.ID))
+	return ExitOK
 }
 
 // submitOpts: a job as the command line asks it.
@@ -681,6 +768,9 @@ func jobState(j jobView, now time.Time) string {
 		return "out of time"
 	case "Cancelled":
 		return "cancelled"
+	}
+	if j.Reason == "held" {
+		return "held (job release " + joinRef(j.Cluster, j.ID) + " lets it wait again)"
 	}
 	s := fmt.Sprintf("#%d ", j.Position)
 	switch j.Reason {
