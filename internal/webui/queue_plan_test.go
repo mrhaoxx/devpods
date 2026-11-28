@@ -500,3 +500,21 @@ func TestPlanPackedStopsNoMoreThanNeeded(t *testing.T) {
 		t.Fatalf("stopped %v", got)
 	}
 }
+
+// The cores other pods (not DevPods) hold on a machine are not counted
+// against a job (its ranks' requests are made to fit beside them), but
+// are against a DevPod, whose pod asks for all it says.
+func TestPlanOtherPodsCoresNotJobs(t *testing.T) {
+	m := machineN("g1", 8)
+	m.OthersCPU = 4600
+	full := qjob("x", 0, 1, 8, time.Hour, 0)
+	full.Spec.CPUsPerNode = resource.MustParse("192")
+	if got := started(planQueue(view([]qMachine{m}, nil, full)), "x"); !slices.Equal(got, []string{"g1"}) {
+		t.Fatalf("a job of the whole machine beside system pods: %v", got)
+	}
+	v := view([]qMachine{m}, nil)
+	v.Queued = []qEntry{{Key: "devpod/d", DevPod: &devpodv1alpha1.DevPod{}, Owner: "u", Nodes: 1, Ask: amount{8, 192000}, Since: planNow}}
+	if p := planQueue(v); started(p, "devpod/d") != nil {
+		t.Fatalf("a DevPod of the whole machine beside system pods started: %+v", p.Starts)
+	}
+}

@@ -32,6 +32,11 @@ type qMachine struct {
 	Rs               []*devpodv1alpha1.NodeReservation
 	Reservable       bool
 	Models           []string // its cards' (gpures.Models)
+	// OthersCPU: the cores other pods (not DevPods) hold — counted against
+	// a DevPod (its pod asks for all it says), not against a job (its
+	// ranks ask Kubernetes for what is left: startJob). Their cards are in
+	// Interactive, against both.
+	OthersCPU int64
 }
 
 // qEntry: something waiting in the line — a job, or a DevPod to start.
@@ -133,6 +138,9 @@ type queueView struct {
 	QuotaOK func(e qEntry, planned []qEntry) bool
 	// Horizon: how far ahead a promise is looked for.
 	Horizon time.Duration
+	// Room: the cores Kubernetes has left on each machine now (its
+	// allocatable less every pod's requests), for a rank's request.
+	Room map[string]int64
 }
 
 type qStart struct {
@@ -241,18 +249,29 @@ func planQueue(v queueView) queuePlan {
 			Preemptible: e.Preemptible, Priority: e.Priority, Started: v.Now})
 	}
 	var held []string // machines kept for entries ahead held to one machine
+	// a DevPod's pod asks for all it says, beside other pods' cores
+	devView := v
+	devView.Machines = make([]qMachine, len(v.Machines))
+	for i, m := range v.Machines {
+		m.Interactive.CPU += m.OthersCPU
+		devView.Machines[i] = m
+	}
 	for _, j := range queueOrder(v.Queued) {
+		pv := v // the view it is planned in
+		if j.DevPod != nil {
+			pv = devView
+		}
 		limit := j.Limit
 		clears = nil
 		// where its ranks would go now, on none of exclude — one with no
 		// end, nowhere beside every reservation known: where the first in
 		// its way comes latest
 		place := func(exclude []string) []string {
-			if p := v.choose(j, runs, v.Now, exclude); p != nil {
+			if p := pv.choose(j, runs, v.Now, exclude); p != nil {
 				return p
 			}
 			if j.Limit <= 0 && j.ranks() == 1 {
-				cands, at := v.soonCleared(j, runs)
+				cands, at := pv.soonCleared(j, runs)
 				cands = slices.DeleteFunc(cands, func(m string) bool { return slices.Contains(exclude, m) })
 				if len(cands) > 0 {
 					clears = at
@@ -263,8 +282,8 @@ func planQueue(v queueView) queuePlan {
 		}
 		placed := place(held)
 		fits := placed != nil
-		quota := v.QuotaOK == nil || v.QuotaOK(j, planned)
-		if !fits && !v.everPossible(j) {
+		quota := v.QuotaOK == nil || pv.QuotaOK(j, planned)
+		if !fits && !pv.everPossible(j) {
 			// no machine it may have could ever take it (too big, its
 			// machine gone or cordoned): it waits, holding nobody up
 			wait(j, qWait{Reason: "never"})
@@ -307,8 +326,8 @@ func planQueue(v queueView) queuePlan {
 			// held to one machine (pinned, or its home's): it keeps that one
 			// for itself, and is not the head — the next that cannot start is
 			held = append(held, j.Only)
-			w := qWait{Reason: "capacity", Detail: v.shortfall(j, runs)}
-			if t, _, ok := v.earliest(j, runs); ok {
+			w := qWait{Reason: "capacity", Detail: pv.shortfall(j, runs)}
+			if t, _, ok := pv.earliest(j, runs); ok {
 				w.Expected = &t
 			}
 			wait(j, w)
@@ -319,7 +338,7 @@ func planQueue(v queueView) queuePlan {
 		// it: it may not start this time either
 		victims, on := []qRun(nil), []string(nil)
 		if !j.NoVictims {
-			victims, on = v.victimsFor(j, runs)
+			victims, on = pv.victimsFor(j, runs)
 		}
 		if len(victims) > 0 {
 			ids := make([]string, 0, len(victims))
@@ -332,14 +351,14 @@ func planQueue(v queueView) queuePlan {
 			wait(j, qWait{Reason: "preempting", Detail: map[string]string{"jobs": strings.Join(ids, ",")}})
 			continue
 		}
-		w := qWait{Reason: "capacity", Detail: v.shortfall(j, runs)}
-		if t, on, ok := v.earliest(j, runs); ok {
+		w := qWait{Reason: "capacity", Detail: pv.shortfall(j, runs)}
+		if t, on, ok := pv.earliest(j, runs); ok {
 			promise, promised, headOn = t, true, on
 			w.Expected = &t
 		} else {
 			// no time in sight (what is in its way has no end): it holds
 			// the machines nearest to taking it all the same
-			headOn = v.nearest(j, runs)
+			headOn = pv.nearest(j, runs)
 		}
 		wait(j, w)
 	}

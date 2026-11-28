@@ -453,3 +453,23 @@ func TestRankDeadlineIsTimeOut(t *testing.T) {
 		t.Fatalf("reason %q", j.Status.Reason)
 	}
 }
+
+// A job of all of a machine's cards (its cores the cards' share: all of
+// them) starts beside other pods' cores: its rank asks Kubernetes for
+// what they leave, and may use all it was given.
+func TestQueueRankRequestBesideOtherPods(t *testing.T) {
+	p, _ := queueRig(t, "qy", "qy-alice")
+	p.s.SetOtherUsageForTest(func(string) map[string]agent.NodeUsage {
+		return map[string]agent.NodeUsage{p.n1: {CPU: 4.6}}
+	})
+	code, v := submitJob(t, p.s, p.as("qy-alice"), map[string]any{"from": map[string]any{"devpod": "qy-alice-dev1"}, "nodes": 1, "gpus": 8, "command": "true"})
+	if code != http.StatusCreated {
+		t.Fatalf("submit: %d %+v", code, v)
+	}
+	roundUntil(t, p, v.ID, devpodv1alpha1.JobStarting)
+	c := ranksBecome(t, v.ID, 1)[0].Spec.Pod.Spec.Containers[0]
+	limit, req := c.Resources.Limits[corev1.ResourceCPU], c.Resources.Requests[corev1.ResourceCPU]
+	if limit.MilliValue() != 192000 || req.MilliValue() != 187400 {
+		t.Fatalf("cpu limit %s request %s", limit.String(), req.String())
+	}
+}

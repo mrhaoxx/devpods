@@ -18,6 +18,7 @@ import (
 
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -258,7 +259,7 @@ func (s *Server) queueIn(ctx context.Context, cluster string, jobs, ended []*dev
 			continue
 		}
 		j := st.Entry.Job
-		if !s.startJob(ctx, cc, j, st.Machines, nodes, ports, now) {
+		if !s.startJob(ctx, cc, j, st.Machines, nodes, ports, v.Room, now) {
 			continue
 		}
 		// a job that may not be stopped, once it has said it starts, looks
@@ -523,7 +524,7 @@ func (s *Server) requeueJob(ctx context.Context, cc *clusters.ClusterClients, j 
 // startJob makes j's ranks on machines and marks it Starting. A rank
 // found made already (a round that did not get to say so) is taken as
 // it is; any other failure takes back what was made.
-func (s *Server) startJob(ctx context.Context, cc *clusters.ClusterClients, j *devpodv1alpha1.Job, machines []string, nodes map[string]*corev1.Node, ports map[string]map[int32]bool, now time.Time) bool {
+func (s *Server) startJob(ctx context.Context, cc *clusters.ClusterClients, j *devpodv1alpha1.Job, machines []string, nodes map[string]*corev1.Node, ports map[string]map[int32]bool, room map[string]int64, now time.Time) bool {
 	// a port block no job on these machines has
 	j.Status.PortBase = pickPorts(j, machines, ports)
 	rank0 := rankName(j.Spec.Owner, j.Name, 0)
@@ -543,11 +544,25 @@ func (s *Server) startJob(ctx context.Context, cc *clusters.ClusterClients, j *d
 		local[r] = here[m]
 		here[m]++
 	}
+	// each rank's cores asked of Kubernetes: what other pods (and all else
+	// there) leave it, when that is less than its cores — its limit stays
+	// its cores, all of which it may use
+	cores := j.Spec.CPUsPerNode.MilliValue()
+	request := map[string]int64{}
+	for m, k := range here {
+		request[m] = cores
+		if left, ok := room[m]; ok && left > 0 && left/int64(k) < cores {
+			request[m] = left / int64(k)
+		}
+	}
 	for r, m := range machines {
 		dp := rankDevPod(j, int32(r), m, s.NS, master)
 		c := &dp.Spec.Pod.Spec.Containers[0]
 		c.Env = append(c.Env, corev1.EnvVar{Name: "DEVPOD_LOCAL_TASK", Value: strconv.Itoa(local[r])},
 			corev1.EnvVar{Name: "DEVPOD_TASKS_HERE", Value: strconv.Itoa(here[m])})
+		if req := request[m]; req < cores && c.Resources.Requests != nil {
+			c.Resources.Requests[corev1.ResourceCPU] = *resource.NewMilliQuantity(req, resource.DecimalSI)
+		}
 		if j.Spec.Attach != "" && s.Queue.GangTimeout > 0 {
 			// it waits for its submitter as long as this start may take (the
 			// others' images may be slow to come) and a little: it is gone
@@ -590,6 +605,12 @@ func (s *Server) startJob(ctx context.Context, cc *clusters.ClusterClients, j *d
 	j.Status.Reason, j.Status.Detail, j.Status.Position, j.Status.ExpectedStart, j.Status.StartedAt = "", nil, 0, nil, nil
 	written := s.writeJobStatus(ctx, j)
 	if written {
+		// what the next start this round has left
+		for m, k := range here {
+			if _, ok := room[m]; ok {
+				room[m] -= int64(k) * request[m]
+			}
+		}
 		slog.Info("queue_job_start", "job", j.Name, "owner", j.Spec.Owner, "machines", machines)
 		ev := systemEvent("system:queue")
 		if len(machines) > 0 {
@@ -707,6 +728,7 @@ func (s *Server) queueViewFor(ctx context.Context, cc *clusters.ClusterClients, 
 	}
 	cluster := s.resCluster(ctx)
 	others := s.othersOn(cluster) // what other workloads hold, by machine
+	room := map[string]int64{}    // the cores Kubernetes has left, by machine
 	activeByID := map[string]*devpodv1alpha1.Job{}
 	for _, j := range active {
 		activeByID[j.Name] = j
@@ -738,8 +760,16 @@ func (s *Server) queueViewFor(ctx context.Context, cc *clusters.ClusterClients, 
 			interactive = append(interactive, p)
 		}
 		c := capacityOf(n)
-		machines = append(machines, qMachine{Name: n.Name, Cap: c, Interactive: loadAt(c, rs, interactive, now, "").with(others[n.Name]).outside(), Rs: rs, Reservable: reservable,
-			Models: gpures.Models(n)})
+		// other pods' cards are no one's; their cores are not counted
+		// against a job, whose ranks are made to fit beside them (a
+		// DevPod's room counts them: planQueue)
+		machines = append(machines, qMachine{Name: n.Name, Cap: c, Interactive: loadAt(c, rs, interactive, now, "").with(amount{GPU: others[n.Name].GPU}).outside(), Rs: rs, Reservable: reservable,
+			Models: gpures.Models(n), OthersCPU: others[n.Name].CPU})
+		left := c.CPU - others[n.Name].CPU
+		for _, p := range on[n.Name] {
+			left -= p.Ask.CPU
+		}
+		room[n.Name] = left
 	}
 	var running []qRun
 	for _, j := range active {
@@ -833,7 +863,7 @@ func (s *Server) queueViewFor(ctx context.Context, cc *clusters.ClusterClients, 
 		}
 		return CheckQuota(EffectiveQuota(up, cc.Name, s.clusterQuota(ctx, cc)), existing, rankDevPod(j, j.Spec.Ranks()-1, "x", s.NS, "")) == nil
 	}
-	return queueView{Now: now, Machines: machines, Running: running, Queued: queued, Allowed: mayRun, QuotaOK: quotaOK, Horizon: 14 * 24 * time.Hour}, byName, nil
+	return queueView{Now: now, Machines: machines, Running: running, Queued: queued, Allowed: mayRun, QuotaOK: quotaOK, Horizon: 14 * 24 * time.Hour, Room: room}, byName, nil
 }
 
 // jobsByID: the queue's jobs not ended, by id (none with the queue off).
