@@ -36,7 +36,7 @@ func rsvRig(t *testing.T, prefix string) (*webui.Server, *webui.SessionManager, 
 	s, sm := newServer(t)
 	now := time.Date(2026, 11, 12, 2, 10, 0, 0, time.UTC) // 10:10 +08:00
 	s.Reservations = &webui.ReservationRules{Granularity: 30 * time.Minute, MaxDuration: 24 * time.Hour, MaxAdvance: 14 * 24 * time.Hour,
-		ClearNotice: 30 * time.Minute, Now: func() time.Time { return now }}
+		ClearNotice: 30 * time.Minute, Now: func() time.Time { return now }, Partial: true}
 	ctx := context.Background()
 	node := prefix + "-n1"
 	// n1: reservable, 8 cards and 192 cores; n2: not, 64 cores, no cards

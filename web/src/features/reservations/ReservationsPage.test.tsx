@@ -708,4 +708,111 @@ describe("ReservationsPage", () => {
     const b = await within(await screen.findByRole("group", { name: "g206 的预约" })).findByRole("button", { name: /bob/ });
     expect(b.style.minWidth).toBe("16px");
   });
+  it("where reservations are of whole machines: the form asks no amount and sends none; a machine is one band", async () => {
+    at();
+    const calls = stubFetch({
+      "/api/reservations/rules": rules,
+      "/api/nodes": { items: [node("g206", { cpu: { allocatable: 192, allocated: 0 } })] },
+      "/api/reservations": { items: [block({ id: "b1", start: "2026-11-12T06:00:00Z", end: "2026-11-12T08:00:00Z" })], partial: { "": false } },
+      "POST /api/reservations": block({ id: "new" }),
+    });
+    renderWithProviders(<ReservationsPage />, { me: me() });
+    const track = (await screen.findAllByText("g206"))[0].closest("[data-row]") as HTMLElement;
+    await waitFor(() => expect(track.querySelectorAll("[data-band]").length).toBe(1));
+    expect(screen.getByText(/预约整台机器，预约期间整台只归你/)).toBeTruthy();
+    fireEvent.click(await screen.findByRole("button", { name: "预约节点" }));
+    const dialog = within(screen.getByRole("dialog"));
+    expect(dialog.queryByRole("radiogroup", { name: "要多少" })).toBeNull();
+    expect(dialog.queryByLabelText("CPU 核数")).toBeNull();
+    fireEvent.click(dialog.getByRole("button", { name: "预约" }));
+    await waitFor(() => expect(calls.some((c) => c.method === "POST")).toBe(true));
+    const sent = JSON.parse(calls.find((c) => c.method === "POST")!.body!);
+    expect(sent).not.toHaveProperty("gpu");
+    expect(sent).not.toHaveProperty("cpu");
+  });
+  it("several clusters: amounts are asked only while every machine picked is of a cluster that allows parts", async () => {
+    at();
+    stubFetch({
+      "/api/reservations/rules": rules,
+      "/api/nodes": { items: [node("g1", { cluster: "a" }), node("g2", { cluster: "b" })] },
+      "/api/reservations": { items: [], partial: { a: false, b: true } },
+    });
+    renderWithProviders(<ReservationsPage />, { me: me() });
+    fireEvent.click(await screen.findByRole("button", { name: "预约节点" }));
+    const dialog = within(screen.getByRole("dialog"));
+    const box = (name: RegExp) => dialog.getByRole("checkbox", { name }) as HTMLInputElement;
+    expect(box(/g1/).checked).toBe(true);
+    expect(dialog.queryByRole("radiogroup", { name: "要多少" })).toBeNull();
+    fireEvent.click(box(/g1/));
+    fireEvent.click(box(/g2/));
+    expect(await dialog.findByRole("radiogroup", { name: "要多少" })).toBeTruthy();
+    fireEvent.click(box(/g1/));
+    await waitFor(() => expect(dialog.queryByRole("radiogroup", { name: "要多少" })).toBeNull());
+  });
+
+  it("whole machines: a queue job of cores and no cards on a machine of cards is still drawn (its CPU band shows)", async () => {
+    at();
+    stubFetch({
+      "/api/reservations/rules": rules,
+      "/api/nodes": { items: [node("g206")] },
+      "/api/reservations": { items: [], partial: { "": false }, jobs: [{ id: "cpu01", rank: 0, owner: "bob", node: "g206", gpu: 0, cpu: 8, start: "2026-11-12T02:00:00Z", end: "2026-11-12T05:00:00Z", mine: false, preemptible: false }] },
+    });
+    renderWithProviders(<ReservationsPage />, { me: me() });
+    const track = (await screen.findAllByText("g206"))[0].closest("[data-row]") as HTMLElement;
+    // once the timeline is read (whole machines): the job is drawn, in its CPU band
+    await waitFor(() => expect(track.querySelector('[data-res="job-cpu01-0"]')).not.toBeNull());
+    expect(track.querySelector('[data-band="cpu"] [data-res="job-cpu01-0"]')).not.toBeNull();
+  });
+
+  it("whole machines: the form says whether the machine is free then, not how many cards; editing one of part left from before says what it holds", async () => {
+    at();
+    stubFetch({
+      "/api/reservations/rules": rules,
+      "/api/nodes": { items: [node("g206", { cpu: { allocatable: 192, allocated: 0 } })] },
+      "/api/reservations": { items: [block({ id: "p1", gpu: 2, cpu: 48, start: "2026-11-12T06:00:00Z", end: "2026-11-12T08:00:00Z" })], partial: { "": false } },
+    });
+    renderWithProviders(<ReservationsPage />, { me: me() });
+    fireEvent.click(await screen.findByRole("button", { name: "预约节点" }));
+    let dialog = within(screen.getByRole("dialog"));
+    expect(await dialog.findByText(/这段时间 g206 空着/)).toBeTruthy();
+    expect(dialog.queryByText(/还能约/)).toBeNull();
+    expect(dialog.getByText(/预约期间整台机器只归你/)).toBeTruthy();
+    fireEvent.click(dialog.getByRole("button", { name: "取消" }));
+    // my partial one, from when parts were allowed: its change says what it holds
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    const track = screen.getAllByText("g206")[0].closest("[data-row]") as HTMLElement;
+    fireEvent.click(track.querySelector('[data-res="p1"]') as HTMLElement);
+    fireEvent.click(await screen.findByRole("button", { name: "修改…" }));
+    dialog = within(await screen.findByRole("dialog"));
+    expect(await dialog.findByText(/这份预约：2 卡 · 48 核/)).toBeTruthy();
+  });
+  it("a refusal for asking part of a machine where whole ones are reserved is said in words (the switch turned off meanwhile)", async () => {
+    at();
+    stubFetch({
+      "/api/reservations/rules": rules,
+      "/api/nodes": { items: [node("g206", { cpu: { allocatable: 192, allocated: 0 } })] },
+      "/api/reservations": { items: [] },
+      "POST /api/reservations": new Response(JSON.stringify({ code: "WHOLE_MACHINES", message: "reservations here are of whole machines: an admin may allow it" }), { status: 400 }),
+    });
+    renderWithProviders(<ReservationsPage />, { me: me() });
+    fireEvent.click(await screen.findByRole("button", { name: "预约节点" }));
+    const dialog = within(screen.getByRole("dialog"));
+    fireEvent.click(within(dialog.getByRole("radiogroup", { name: "要多少" })).getByRole("radio", { name: "4 卡" }));
+    fireEvent.click(dialog.getByRole("button", { name: "预约" }));
+    expect(await dialog.findByText(/这个集群只能预约整台机器/)).toBeTruthy();
+    expect(dialog.queryByText(/reservations here are of whole machines/)).toBeNull();
+  });
+
+  it("whole machines: a reservation of part that ended before the window does not bring back the two bands", async () => {
+    at();
+    stubFetch({
+      "/api/reservations/rules": rules,
+      "/api/nodes": { items: [node("g206", { cpu: { allocatable: 192, allocated: 0 } })] },
+      "/api/reservations": { items: [block({ id: "old", gpu: 2, cpu: 48, phase: "Ended", start: "2026-11-01T04:00:00Z", end: "2026-11-01T06:00:00Z" })], partial: { "": false } },
+    });
+    renderWithProviders(<ReservationsPage />, { me: me() });
+    const track = (await screen.findAllByText("g206"))[0].closest("[data-row]") as HTMLElement;
+    await waitFor(() => expect(screen.getByText(/预约整台机器，预约期间整台只归你/)).toBeTruthy()); // the timeline is read
+    expect(track.querySelectorAll("[data-band]").length).toBe(1);
+  });
 });

@@ -29,6 +29,8 @@ export interface LinkStats {
 /** GET /api/admin/clusters adds what an admin manages. */
 export interface AdminCluster extends Cluster {
   joined: boolean;
+  /** reservations here may be of part of a machine (cards and cores); else whole machines */
+  partialReservations?: boolean;
   tokenExpires?: string;
   agentVersion?: string;
   controllerVersion?: string;
@@ -55,7 +57,7 @@ export const listClusters = () =>
 export const listAdminClusters = () => req<{ items: AdminCluster[] }>("GET", "/api/admin/clusters");
 export const createCluster = (name: string, displayName: string) => req<Joining>("POST", "/api/admin/clusters", { name, displayName });
 export const reissueClusterToken = (name: string) => req<Joining>("POST", `/api/admin/clusters/${name}/token`);
-export const patchCluster = (name: string, body: { displayName?: string; paused?: boolean }) =>
+export const patchCluster = (name: string, body: { displayName?: string; paused?: boolean; partialReservations?: boolean }) =>
   req<AdminCluster>("PATCH", `/api/admin/clusters/${name}`, body);
 export const deleteCluster = (name: string) => req<void>("DELETE", `/api/admin/clusters/${name}`);
 

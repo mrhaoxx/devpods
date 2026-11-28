@@ -47,6 +47,10 @@ type ReservationRules struct {
 	MaxAdvance  time.Duration // how far ahead a start may be; 0 = unlimited
 	ClearNotice time.Duration // how long before its end a holder is warned
 	Now         func() time.Time
+	// Partial: reservations may be of part of a machine, in a cluster no
+	// Cluster object of says (a console's own); a Cluster's
+	// PartialReservations says for its own
+	Partial bool
 }
 
 // reservationTZ is the zone times align to and are shown in (spec §3.1).
@@ -428,7 +432,8 @@ func (s *Server) handleListReservations(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	items := []reservationView{}
-	holds := []jobHoldView{} // the timeline's: what running jobs hold
+	holds := []jobHoldView{}     // the timeline's: what running jobs hold
+	partial := map[string]bool{} // by cluster: reservations may be of part of a machine
 	shown := s.clusterGate(r.Context(), sess)
 	var gs *access.GrantSet
 	var groups map[string]bool
@@ -442,6 +447,9 @@ func (s *Server) handleListReservations(w http.ResponseWriter, r *http.Request) 
 		ctx := s.in(r.Context(), cc)
 		cluster := s.resCluster(ctx)
 		open := shown(cc.Name)
+		if open { // of a cluster the caller is shown only
+			partial[s.clusterLabel(cc)] = s.partialReservations(ctx, cluster)
+		}
 		// the machines whose reservations the caller may run (a grant)
 		managed := map[string]bool{}
 		manageable := func(node string) bool {
@@ -537,7 +545,7 @@ func (s *Server) handleListReservations(w http.ResponseWriter, r *http.Request) 
 	}
 	if limit == 0 && after == nil {
 		sort.SliceStable(items, func(i, j int) bool { return items[i].Start.Before(items[j].Start) })
-		out := map[string]any{"items": items}
+		out := map[string]any{"items": items, "partial": partial}
 		if !mine && s.Queue != nil {
 			out["jobs"] = holds
 		}
@@ -668,12 +676,16 @@ func (s *Server) handleCreateReservation(w http.ResponseWriter, r *http.Request)
 		s.writeErr(w, http.StatusBadRequest, "BAD_REQUEST", err.Error(), nil)
 		return
 	}
+	cluster := s.resCluster(r.Context())
+	if (req.GPU != nil || req.CPU != nil) && !s.partialReservations(r.Context(), cluster) {
+		s.writeServerErr(w, wholeOnly())
+		return
+	}
 	gpu, cpu, apiErr := shareOf(n, req.GPU, req.CPU)
 	if apiErr != nil {
 		s.writeServerErr(w, apiErr)
 		return
 	}
-	cluster := s.resCluster(r.Context())
 	d, _, err := s.decide(r.Context(), user, cluster, access.Node{Name: n.Name, Labels: n.Labels})
 	switch {
 	case err != nil:
@@ -773,6 +785,10 @@ func (s *Server) handlePatchReservation(w http.ResponseWriter, r *http.Request) 
 	now := ru.now()
 	nr, ok := s.ownReservation(w, r, sess, now)
 	if !ok {
+		return
+	}
+	if (req.GPU != nil || req.CPU != nil) && !s.partialReservations(r.Context(), nr.Spec.Cluster) {
+		s.writeServerErr(w, wholeOnly())
 		return
 	}
 	start, end := nr.Spec.Start.Time, nr.Spec.End.Time
@@ -1139,4 +1155,11 @@ func (s *Server) nodeChoicesIn(ctx context.Context, sess Session) ([]nodeChoice,
 		items = append(items, c)
 	}
 	return items, nil
+}
+
+// wholeOnly: a reservation of part of a machine where reservations are of
+// whole machines.
+func wholeOnly() *serverErr {
+	return &serverErr{http.StatusBadRequest, "WHOLE_MACHINES",
+		"reservations here are of whole machines: an admin may allow reservations of part of a machine (cards and cores) in the cluster's settings", nil}
 }

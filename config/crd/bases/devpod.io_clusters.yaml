@@ -112,6 +112,12 @@ spec:
                   JobMaxTimeLimit: the longest time limit a queue job may have here
                   (the console's --job-max-time-limit when unset).
                 type: string
+              partialReservations:
+                description: |-
+                  PartialReservations: a reservation here may be of part of a machine
+                  (cards and cores), guaranteed. Off: a reservation is the whole
+                  machine, a machine's never overlapping.
+                type: boolean
               paused:
                 description: 'Paused: the agent''s connections are refused and dropped.'
                 type: boolean

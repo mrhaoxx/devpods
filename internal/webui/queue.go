@@ -111,3 +111,16 @@ func (s *Server) maxTimeLimit(ctx context.Context, cluster string) time.Duration
 	}
 	return s.Queue.MaxTimeLimit
 }
+
+// partialReservations: cluster's reservations may be of part of a machine
+// — as its Cluster says (PartialReservations); a cluster no Cluster object
+// is of (a console's own), as the console's rules say (off by default).
+func (s *Server) partialReservations(ctx context.Context, cluster string) bool {
+	if cluster != "" {
+		var c devpodv1alpha1.Cluster
+		if s.Client.Get(ctx, types.NamespacedName{Name: cluster}, &c) == nil {
+			return c.Spec.PartialReservations
+		}
+	}
+	return s.Reservations != nil && s.Reservations.Partial
+}

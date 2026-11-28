@@ -16,6 +16,7 @@ import (
 
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	devpodv1alpha1 "github.com/mrhaoxx/devpod/api/v1alpha1"
@@ -126,6 +127,27 @@ func TestClustersHiddenWithoutAccess(t *testing.T) {
 	if got := clustersOf("hz-bob"); !slices.Equal(got, []string{"a"}) {
 		t.Fatalf("bob's clusters %v", got)
 	}
+
+	// the timeline says, by cluster, whether reservations may be of part of
+	// a machine — and nothing of a cluster the caller is not shown
+	w.s.Reservations = &webui.ReservationRules{Granularity: 10 * time.Minute}
+	partialOf := func(user string) map[string]any {
+		_, out, _ := w.call(user, "GET", "/api/reservations", "")
+		m, _ := out["partial"].(map[string]any)
+		return m
+	}
+	if p := partialOf("hz-bob"); p["a"] != false || p["b"] != nil {
+		t.Fatalf("bob's timeline says %v", p)
+	}
+	var b devpodv1alpha1.Cluster
+	if err := w.a.Get(context.Background(), types.NamespacedName{Name: "b"}, &b); err != nil {
+		t.Fatal(err)
+	}
+	b.Spec.PartialReservations = true
+	if err := w.a.Update(context.Background(), &b); err != nil {
+		t.Fatal(err)
+	}
+	w.until("b allows parts, a not", func() bool { p := partialOf("root"); return p["b"] == true && p["a"] == false })
 }
 
 // A rule naming a group that is not there (as kubectl may leave one)

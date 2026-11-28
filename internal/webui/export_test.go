@@ -245,3 +245,8 @@ func (s *Server) HomePVCNameForTest(dp *devpodv1alpha1.DevPod) string { return r
 func SetAllowedForTest(dp *devpodv1alpha1.DevPod, nodes []string) { access.SetAllowed(dp, nodes) }
 
 func (s *Server) PinSweepRoundForTest(ctx context.Context) { s.pinSweepRound(ctx) }
+
+// PartialReservationsForTest is partialReservations.
+func (s *Server) PartialReservationsForTest(ctx context.Context, cluster string) bool {
+	return s.partialReservations(ctx, cluster)
+}

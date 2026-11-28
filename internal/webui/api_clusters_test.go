@@ -173,6 +173,19 @@ func TestClusters(t *testing.T) {
 		t.Fatalf("what an admin sees: %v", m)
 	}
 
+	// reservations by cards and cores: off until an admin allows them
+	if s.PartialReservationsForTest(context.Background(), "mulan") {
+		t.Fatal("partial reservations are on before anyone allowed them")
+	}
+	if code, out := call("PATCH", "/api/admin/clusters/mulan", admin, `{"partialReservations":true}`); code != http.StatusOK {
+		t.Fatalf("allow partial reservations: %d %v", code, out)
+	}
+	waitFor(t, func() bool { return find(admin, "/api/admin/clusters")["partialReservations"] == true })
+	waitFor(t, func() bool { return s.PartialReservationsForTest(context.Background(), "mulan") })
+	if s.PartialReservationsForTest(context.Background(), "") {
+		t.Fatal("a console's own cluster without an object allows partial reservations")
+	}
+
 	// edit: a quota for the cluster, a new display name
 	if code, out := call("PATCH", "/api/admin/clusters/mulan", admin, `{"displayName":"Mulan","defaultQuota":{"maxDevPods":3,"cpu":"64"}}`); code != http.StatusOK {
 		t.Fatalf("patch: %d %v", code, out)

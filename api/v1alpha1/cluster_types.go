@@ -47,6 +47,13 @@ type ClusterSpec struct {
 	//
 	// +optional
 	JobMaxTimeLimit *metav1.Duration `json:"jobMaxTimeLimit,omitempty"`
+
+	// PartialReservations: a reservation here may be of part of a machine
+	// (cards and cores), guaranteed. Off: a reservation is the whole
+	// machine, a machine's never overlapping.
+	//
+	// +optional
+	PartialReservations bool `json:"partialReservations,omitempty"`
 }
 
 // ClusterStatus is what the console last heard from the cluster's agent.

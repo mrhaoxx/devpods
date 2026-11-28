@@ -121,4 +121,17 @@ describe("集群 page", () => {
     fireEvent.click(dlg.getByRole("button", { name: "重新签发" }));
     expect(await screen.findByText(/dpj_new/)).toBeTruthy();
   });
+  it("reservations by cards and cores are allowed per cluster: off by default, switched on and off", async () => {
+    const calls = stubFetch({
+      "GET /api/admin/clusters": { items: [mulan, { ...mulan, name: "st2", displayName: "", partialReservations: true }] },
+      "PATCH /api/admin/clusters/mulan": { ...mulan, partialReservations: true },
+    });
+    renderWithProviders(<ClustersPage />);
+    await screen.findByText("st2");
+    const box = (await within(row("mulan")).findByLabelText("mulan 可按卡/核预约")) as HTMLInputElement;
+    expect(box.checked).toBe(false);
+    expect((within(row("st2")).getByLabelText("st2 可按卡/核预约") as HTMLInputElement).checked).toBe(true);
+    fireEvent.click(box);
+    await waitFor(() => expect(calls.find((c) => c.method === "PATCH")?.body).toBe(JSON.stringify({ partialReservations: true })));
+  });
 });

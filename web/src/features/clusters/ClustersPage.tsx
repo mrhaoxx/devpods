@@ -80,6 +80,12 @@ export function ClustersPage() {
     onError: (e) => setError(errText(e)),
     onSettled: refresh,
   });
+  // reservations of part of a machine: off (whole machines) unless allowed
+  const partial = useMutation({
+    mutationFn: (v: { cluster: string; on: boolean }) => patchCluster(v.cluster, { partialReservations: v.on }),
+    onError: (e) => setError(errText(e)),
+    onSettled: refresh,
+  });
   if (q.isError) return <EmptyState tone="error" title="无法加载集群" hint={errText(q.error)} />;
   const items = q.data?.items ?? [];
   return (
@@ -107,7 +113,7 @@ export function ClustersPage() {
           <table className="w-full text-left text-xs">
             <thead className="border-b border-line text-muted">
               <tr>
-                {["名称", "显示名", "状态", "连接", "延迟", "流量（收 / 发）", "版本", "能力", "网关", ""].map((h) => (
+                {["名称", "显示名", "状态", "连接", "延迟", "流量（收 / 发）", "版本", "能力", "网关", "按卡/核预约", ""].map((h) => (
                   <th key={h} className="px-3 py-2 font-medium">
                     {h}
                   </th>
@@ -159,6 +165,15 @@ export function ClustersPage() {
                         </option>
                       ))}
                     </Select>
+                  </td>
+                  <td className="px-3 py-2">
+                    <input
+                      type="checkbox"
+                      aria-label={`${c.name} 可按卡/核预约`}
+                      title="关闭时预约整台机器（独占）；打开后可以只约几张卡和对应的核"
+                      checked={!!c.partialReservations}
+                      onChange={(e) => partial.mutate({ cluster: c.name, on: e.target.checked })}
+                    />
                   </td>
                   <td className="px-3 py-2">
                     <span className="flex justify-end gap-1">

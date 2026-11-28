@@ -614,7 +614,7 @@ export type Reservation = {
 export type JobHold = { cluster?: string; id: string; title?: string; owner: string; mine: boolean; rank: number; node: string; gpu: number; cpu: number; start: string; end: string; preemptible?: boolean };
 export type ReservationRules = { granularitySeconds: number; maxDurationSeconds: number; maxAdvanceSeconds: number; clearNoticeSeconds: number; timezone: string; now: string };
 export const getReservationRules = () => req<ReservationRules>("GET", "/api/reservations/rules");
-export const listReservations = (from: string, to: string) => req<{ items: Reservation[]; jobs?: JobHold[] }>("GET", `/api/reservations?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}`);
+export const listReservations = (from: string, to: string) => req<{ items: Reservation[]; jobs?: JobHold[]; partial?: Record<string, boolean> }>("GET", `/api/reservations?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}`);
 /** listMyReservations: a page of mine, of any time, the latest start first; `next` asks for the page after. */
 export const listMyReservations = (cursor?: string, limit = 50) =>
   req<{ items: Reservation[]; next?: string }>("GET", `/api/reservations?mine=1&limit=${limit}${cursor ? `&cursor=${encodeURIComponent(cursor)}` : ""}`);

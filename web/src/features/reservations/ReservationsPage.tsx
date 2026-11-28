@@ -63,12 +63,14 @@ const DAY = 86_400_000;
 const RANGES = [3, 7, 14] as const;
 
 /** apiMessage turns a reservation API failure into a sentence. */
-function apiMessage(e: unknown): string {
+function apiMessage(e: unknown, whole = false): string {
   if (e instanceof ApiFailure) {
     if (e.code === "NOT_RESERVABLE") return "这台机器没有开放预约。";
     if (e.code === "ACL_DENIED") return "你没有使用这台机器的权限。";
+    if (e.code === "WHOLE_MACHINES") return "这个集群只能预约整台机器；要按卡/核预约，请管理员在集群设置里打开「按卡/核预约」。";
     if (e.code === "NO_ROOM") {
       const d = e.body.detail as { free?: Amount; earliest?: string } | undefined;
+      if (whole) return `这段时间这台机器已有预约或任务占着${d?.earliest ? `；最早 ${fmtTime(d.earliest)} 起有空` : ""}`;
       if (d?.free) {
         const what = d.free.gpu > 0 ? `${d.free.gpu} 卡 · ${num(d.free.cpu)} 核` : d.free.cpu > 0 ? `${num(d.free.cpu)} 核` : "";
         return `${what ? `这段时间最多还能约 ${what}` : "这段时间已约满"}${d.earliest ? `；最早 ${fmtTime(d.earliest)} 起有空` : ""}`;
@@ -151,10 +153,13 @@ function ReserveDialog({
   rules,
   now,
   forOthers,
+  partialIn,
   onClose,
 }: {
   draft: Draft;
   nodes: NodeChoice[];
+  /** whether a cluster's reservations may be of part of a machine; else whole machines */
+  partialIn: (cluster?: string) => boolean;
   /** the reservations on the timeline: what the form says is free from */
   blocks: Reservation[];
   rules: ReservationRules;
@@ -170,6 +175,8 @@ function ReserveDialog({
   const several = nodes.some((n) => n.cluster);
   // a new one may be for several machines at once: one reservation each
   const [picked, setPicked] = useState<string[]>(draft.nodes ?? [draft.node]);
+  // amounts only while every machine asked for is of a cluster that allows parts
+  const partial = (edit ? [node] : picked).every((k) => partialIn(refOfKey(k).cluster));
   const [outcome, setOutcome] = useState<{ made: number; failed: { key: string; why: string }[] } | null>(null);
   const nameOf = (key: string) => {
     const r = refOfKey(key);
@@ -205,6 +212,7 @@ function ReserveDialog({
   const offered = presets(cap);
   const [ask, setAsk] = useState<Ask>(() => {
     if (edit) return { gpu: edit.gpu, cpu: edit.cpu };
+    if (!partial) return {}; // the whole machine
     const k = draft.nodes?.[0] ?? draft.node;
     const n = nodeOf(k);
     if (!n) return {};
@@ -220,6 +228,10 @@ function ReserveDialog({
     edit && !wholeAsk(ask) && !presets(cap).some((p) => (cap.gpu > 0 ? p.gpu === edit.gpu : p.cpu === edit.cpu)) ? String((cap.gpu > 0 ? edit.gpu : edit.cpu) ?? "") : "",
   );
   const pick = (a: Ask) => (setAsk(a), touch());
+  // a machine of a cluster of whole machines picked: the whole machine
+  useEffect(() => {
+    if (!partial && !edit) setAsk({});
+  }, [partial, edit]);
   // another machine of another size first: the amount starts over
   const capKey = `${cap.gpu}/${cap.cpu}`;
   const lastCap = useRef(capKey);
@@ -300,7 +312,7 @@ function ReserveDialog({
         ...(ask.cpu != null && (ownCpu || ask.gpu == null) ? { cpu: ask.cpu } : {}),
       };
       const results = await Promise.allSettled(keys.map((k) => createReservation(refOfKey(k).cluster, { ...period, ...extra, node: refOfKey(k).name })));
-      const failed = results.flatMap((r, i) => (r.status === "rejected" ? [{ key: keys[i], why: apiMessage(r.reason) }] : []));
+      const failed = results.flatMap((r, i) => (r.status === "rejected" ? [{ key: keys[i], why: apiMessage(r.reason, !partial) }] : []));
       return { made: keys.length - failed.length, failed };
     },
     onSuccess: (r) => {
@@ -310,7 +322,7 @@ function ReserveDialog({
       setOutcome(r);
       setPicked(r.failed.map((f) => f.key));
     },
-    onError: (err) => setError(apiMessage(err)),
+    onError: (err) => setError(apiMessage(err, !partial)),
   });
   return (
     <Dialog.Root open onOpenChange={(o) => !o && onClose()}>
@@ -379,7 +391,14 @@ function ReserveDialog({
               </Field>
             </div>
             <div className="space-y-1">
-              <div className="text-xs font-medium">要多少</div>
+              <div className="text-xs font-medium">
+                {partial
+                  ? "要多少"
+                  : edit && (edit.gpu != null || edit.cpu != null)
+                    ? `这份预约：${cap.gpu > 0 ? `${edit.gpu ?? 0} 卡 · ` : ""}${num(edit.cpu ?? 0)} 核（按卡/核预约关闭前约的，保留到结束）`
+                    : "整台机器（预约期间只归你）"}
+              </div>
+              {partial && (
               <div role="radiogroup" aria-label="要多少" className="flex flex-wrap items-center gap-1.5 text-xs">
                 {offered.map((p) => {
                   const on = (p.gpu ?? null) === (ask.gpu ?? null) && (p.gpu != null || (p.cpu ?? null) === (ask.cpu ?? null));
@@ -434,9 +453,18 @@ function ReserveDialog({
                   </>
                 )}
               </div>
+              )}
               {rooms.map((r) => (
                 <p key={r.k} className={`text-[11px] ${r.ok ? "text-run" : "text-fail"}`}>
-                  {r.ok ? `✓ 这段时间 ${nameOf(r.k)} 还能约 ${r.what}` : r.full ? `✗ ${nameOf(r.k)} 这段时间已约满` : `✗ ${nameOf(r.k)} 这段时间最多还能约 ${r.what}`}
+                  {!partial
+                    ? r.ok
+                      ? `✓ 这段时间 ${nameOf(r.k)} 空着`
+                      : `✗ ${nameOf(r.k)} 这段时间已有预约或任务占着`
+                    : r.ok
+                      ? `✓ 这段时间 ${nameOf(r.k)} 还能约 ${r.what}`
+                      : r.full
+                        ? `✗ ${nameOf(r.k)} 这段时间已约满`
+                        : `✗ ${nameOf(r.k)} 这段时间最多还能约 ${r.what}`}
                 </p>
               ))}
             </div>
@@ -471,11 +499,15 @@ function ReserveDialog({
               </Notice>
             )}
             {!edit && !problem && noticeMs > 0 && s < now + noticeMs && (
-              <p className="text-[11px] text-warm">如果机器上有人在用没被预约的部分，他们会先收到通知，最晚 {fmtClock(now + noticeMs)} 前腾出。</p>
+              <p className="text-[11px] text-warm">
+                {partial ? "如果机器上有人在用没被预约的部分" : "如果机器上有人在用"}，他们会先收到通知，最晚 {fmtClock(now + noticeMs)} 前腾出。
+              </p>
             )}
             {!edit && (
               <p className="text-[11px] text-muted">
-                约到的卡和核在预约期间只归你，机器上没被约走的部分别人照样可以用。开始时如果有人占着你约的部分，他们会先收到通知、到时被休眠。到期后，你在这台机器上只靠这份预约运行的 DevPod 会被自动休眠。
+                {partial
+                  ? "约到的卡和核在预约期间只归你，机器上没被约走的部分别人照样可以用。开始时如果有人占着你约的部分，他们会先收到通知、到时被休眠。到期后，你在这台机器上只靠这份预约运行的 DevPod 会被自动休眠。"
+                  : "预约期间整台机器只归你。开始时如果有人在用这台机器，他们会先收到通知、到时被休眠。到期后，你在这台机器上只靠这份预约运行的 DevPod 会被自动休眠。"}
               </p>
             )}
             <div className="flex justify-end gap-2">
@@ -506,10 +538,13 @@ function Row({
   bad,
   label,
   trackW,
+  partial,
   onPick,
 }: {
   node: NodeChoice;
   blocks: Reservation[];
+  /** its cluster's reservations may be of part of a machine: a GPU band and a CPU band */
+  partial: boolean;
   from: number;
   to: number;
   now: number;
@@ -534,8 +569,17 @@ function Row({
     const out: { key: "gpu" | "cpu"; label: string; h: number; cap: number; pick: (b: Reservation) => number }[] = [];
     if (cap.gpu > 0) out.push({ key: "gpu", label: "GPU", h: Math.min(64, Math.max(24, 6 * cap.gpu)), cap: cap.gpu, pick: (b) => amountOf(b, cap).gpu });
     out.push({ key: "cpu", label: "CPU", h: out.length ? 24 : 36, cap: cap.cpu, pick: (b) => amountOf(b, cap).cpu });
-    return out.map((band) => ({ ...band, stack: band.cap > 0 ? stackBand(blocks, band.cap, band.pick) : null }));
-  }, [blocks, cap.gpu, cap.cpu]); // eslint-disable-line react-hooks/exhaustive-deps
+    // whole machines (and none of part left from when parts were allowed):
+    // one band — a reservation fills it, a queue job takes its cards
+    const split =
+      partial ||
+      // one of part left from when parts were allowed, still in the window
+      blocks.some((b) => !b.job && (b.gpu != null || b.cpu != null) && Date.parse(b.end) > from) ||
+      // a queue job of cores and no cards on a machine of cards: its CPU band shows it
+      (cap.gpu > 0 && blocks.some((b) => !!b.job && !((b.gpu ?? 0) > 0)));
+    const shown = split ? out : out.slice(0, 1).map((band) => ({ ...band, h: Math.max(band.h, 36) }));
+    return shown.map((band) => ({ ...band, stack: band.cap > 0 ? stackBand(blocks, band.cap, band.pick) : null }));
+  }, [blocks, cap.gpu, cap.cpu, partial, from]); // eslint-disable-line react-hooks/exhaustive-deps
   // the band a reservation is said (and picked) in: the first it shows in
   const primary = (b: Reservation) => bands.find((band) => band.cap <= 0 || band.pick(b) > 0)?.key ?? "cpu";
   const [hot, setHot] = useState<string | null>(null);
@@ -767,6 +811,11 @@ export function ReservationsPage() {
   const pick = (b: Reservation) => (b.job ? nav(`/queue/${clusterSeg(b.cluster)}/${b.job.id}`) : setPicked(b));
   // the reservable machines I may use, whether I need a reservation there or not
   const nodes = (nodesQ.data?.items ?? []).filter((n) => n.reservable && (n.access !== "denied" || n.manageReservations) && matches(n));
+  // whether a cluster's reservations may be of part of a machine (a console of before says nothing: they may)
+  const partialIn = (cluster?: string) => {
+    const m = q.data?.partial;
+    return m ? (m[cluster ?? ""] ?? false) : true;
+  };
   const mine = (mineQ.data?.pages.flatMap((p) => p.items) ?? []).filter((b) => b.mine && matches(b));
   const cancelAll = async (rows: Reservation[], clear: () => void) => {
     setBulkCancel(null);
@@ -824,7 +873,11 @@ export function ReservationsPage() {
             </button>
           ))}
         </div>
-        <span className="text-[11px] text-muted">在时间轴上拖动（触屏或手写笔点一下）来预约，左右滑动看更多天。每台机器上面一条是 GPU、下面一条是 CPU：约到的部分在预约期间只归你，可以只约几张卡。北京时间。</span>
+        <span className="text-[11px] text-muted">
+            {nodes.some((n) => partialIn(n.cluster))
+              ? "在时间轴上拖动（触屏或手写笔点一下）来预约，左右滑动看更多天。每台机器上面一条是 GPU、下面一条是 CPU：约到的部分在预约期间只归你，可以只约几张卡。北京时间。"
+              : "在时间轴上拖动（触屏或手写笔点一下）来预约整台机器，预约期间整台只归你；左右滑动看更多天。北京时间。"}
+          </span>
         <span className="flex-1" />
         <Button variant="primary" disabled={nodes.length === 0} onClick={() => setDraft({ node: keyOf(nodes[0]), start: first, end: first + Math.max(2 * g, HOUR) })}>
           预约节点
@@ -909,6 +962,7 @@ export function ReservationsPage() {
                   bad={dragBad}
                   label={i === rowsOf[0]}
                   trackW={trackW}
+                  partial={partialIn(n.cluster)}
                   onPick={pick}
                 />
               ))}
@@ -968,7 +1022,7 @@ export function ReservationsPage() {
             : "它们都还没开始，直接取消。")}
       </ConfirmDialog>
       {bulk.toast}
-      {draft && <ReserveDialog key={`${draft.node}-${draft.start}-${draft.edit?.id ?? ""}`} draft={draft} nodes={nodes} blocks={[...live, ...holds.filter((h) => !h.job?.preemptible)]} rules={rules.data} now={now} forOthers={me.admin || !!me.permissions?.manageReservations} onClose={() => setDraft(null)} />}
+      {draft && <ReserveDialog key={`${draft.node}-${draft.start}-${draft.edit?.id ?? ""}`} draft={draft} nodes={nodes} blocks={[...live, ...holds.filter((h) => !h.job?.preemptible)]} rules={rules.data} now={now} forOthers={me.admin || !!me.permissions?.manageReservations} partialIn={partialIn} onClose={() => setDraft(null)} />}
       {picked && (
         <ReservationDetails
           b={picked}

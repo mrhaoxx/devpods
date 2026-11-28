@@ -17,6 +17,7 @@ import (
 type reservationFlags struct {
 	enabled                                       bool
 	granularity, maxDuration, maxAdvance, clearBy time.Duration
+	partial                                       bool
 }
 
 func addReservationFlags(fs *flag.FlagSet) *reservationFlags {
@@ -26,6 +27,7 @@ func addReservationFlags(fs *flag.FlagSet) *reservationFlags {
 	fs.DurationVar(&f.maxDuration, "reservation-max-duration", 0, "longest single reservation; 0 = unlimited")
 	fs.DurationVar(&f.maxAdvance, "reservation-max-advance", 336*time.Hour, "how far ahead a reservation may start; 0 = unlimited")
 	fs.DurationVar(&f.clearBy, "reservation-clear-notice", 30*time.Minute, "how long before a start (or an end) the DevPods on the node are warned")
+	fs.BoolVar(&f.partial, "partial-reservations", false, "reservations may be of part of a machine (cards and cores) in a cluster no Cluster object says for (a Cluster's spec.partialReservations says for its own)")
 	return f
 }
 
@@ -37,5 +39,5 @@ func (f *reservationFlags) build() (*webui.ReservationRules, error) {
 	if f.granularity < time.Second || f.granularity%time.Second != 0 || f.maxDuration < 0 || f.maxAdvance < 0 {
 		return nil, fmt.Errorf("invalid reservation rules: granularity %s, max duration %s, max advance %s", f.granularity, f.maxDuration, f.maxAdvance)
 	}
-	return &webui.ReservationRules{Granularity: f.granularity, MaxDuration: f.maxDuration, MaxAdvance: f.maxAdvance, ClearNotice: f.clearBy}, nil
+	return &webui.ReservationRules{Granularity: f.granularity, MaxDuration: f.maxDuration, MaxAdvance: f.maxAdvance, ClearNotice: f.clearBy, Partial: f.partial}, nil
 }

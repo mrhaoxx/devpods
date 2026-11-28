@@ -25,8 +25,9 @@ const reserveLong = `reserve [list]             reservations from now on (--days
 reserve rules              the steps, the longest period and how far ahead one may reserve
 reserve add <node> --start T (--end T | --for D) [--gpus N] [--cpus N] [--purpose P]
                            reserve a reservable node you may use, for yourself:
-                           the whole node, or --gpus N cards (with their share
-                           of the cores unless --cpus says) / --cpus N cores
+                           the whole node; where the cluster allows parts,
+                           --gpus N cards (with their share of the cores
+                           unless --cpus says) / --cpus N cores
 reserve change <id> [--start T] [--end T] [--gpus N] [--cpus N | --whole] [--purpose P]
 reserve cancel <id>
 

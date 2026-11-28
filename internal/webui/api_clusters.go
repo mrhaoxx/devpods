@@ -54,7 +54,9 @@ type adminClusterView struct {
 	ControllerVersion string                    `json:"controllerVersion,omitempty"`
 	KubernetesVersion string                    `json:"kubernetesVersion,omitempty"`
 	DefaultQuota      *devpodv1alpha1.UserQuota `json:"defaultQuota,omitempty"`
-	CreatedAt         time.Time                 `json:"createdAt"`
+	// PartialReservations: reservations here may be of part of a machine.
+	PartialReservations bool      `json:"partialReservations,omitempty"`
+	CreatedAt           time.Time `json:"createdAt"`
 	// Link: its agent's link to this console replica (absent: not
 	// connected to this one).
 	Link *tunnel.LinkStats `json:"link,omitempty"`
@@ -84,7 +86,7 @@ func (s *Server) adminClusterView(c *devpodv1alpha1.Cluster) adminClusterView {
 	v := adminClusterView{
 		clusterView: s.clusterView(c), Joined: c.Spec.AgentPublicKey != "",
 		AgentVersion: c.Status.AgentVersion, ControllerVersion: c.Status.ControllerVersion,
-		KubernetesVersion: c.Status.KubernetesVersion, DefaultQuota: c.Spec.DefaultQuota,
+		KubernetesVersion: c.Status.KubernetesVersion, DefaultQuota: c.Spec.DefaultQuota, PartialReservations: c.Spec.PartialReservations,
 		CreatedAt: c.CreationTimestamp.Time,
 	}
 	if in, ok := s.Clusters.Info(c.Name); ok {
@@ -254,10 +256,11 @@ func (s *Server) handlePatchCluster(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req struct {
-		DisplayName  *string     `json:"displayName,omitempty"`
-		Paused       *bool       `json:"paused,omitempty"`
-		DefaultQuota *quotaPatch `json:"defaultQuota,omitempty"`
-		Gateway      *string     `json:"gateway,omitempty"`
+		DisplayName         *string     `json:"displayName,omitempty"`
+		Paused              *bool       `json:"paused,omitempty"`
+		DefaultQuota        *quotaPatch `json:"defaultQuota,omitempty"`
+		Gateway             *string     `json:"gateway,omitempty"`
+		PartialReservations *bool       `json:"partialReservations,omitempty"`
 	}
 	if apiErr := decodeStrict(r, &req); apiErr != nil {
 		s.writeServerErr(w, apiErr)
@@ -288,6 +291,9 @@ func (s *Server) handlePatchCluster(w http.ResponseWriter, r *http.Request) {
 		}
 		if req.Paused != nil {
 			c.Spec.Paused = *req.Paused
+		}
+		if req.PartialReservations != nil {
+			c.Spec.PartialReservations = *req.PartialReservations
 		}
 		if req.DefaultQuota != nil {
 			c.Spec.DefaultQuota = quota.DeepCopy() // empty = none of its own
