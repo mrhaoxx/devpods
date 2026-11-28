@@ -12,8 +12,17 @@ export function fmtHours(ms: number): string {
   return `${m}m`;
 }
 
-/** sizeText: "2 台 × 8 卡", or cores for a job without cards. */
-export const sizeText = (j: Pick<Job, "nodes" | "gpus" | "cpus">) => (j.gpus > 0 ? `${j.nodes} 台 × ${j.gpus} 卡` : `${j.nodes} 台 × ${j.cpus} 核`);
+/** ranksOf: how many ranks a job has. */
+export const ranksOf = (j: Pick<Job, "nodes" | "tasks">) => (j.tasks && j.tasks > 0 ? j.tasks : j.nodes);
+
+/** sizeText: "2 台 × 8 卡" (one rank on each machine), "1 台 × 2 任务 × 1 卡", "6 任务 × 1 卡" (packed), cores for a job without cards, its GPU model after. */
+export const sizeText = (j: Pick<Job, "nodes" | "gpus" | "cpus"> & Partial<Pick<Job, "tasks" | "tasksPerNode" | "gpuModel">>) => {
+  const each = j.gpus > 0 ? `${j.gpus} 卡${j.gpuModel ? `（${j.gpuModel}）` : ""}` : `${j.cpus} 核`;
+  const ranks = ranksOf(j);
+  if (ranks === j.nodes) return `${j.nodes} 台 × ${each}`;
+  if (j.nodes > 0) return `${j.nodes} 台 × ${ranks / j.nodes} 任务 × ${each}`;
+  return `${ranks} 任务 × ${each}`;
+};
 
 /** whenText: 今天 14:00, 明天 02:10, or the date and time. */
 export function whenText(t: string, now: number): string {
@@ -52,12 +61,18 @@ export function stateText(j: Job, now: number): string {
   let why = "等待";
   switch (j.reason) {
     case "capacity":
-      if (d.fit !== undefined)
+      if (d.fit !== undefined && j.nodes === 0 && (j.tasks ?? 0) > 0)
+        // packed: how many of its ranks fit
+        why =
+          j.gpus > 0
+            ? `空闲卡不够（${sizeText(j)}，只放得下 ${d.fit} 个任务，共空 ${d.free ?? "?"} 卡）`
+            : `空闲核不够（${sizeText(j)}，只放得下 ${d.fit} 个任务，共空 ${d.freeCPU ?? "?"} 核）`;
+      else if (d.fit !== undefined)
         // how many machines have room for one rank: free cards spread thin show
         why =
           j.gpus > 0
-            ? `空闲卡不够（${j.nodes} 台 × ${j.gpus} 卡，只有 ${d.fit} 台放得下，共空 ${d.free ?? "?"} 卡）`
-            : `空闲核不够（${j.nodes} 台 × ${j.cpus} 核，只有 ${d.fit} 台放得下，共空 ${d.freeCPU ?? "?"} 核）`;
+            ? `空闲卡不够（${sizeText(j)}，只有 ${d.fit} 台放得下，共空 ${d.free ?? "?"} 卡）`
+            : `空闲核不够（${sizeText(j)}，只有 ${d.fit} 台放得下，共空 ${d.freeCPU ?? "?"} 核）`;
       else why = j.gpus > 0 ? `空闲卡不够（要 ${d.need ?? "?"}，剩 ${d.free ?? "?"}）` : `空闲核不够（要 ${d.needCPU ?? "?"}，剩 ${d.freeCPU ?? "?"}）`;
       break;
     case "behind":

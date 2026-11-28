@@ -359,3 +359,144 @@ func TestPlanImpossibleEntryNeverHead(t *testing.T) {
 		t.Fatalf("x %+v, y %+v", p.Waits["x"], p.Waits["y"])
 	}
 }
+
+// qshape: qjob of another shape — nodes machines × per ranks (nodes 0:
+// tasks packed, at most per on one).
+func qshape(name string, prio, nodes, per, tasks, gpus int32, limit, after time.Duration) *devpodv1alpha1.Job {
+	j := qjob(name, prio, nodes, gpus, limit, after)
+	j.Spec.TasksPerNode, j.Spec.Tasks = per, tasks
+	return j
+}
+
+func machineN(name string, cards int64) qMachine {
+	return qMachine{Name: name, Cap: amount{cards, 192000}}
+}
+
+// Two ranks of one card on a machine of four: both there.
+func TestPlanSeveralRanksPerMachine(t *testing.T) {
+	p := planQueue(view([]qMachine{machineN("g1", 4)}, nil, qshape("x", 0, 1, 2, 2, 1, time.Hour, 0)))
+	if m := started(p, "x"); !slices.Equal(m, []string{"g1", "g1"}) {
+		t.Fatalf("x on %v (%+v)", m, p.Waits["x"])
+	}
+}
+
+// Fixed machines take exactly their share each: one with room for one
+// rank is no machine for a job of two on each.
+func TestPlanFixedNeedsKOnEach(t *testing.T) {
+	p := planQueue(view([]qMachine{machineN("g1", 4), machineN("g2", 1)}, nil, qshape("x", 0, 2, 2, 4, 1, time.Hour, 0)))
+	if m := started(p, "x"); m != nil || p.Waits["x"].Reason != "never" && p.Waits["x"].Reason != "capacity" {
+		t.Fatalf("x on %v (%+v)", m, p.Waits["x"])
+	}
+}
+
+// Packed: the snuggest one machine that takes them all; else the
+// machines taking the most first, so as few as can.
+func TestPlanPackedFewestMachines(t *testing.T) {
+	ms := []qMachine{machineN("g1", 4), machineN("g2", 8), machineN("g3", 2)}
+	if m := started(planQueue(view(ms, nil, qshape("x", 0, 0, 0, 3, 1, time.Hour, 0))), "x"); !slices.Equal(m, []string{"g1", "g1", "g1"}) {
+		t.Fatalf("3 ranks on %v", m)
+	}
+	want := []string{"g2", "g2", "g2", "g2", "g2", "g2", "g2", "g2", "g1", "g1"}
+	if m := started(planQueue(view(ms, nil, qshape("y", 0, 0, 0, 10, 1, time.Hour, 0))), "y"); !slices.Equal(m, want) {
+		t.Fatalf("10 ranks on %v", m)
+	}
+}
+
+// Packed with a most per machine: never more than that on one.
+func TestPlanPackedPerMachineCap(t *testing.T) {
+	p := planQueue(view([]qMachine{machineN("g1", 8), machineN("g2", 8)}, nil, qshape("x", 0, 0, 2, 4, 1, time.Hour, 0)))
+	if m := started(p, "x"); !slices.Equal(m, []string{"g1", "g1", "g2", "g2"}) {
+		t.Fatalf("x on %v", m)
+	}
+}
+
+// A running job's two ranks on one machine take its room twice.
+func TestPlanRunningRanksShareMachine(t *testing.T) {
+	run := qrun("r", 0, false, 2, time.Hour, -time.Minute, "g1", "g1")
+	p := planQueue(view([]qMachine{machineN("g1", 4)}, []qRun{run}, qjob("x", 0, 1, 1, time.Hour, 0)))
+	if m := started(p, "x"); m != nil {
+		t.Fatalf("x started on %v beside a machine's two ranks", m)
+	}
+}
+
+// A packed head that needs room on two machines has the jobs on both
+// stopped, not on one.
+func TestPlanPreemptsForPackedRanks(t *testing.T) {
+	runs := []qRun{qrun("a", 0, true, 4, time.Hour, -time.Minute, "g1"), qrun("b", 0, true, 4, time.Hour, -time.Minute, "g2")}
+	p := planQueue(view([]qMachine{machineN("g1", 4), machineN("g2", 4)}, runs, qshape("x", 5, 0, 0, 8, 1, time.Hour, 0)))
+	var stopped []string
+	for _, j := range p.Preempt {
+		stopped = append(stopped, j.Name)
+	}
+	slices.Sort(stopped)
+	if !slices.Equal(stopped, []string{"a", "b"}) || p.Waits["x"].Reason != "preempting" {
+		t.Fatalf("stopped %v, x %+v", stopped, p.Waits["x"])
+	}
+}
+
+// A packed head that cannot start is promised the end of what is in its
+// way.
+func TestPlanPackedHeadPromise(t *testing.T) {
+	run := qrun("r", 0, false, 4, time.Hour, -time.Minute, "g1")
+	p := planQueue(view([]qMachine{machineN("g1", 4)}, []qRun{run}, qshape("x", 0, 0, 0, 2, 1, time.Hour, 0)))
+	if w := p.Waits["x"]; w.Expected == nil || !w.Expected.Equal(planNow.Add(time.Hour)) {
+		t.Fatalf("x %+v", w)
+	}
+}
+
+// A job that has said it starts with two ranks on a machine is kept
+// beside a reservation made meanwhile only if both ranks fit beside it.
+func TestKeptBesideReservationsCountsRanks(t *testing.T) {
+	v := queueView{Now: planNow, Machines: []qMachine{{Name: "n1", Cap: amount{8, 192000}}}}
+	nr := *rsvOf("bob", "bob", planNow, planNow.Add(time.Hour), 4, "0")
+	st := qStart{Entry: qEntry{Key: "x", Ask: amount{4, 24000}, Limit: time.Hour}, Machines: []string{"n1"}}
+	if !keptBesideReservations(v, st, []devpodv1alpha1.NodeReservation{nr}, "", nil) {
+		t.Fatal("one rank of 4 beside 4 reserved of 8: kept")
+	}
+	st.Machines = []string{"n1", "n1"}
+	if keptBesideReservations(v, st, []devpodv1alpha1.NodeReservation{nr}, "", nil) {
+		t.Fatal("two ranks of 4 beside 4 reserved of 8: given way")
+	}
+}
+
+func stoppedOf(p queuePlan) []string {
+	var out []string
+	for _, j := range p.Preempt {
+		out = append(out, j.Name)
+	}
+	slices.Sort(out)
+	return out
+}
+
+// A packed head stops nobody on a machine its ranks do not go to: B's
+// room on g1 takes all four, A on g5 is left running.
+func TestPlanPackedVictimsOnlyWhereRanksGo(t *testing.T) {
+	runs := []qRun{qrun("b", 1, true, 3, time.Hour, -time.Minute, "g1"), qrun("a", 0, true, 2, time.Hour, -time.Minute, "g5")}
+	p := planQueue(view([]qMachine{machineN("g1", 4), machineN("g5", 2)}, runs, qshape("x", 5, 0, 0, 4, 1, time.Hour, 0)))
+	if got := stoppedOf(p); !slices.Equal(got, []string{"b"}) {
+		t.Fatalf("stopped %v", got)
+	}
+}
+
+// A machine a job that may not be stopped shares still gives what the
+// one that may be stopped leaves: the packed head starts by stopping P.
+func TestPlanPackedPreemptsBesideANonPreemptible(t *testing.T) {
+	runs := []qRun{qrun("n", 0, false, 2, time.Hour, -time.Minute, "g1"), qrun("p", 0, true, 2, time.Hour, -time.Minute, "g1")}
+	p := planQueue(view([]qMachine{machineN("g1", 4), machineN("g2", 4)}, runs, qshape("x", 5, 0, 0, 6, 1, time.Hour, 0)))
+	if got := stoppedOf(p); !slices.Equal(got, []string{"p"}) || p.Waits["x"].Reason != "preempting" {
+		t.Fatalf("stopped %v, x %+v", got, p.Waits["x"])
+	}
+}
+
+// A packed head stops no more than the ranks it still lacks need: two of
+// g2's four one-card jobs, not all.
+func TestPlanPackedStopsNoMoreThanNeeded(t *testing.T) {
+	var runs []qRun
+	for i, n := range []string{"p1", "p2", "p3", "p4"} {
+		runs = append(runs, qrun(n, 0, true, 1, time.Hour, -time.Duration(i+1)*time.Minute, "g2"))
+	}
+	p := planQueue(view([]qMachine{machineN("g1", 4), machineN("g2", 4)}, runs, qshape("x", 5, 0, 0, 6, 1, time.Hour, 0)))
+	if got := stoppedOf(p); len(got) != 2 {
+		t.Fatalf("stopped %v", got)
+	}
+}

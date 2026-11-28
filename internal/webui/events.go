@@ -496,10 +496,18 @@ func (s *Server) recordJob(ctx context.Context, ev store.EventRow, j *devpodv1al
 	s.record(ctx, ev)
 }
 
+// modelNote: " (model)" for a model asked, else "".
+func modelNote(model string) string {
+	if model == "" {
+		return ""
+	}
+	return " (" + model + ")"
+}
+
 // jobSummary: what a job asks, in a line.
 func jobSummary(j *devpodv1alpha1.Job) string {
 	parts := []string{
-		fmt.Sprintf("%d×%d GPU", j.Spec.Nodes, j.Spec.GPUsPerNode),
+		fmt.Sprintf("%d×%d GPU", j.Spec.Ranks(), j.Spec.GPUsPerNode) + modelNote(j.Spec.GPUModel),
 		j.Spec.CPUsPerNode.String() + " cores",
 		"at most " + j.Spec.TimeLimit.Duration.String(),
 		fmt.Sprintf("priority %d", j.Spec.Priority),

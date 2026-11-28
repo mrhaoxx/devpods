@@ -743,9 +743,16 @@ export type Job = {
   detail?: Record<string, string>;
   /** its place among the waiting, from 1 */
   position?: number;
+  /** machines (0: its ranks packed on as few as fit) */
   nodes: number;
+  /** its ranks in all (a console of before says none: nodes) */
+  tasks?: number;
+  /** ranks on each machine as asked (packed: the most on one) */
+  tasksPerNode?: number;
+  /** each rank's */
   gpus: number;
   cpus: number;
+  gpuModel?: string;
   timeLimitSeconds: number;
   priority: number;
   preemptible?: boolean;
@@ -775,7 +782,10 @@ export type JobRequest = {
   workdir?: string;
   from: { devpod?: string; config?: string; vars?: Record<string, string> };
   nodes: number;
+  tasks?: number;
+  tasksPerNode?: number;
   gpus: number;
+  gpuModel?: string;
   cpus?: number;
   timeLimitSeconds?: number;
   priority?: number;
@@ -834,5 +844,7 @@ export type PriorityRule = { condition: string; maxPriority: number; maxJobs?: n
 export const getPriorityRules = () => req<{ items: PriorityRule[] }>("GET", "/api/admin/job-priority-rules");
 export const putPriorityRules = (items: PriorityRule[]) => req<{ items: PriorityRule[] }>("PUT", "/api/admin/job-priority-rules", { items });
 /** what the queue can use now in a cluster: free cards and cores, the most cards one machine has */
-export type QueueFree = { cluster?: string; gpu: number; cpu: number; maxGPU: number; machines: number };
+/** ModelFree: one GPU model's cards on the queue's machines — free now, and in all. */
+export type ModelFree = { model: string; gpu: number; total: number; machines: number };
+export type QueueFree = { cluster?: string; gpu: number; cpu: number; maxGPU: number; machines: number; models?: ModelFree[] };
 export const jobsFree = () => req<{ items: QueueFree[] }>("GET", "/api/jobs/free");

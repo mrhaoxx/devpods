@@ -271,3 +271,32 @@ func TestRankDevPodAttach(t *testing.T) {
 		}
 	}
 }
+
+// A job of two ranks on one machine is a world of two; each rank's own
+// cards start at 0 (LOCAL_RANK), whatever its place on the machine.
+func TestRankDevPodWorldSize(t *testing.T) {
+	j := testJob()
+	j.Spec.Nodes, j.Spec.TasksPerNode, j.Spec.Tasks = 1, 2, 2
+	c := rankDevPod(j, 1, "g1", "devpods", "").Spec.Pod.Spec.Containers[0]
+	if envValue(c, "WORLD_SIZE") != "2" || envValue(c, "RANK") != "1" || envValue(c, "LOCAL_RANK") != "0" {
+		t.Fatalf("WORLD_SIZE %q RANK %q LOCAL_RANK %q", envValue(c, "WORLD_SIZE"), envValue(c, "RANK"), envValue(c, "LOCAL_RANK"))
+	}
+}
+
+// A job of a GPU model takes only machines of cards it names; one of
+// none, any.
+func TestMachineFitsGPUModel(t *testing.T) {
+	node := func(product string) *corev1.Node {
+		return &corev1.Node{ObjectMeta: metav1.ObjectMeta{Labels: map[string]string{"nvidia.com/gpu.product": product}},
+			Status: corev1.NodeStatus{Allocatable: corev1.ResourceList{gpures.NVIDIA: resource.MustParse("8")}, Capacity: corev1.ResourceList{gpures.NVIDIA: resource.MustParse("8")}}}
+	}
+	a100, rtx := node("NVIDIA-A100-80GB-PCIe"), node("NVIDIA-GeForce-RTX-4090")
+	j := testJob()
+	if !machineFits(j, a100) || !machineFits(j, rtx) {
+		t.Fatal("no model asked: any machine of the kind")
+	}
+	j.Spec.GPUModel = "a100"
+	if !machineFits(j, a100) || machineFits(j, rtx) {
+		t.Fatalf("a100: on the A100 %v, on the 4090 %v", machineFits(j, a100), machineFits(j, rtx))
+	}
+}

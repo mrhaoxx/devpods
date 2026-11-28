@@ -79,16 +79,38 @@ type JobSpec struct {
 	Workdir string `json:"workdir,omitempty"`
 	// +optional
 	Env []corev1.EnvVar `json:"env,omitempty"`
-	// Nodes: how many machines, one rank on each.
+	// Nodes: how many machines — TasksPerNode ranks on each (one when
+	// unset). 0: as many as Tasks needs, the ranks packed on as few as
+	// fit (srun -n).
 	//
-	// +kubebuilder:validation:Minimum=1
+	// +kubebuilder:validation:Minimum=0
 	// +kubebuilder:validation:Maximum=64
 	Nodes int32 `json:"nodes"`
-	// GPUsPerNode and CPUsPerNode: what each rank takes.
+	// Tasks: how many ranks in all (Nodes × TasksPerNode on fixed
+	// machines; packed, with Nodes 0). Unset: Nodes.
+	//
+	// +optional
+	// +kubebuilder:validation:Minimum=0
+	// +kubebuilder:validation:Maximum=256
+	Tasks int32 `json:"tasks,omitempty"`
+	// TasksPerNode: with Nodes, the ranks on each machine; packed, the
+	// most on one (unset: as many as fit).
+	//
+	// +optional
+	// +kubebuilder:validation:Minimum=0
+	TasksPerNode int32 `json:"tasksPerNode,omitempty"`
+	// GPUsPerNode and CPUsPerNode: what each rank takes (the names are
+	// from when a machine had one rank).
 	//
 	// +kubebuilder:validation:Minimum=0
 	GPUsPerNode int32             `json:"gpusPerNode"`
 	CPUsPerNode resource.Quantity `json:"cpusPerNode"`
+	// GPUModel: the cards' model its ranks run on (as people write it:
+	// a100, rtx-4090, s5000 — gpures.ModelMatches); unset: any.
+	//
+	// +optional
+	// +kubebuilder:validation:MaxLength=63
+	GPUModel string `json:"gpuModel,omitempty"`
 	// TimeLimit: it is ended when it has run this long.
 	TimeLimit metav1.Duration `json:"timeLimit"`
 	// Priority: higher runs first (ties: submitted first); at most the
@@ -217,6 +239,24 @@ type JobList struct {
 
 func init() {
 	SchemeBuilder.Register(&Job{}, &JobList{})
+}
+
+// Ranks: how many ranks the job has — Tasks, or (a job of before, one
+// rank on each machine) Nodes.
+func (s JobSpec) Ranks() int32 {
+	if s.Tasks > 0 {
+		return s.Tasks
+	}
+	return s.Nodes
+}
+
+// PerMachine: on fixed machines (Nodes set) the ranks on each; packed,
+// the most on one (0: as many as fit).
+func (s JobSpec) PerMachine() int32 {
+	if s.Nodes > 0 {
+		return max(s.Ranks()/s.Nodes, 1)
+	}
+	return s.TasksPerNode
 }
 
 // Requeues: a job stopped by the system waits in line again (its

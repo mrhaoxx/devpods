@@ -39,7 +39,8 @@ var dpNames = []string{"dp", "srun", "sbatch", "squeue", "scancel"}
 // (so it is not the script).
 var sbatchValueFlags = map[string]bool{"-N": true, "-n": true, "-t": true, "-J": true, "-o": true, "-e": true, "-p": true, "-c": true, "-G": true,
 	"--nodes": true, "--ntasks": true, "--gpus": true, "--gpus-per-node": true, "--cpus-per-task": true, "--time": true, "--job-name": true,
-	"--output": true, "--error": true, "--partition": true, "--priority": true, "--export": true}
+	"--output": true, "--error": true, "--partition": true, "--priority": true, "--export": true,
+	"--ntasks-per-node": true, "--gpus-per-task": true, "--gres": true}
 
 // sbatchBoolFlags: sbatch's flags that take no value.
 var sbatchBoolFlags = map[string]bool{"--preemptible": true}

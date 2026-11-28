@@ -42,13 +42,13 @@ func rankContainer(j *devpodv1alpha1.Job) string {
 // log that cannot be opened or kept is left out; ctx bounds it all.
 // Without kept output it only deletes them.
 func (s *Server) keepAndStop(ctx context.Context, cc *clusters.ClusterClients, j *devpodv1alpha1.Job, key func(rank int32) string) {
-	streams := make([]io.ReadCloser, j.Spec.Nodes)
+	streams := make([]io.ReadCloser, j.Spec.Ranks())
 	// what it keeps with and where, as they are now (this runs on)
 	podLogs, objects := s.PodLogs, store.ObjectStore(nil)
 	if s.keepsRankLogs() {
 		objects = s.Audit.Objects
 		var wg sync.WaitGroup
-		for r := int32(0); r < j.Spec.Nodes; r++ {
+		for r := int32(0); r < j.Spec.Ranks(); r++ {
 			wg.Add(1)
 			go func() { // opened together: stopping waits for the slowest only
 				defer wg.Done()
@@ -93,8 +93,8 @@ func (s *Server) handleJobLogs(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	rank, err := strconv.Atoi(r.URL.Query().Get("rank"))
-	if err != nil || rank < 0 || rank >= int(j.Spec.Nodes) {
-		s.writeErr(w, http.StatusBadRequest, "BAD_REQUEST", fmt.Sprintf("rank is 0 to %d", j.Spec.Nodes-1), nil)
+	if err != nil || rank < 0 || rank >= int(j.Spec.Ranks()) {
+		s.writeErr(w, http.StatusBadRequest, "BAD_REQUEST", fmt.Sprintf("rank is 0 to %d", j.Spec.Ranks()-1), nil)
 		return
 	}
 	// ?attempt=N: the output of an earlier start (one that did not end

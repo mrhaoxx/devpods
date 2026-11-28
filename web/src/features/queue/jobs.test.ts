@@ -38,4 +38,12 @@ describe("jobs", () => {
     expect(fmtHours(90 * 60e3)).toBe("1h30m");
     expect(fmtHours(40 * 60e3)).toBe("40m");
   });
+  it("sizes a job by its ranks: on each machine, packed, and its GPU model", () => {
+    expect(sizeText({ nodes: 2, gpus: 8, cpus: 96 })).toBe("2 台 × 8 卡");
+    expect(sizeText({ nodes: 1, tasks: 2, tasksPerNode: 2, gpus: 1, cpus: 12, gpuModel: "4090" })).toBe("1 台 × 2 任务 × 1 卡（4090）");
+    expect(sizeText({ nodes: 0, tasks: 6, gpus: 1, cpus: 12 })).toBe("6 任务 × 1 卡");
+    expect(sizeText({ nodes: 2, tasks: 2, gpus: 4, cpus: 48, gpuModel: "a100" })).toBe("2 台 × 4 卡（a100）");
+    const now = Date.parse("2026-11-27T04:00:00Z");
+    expect(stateText(job({ nodes: 0, tasks: 6, gpus: 1, reason: "capacity", detail: { need: "6", free: "4", fit: "4" } }), now)).toBe("○ 等待 · 空闲卡不够（6 任务 × 1 卡，只放得下 4 个任务，共空 4 卡）");
+  });
 });

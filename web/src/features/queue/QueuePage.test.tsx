@@ -214,4 +214,65 @@ describe("QueuePage", () => {
     const sent = JSON.parse(calls.filter((c) => c.method === "POST" && !JSON.parse(c.body ?? "{}").dryRun)[0].body!);
     expect(sent.requeue).toBe(false);
   });
+  it("submits ranks on each machine and a GPU model from the free cards' models", async () => {
+    const calls = stubFetch({
+      "/api/jobs": { items: [] },
+      "/api/jobs/free": { items: [{ gpu: 4, cpu: 188, maxGPU: 4, machines: 2, models: [{ model: "NVIDIA-A100-80GB-PCIe", gpu: 0, total: 3, machines: 3 }, { model: "NVIDIA-GeForce-RTX-4090", gpu: 4, total: 4, machines: 1 }] }] },
+      "/api/jobs/limits": { maxPriority: 0, unlimitedPriority: false, defaultTimeLimitSeconds: 86400, maxTimeLimitSeconds: 259200 },
+      "/api/devpods": { items: [{ metadata: { name: "u-dev" }, spec: { owner: "u", running: true }, status: {} }] },
+      "/api/configs": { items: [] },
+      "POST /api/jobs": (_u: URL, init?: RequestInit) => (JSON.parse(String(init?.body)).dryRun ? { position: 1, reason: "capacity", cpus: 24 } : { id: "new03", phase: "Queued" }),
+    });
+    page();
+    fireEvent.click(await screen.findByRole("button", { name: "提交任务…" }));
+    const dialog = within(await screen.findByRole("dialog"));
+    await dialog.findByRole("option", { name: "DevPod：u-dev" });
+    fireEvent.change(dialog.getByLabelText("来自"), { target: { value: "devpod:u-dev" } });
+    fireEvent.change(dialog.getByLabelText("命令"), { target: { value: "torchrun t.py" } });
+    fireEvent.change(dialog.getByLabelText("每台任务数"), { target: { value: "2" } });
+    fireEvent.click(dialog.getByRole("radio", { name: "1 卡" }));
+    expect(dialog.getByText("每个任务")).toBeTruthy();
+    await dialog.findByRole("option", { name: /NVIDIA-GeForce-RTX-4090/ });
+    fireEvent.change(dialog.getByLabelText("GPU 型号"), { target: { value: "NVIDIA-GeForce-RTX-4090" } });
+    fireEvent.click(dialog.getByRole("button", { name: "提交" }));
+    await waitFor(() => expect(calls.some((c) => c.method === "POST" && !JSON.parse(c.body ?? "{}").dryRun)).toBe(true));
+    const sent = JSON.parse(calls.filter((c) => c.method === "POST" && !JSON.parse(c.body ?? "{}").dryRun)[0].body!);
+    expect(sent).toMatchObject({ nodes: 1, tasksPerNode: 2, gpus: 1, gpuModel: "NVIDIA-GeForce-RTX-4090" });
+  });
+  it("a GPU model of one cluster is not sent for a job of another", async () => {
+    const free = (cluster: string, model: string) => ({ cluster, gpu: 4, cpu: 100, maxGPU: 4, machines: 1, models: [{ model, gpu: 4, total: 4, machines: 1 }] });
+    const limits = { maxPriority: 0, unlimitedPriority: false, defaultTimeLimitSeconds: 86400, maxTimeLimitSeconds: 259200 };
+    const post = (_u: URL, init?: RequestInit) => (JSON.parse(String(init?.body)).dryRun ? { position: 1, reason: "capacity", cpus: 24 } : { id: "new04", phase: "Queued" });
+    const calls = stubFetch({
+      "/api/jobs": { items: [] },
+      "/api/clusters": { items: [{ name: "a", capabilities: ["jobs"] }, { name: "b", capabilities: ["jobs"] }] },
+      "/api/jobs/free": { items: [free("a", "NVIDIA-A100-80GB-PCIe"), free("b", "NVIDIA-GeForce-RTX-4090")] },
+      "/api/clusters/a/jobs/limits": limits,
+      "/api/clusters/b/jobs/limits": limits,
+      "/api/devpods": {
+        items: [
+          { metadata: { name: "u-a" }, cluster: "a", spec: { owner: "u", running: true }, status: {} },
+          { metadata: { name: "u-b" }, cluster: "b", spec: { owner: "u", running: true }, status: {} },
+        ],
+      },
+      "/api/configs": { items: [] },
+      "POST /api/clusters/a/jobs": post,
+      "POST /api/clusters/b/jobs": post,
+    });
+    page();
+    fireEvent.click(await screen.findByRole("button", { name: "提交任务…" }));
+    const dialog = within(await screen.findByRole("dialog"));
+    await dialog.findByRole("option", { name: /DevPod：u-a/ });
+    fireEvent.change(dialog.getByLabelText("来自"), { target: { value: "devpod:a/u-a" } });
+    fireEvent.change(dialog.getByLabelText("命令"), { target: { value: "true" } });
+    await dialog.findByRole("option", { name: /NVIDIA-A100-80GB-PCIe/ });
+    fireEvent.change(dialog.getByLabelText("GPU 型号"), { target: { value: "NVIDIA-A100-80GB-PCIe" } });
+    fireEvent.change(dialog.getByLabelText("来自"), { target: { value: "devpod:b/u-b" } });
+    await dialog.findByRole("option", { name: /NVIDIA-GeForce-RTX-4090/ });
+    expect((dialog.getByLabelText("GPU 型号") as HTMLSelectElement).value).toBe("");
+    fireEvent.click(dialog.getByRole("button", { name: "提交" }));
+    await waitFor(() => expect(calls.some((c) => c.method === "POST" && c.url.pathname === "/api/clusters/b/jobs" && !JSON.parse(c.body ?? "{}").dryRun)).toBe(true));
+    const sent = JSON.parse(calls.filter((c) => c.method === "POST" && c.url.pathname === "/api/clusters/b/jobs" && !JSON.parse(c.body ?? "{}").dryRun)[0].body!);
+    expect(sent.gpuModel).toBeUndefined();
+  });
 });

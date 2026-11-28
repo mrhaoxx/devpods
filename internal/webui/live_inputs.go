@@ -25,9 +25,6 @@ import (
 	"github.com/mrhaoxx/devpod/internal/webui/live"
 )
 
-// gpuProductLabel is set by the NVIDIA GPU feature discovery.
-const gpuProductLabel = "nvidia.com/gpu.product"
-
 // keepNodeLabel limits the labels streamed every second to the few the
 // UI shows (feature-discovery nodes carry hundreds).
 func keepNodeLabel(k string) bool {
@@ -108,14 +105,11 @@ func bytesOf(l corev1.ResourceList) float64 {
 }
 func gpus(l corev1.ResourceList) int { return gpures.Count(l) }
 
-// gpuModel is what a node's cards are: the model NVIDIA's feature
-// discovery labels it with, or — other vendors' nodes carry no such
-// label — the vendor.
+// gpuModel is what a node's cards are (gpures.Models: an admin's label,
+// the feature discoveries' product labels, else the vendor), mixed ones
+// joined.
 func gpuModel(n *corev1.Node) string {
-	if m := n.Labels[gpuProductLabel]; m != "" {
-		return m
-	}
-	return gpures.Vendor(n.Status.Allocatable)
+	return strings.Join(gpures.Models(n), " / ")
 }
 
 // Build snapshots the cluster objects the rollups need.

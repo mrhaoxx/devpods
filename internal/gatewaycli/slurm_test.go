@@ -26,7 +26,7 @@ func TestParseSbatch(t *testing.T) {
 	if o, err := parseSbatch("#!/bin/bash\n", []string{"-N2", "-G", "8", "--cpus-per-task=16", "-p", "st2", "--preemptible", "x.sh"}); err != nil || o.nodes != 2 || o.gpus != 4 || o.cpus == nil || *o.cpus != 16 || o.partition != "st2" || !o.preemptible {
 		t.Fatalf("flags: %+v %v", o, err)
 	}
-	for _, bad := range [][]string{{"--array=1-3", "x.sh"}, {"--mem", "4G", "x.sh"}, {"--dependency=afterok:1", "x.sh"}, {"-N", "1", "-n", "4", "x.sh"}} {
+	for _, bad := range [][]string{{"--array=1-3", "x.sh"}, {"--mem", "4G", "x.sh"}, {"--dependency=afterok:1", "x.sh"}, {"-N", "2", "-n", "3", "x.sh"}} {
 		if _, err := parseSbatch("", bad); err == nil || !strings.Contains(err.Error(), strings.SplitN(strings.TrimLeft(bad[0], "-"), "=", 2)[0]) && !strings.Contains(err.Error(), "ntasks") {
 			t.Errorf("%v: %v", bad, err)
 		}
@@ -151,5 +151,81 @@ func TestParseSrun(t *testing.T) {
 	}
 	if _, err := parseSlurm("srun", "", []string{"-o", "x.log", "true"}); err == nil || !strings.Contains(err.Error(), "terminal") {
 		t.Fatalf("-o: %v", err)
+	}
+}
+
+// -N, -n and --ntasks-per-node as Slurm reads them: machines × ranks on
+// each, or ranks packed (-n alone); ranks that do not split over the
+// machines are refused.
+func TestSlurmTasks(t *testing.T) {
+	for _, c := range []struct {
+		argv              string
+		nodes, tasks, per int
+	}{
+		{"-N 1 --ntasks-per-node 2 --gpus-per-task 1 true", 1, 0, 2},
+		{"-n 4 -c 2 true", 0, 4, 0},
+		{"-n 4 --ntasks-per-node 2 -c 2 true", 0, 4, 2},
+		{"-N 2 -n 4 -c 2 true", 2, 4, 0},
+		{"-N 2 -c 2 true", 2, 0, 0},
+	} {
+		o, err := parseSlurm("srun", "", strings.Fields(c.argv))
+		if err != nil || o.nodes != c.nodes || o.tasks != c.tasks || o.tasksPerNode != c.per {
+			t.Errorf("%s: nodes %d tasks %d per %d (%v)", c.argv, o.nodes, o.tasks, o.tasksPerNode, err)
+		}
+	}
+	if _, err := parseSlurm("srun", "", strings.Fields("-N 2 -n 5 -c 1 true")); err == nil || !strings.Contains(err.Error(), "multiple") {
+		t.Errorf("-N 2 -n 5: %v", err)
+	}
+}
+
+// Each rank's cards from Slurm's GPU options — per task, per machine
+// (shared by its ranks), in all (shared by all ranks), --gres — and the
+// model each may name.
+func TestSlurmTaskGPUs(t *testing.T) {
+	for _, c := range []struct {
+		argv  string
+		gpus  int
+		model string
+	}{
+		{"-N 1 --ntasks-per-node 2 --gpus-per-node 4 true", 2, ""},
+		{"-N 1 --ntasks-per-node 2 --gpus-per-task 4090:1 true", 1, "4090"},
+		{"-n 4 -G a100:8 true", 2, "a100"},
+		{"--gres gpu:s5000:8 true", 8, "s5000"},
+		{"--gres=gpu:2 true", 2, ""},
+		{"-N 2 --gpus-per-node h800:4 true", 4, "h800"},
+	} {
+		o, err := parseSlurm("srun", "", strings.Fields(c.argv))
+		if err != nil || o.gpus != c.gpus || o.gpuModel != c.model {
+			t.Errorf("%s: gpus %d model %q (%v)", c.argv, o.gpus, o.gpuModel, err)
+		}
+	}
+	for argv, want := range map[string]string{
+		"--ntasks-per-node 2 --gpus-per-node 3 true":         "split",
+		"-n 8 --gpus-per-node 4 true":                        "--gpus-per-task",
+		"--gpus-per-node a100:4 --gpus-per-task h800:1 true": "model",
+		"--gres mps:2 true":                                  "gpu",
+	} {
+		if _, err := parseSlurm("srun", "", strings.Fields(argv)); err == nil || !strings.Contains(err.Error(), want) {
+			t.Errorf("%s: %v, want it to say %q", argv, err, want)
+		}
+	}
+}
+
+// The command line's GPU option wins over the script's, and only the
+// winner is read; two on one side that disagree are refused.
+func TestSlurmGPUsCommandLineWins(t *testing.T) {
+	o, err := parseSbatch("#!/bin/bash\n#SBATCH --gpus-per-task=1\n", strings.Fields("-N 1 --ntasks-per-node 2 --gpus-per-node 8 x.sh"))
+	if err != nil || o.gpus != 4 {
+		t.Fatalf("command line --gpus-per-node 8 over the script's --gpus-per-task 1: gpus %d (%v)", o.gpus, err)
+	}
+	o, err = parseSbatch("#!/bin/bash\n#SBATCH --gres=gpu:8\n", strings.Fields("-n 16 --gpus-per-task 1 x.sh"))
+	if err != nil || o.gpus != 1 {
+		t.Fatalf("command line --gpus-per-task 1 over the script's --gres gpu:8: gpus %d (%v)", o.gpus, err)
+	}
+	if _, err := parseSlurm("srun", "", strings.Fields("--gpus-per-node 8 --gpus-per-task 1 true")); err == nil || !strings.Contains(err.Error(), "one way") {
+		t.Fatalf("two GPU options that disagree: %v", err)
+	}
+	if o, err := parseSbatch("#!/bin/bash\n#SBATCH --gres=gpu:8\n#SBATCH --gpus-per-node=8\n", strings.Fields("x.sh")); err != nil || o.gpus != 8 {
+		t.Fatalf("two that agree: gpus %d (%v)", o.gpus, err)
 	}
 }

@@ -51,7 +51,10 @@ type JobRequest struct {
 	Workdir          string                   `json:"workdir"`
 	From             devpodv1alpha1.JobSource `json:"from"`
 	Nodes            int32                    `json:"nodes"`
-	GPUs             int32                    `json:"gpus"`
+	Tasks            int32                    `json:"tasks"`        // ranks in all (nodes 0: packed)
+	TasksPerNode     int32                    `json:"tasksPerNode"` // on each machine (packed: the most on one)
+	GPUs             int32                    `json:"gpus"`         // each rank's
+	GPUModel         string                   `json:"gpuModel"`
 	CPUs             *float64                 `json:"cpus"`
 	TimeLimitSeconds int64                    `json:"timeLimitSeconds"`
 	Priority         int32                    `json:"priority"`
@@ -86,6 +89,9 @@ type jobView struct {
 	Detail           map[string]string       `json:"detail,omitempty"`
 	Position         int32                   `json:"position,omitempty"`
 	Nodes            int32                   `json:"nodes"`
+	Tasks            int32                   `json:"tasks"`                  // its ranks in all
+	TasksPerNode     int32                   `json:"tasksPerNode,omitempty"` // as asked: on each machine (packed: the most)
+	GPUModel         string                  `json:"gpuModel,omitempty"`
 	GPUs             int32                   `json:"gpus"`
 	CPUs             float64                 `json:"cpus"`
 	TimeLimitSeconds int64                   `json:"timeLimitSeconds"`
@@ -122,7 +128,7 @@ func timeOf(t *metav1.Time) *time.Time {
 func viewOfJob(j *devpodv1alpha1.Job, me string, admin bool) jobView {
 	v := jobView{
 		ID: j.Name, Title: j.Spec.Title, Owner: j.Spec.Owner, Phase: j.Status.Phase, Reason: j.Status.Reason, Detail: j.Status.Detail,
-		Position: j.Status.Position, Nodes: j.Spec.Nodes, GPUs: j.Spec.GPUsPerNode, CPUs: float64(j.Spec.CPUsPerNode.MilliValue()) / 1000,
+		Position: j.Status.Position, Nodes: j.Spec.Nodes, Tasks: j.Spec.Ranks(), TasksPerNode: j.Spec.TasksPerNode, GPUModel: j.Spec.GPUModel, GPUs: j.Spec.GPUsPerNode, CPUs: float64(j.Spec.CPUsPerNode.MilliValue()) / 1000,
 		TimeLimitSeconds: int64(j.Spec.TimeLimit.Duration / time.Second), Priority: j.Spec.Priority, Preemptible: j.Spec.Preemptible,
 		Requeue: j.Spec.Requeues(), Held: j.Spec.Held, Mine: j.Spec.Owner == me, Submitted: j.CreationTimestamp.Time.UTC(), ExpectedStart: timeOf(j.Status.ExpectedStart),
 		StartedAt: timeOf(j.Status.StartedAt), FinishedAt: timeOf(j.Status.FinishedAt), Attempts: j.Status.Attempts,
@@ -475,12 +481,21 @@ func (s *Server) buildJob(ctx context.Context, sess Session, req JobRequest) (*d
 		return nil, badRequest("say what to run (command or script)")
 	case len(command) > 65536:
 		return nil, badRequest("the command is longer than 64 KiB")
-	case req.Nodes < 1 || req.Nodes > 64:
-		return nil, badRequest("a job runs on 1 to 64 machines")
 	case req.GPUs < 0:
 		return nil, badRequest("gpus must be 0 or more")
 	case req.CPUs != nil && !(*req.CPUs > 0):
 		return nil, badRequest("cpus must be more than 0")
+	}
+	nodes, tasks, per, shapeErr := jobShape(req.Nodes, req.Tasks, req.TasksPerNode)
+	if shapeErr != nil {
+		return nil, shapeErr
+	}
+	model := strings.TrimSpace(req.GPUModel)
+	switch {
+	case len(model) > 63:
+		return nil, badRequest("a GPU model is at most 63 characters")
+	case model != "" && req.GPUs == 0:
+		return nil, badRequest("a GPU model is for ranks that take cards (gpus)")
 	}
 	limit := s.Queue.DefaultTimeLimit
 	if req.TimeLimitSeconds < 0 {
@@ -540,6 +555,12 @@ func (s *Server) buildJob(ctx context.Context, sess Session, req JobRequest) (*d
 		c.GPU = q.Value()
 		return c
 	}
+	if model != "" {
+		var apiErr *serverErr
+		if machines, apiErr = modelMachines(machines, model, kind); apiErr != nil {
+			return nil, apiErr
+		}
+	}
 	// cores: as asked, else each machine's share for the cards, the least
 	var cpuMilli int64
 	if req.CPUs != nil {
@@ -560,17 +581,32 @@ func (s *Server) buildJob(ctx context.Context, sess Session, req JobRequest) (*d
 		}
 	}
 	ask := amount{GPU: int64(req.GPUs), CPU: cpuMilli}
-	fit := 0
+	// the machines that could ever hold its share (fixed), the ranks they
+	// could hold between them (packed): its own placement and taints let it
+	// on, with the room
+	fitMachines, fitRanks := 0, int64(0)
 	for _, n := range machines {
-		// one its own placement and taints let it on, with the room
-		if ask.fits(capFor(&n)) && ask.CPU > 0 && placementAdmits(&tmpl.Spec, &n) && taintsTolerated(&tmpl.Spec, req.GPUs > 0, &n) {
-			fit++
+		if ask.CPU <= 0 || !placementAdmits(&tmpl.Spec, &n) || !taintsTolerated(&tmpl.Spec, req.GPUs > 0, &n) {
+			continue
 		}
+		k := slots(capFor(&n), ask)
+		if nodes == 0 && per > 0 {
+			k = min(k, int64(per))
+		}
+		if nodes > 0 && k >= int64(max(per, 1)) {
+			fitMachines++
+		}
+		fitRanks += k
 	}
-	if fit < int(req.Nodes) {
-		return nil, &serverErr{http.StatusConflict, "NO_MACHINE", fmt.Sprintf("only %d machine(s) here could ever hold one rank of %s", fit, ask), map[string]any{"machines": fit}}
+	switch {
+	case nodes > 0 && per <= 1 && fitMachines < int(nodes):
+		return nil, &serverErr{http.StatusConflict, "NO_MACHINE", fmt.Sprintf("only %d machine(s) here could ever hold one rank of %s", fitMachines, ask), map[string]any{"machines": fitMachines}}
+	case nodes > 0 && fitMachines < int(nodes):
+		return nil, &serverErr{http.StatusConflict, "NO_MACHINE", fmt.Sprintf("only %d machine(s) here could ever hold %d ranks of %s", fitMachines, per, ask), map[string]any{"machines": fitMachines}}
+	case nodes == 0 && fitRanks < int64(tasks):
+		return nil, &serverErr{http.StatusConflict, "NO_MACHINE", fmt.Sprintf("the machines here could ever hold %d ranks of %s, not %d", fitRanks, ask, tasks), map[string]any{"ranks": fitRanks}}
 	}
-	if len(rankName(owner, "xxxxx", req.Nodes-1)) > 22 {
+	if len(rankName(owner, "xxxxx", max(tasks, nodes)-1)) > 22 {
 		return nil, badRequest("the user name is too long for job DevPod names (%s-<job>-<rank>: at most 22 characters)", owner)
 	}
 	// the environment it takes along (a submitting shell's, often): bounded
@@ -590,7 +626,7 @@ func (s *Server) buildJob(ctx context.Context, sess Session, req JobRequest) (*d
 	job := &devpodv1alpha1.Job{
 		Spec: devpodv1alpha1.JobSpec{
 			Cluster: cluster, Owner: owner, Title: title, Source: req.From, Template: tmpl, Shell: shell, Attach: req.Attach,
-			Command: command, Args: req.Args, Workdir: req.Workdir, Env: env, Nodes: req.Nodes, GPUsPerNode: req.GPUs,
+			Command: command, Args: req.Args, Workdir: req.Workdir, Env: env, Nodes: nodes, Tasks: tasks, TasksPerNode: per, GPUsPerNode: req.GPUs, GPUModel: model,
 			CPUsPerNode: *resource.NewMilliQuantity(cpuMilli, resource.DecimalSI), TimeLimit: metav1.Duration{Duration: limit},
 			Priority: req.Priority, Preemptible: req.Preemptible, Requeue: req.Requeue,
 		},
@@ -615,10 +651,10 @@ func (s *Server) jobQuota(ctx context.Context, job *devpodv1alpha1.Job) *serverE
 	cc := s.kc(ctx)
 	q := EffectiveQuota(up, cc.Name, s.clusterQuota(ctx, cc))
 	var ranks []devpodv1alpha1.DevPod
-	for i := int32(0); i < job.Spec.Nodes-1; i++ {
+	for i := int32(0); i < job.Spec.Ranks()-1; i++ {
 		ranks = append(ranks, *rankDevPod(job, i, "x", s.NS, ""))
 	}
-	if qErr := CheckQuota(q, ranks, rankDevPod(job, job.Spec.Nodes-1, "x", s.NS, "")); qErr != nil {
+	if qErr := CheckQuota(q, ranks, rankDevPod(job, job.Spec.Ranks()-1, "x", s.NS, "")); qErr != nil {
 		return &serverErr{http.StatusConflict, "QUOTA_EXCEEDED", "the job's ranks together are over your quota: " + qErr.Error(), qErr.Violations}
 	}
 	return nil
@@ -1265,3 +1301,88 @@ const (
 	maxJobEnvVars  = 512
 	maxJobEnvBytes = 64 << 10
 )
+
+// maxJobRanks: the most ranks a job has.
+const maxJobRanks = 256
+
+// jobShape: a job's rank shape as asked (machines, ranks in all, ranks
+// on each machine) in its stored form — machines alone (one rank on each:
+// tasks and per 0), machines × per (tasks = nodes × per), or ranks packed
+// (nodes 0, per the most on one) — or why it does not add up.
+func jobShape(nodes, tasks, per int32) (int32, int32, int32, *serverErr) {
+	switch {
+	case nodes < 0 || nodes > 64:
+		return 0, 0, 0, badRequest("a job runs on 1 to 64 machines")
+	case tasks < 0 || per < 0:
+		return 0, 0, 0, badRequest("the ranks (tasks) and the ranks on each machine are 0 or more")
+	case nodes == 0 && tasks == 0:
+		return 0, 0, 0, badRequest("say on how many machines (nodes), or how many ranks (tasks) to pack on as few machines as fit")
+	case nodes > 0 && tasks > 0 && tasks%nodes != 0:
+		return 0, 0, 0, badRequest("%d ranks do not split over %d machines: the ranks (-n) must be a multiple of the machines (-N)", tasks, nodes)
+	case nodes > 0 && tasks > 0 && per > 0 && per != tasks/nodes:
+		return 0, 0, 0, badRequest("%d ranks on %d machines are %d on each, not %d", tasks, nodes, tasks/nodes, per)
+	}
+	if nodes > 0 {
+		if tasks > 0 {
+			per = tasks / nodes
+		}
+		if per <= 1 {
+			return nodes, 0, 0, nil
+		}
+		tasks = nodes * per
+	}
+	if tasks > maxJobRanks {
+		return 0, 0, 0, badRequest("a job has at most %d ranks (this one %d)", maxJobRanks, tasks)
+	}
+	return nodes, tasks, per, nil
+}
+
+// modelMachines: of machines, those whose cards are model and of kind
+// (the ranks' source's) — or NO_GPU_MODEL, saying the models there (with
+// their cards), or that model is another vendor's cards.
+func modelMachines(machines []corev1.Node, model string, kind corev1.ResourceName) ([]corev1.Node, *serverErr) {
+	var kept []corev1.Node
+	cards := map[string]int{}
+	other := ""
+	for _, n := range machines {
+		ms := gpures.Models(&n)
+		if len(ms) == 0 {
+			continue
+		}
+		cards[strings.Join(ms, " / ")] += gpures.Count(n.Status.Capacity)
+		if !gpures.ModelMatches(model, ms) {
+			continue
+		}
+		if q := n.Status.Capacity[kind]; q.IsZero() {
+			other = gpures.Vendor(n.Status.Capacity)
+			continue
+		}
+		kept = append(kept, n)
+	}
+	if len(kept) > 0 {
+		return kept, nil
+	}
+	if other != "" {
+		return nil, &serverErr{http.StatusConflict, "NO_GPU_MODEL", fmt.Sprintf("%s cards here are %s's; the ranks take %s's (as their source does)", model, other, vendorOf(kind)), map[string]any{"models": cards}}
+	}
+	var list []string
+	for m, n := range cards {
+		list = append(list, fmt.Sprintf("%s (%d cards)", m, n))
+	}
+	sort.Strings(list)
+	there := "none"
+	if len(list) > 0 {
+		there = strings.Join(list, ", ")
+	}
+	return nil, &serverErr{http.StatusConflict, "NO_GPU_MODEL", fmt.Sprintf("no machine you may use here has %s cards; their models: %s", model, there), map[string]any{"models": cards}}
+}
+
+// vendorOf: the label of the GPU type whose resource is kind.
+func vendorOf(kind corev1.ResourceName) string {
+	for _, t := range gpures.Types() {
+		if t.Resource == kind {
+			return t.Label
+		}
+	}
+	return string(kind)
+}

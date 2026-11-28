@@ -8,6 +8,7 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"net/http/httptest"
 	"testing"
 	"time"
 
@@ -280,5 +281,66 @@ func TestJobDryRun(t *testing.T) {
 	}
 	if len(listJobs(t, p.s, p.as("qy-alice"), "?mine=1")) != 1 {
 		t.Fatal("a dry run made a job")
+	}
+}
+
+func containerEnv(c corev1.Container, name string) string {
+	for _, e := range c.Env {
+		if e.Name == name {
+			return e.Value
+		}
+	}
+	return ""
+}
+
+// Two ranks of one card on one machine: both made there, each told its
+// place on the machine and how many are there; the world is two ranks,
+// and its output is asked for rank by rank.
+func TestQueueTwoRanksOneMachine(t *testing.T) {
+	p, _ := queueRig(t, "qm", "qm-alice")
+	id := submit(t, p, "qm-alice", 1, 1, nil)
+	// the shape (the API's own test is the submission's)
+	err := retry.RetryOnConflict(retry.DefaultRetry, func() error {
+		var j devpodv1alpha1.Job
+		if err := k8sManager.GetAPIReader().Get(context.Background(), types.NamespacedName{Name: id}, &j); err != nil {
+			return err
+		}
+		j.Spec.TasksPerNode, j.Spec.Tasks = 2, 2
+		return k8sClient.Update(context.Background(), &j)
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, func() bool {
+		var j devpodv1alpha1.Job
+		return k8sClient.Get(context.Background(), types.NamespacedName{Name: id}, &j) == nil && j.Spec.Tasks == 2
+	})
+	j := roundUntil(t, p, id, devpodv1alpha1.JobStarting)
+	ranks := ranksBecome(t, id, 2)
+	local := map[string]bool{}
+	for _, r := range ranks {
+		c := r.Spec.Pod.Spec.Containers[0]
+		if r.Spec.Pod.Spec.NodeSelector["kubernetes.io/hostname"] != p.n1 || containerEnv(c, "WORLD_SIZE") != "2" || containerEnv(c, "DEVPOD_TASKS_HERE") != "2" {
+			t.Fatalf("rank %s on %s: WORLD_SIZE %q here %q", r.Name, r.Spec.Pod.Spec.NodeSelector["kubernetes.io/hostname"], containerEnv(c, "WORLD_SIZE"), containerEnv(c, "DEVPOD_TASKS_HERE"))
+		}
+		local[containerEnv(c, "DEVPOD_LOCAL_TASK")] = true
+	}
+	if !local["0"] || !local["1"] || len(j.Status.Ranks) != 2 || j.Status.Ranks[1].Node != p.n1 {
+		t.Fatalf("local tasks %v, ranks %+v", local, j.Status.Ranks)
+	}
+	web := httptest.NewServer(p.s.Routes())
+	defer web.Close()
+	logs := func(rank string) int {
+		req, _ := http.NewRequest(http.MethodGet, web.URL+"/api/jobs/"+id+"/logs?rank="+rank, nil)
+		req.AddCookie(p.as("qm-alice"))
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		_ = resp.Body.Close()
+		return resp.StatusCode
+	}
+	if logs("1") == http.StatusBadRequest || logs("2") != http.StatusBadRequest {
+		t.Fatalf("rank 1: %d, rank 2: %d", logs("1"), logs("2"))
 	}
 }

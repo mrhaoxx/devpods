@@ -47,7 +47,11 @@ submit options:
   --from-devpod NAME | --from-config NAME [--var K=V]…
                     what the ranks are made from (inside a DevPod: that DevPod)
   -N n              machines, one rank on each (1)
-  --gpus n          cards per rank; --cpus n  cores per rank (the cards' share)
+  --ntasks-per-node k   k ranks on each machine
+  -n t              t ranks in all: with -N, a multiple of it; alone, packed
+                    on as few machines as fit (at most --ntasks-per-node)
+  --gpus n          cards per rank, or MODEL:n (a100:4, rtx4090:1, s5000:8 —
+                    job free lists the models); --cpus n  cores per rank
   -t TIME           time limit: 30 (minutes), 2:00:00, 1-12, 1-00:30, or 4h (24h)
   --priority p      higher runs first (at most your cap: job submit --dry-run says)
   --preemptible     may be stopped (and queued again) for higher jobs or a
@@ -74,11 +78,11 @@ var consoleTZ = time.FixedZone("CST", 8*3600)
 
 func jobCommands() []*command {
 	return []*command{{group: "Queue", name: "job", aliases: []string{"jobs"},
-		args:  "[submit [opts] -- cmd… | list [--mine] [--ended] | show <id> | cancel <id>… | priority <id> <p> | hold <id>… | release <id>… | resubmit <id> | logs [-f] [--rank N] <id> | ssh <id> [--rank N]] [--cluster C]",
+		args:  "[submit [opts] -- cmd… | list [--mine] [--ended] | show <id> | cancel <id>… | priority <id> <p> | hold <id>… | release <id>… | resubmit <id> | logs [-f] [--rank N] <id> | ssh <id> [--rank N] | free] [--cluster C]",
 		brief: "[submit|list|show|cancel|logs|ssh …]",
 		short: "the queue: submit jobs, see the queue, cancel, read a job's output",
 		long:  jobLong,
-		vals:  []string{"title", "from-devpod", "from-config", "var", "N", "nodes", "gpus", "cpus", "t", "time", "priority", "cap-add", "env", "workdir", "script", "rank", "attempt", "export"},
+		vals:  []string{"title", "from-devpod", "from-config", "var", "N", "nodes", "n", "ntasks", "ntasks-per-node", "gpus", "gpus-per-task", "cpus", "t", "time", "priority", "cap-add", "env", "workdir", "script", "rank", "attempt", "export"},
 		bools: []string{"preemptible", "host-network", "privileged", "dry-run", "mine", "ended", "f", "follow", "d", "detach", "requeue", "no-requeue", "no-workdir-warning", "pty"}, run: runJob}}
 }
 
@@ -92,6 +96,9 @@ type jobView struct {
 	Detail           map[string]string `json:"detail"`
 	Position         int               `json:"position"`
 	Nodes            int               `json:"nodes"`
+	Tasks            int               `json:"tasks"` // its ranks in all (0: a console of before — Nodes)
+	TasksPerNode     int               `json:"tasksPerNode"`
+	GPUModel         string            `json:"gpuModel"`
 	GPUs             int               `json:"gpus"`
 	CPUs             float64           `json:"cpus"`
 	TimeLimitSeconds int64             `json:"timeLimitSeconds"`
@@ -123,6 +130,8 @@ func runJob(e *Env, a *parsed) int {
 	}
 	a.pos = rest
 	switch verb {
+	case "free":
+		return jobFree(e)
 	case "submit":
 		return jobSubmit(e, a, c)
 	case "list", "ls":
@@ -157,7 +166,7 @@ func runJob(e *Env, a *parsed) int {
 	case "ssh":
 		return jobSSH(e, a, c)
 	}
-	return usage(e, c, fmt.Sprintf("unknown job %q: submit, list, show, cancel, priority, hold, release, resubmit, logs or ssh", verb))
+	return usage(e, c, fmt.Sprintf("unknown job %q: submit, list, show, cancel, priority, hold, release, resubmit, logs, ssh or free", verb))
 }
 
 // jobPath: the API path of the job ref names (<cluster>/<id> or <id>).
@@ -231,7 +240,9 @@ type submitOpts struct {
 	limit                                          time.Duration
 	preemptible, hostNetwork, privileged, dryRun   bool
 	noWorkdirWarning                               bool
-	pty                                            bool  // srun --pty: rank 0 on a terminal, attached
+	pty                                            bool // srun --pty: rank 0 on a terminal, attached
+	tasks, tasksPerNode                            int  // ranks in all (nodes 0: packed), on each machine
+	gpuModel                                       string
 	requeue                                        *bool // nil: the console's default (requeued)
 	detach                                         bool  // job submit -d: submit and be done (else as srun)
 	capAdd                                         []string
@@ -258,11 +269,45 @@ func submitOptsOf(a *parsed) (submitOpts, error) {
 		}
 		return nil
 	}
+	nodesSet := a.has["N"] || a.has["nodes"] || a.val["N"] != "" || a.val["nodes"] != ""
 	if err := num([]string{"N", "nodes"}, &o.nodes); err != nil {
 		return o, err
 	}
-	if err := num([]string{"gpus"}, &o.gpus); err != nil {
+	// -n/--ntasks and --ntasks-per-node as srun's: -n alone packs
+	tasks, per := 0, 0
+	if err := num([]string{"n", "ntasks"}, &tasks); err != nil {
 		return o, err
+	}
+	if err := num([]string{"ntasks-per-node"}, &per); err != nil {
+		return o, err
+	}
+	_, tasksSet := a.val["n"]
+	if _, ok := a.val["ntasks"]; ok {
+		tasksSet = true
+	}
+	_, perSet := a.val["ntasks-per-node"]
+	if err := slurmShape("job submit", &o, o.nodes, nodesSet, tasks, tasksSet, per, perSet); err != nil {
+		return o, err
+	}
+	// each rank's cards: N or MODEL:N (--gpus-per-task is --gpus)
+	seen := ""
+	for _, name := range []string{"gpus", "gpus-per-task"} {
+		if v, ok := a.val[name]; ok {
+			model, n, err := parseGPUs(name, v)
+			if err != nil {
+				return o, err
+			}
+			if seen != "" && n != o.gpus {
+				return o, fmt.Errorf("say each rank's cards one way: --%s and --%s disagree (%d and %d)", seen, name, o.gpus, n)
+			}
+			if model != "" && o.gpuModel != "" && !strings.EqualFold(model, o.gpuModel) {
+				return o, fmt.Errorf("two GPU models asked (%s, %s): one job runs on one model", o.gpuModel, model)
+			}
+			seen, o.gpus = name, n
+			if model != "" {
+				o.gpuModel = model
+			}
+		}
 	}
 	if err := num([]string{"priority"}, &o.priority); err != nil {
 		return o, err
@@ -344,6 +389,15 @@ func submitBody(e *Env, o submitOpts) (string, map[string]any, error) {
 		return "", nil, errors.New("say what the job is made from: --from-devpod NAME or --from-config NAME (inside a DevPod: that DevPod)")
 	}
 	body := map[string]any{"from": from, "nodes": o.nodes, "gpus": o.gpus, "priority": o.priority}
+	if o.tasks > 0 {
+		body["tasks"] = o.tasks
+	}
+	if o.tasksPerNode > 0 {
+		body["tasksPerNode"] = o.tasksPerNode
+	}
+	if o.gpuModel != "" {
+		body["gpuModel"] = o.gpuModel
+	}
 	switch {
 	case o.script != "" && len(o.command) > 0:
 		return "", nil, errors.New("a command or --script, not both")
@@ -482,7 +536,7 @@ func submitJob(e *Env, a *parsed, c *command, o submitOpts) int {
 		sayWarnings(e, o.noWorkdirWarning, v.Warnings)
 		ref := joinRef(v.Cluster, v.ID)
 		fmt.Fprintf(e.Err, "submitted job %s\n", ref)
-		return waitJob(e, ref, v.ID, o.nodes, attach)
+		return waitJob(e, ref, v.ID, v.ranks(), attach)
 	}
 	return postJob(e, a, scoped(e, cluster, "/api/jobs"), body, o.noWorkdirWarning)
 }
@@ -802,10 +856,30 @@ func jobList(e *Env, a *parsed) int {
 }
 
 func jobSize(j jobView) string {
+	each := strconv.FormatFloat(j.CPUs, 'f', -1, 64) + " CPU"
 	if j.GPUs > 0 {
-		return fmt.Sprintf("%d×%d GPU", j.Nodes, j.GPUs)
+		each = fmt.Sprintf("%d GPU", j.GPUs)
+		if j.GPUModel != "" {
+			each += " (" + j.GPUModel + ")"
+		}
 	}
-	return fmt.Sprintf("%d×%s CPU", j.Nodes, strconv.FormatFloat(j.CPUs, 'f', -1, 64))
+	ranks := j.ranks()
+	switch {
+	case ranks == j.Nodes: // one rank on each machine
+		return fmt.Sprintf("%d×%s", j.Nodes, each)
+	case j.Nodes > 0:
+		per := ranks / j.Nodes
+		return fmt.Sprintf("%d %s × %d %s × %s", j.Nodes, plural(strconv.Itoa(j.Nodes), "machine", "machines"), per, plural(strconv.Itoa(per), "rank", "ranks"), each)
+	}
+	return fmt.Sprintf("%d %s × %s", ranks, plural(strconv.Itoa(ranks), "rank", "ranks"), each)
+}
+
+// ranks: how many ranks j has.
+func (j jobView) ranks() int {
+	if j.Tasks > 0 {
+		return j.Tasks
+	}
+	return j.Nodes
 }
 
 // fmtDur: 3h, 1h30m, 40m.
@@ -864,6 +938,12 @@ func jobState(j jobView, now time.Time) string {
 		switch fit := j.Detail["fit"]; {
 		case fit == "":
 			s += fmt.Sprintf("capacity: needs %s, %s free", j.Detail["need"], j.Detail["free"])
+		case j.Nodes == 0 && j.Tasks > 0: // packed: the ranks that fit
+			free := j.Detail["free"]
+			if j.GPUs == 0 {
+				free = j.Detail["freeCPU"] + " cores"
+			}
+			s += fmt.Sprintf("capacity: %s, %s %s fit (%s free)", jobSize(j), fit, plural(fit, "rank", "ranks"), free)
 		case j.GPUs > 0:
 			s += fmt.Sprintf("capacity: %s, %s %s room (%s free)", jobSize(j), fit, plural(fit, "machine has", "machines have"), j.Detail["free"])
 		default:
@@ -1108,3 +1188,42 @@ func validExport(v string) bool {
 }
 
 func ptrBool(v bool) *bool { return &v }
+
+// jobFree is job free: each cluster's cards free for the queue now, and
+// by model — what --gpus MODEL:N can name.
+func jobFree(e *Env) int {
+	var v struct {
+		Items []struct {
+			Cluster  string  `json:"cluster"`
+			GPU      int     `json:"gpu"`
+			CPU      float64 `json:"cpu"`
+			MaxGPU   int     `json:"maxGPU"`
+			Machines int     `json:"machines"`
+			Models   []struct {
+				Model    string `json:"model"`
+				GPU      int    `json:"gpu"`
+				Total    int    `json:"total"`
+				Machines int    `json:"machines"`
+			} `json:"models"`
+		} `json:"items"`
+	}
+	if _, err := call(e, "GET", "/api/jobs/free", nil, &v); err != nil {
+		return fail(e, err)
+	}
+	if len(v.Items) == 0 {
+		fmt.Fprintln(e.Out, "no cluster here takes jobs")
+		return 0
+	}
+	for _, f := range v.Items {
+		fmt.Fprintf(e.Out, "%s: %d GPU free on %d %s (at most %d on one), %s cores\n", f.Cluster, f.GPU, f.Machines,
+			plural(strconv.Itoa(f.Machines), "machine", "machines"), f.MaxGPU, strconv.FormatFloat(f.CPU, 'f', -1, 64))
+		width := 0
+		for _, m := range f.Models {
+			width = max(width, len(m.Model))
+		}
+		for _, m := range f.Models {
+			fmt.Fprintf(e.Out, "  %-*s  %d free of %d (%d %s)\n", width, m.Model, m.GPU, m.Total, m.Machines, plural(strconv.Itoa(m.Machines), "machine", "machines"))
+		}
+	}
+	return 0
+}

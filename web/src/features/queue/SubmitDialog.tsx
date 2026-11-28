@@ -5,7 +5,7 @@ import { useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useNavigate } from "react-router-dom";
 import * as Dialog from "@radix-ui/react-dialog";
-import { ApiFailure, jobLimits, listDevPods, submitJob, type JobEstimate, type JobRequest } from "../../data/api";
+import { ApiFailure, jobLimits, jobsFree, listDevPods, submitJob, type JobEstimate, type JobRequest } from "../../data/api";
 import { clusterSeg, keyOf } from "../../data/cluster";
 import { useClusterList } from "../../data/clusterFilter";
 import { listConfigs } from "../configs/api";
@@ -42,7 +42,9 @@ export function SubmitDialog({ onClose }: { onClose(): void }) {
   const [workdir, setWorkdir] = useState("");
   const [title, setTitle] = useState("");
   const [nodes, setNodes] = useState("1");
+  const [perNode, setPerNode] = useState("1");
   const [gpus, setGpus] = useState("8");
+  const [model, setModel] = useState("");
   const [cpus, setCpus] = useState("");
   const [hours, setHours] = useState("");
   const [priority, setPriority] = useState("0");
@@ -60,12 +62,19 @@ export function SubmitDialog({ onClose }: { onClose(): void }) {
   const cluster = kind === "devpod" ? source?.cluster : configCluster || (jobClusters.length === 1 ? jobClusters[0].name : undefined);
 
   const limits = useQuery({ queryKey: ["job-limits", cluster ?? ""], queryFn: () => jobLimits(cluster) });
+  // the GPU models its cluster has (the queue's free cards say them)
+  const free = useQuery({ queryKey: ["jobs-free"], queryFn: jobsFree });
+  const freeItems = free.data?.items ?? [];
+  const models = (freeItems.length === 1 ? freeItems[0] : freeItems.find((f) => f.cluster === cluster))?.models ?? [];
+  // a model chosen is the job's only while its cluster has it (another source, another cluster: none)
+  const chosenModel = models.some((m) => m.model === model) ? model : "";
   const lim = limits.data;
   useEffect(() => {
     if (lim && hours === "") setHours(String(lim.defaultTimeLimitSeconds / 3600));
   }, [lim, hours]);
 
   const n = Number(nodes);
+  const k = Number(perNode);
   const g = Number(gpus);
   const c = cpus.trim() === "" ? undefined : Number(cpus);
   const h = Number(hours);
@@ -78,6 +87,8 @@ export function SubmitDialog({ onClose }: { onClose(): void }) {
         ? "填写要运行的命令"
         : !(Number.isInteger(n) && n >= 1)
           ? "台数至少 1"
+          : !(Number.isInteger(k) && k >= 1)
+            ? "每台任务数至少 1"
           : !(Number.isInteger(g) && g >= 0)
             ? "每台卡数是个整数"
             : g === 0 && c === undefined
@@ -106,6 +117,8 @@ export function SubmitDialog({ onClose }: { onClose(): void }) {
       timeLimitSeconds: Math.round(h * 3600),
       priority: p,
     };
+    if (k > 1) b.tasksPerNode = k;
+    if (chosenModel && g > 0) b.gpuModel = chosenModel;
     if (c !== undefined) b.cpus = c;
     if (preemptible) b.preemptible = true;
     if (!requeue) b.requeue = false;
@@ -113,7 +126,7 @@ export function SubmitDialog({ onClose }: { onClose(): void }) {
     if (workdir.trim()) b.workdir = workdir.trim();
     if (title.trim()) b.title = title.trim();
     return b;
-  }, [from, kind, source, ref, vars, command, n, g, c, h, p, preemptible, requeue, hostNetwork, privileged, workdir, title]);
+  }, [from, kind, source, ref, vars, command, n, k, g, chosenModel, c, h, p, preemptible, requeue, hostNetwork, privileged, workdir, title]);
 
   // where it would stand: asked again a moment after the form settles
   const [estimate, setEstimate] = useState<JobEstimate | undefined>();
@@ -213,16 +226,19 @@ export function SubmitDialog({ onClose }: { onClose(): void }) {
               每台都在登录 bash 里运行，带 <span className="mono">RANK</span>、<span className="mono">WORLD_SIZE</span>、<span className="mono">MASTER_ADDR</span>、
               <span className="mono">MASTER_PORT</span>；所有台都结束任务才结束。
             </p>
-            <div className="grid grid-cols-2 gap-3">
+            <div className="grid grid-cols-3 gap-3">
               <Field label="台数">
                 <Input aria-label="台数" type="number" min={1} value={nodes} onChange={(e) => setNodes(e.target.value)} />
+              </Field>
+              <Field label="每台任务数" hint="几个 rank 共用一台">
+                <Input aria-label="每台任务数" type="number" min={1} value={perNode} onChange={(e) => setPerNode(e.target.value)} />
               </Field>
               <Field label="时长上限（小时）" hint={lim ? `最长 ${lim.maxTimeLimitSeconds / 3600}` : undefined}>
                 <Input aria-label="时长上限（小时）" type="number" min={0} step="any" value={hours} onChange={(e) => setHours(e.target.value)} />
               </Field>
             </div>
             <div>
-              <span className="mb-1 block text-xs font-medium text-ink">每台</span>
+              <span className="mb-1 block text-xs font-medium text-ink">{k > 1 ? "每个任务" : "每台"}</span>
               <div className="flex flex-wrap items-center gap-2">
                 <div role="radiogroup" aria-label="每台卡数" className="inline-flex rounded-md border border-line bg-sunk p-0.5 text-xs">
                   {CARDS.map((k) => (
@@ -252,6 +268,18 @@ export function SubmitDialog({ onClose }: { onClose(): void }) {
               </div>
               <p className="mt-1 text-[11px] text-faint">核数留空时按卡数占机器的比例给。</p>
             </div>
+            {g > 0 && models.length > 0 && (
+              <Field label="GPU 型号">
+                <Select aria-label="GPU 型号" value={chosenModel} onChange={(e) => setModel(e.target.value)}>
+                  <option value="">任意</option>
+                  {models.map((m) => (
+                    <option key={m.model} value={m.model}>
+                      {`${m.model}（空 ${m.gpu} / 共 ${m.total} 卡）`}
+                    </option>
+                  ))}
+                </Select>
+              </Field>
+            )}
             <Field label="优先级">
               <Input aria-label="优先级" type="number" value={priority} onChange={(e) => setPriority(e.target.value)} />
             </Field>

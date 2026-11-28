@@ -31,6 +31,7 @@ type qMachine struct {
 	Cap, Interactive amount
 	Rs               []*devpodv1alpha1.NodeReservation
 	Reservable       bool
+	Models           []string // its cards' (gpures.Models)
 }
 
 // qEntry: something waiting in the line — a job, or a DevPod to start.
@@ -41,7 +42,9 @@ type qEntry struct {
 	Owner       string
 	Priority    int32
 	Since       time.Time     // its place in time
-	Nodes       int32         // ranks (a DevPod: 1)
+	Nodes       int32         // fixed: how many machines (a DevPod: 1); 0: packed, Tasks on as few as fit
+	PerMachine  int32         // fixed: ranks on each (0: one); packed: the most on one (0: any)
+	Tasks       int32         // packed: how many ranks
 	Ask         amount        // each rank's
 	Limit       time.Duration // 0: no end
 	Preemptible bool
@@ -53,7 +56,54 @@ type qEntry struct {
 // jobEntry: job j as an entry of the line.
 func jobEntry(j *devpodv1alpha1.Job) qEntry {
 	return qEntry{Key: j.Name, Job: j, Owner: j.Spec.Owner, Priority: j.Spec.Priority, Since: j.CreationTimestamp.Time,
-		Nodes: j.Spec.Nodes, Ask: jobAsk(j), Limit: j.Spec.TimeLimit.Duration, Preemptible: j.Spec.Preemptible, NoVictims: j.Status.GangTimeouts > 0}
+		Nodes: j.Spec.Nodes, PerMachine: j.Spec.PerMachine(), Tasks: j.Spec.Ranks(),
+		Ask: jobAsk(j), Limit: j.Spec.TimeLimit.Duration, Preemptible: j.Spec.Preemptible, NoVictims: j.Status.GangTimeouts > 0}
+}
+
+// ranks: how many ranks e has.
+func (e qEntry) ranks() int32 {
+	if e.Nodes > 0 {
+		return e.Nodes * max(e.PerMachine, 1)
+	}
+	return e.Tasks
+}
+
+// perMachine: the ranks of e one machine takes — fixed, exactly so many;
+// packed, at most (0: as many as fit).
+func (e qEntry) perMachine() int64 {
+	if e.Nodes > 0 {
+		return int64(max(e.PerMachine, 1))
+	}
+	return int64(e.PerMachine)
+}
+
+// slots: how many ranks asking ask fit in free.
+func slots(free, ask amount) int64 {
+	if !ask.fits(free) {
+		return 0
+	}
+	n := int64(1 << 20)
+	if ask.GPU > 0 {
+		n = min(n, free.GPU/ask.GPU)
+	}
+	if ask.CPU > 0 {
+		n = min(n, free.CPU/ask.CPU)
+	}
+	return n
+}
+
+// times: k of a.
+func (a amount) times(k int64) amount { return amount{a.GPU * k, a.CPU * k} }
+
+// count: how many of ms are m (a job's ranks on machine m).
+func count(ms []string, m string) int64 {
+	var n int64
+	for _, x := range ms {
+		if x == m {
+			n++
+		}
+	}
+	return n
 }
 
 // qRun: a job running (or starting) — where, how much on each machine,
@@ -61,7 +111,7 @@ func jobEntry(j *devpodv1alpha1.Job) qEntry {
 type qRun struct {
 	Key         string              // as its entry's
 	Job         *devpodv1alpha1.Job // nil: a DevPod started by this plan
-	Machines    []string
+	Machines    []string            // each rank's (a machine again for each more rank on it)
 	Ask         amount
 	Until       time.Time
 	Preemptible bool
@@ -142,8 +192,8 @@ type queuePlan struct {
 func freeFor(m qMachine, running []qRun, from time.Time, d time.Duration) amount {
 	free := m.Cap.sub(peakIn(m.Rs, m.Cap, from, from.Add(d))).sub(m.Interactive)
 	for _, r := range running {
-		if r.Until.After(from) && slices.Contains(r.Machines, m.Name) {
-			free = free.sub(r.Ask)
+		if r.Until.After(from) {
+			free = free.sub(r.Ask.times(count(r.Machines, m.Name)))
 		}
 	}
 	return free
@@ -182,7 +232,7 @@ func planQueue(v queueView) queuePlan {
 	var clears map[string]time.Time // where the entry at hand would be cleared, when
 	start := func(e qEntry, machines []string) {
 		st := qStart{Entry: e, Machines: machines}
-		if t, ok := clears[machines[0]]; ok && e.Nodes == 1 {
+		if t, ok := clears[machines[0]]; ok && e.ranks() == 1 {
 			st.ClearsAt = &t
 		}
 		plan.Starts = append(plan.Starts, st)
@@ -191,21 +241,28 @@ func planQueue(v queueView) queuePlan {
 			Preemptible: e.Preemptible, Priority: e.Priority, Started: v.Now})
 	}
 	var held []string // machines kept for entries ahead held to one machine
-	notHeld := func(ms []string) []string {
-		return slices.DeleteFunc(ms, func(m string) bool { return slices.Contains(held, m) })
-	}
 	for _, j := range queueOrder(v.Queued) {
-		n := int(j.Nodes)
 		limit := j.Limit
-		cands := notHeld(v.candidates(j, runs, v.Now))
 		clears = nil
-		if len(cands) < n && j.Limit <= 0 {
-			// no end, and nowhere beside every reservation known: where the
-			// first in its way comes latest
-			cands, clears = v.soonCleared(j, runs)
-			cands = notHeld(cands)
+		// where its ranks would go now, on none of exclude — one with no
+		// end, nowhere beside every reservation known: where the first in
+		// its way comes latest
+		place := func(exclude []string) []string {
+			if p := v.choose(j, runs, v.Now, exclude); p != nil {
+				return p
+			}
+			if j.Limit <= 0 && j.ranks() == 1 {
+				cands, at := v.soonCleared(j, runs)
+				cands = slices.DeleteFunc(cands, func(m string) bool { return slices.Contains(exclude, m) })
+				if len(cands) > 0 {
+					clears = at
+					return cands[:1]
+				}
+			}
+			return nil
 		}
-		fits := len(cands) >= n
+		placed := place(held)
+		fits := placed != nil
 		quota := v.QuotaOK == nil || v.QuotaOK(j, planned)
 		if !fits && !v.everPossible(j) {
 			// no machine it may have could ever take it (too big, its
@@ -218,14 +275,17 @@ func planQueue(v queueView) queuePlan {
 			// machines the head holds nothing on, or on any if it has ended
 			// by the promise — either way the head is not put off (a head
 			// holding machines with no promise has no time to end by)
-			away := slices.DeleteFunc(slices.Clone(cands), func(m string) bool { return slices.Contains(headOn, m) })
 			anywhere := len(headOn) == 0 || (promised && limit > 0 && !v.Now.Add(limit).After(promise))
+			var away []string
+			if fits && quota && !anywhere {
+				away = place(append(slices.Clone(held), headOn...))
+			}
 			switch {
 			case fits && quota && anywhere:
-				start(j, cands[:n])
+				start(j, placed)
 				continue
-			case fits && quota && len(away) >= n:
-				start(j, away[:n])
+			case away != nil:
+				start(j, away)
 				continue
 			}
 			if fits && !quota {
@@ -237,7 +297,7 @@ func planQueue(v queueView) queuePlan {
 		}
 		switch {
 		case fits && quota:
-			start(j, cands[:n])
+			start(j, placed)
 			continue
 		case fits:
 			wait(j, qWait{Reason: "quota"}) // holds up nobody
@@ -286,37 +346,90 @@ func planQueue(v queueView) queuePlan {
 	return plan
 }
 
-// candidates: the machines one of j's ranks could run on from at for its
-// time limit, the snuggest first.
-func (v queueView) candidates(j qEntry, runs []qRun, at time.Time) []string {
-	ask := j.Ask
+// choose: the machine of each of e's ranks from at for its time limit,
+// on none of exclude — fixed, Nodes machines taking PerMachine each, the
+// snuggest after them first; packed, the snuggest one machine taking them
+// all, else the machines taking the most first (as few as can), at most
+// PerMachine on one. A machine's ranks are in a row; nil: they do not all
+// fit.
+func (v queueView) choose(e qEntry, runs []qRun, at time.Time, exclude []string) []string {
 	type cand struct {
 		name string
-		left amount
+		n    int64 // ranks it takes
+		free amount
 	}
+	per := e.perMachine()
 	var cs []cand
 	for _, m := range v.Machines {
-		if !v.mayHave(j, m.Name) {
+		if !v.mayHave(e, m.Name) || slices.Contains(exclude, m.Name) {
 			continue
 		}
-		if f := freeFor(m, runs, at, v.window(j)); ask.fits(f) {
-			cs = append(cs, cand{m.Name, f.sub(ask)})
+		f := freeFor(m, runs, at, v.window(e))
+		n := slots(f, e.Ask)
+		if per > 0 {
+			n = min(n, per)
+		}
+		if n == 0 || (e.Nodes > 0 && n < per) {
+			continue
+		}
+		cs = append(cs, cand{m.Name, n, f})
+	}
+	snuggest := func(cs []cand, k int64) {
+		sort.Slice(cs, func(a, b int) bool {
+			la, lb := cs[a].free.sub(e.Ask.times(k)), cs[b].free.sub(e.Ask.times(k))
+			if la.GPU != lb.GPU {
+				return la.GPU < lb.GPU
+			}
+			if la.CPU != lb.CPU {
+				return la.CPU < lb.CPU
+			}
+			return cs[a].name < cs[b].name
+		})
+	}
+	var out []string
+	put := func(name string, k int64) {
+		for range k {
+			out = append(out, name)
 		}
 	}
-	sort.Slice(cs, func(a, b int) bool {
-		if cs[a].left.GPU != cs[b].left.GPU {
-			return cs[a].left.GPU < cs[b].left.GPU
+	if e.Nodes > 0 {
+		if len(cs) < int(e.Nodes) {
+			return nil
 		}
-		if cs[a].left.CPU != cs[b].left.CPU {
-			return cs[a].left.CPU < cs[b].left.CPU
+		snuggest(cs, per)
+		for _, c := range cs[:e.Nodes] {
+			put(c.name, per)
+		}
+		return out
+	}
+	t := int64(e.Tasks)
+	if t <= 0 {
+		return nil
+	}
+	var whole []cand
+	for _, c := range cs {
+		if c.n >= t {
+			whole = append(whole, c)
+		}
+	}
+	if len(whole) > 0 {
+		snuggest(whole, t)
+		put(whole[0].name, t)
+		return out
+	}
+	sort.Slice(cs, func(a, b int) bool {
+		if cs[a].n != cs[b].n {
+			return cs[a].n > cs[b].n
 		}
 		return cs[a].name < cs[b].name
 	})
-	out := make([]string, len(cs))
-	for i, c := range cs {
-		out[i] = c.name
+	for _, c := range cs {
+		put(c.name, min(c.n, t-int64(len(out))))
+		if int64(len(out)) == t {
+			return out
+		}
 	}
-	return out
+	return nil
 }
 
 // earliest: the first time (a running job's end, a reservation's start or
@@ -341,8 +454,8 @@ func (v queueView) earliest(j qEntry, runs []qRun) (time.Time, []string, bool) {
 	}
 	slices.SortFunc(events, func(a, b time.Time) int { return a.Compare(b) })
 	for _, t := range slices.Compact(events) {
-		if cs := v.candidates(j, runs, t); len(cs) >= int(j.Nodes) {
-			return t, cs[:j.Nodes], true
+		if p := v.choose(j, runs, t, nil); p != nil {
+			return t, p, true
 		}
 	}
 	return time.Time{}, nil, false
@@ -350,23 +463,33 @@ func (v queueView) earliest(j qEntry, runs []qRun) (time.Time, []string, bool) {
 
 // victimsFor: the fewest running jobs, preemptible and of lower priority
 // than j, whose stopping lets j's ranks start now — chosen machine by
-// machine (those needing the fewest stopped first) — and the machines j
-// would take; none when that is not enough.
+// machine (those needing the fewest stopped first) — and the machine of
+// each rank j would have; none when that is not enough. A machine is made
+// room on for its share (fixed); a packed j is packedVictims'.
 func (v queueView) victimsFor(j qEntry, runs []qRun) ([]qRun, []string) {
+	if j.Nodes == 0 {
+		return v.packedVictims(j, runs)
+	}
 	ask := j.Ask
+	per := j.perMachine()
 	type option struct {
 		machine string
 		victims []qRun
 		prio    int64
+		ranks   int64
 	}
 	var opts []option
 	for _, m := range v.Machines {
 		if !v.mayHave(j, m.Name) {
 			continue
 		}
+		want := per
 		f := freeFor(m, runs, v.Now, v.window(j))
-		if ask.fits(f) {
-			opts = append(opts, option{machine: m.Name})
+		have := min(slots(f, ask), want)
+		if have >= want {
+			opts = append(opts, option{machine: m.Name, ranks: have})
+		}
+		if have >= want {
 			continue
 		}
 		var cands []qRun
@@ -389,28 +512,59 @@ func (v queueView) victimsFor(j qEntry, runs []qRun) ([]qRun, []string) {
 		for _, c := range cands {
 			vs = append(vs, c)
 			prio += int64(c.Priority)
-			if f = f.add(c.Ask); ask.fits(f) {
-				opts = append(opts, option{m.Name, vs, prio})
+			if f = f.add(c.Ask.times(count(c.Machines, m.Name))); slots(f, ask) >= want {
+				opts = append(opts, option{m.Name, slices.Clone(vs), prio, want})
 				break
 			}
 		}
 	}
-	if len(opts) < int(j.Nodes) {
+	byFewest := func(a, b option) bool {
+		if len(a.victims) != len(b.victims) {
+			return len(a.victims) < len(b.victims)
+		}
+		if a.prio != b.prio {
+			return a.prio < b.prio
+		}
+		if a.ranks != b.ranks {
+			return a.ranks > b.ranks
+		}
+		return a.machine < b.machine
+	}
+	sort.SliceStable(opts, func(a, b int) bool { return byFewest(opts[a], opts[b]) })
+	// the options taken: a machine's taken again for more ranks (more
+	// stopped there) stands for its first
+	chosen := map[string]option{}
+	var order []string
+	var total int64
+	need := int64(j.ranks())
+	for _, o := range opts {
+		if total >= need || (j.Nodes > 0 && len(order) == int(j.Nodes)) {
+			break
+		}
+		if c, ok := chosen[o.machine]; ok {
+			if o.ranks <= c.ranks {
+				continue
+			}
+			total += o.ranks - c.ranks
+		} else {
+			order = append(order, o.machine)
+			total += o.ranks
+		}
+		chosen[o.machine] = o
+	}
+	if total < need {
 		return nil, nil
 	}
-	sort.SliceStable(opts, func(a, b int) bool {
-		if len(opts[a].victims) != len(opts[b].victims) {
-			return len(opts[a].victims) < len(opts[b].victims)
-		}
-		if opts[a].prio != opts[b].prio {
-			return opts[a].prio < opts[b].prio
-		}
-		return opts[a].machine < opts[b].machine
-	})
 	var out []qRun
 	var on []string
-	for _, o := range opts[:j.Nodes] {
-		on = append(on, o.machine)
+	left := need
+	for _, m := range order {
+		o := chosen[m]
+		k := min(o.ranks, left)
+		left -= k
+		for range k {
+			on = append(on, m)
+		}
 		for _, r := range o.victims {
 			if !slices.ContainsFunc(out, func(x qRun) bool { return x.Key == r.Key }) {
 				out = append(out, r)
@@ -420,23 +574,158 @@ func (v queueView) victimsFor(j qEntry, runs []qRun) ([]qRun, []string) {
 	return out, on
 }
 
-// shortfall: what j needs in all, what its machines have free now, and
-// how many of them have room for one rank (free cards spread thin show),
-// for saying why it waits.
-func (v queueView) shortfall(j qEntry, runs []qRun) map[string]string {
-	ask := j.Ask
-	var free amount
+// victimSteps: the preemptible runs of lower priority than j on machine
+// m, those to stop first first, as steps — after each, the victims so far
+// and the ranks of j m then takes (at most limit) — from none stopped.
+func (v queueView) victimSteps(j qEntry, m qMachine, runs []qRun, limit int64) []victimStep {
+	f := freeFor(m, runs, v.Now, v.window(j))
+	steps := []victimStep{{ranks: min(slots(f, j.Ask), limit)}}
+	var cands []qRun
+	for _, r := range runs {
+		if r.Preemptible && r.Job != nil && r.Priority < j.Priority && slices.Contains(r.Machines, m.Name) {
+			cands = append(cands, r)
+		}
+	}
+	sort.SliceStable(cands, func(a, b int) bool {
+		if cands[a].Priority != cands[b].Priority {
+			return cands[a].Priority < cands[b].Priority
+		}
+		if cands[a].Ask.GPU != cands[b].Ask.GPU {
+			return cands[a].Ask.GPU > cands[b].Ask.GPU
+		}
+		return cands[a].Started.After(cands[b].Started)
+	})
+	var vs []qRun
+	var prio int64
+	for _, c := range cands {
+		if steps[len(steps)-1].ranks >= limit {
+			break
+		}
+		vs = append(vs, c)
+		prio += int64(c.Priority)
+		f = f.add(c.Ask.times(count(c.Machines, m.Name)))
+		if n := min(slots(f, j.Ask), limit); n > steps[len(steps)-1].ranks {
+			steps = append(steps, victimStep{victims: slices.Clone(vs), ranks: n, prio: prio})
+		}
+	}
+	return steps
+}
+
+type victimStep struct {
+	victims []qRun
+	ranks   int64
+	prio    int64
+}
+
+// packedVictims: victimsFor of a packed j. Each machine's steps (victims
+// stopped, ranks it then takes) are advanced one at a time — the step
+// that gains the most ranks for each one stopped first — until all of j's
+// ranks have room; then each machine is given its ranks (those stopping
+// nobody first) and stops only what its share needs.
+func (v queueView) packedVictims(j qEntry, runs []qRun) ([]qRun, []string) {
+	need := int64(j.Tasks)
+	limit := need
+	if per := j.perMachine(); per > 0 {
+		limit = min(limit, per)
+	}
+	type machine struct {
+		name  string
+		steps []victimStep
+		at    int
+	}
+	var ms []*machine
+	var total int64
 	for _, m := range v.Machines {
 		if !v.mayHave(j, m.Name) {
 			continue
 		}
-		free = free.add(freeFor(m, runs, v.Now, v.window(j)).clamped())
+		steps := v.victimSteps(j, m, runs, limit)
+		ms = append(ms, &machine{name: m.Name, steps: steps})
+		total += steps[0].ranks
 	}
-	n := int64(j.Nodes)
+	for total < need {
+		var best *machine
+		var gain, added int64
+		for _, m := range ms {
+			if m.at+1 >= len(m.steps) {
+				continue
+			}
+			cur, next := m.steps[m.at], m.steps[m.at+1]
+			g, a := next.ranks-cur.ranks, int64(len(next.victims)-len(cur.victims))
+			// more ranks for each one stopped; then fewer stopped, the lower
+			// their priority, by name
+			if best == nil || g*added > gain*a || (g*added == gain*a && (a < added || (a == added && m.name < best.name))) {
+				best, gain, added = m, g, a
+			}
+		}
+		if best == nil {
+			return nil, nil
+		}
+		total += gain
+		best.at++
+	}
+	sort.SliceStable(ms, func(a, b int) bool {
+		va, vb := len(ms[a].steps[ms[a].at].victims), len(ms[b].steps[ms[b].at].victims)
+		if va != vb {
+			return va < vb
+		}
+		if ra, rb := ms[a].steps[ms[a].at].ranks, ms[b].steps[ms[b].at].ranks; ra != rb {
+			return ra > rb
+		}
+		return ms[a].name < ms[b].name
+	})
+	var out []qRun
+	var on []string
+	left := need
+	for _, m := range ms {
+		k := min(m.steps[m.at].ranks, left)
+		if k == 0 {
+			continue
+		}
+		left -= k
+		for range k {
+			on = append(on, m.name)
+		}
+		// the fewest stopped that give it k
+		i := slices.IndexFunc(m.steps, func(s victimStep) bool { return s.ranks >= k })
+		for _, r := range m.steps[i].victims {
+			if !slices.ContainsFunc(out, func(x qRun) bool { return x.Key == r.Key }) {
+				out = append(out, r)
+			}
+		}
+	}
+	return out, on
+}
+
+// shortfall: what j needs in all, what its machines have free now, and
+// how much of it fits (fixed: the machines with room for their share;
+// packed: the ranks), for saying why it waits.
+func (v queueView) shortfall(j qEntry, runs []qRun) map[string]string {
+	ask := j.Ask
+	per := j.perMachine()
+	var free amount
+	var fit int64
+	for _, m := range v.Machines {
+		if !v.mayHave(j, m.Name) {
+			continue
+		}
+		f := freeFor(m, runs, v.Now, v.window(j))
+		free = free.add(f.clamped())
+		n := slots(f, ask)
+		switch {
+		case j.Nodes > 0 && n >= per:
+			fit++
+		case j.Nodes == 0 && per > 0:
+			fit += min(n, per)
+		case j.Nodes == 0:
+			fit += n
+		}
+	}
+	n := int64(j.ranks())
 	return map[string]string{
 		"need": strconv.FormatInt(ask.GPU*n, 10), "free": strconv.FormatInt(free.GPU, 10),
 		"needCPU": coresOf(ask.CPU * n), "freeCPU": coresOf(free.CPU),
-		"fit": strconv.Itoa(len(v.candidates(j, runs, v.Now))),
+		"fit": strconv.FormatInt(fit, 10),
 	}
 }
 
@@ -490,21 +779,28 @@ func (v queueView) soonCleared(e qEntry, runs []qRun) ([]string, map[string]time
 	return names, at
 }
 
-// nearest: the machines e may have that could ever take one of its ranks,
-// those one rank lacks the least on now first (cards, then cores), as
-// many as it has ranks — what a head no time can be promised holds.
+// nearest: the machines e may have that could ever take its share (one
+// rank, its PerMachine fixed), those one rank lacks the least on now first
+// (cards, then cores) — as many as it needs: what a head no time can be
+// promised holds.
 func (v queueView) nearest(e qEntry, runs []qRun) []string {
 	type cand struct {
 		name string
 		lack amount
+		hold int64 // ranks it holds empty
 	}
+	per := e.perMachine()
 	var cs []cand
 	for _, m := range v.Machines {
-		if !v.mayHave(e, m.Name) || !e.Ask.fits(m.Cap) {
+		hold := slots(m.Cap, e.Ask)
+		if per > 0 {
+			hold = min(hold, per)
+		}
+		if !v.mayHave(e, m.Name) || hold == 0 || (e.Nodes > 0 && hold < per) {
 			continue
 		}
 		free := freeFor(m, runs, v.Now, v.window(e)).clamped()
-		cs = append(cs, cand{m.Name, e.Ask.sub(free).clamped()})
+		cs = append(cs, cand{m.Name, e.Ask.sub(free).clamped(), hold})
 	}
 	sort.Slice(cs, func(a, b int) bool {
 		if cs[a].lack.GPU != cs[b].lack.GPU {
@@ -516,20 +812,38 @@ func (v queueView) nearest(e qEntry, runs []qRun) []string {
 		return cs[a].name < cs[b].name
 	})
 	var out []string
-	for i := 0; i < len(cs) && i < int(e.Nodes); i++ {
-		out = append(out, cs[i].name)
+	var held int64
+	for _, c := range cs {
+		if (e.Nodes > 0 && len(out) >= int(e.Nodes)) || (e.Nodes == 0 && held >= int64(e.Tasks)) {
+			break
+		}
+		out = append(out, c.name)
+		held += c.hold
 	}
 	return out
 }
 
-// everPossible: some machine e may have could ever take one of its ranks
-// (load aside), and as many as it has ranks.
+// everPossible: machines e may have could ever take its ranks (load
+// aside) — fixed, enough that take its share; packed, room for all its
+// ranks between them.
 func (v queueView) everPossible(e qEntry) bool {
-	n := 0
+	per := e.perMachine()
+	var machines, ranks int64
 	for _, m := range v.Machines {
-		if v.mayHave(e, m.Name) && e.Ask.fits(m.Cap) {
-			n++
+		if !v.mayHave(e, m.Name) {
+			continue
 		}
+		n := slots(m.Cap, e.Ask)
+		if per > 0 {
+			n = min(n, per)
+		}
+		if e.Nodes > 0 && n >= per {
+			machines++
+		}
+		ranks += n
 	}
-	return n >= int(e.Nodes)
+	if e.Nodes > 0 {
+		return machines >= int64(e.Nodes)
+	}
+	return ranks >= int64(e.Tasks)
 }

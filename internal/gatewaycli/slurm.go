@@ -36,29 +36,35 @@ func slurmCommands() []*command {
 
 const sbatchLong = `sbatch [options] script [args…]   (or the script on standard input)
 Options, on the command line or as #SBATCH lines at the script's top (the
-command line wins): -N/--nodes, --gpus-per-node, -G/--gpus (in all),
--c/--cpus-per-task (cores per machine), -t/--time, -J/--job-name,
+command line wins): -N/--nodes, -n/--ntasks (ranks: with -N a multiple of
+it, alone packed on as few machines as fit), --ntasks-per-node,
+--gpus-per-task, --gpus-per-node (shared by a machine's ranks),
+-G/--gpus (in all), --gres gpu[:MODEL]:N — the GPU options take N or
+MODEL:N (a100:4, rtx4090:1, s5000:8; job free lists the models) —
+-c/--cpus-per-task (cores per rank), -t/--time, -J/--job-name,
 -o/--output and -e/--error (default slurm-%j.out in the directory it was
 submitted from; %j the job, %x its name), -p/--partition (the cluster),
 --export ALL|NONE (the shell's environment, ALL by default),
 --requeue / --no-requeue (stopped for another: wait again, or end), and
-the queue's own --priority N and --preemptible. -n/--ntasks may not be
-more than the machines (one rank each). Anything else (--array,
+the queue's own --priority N and --preemptible. Anything else (--array,
 --dependency, --mem, …) is refused by name.`
 
 const srunLong = `srun [options] command [args…]
 Runs the command as a job and stays attached to it until it ends: what its
 ranks write, live (marked by rank when several); your stdin to rank 0;
 Ctrl-C (and closing the terminal) cancels it; its exit code is yours.
-Options as sbatch's (-N, --gpus-per-node, -G, -c, -t, -J, -p, --export,
---requeue / --no-requeue, --priority, --preemptible), and --pty: rank 0
+Options as sbatch's (-N, -n, --ntasks-per-node, --gpus-per-task,
+--gpus-per-node, -G, --gres, the GPU options N or MODEL:N, -c, -t, -J,
+-p, --export, --requeue / --no-requeue, --priority, --preemptible),
+and --pty: rank 0
 on a terminal (interactive programs, srun --pty bash) — inside a DevPod,
 from an interactive shell.`
 
 // sbatchValue / sbatchFlag: what sbatch takes, by its long names (the
 // short ones map onto them).
 var sbatchValue = map[string]bool{"nodes": true, "gpus-per-node": true, "gpus": true, "cpus-per-task": true, "time": true,
-	"job-name": true, "output": true, "error": true, "partition": true, "priority": true, "ntasks": true, "export": true}
+	"job-name": true, "output": true, "error": true, "partition": true, "priority": true, "ntasks": true, "export": true,
+	"ntasks-per-node": true, "gpus-per-task": true, "gres": true}
 var sbatchShort = map[string]string{"N": "nodes", "G": "gpus", "c": "cpus-per-task", "t": "time", "J": "job-name", "o": "output",
 	"e": "error", "p": "partition", "n": "ntasks"}
 
@@ -76,7 +82,8 @@ func parseSlurm(cmd, script string, argv []string) (submitOpts, error) {
 	o := submitOpts{nodes: 1, vars: map[string]string{}, env: map[string]string{}}
 	vals := map[string]string{}
 	bools := map[string]bool{}
-	var requeue *bool // the last of --requeue / --no-requeue said
+	var requeue *bool            // the last of --requeue / --no-requeue said
+	cmdline := map[string]bool{} // the options argv gave (they win over #SBATCH lines)
 	read := func(words []string, takeScript bool) error {
 		for i := 0; i < len(words); i++ {
 			w := words[i]
@@ -131,6 +138,9 @@ func parseSlurm(cmd, script string, argv []string) (submitOpts, error) {
 				value = words[i]
 			}
 			vals[name] = value
+			if takeScript {
+				cmdline[name] = true
+			}
 		}
 		return nil
 	}
@@ -164,28 +174,23 @@ func parseSlurm(cmd, script string, argv []string) (submitOpts, error) {
 		}
 		return n, true, nil
 	}
-	if n, ok, err := num("nodes"); err != nil {
+	nodes, nodesSet, err := num("nodes")
+	if err != nil {
 		return o, err
-	} else if ok {
-		o.nodes = n
 	}
-	if n, ok, err := num("gpus-per-node"); err != nil {
+	tasks, tasksSet, err := num("ntasks")
+	if err != nil {
 		return o, err
-	} else if ok {
-		o.gpus = n
 	}
-	if n, ok, err := num("gpus"); err != nil {
+	per, perSet, err := num("ntasks-per-node")
+	if err != nil {
 		return o, err
-	} else if ok {
-		if o.nodes == 0 || n%o.nodes != 0 {
-			return o, fmt.Errorf(cmd+": --gpus %d does not split over %d machines", n, o.nodes)
-		}
-		o.gpus = n / o.nodes
 	}
-	if n, ok, err := num("ntasks"); err != nil {
+	if err := slurmShape(cmd, &o, nodes, nodesSet, tasks, tasksSet, per, perSet); err != nil {
 		return o, err
-	} else if ok && n > o.nodes {
-		return o, fmt.Errorf(cmd+": --ntasks %d is more than the machines (%d): the queue runs one rank on each", n, o.nodes)
+	}
+	if err := slurmGPUs(cmd, &o, vals, cmdline); err != nil {
+		return o, err
 	}
 	if n, ok, err := num("priority"); err != nil {
 		return o, err
@@ -407,4 +412,133 @@ func runSrun(e *Env, a *parsed) int {
 		return usage(e, c, "say what to run: srun [options] command [args…]")
 	}
 	return submitJob(e, a, c, o)
+}
+
+// slurmShape: the job's rank shape from -N, -n and --ntasks-per-node as
+// Slurm reads them — machines × ranks on each (-N, with -n a multiple of
+// it or --ntasks-per-node), or ranks packed on as few machines as fit (-n
+// without -N, at most --ntasks-per-node on one).
+func slurmShape(cmd string, o *submitOpts, nodes int, nodesSet bool, tasks int, tasksSet bool, per int, perSet bool) error {
+	if nodesSet {
+		o.nodes = nodes
+	}
+	switch {
+	case tasksSet && !nodesSet:
+		o.nodes, o.tasks = 0, tasks
+	case tasksSet:
+		if o.nodes <= 0 || tasks%o.nodes != 0 {
+			return fmt.Errorf(cmd+": %d ranks (-n) do not split over %d machines (-N): the ranks must be a multiple of the machines", tasks, o.nodes)
+		}
+		o.tasks = tasks
+	}
+	if perSet {
+		o.tasksPerNode = per
+	}
+	return nil
+}
+
+// ranksPerMachine: the ranks on each machine of o's fixed shape (0:
+// packed, no number).
+func (o submitOpts) ranksPerMachine() int {
+	switch {
+	case o.nodes == 0:
+		return 0
+	case o.tasks > 0:
+		return o.tasks / o.nodes
+	case o.tasksPerNode > 0:
+		return o.tasksPerNode
+	}
+	return 1
+}
+
+// allRanks: how many ranks o asks for.
+func (o submitOpts) allRanks() int {
+	if o.nodes == 0 {
+		return o.tasks
+	}
+	return o.nodes * o.ranksPerMachine()
+}
+
+// slurmGPUs: each rank's cards, and their model, from Slurm's options —
+// --gpus-per-task (each rank's), --gpus-per-node and --gres gpu:… (each
+// machine's, shared by its ranks), -G/--gpus (in all, shared by all) —
+// each N or MODEL:N. Those of the command line (cmdline) win over the
+// script's; two on one side that come to different cards, or name two
+// models, are refused.
+func slurmGPUs(cmd string, o *submitOpts, vals map[string]string, cmdline map[string]bool) error {
+	var given []string
+	for _, name := range []string{"gpus-per-task", "gpus-per-node", "gres", "gpus"} {
+		if _, ok := vals[name]; ok {
+			given = append(given, name)
+		}
+	}
+	if slices.ContainsFunc(given, func(n string) bool { return cmdline[n] }) {
+		given = slices.DeleteFunc(given, func(n string) bool { return !cmdline[n] })
+	}
+	first := ""
+	for _, name := range given {
+		model, n, err := parseGPUs(name, vals[name])
+		if err != nil {
+			return fmt.Errorf(cmd+": %v", err)
+		}
+		each := n
+		switch name {
+		case "gpus-per-node", "gres":
+			k := o.ranksPerMachine()
+			if k == 0 {
+				return fmt.Errorf(cmd+": --%s with -n and no -N: the ranks' machines are not known — say each rank's cards with --gpus-per-task", name)
+			}
+			if n%k != 0 {
+				return fmt.Errorf(cmd+": %d cards a machine do not split over its %d ranks", n, k)
+			}
+			each = n / k
+		case "gpus":
+			r := o.allRanks()
+			if r <= 0 || n%r != 0 {
+				return fmt.Errorf(cmd+": --gpus %d does not split over %d ranks", n, r)
+			}
+			each = n / r
+		}
+		if model != "" {
+			if o.gpuModel != "" && !strings.EqualFold(o.gpuModel, model) {
+				return fmt.Errorf(cmd+": two GPU models asked (%s, %s): one job runs on one model", o.gpuModel, model)
+			}
+			o.gpuModel = model
+		}
+		if first != "" && each != o.gpus {
+			return fmt.Errorf(cmd+": say each rank's cards one way: --%s and --%s disagree (%d and %d a rank)", first, name, o.gpus, each)
+		}
+		if first == "" {
+			first = name
+		}
+		o.gpus = each
+	}
+	return nil
+}
+
+// parseGPUs reads a GPU option's value: N or MODEL:N; flag gres takes
+// gpu, gpu:N or gpu:MODEL:N (Slurm's --gres, of GPUs only).
+func parseGPUs(flag, v string) (model string, n int, err error) {
+	parts := strings.Split(v, ":")
+	if flag == "gres" {
+		if parts[0] != "gpu" {
+			return "", 0, fmt.Errorf("--gres %s: only gpu resources are taken here (gpu:N or gpu:MODEL:N)", v)
+		}
+		parts = parts[1:]
+		if len(parts) == 0 {
+			return "", 1, nil
+		}
+	}
+	switch len(parts) {
+	case 1:
+	case 2:
+		model = strings.TrimSpace(parts[0])
+	default:
+		return "", 0, fmt.Errorf("--%s %s: say N or MODEL:N", flag, v)
+	}
+	n, err = strconv.Atoi(parts[len(parts)-1])
+	if err != nil || n < 0 || (model == "" && len(parts) == 2) {
+		return "", 0, fmt.Errorf("--%s %s: say N or MODEL:N (a number of cards)", flag, v)
+	}
+	return model, n, nil
 }

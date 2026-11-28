@@ -527,3 +527,73 @@ func TestJobSubmitPtyNeeds(t *testing.T) {
 		t.Fatalf("-d asked attach %v", b["attach"])
 	}
 }
+
+// job submit asks for ranks on each machine, packed ranks and a GPU
+// model; what the console answers the ranks to be is what dp attaches to.
+func TestJobSubmitTasksBody(t *testing.T) {
+	f := newFakeAPI(t)
+	f.routes["POST /api/clusters/st/jobs"] = map[string]any{"id": "abc12", "cluster": "st", "phase": "Queued", "nodes": 1}
+	if code, _, errs := f.runWaitFrom("job submit -d -N 1 --ntasks-per-node 2 --gpus 4090:1 -- x", origin); code != 0 {
+		t.Fatalf("%d %s", code, errs)
+	}
+	b := lastBody(t, f, "POST", "/api/clusters/st/jobs")
+	if b["nodes"] != float64(1) || b["tasksPerNode"] != float64(2) || b["gpus"] != float64(1) || b["gpuModel"] != "4090" {
+		t.Fatalf("body %v", b)
+	}
+	if code, _, errs := f.runWaitFrom("job submit -d -n 3 --gpus 1 -- x", origin); code != 0 {
+		t.Fatalf("%d %s", code, errs)
+	}
+	if b := lastBody(t, f, "POST", "/api/clusters/st/jobs"); b["nodes"] != float64(0) || b["tasks"] != float64(3) {
+		t.Fatalf("packed body %v", b)
+	}
+	saved := waitPoll
+	waitPoll = 20 * time.Millisecond
+	t.Cleanup(func() { waitPoll = saved })
+	g := newFakeAPI(t)
+	g.routes["POST /api/clusters/st/jobs"] = map[string]any{"id": "abc12", "cluster": "st", "phase": "Queued", "nodes": 1, "tasks": 2}
+	n := 0
+	g.dyn["GET /api/jobs/abc12"] = func() any {
+		n++
+		if n < 3 {
+			return map[string]any{"id": "abc12", "cluster": "st", "phase": "Running", "nodes": 1, "tasks": 2, "attempts": 1}
+		}
+		return map[string]any{"id": "abc12", "cluster": "st", "phase": "Succeeded", "nodes": 1, "tasks": 2}
+	}
+	o, told := attachingOrigin(false)
+	if code, _, errs := g.runWaitFrom("job submit -N 1 --ntasks-per-node 2 --gpus 1 -- x", o); code != 0 {
+		t.Fatalf("%d %s", code, errs)
+	}
+	if got := told(); len(got) != 1 || got[0].Nodes != 2 {
+		t.Fatalf("told %+v", got)
+	}
+}
+
+// job free: each cluster's free cards, by model.
+func TestJobFree(t *testing.T) {
+	f := newFakeAPI(t)
+	f.routes["GET /api/jobs/free"] = map[string]any{"items": []any{map[string]any{"cluster": "zjusct", "gpu": 4, "cpu": 512, "maxGPU": 4, "machines": 9,
+		"models": []any{map[string]any{"model": "NVIDIA-GeForce-RTX-4090", "gpu": 4, "total": 4, "machines": 1}, map[string]any{"model": "NVIDIA-A100-80GB-PCIe", "gpu": 0, "total": 3, "machines": 3}}}}}
+	code, out, errs := f.run("job free")
+	if code != 0 || !strings.Contains(out, "zjusct") || !strings.Contains(out, "NVIDIA-GeForce-RTX-4090") || !strings.Contains(out, "4 free of 4") || !strings.Contains(out, "0 free of 3") {
+		t.Fatalf("%d %q %q", code, out, errs)
+	}
+}
+
+// A packed job waiting for room says how many of its ranks fit, not how
+// many machines.
+func TestJobStatePackedCapacity(t *testing.T) {
+	j := jobView{Phase: "Queued", Position: 1, Reason: "capacity", Nodes: 0, Tasks: 6, GPUs: 1,
+		Detail: map[string]string{"need": "6", "free": "4", "fit": "4"}}
+	if s := jobState(j, time.Now()); !strings.Contains(s, "6 ranks × 1 GPU") || !strings.Contains(s, "4 ranks fit") {
+		t.Fatalf("%q", s)
+	}
+}
+
+// job submit's --gpus and --gpus-per-task are the same thing: both,
+// disagreeing, are refused.
+func TestJobSubmitTwoGPUOptions(t *testing.T) {
+	f := newFakeAPI(t)
+	if code, _, errs := f.runWaitFrom("job submit -d --gpus 4 --gpus-per-task 1 -- x", origin); code == 0 || !strings.Contains(errs, "one way") {
+		t.Fatalf("%d %s", code, errs)
+	}
+}

@@ -220,8 +220,16 @@ spec:
                   - name
                   type: object
                 type: array
+              gpuModel:
+                description: |-
+                  GPUModel: the cards' model its ranks run on (as people write it:
+                  a100, rtx-4090, s5000 — gpures.ModelMatches); unset: any.
+                maxLength: 63
+                type: string
               gpusPerNode:
-                description: 'GPUsPerNode and CPUsPerNode: what each rank takes.'
+                description: |-
+                  GPUsPerNode and CPUsPerNode: what each rank takes (the names are
+                  from when a machine had one rank).
                 format: int32
                 minimum: 0
                 type: integer
@@ -232,10 +240,13 @@ spec:
                   its place again (by its submission). Only a waiting job is held.
                 type: boolean
               nodes:
-                description: 'Nodes: how many machines, one rank on each.'
+                description: |-
+                  Nodes: how many machines — TasksPerNode ranks on each (one when
+                  unset). 0: as many as Tasks needs, the ranks packed on as few as
+                  fit (srun -n).
                 format: int32
                 maximum: 64
-                minimum: 1
+                minimum: 0
                 type: integer
               owner:
                 minLength: 1
@@ -277,6 +288,21 @@ spec:
                       type: string
                     type: object
                 type: object
+              tasks:
+                description: |-
+                  Tasks: how many ranks in all (Nodes × TasksPerNode on fixed
+                  machines; packed, with Nodes 0). Unset: Nodes.
+                format: int32
+                maximum: 256
+                minimum: 0
+                type: integer
+              tasksPerNode:
+                description: |-
+                  TasksPerNode: with Nodes, the ranks on each machine; packed, the
+                  most on one (unset: as many as fit).
+                format: int32
+                minimum: 0
+                type: integer
               template:
                 description: 'Template: the ranks'' Pod, resolved at submission from
                   the source.'

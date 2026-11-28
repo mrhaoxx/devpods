@@ -162,3 +162,27 @@ func TestStartGivesWayToReservationMadeMeanwhile(t *testing.T) {
 		t.Fatalf("job %s %s", j.Status.Phase, j.Status.Reason)
 	}
 }
+
+// The free cards are also told by model: what is free and what there is.
+func TestJobsFreeModels(t *testing.T) {
+	p, _ := queueRig(t, "rm", "rm-alice")
+	labelMachine(t, p.n1, map[string]string{"nvidia.com/gpu.product": "NVIDIA-A100-80GB-PCIe"}, "", 0)
+	startedJob(t, p, "rm-alice", 4, false)
+	var free struct {
+		Items []struct {
+			Models []struct {
+				Model    string
+				GPU      int64
+				Total    int64
+				Machines int
+			}
+		}
+	}
+	rec := doJSON(t, p.s.Routes().ServeHTTP, "GET", "/api/jobs/free", nil, p.as("rm-alice"), "")
+	if rec.Code != http.StatusOK || json.Unmarshal(rec.Body.Bytes(), &free) != nil || len(free.Items) != 1 {
+		t.Fatalf("free: %d %s", rec.Code, rec.Body)
+	}
+	if ms := free.Items[0].Models; len(ms) != 1 || ms[0].Model != "NVIDIA-A100-80GB-PCIe" || ms[0].GPU != 4 || ms[0].Total != 8 || ms[0].Machines != 1 {
+		t.Fatalf("models %+v", ms)
+	}
+}

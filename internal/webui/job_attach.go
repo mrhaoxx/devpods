@@ -82,8 +82,8 @@ func (s *Server) attachRank(w http.ResponseWriter, r *http.Request, j *devpodv1a
 		return
 	}
 	rank, err := strconv.Atoi(r.URL.Query().Get("rank"))
-	if err != nil || rank < 0 || rank >= int(j.Spec.Nodes) {
-		http.Error(w, fmt.Sprintf("a rank of this job is 0 to %d", j.Spec.Nodes-1), http.StatusBadRequest)
+	if err != nil || rank < 0 || rank >= int(j.Spec.Ranks()) {
+		http.Error(w, fmt.Sprintf("a rank of this job is 0 to %d", j.Spec.Ranks()-1), http.StatusBadRequest)
 		return
 	}
 	if jobEnded(j.Status.Phase) {

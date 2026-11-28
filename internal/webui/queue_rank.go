@@ -54,7 +54,7 @@ func attemptOf(d *devpodv1alpha1.DevPod) int32 {
 // isRankOf: d is one of j's ranks, as the queue made it — its name, its
 // owner and its rank all j's. Anything else naming j is not.
 func isRankOf(d *devpodv1alpha1.DevPod, j *devpodv1alpha1.Job) bool {
-	return d.Spec.Job != nil && d.Spec.Job.Name == j.Name && d.Spec.Job.Rank >= 0 && d.Spec.Job.Rank < j.Spec.Nodes &&
+	return d.Spec.Job != nil && d.Spec.Job.Name == j.Name && d.Spec.Job.Rank >= 0 && d.Spec.Job.Rank < j.Spec.Ranks() &&
 		d.Spec.Owner == j.Spec.Owner && d.Name == rankName(j.Spec.Owner, j.Name, d.Spec.Job.Rank)
 }
 
@@ -156,7 +156,7 @@ func rankDevPod(job *devpodv1alpha1.Job, rank int32, node, ns, master string) *d
 	env := append([]corev1.EnvVar{}, c.Env...)
 	env = append(env, job.Spec.Env...)
 	for _, kv := range [][2]string{
-		{"RANK", itoa(rank)}, {"NODE_RANK", itoa(rank)}, {"LOCAL_RANK", "0"}, {"WORLD_SIZE", itoa(job.Spec.Nodes)},
+		{"RANK", itoa(rank)}, {"NODE_RANK", itoa(rank)}, {"LOCAL_RANK", "0"}, {"WORLD_SIZE", itoa(job.Spec.Ranks())},
 		{"MASTER_ADDR", master}, {"MASTER_PORT", itoa(lo)}, {"DEVPOD_JOB", job.Name}, {"DEVPOD_JOB_PORTS", itoa(lo) + "-" + itoa(hi)},
 	} {
 		env = append(env, corev1.EnvVar{Name: kv[0], Value: kv[1]})
@@ -283,7 +283,8 @@ func machineFits(job *devpodv1alpha1.Job, n *corev1.Node) bool {
 			return false
 		}
 	}
-	return true
+	// its cards' model, when it says one
+	return job.Spec.GPUModel == "" || gpures.ModelMatches(job.Spec.GPUModel, gpures.Models(n))
 }
 
 // podFits: n could take a Pod of spec at all — not cordoned, spec's own

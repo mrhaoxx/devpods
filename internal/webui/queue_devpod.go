@@ -116,7 +116,7 @@ func (s *Server) devPodQuotaOK(ctx context.Context, cc *clusters.ClusterClients,
 			started.Spec.Running = true
 			existing = append(existing, *started)
 		case pe.Job != nil && pe.Owner == dp.Spec.Owner:
-			for r := int32(0); r < pe.Job.Spec.Nodes; r++ {
+			for r := int32(0); r < pe.Job.Spec.Ranks(); r++ {
 				existing = append(existing, *rankDevPod(pe.Job, r, "x", s.NS, ""))
 			}
 		}

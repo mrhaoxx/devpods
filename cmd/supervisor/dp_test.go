@@ -75,6 +75,10 @@ func TestDPArgvAndFiles(t *testing.T) {
 	if _, _, err := dpArgs("sbatch", []string{"missing.sh"}, "/w", read); err == nil {
 		t.Fatal("a script that cannot be read is sent")
 	}
+	// the per-rank and model options skip their values too
+	if _, files, err := dpArgs("sbatch", []string{"--ntasks-per-node", "2", "--gres", "gpu:a100:4", "--gpus-per-task", "1", "train.sh"}, "/w", read); err != nil || files["train.sh"] == "" {
+		t.Fatalf("sbatch --ntasks-per-node --gres --gpus-per-task: %v %v", files, err)
+	}
 	// all of sbatch's value flags skip their value
 	if _, files, err := dpArgs("sbatch", []string{"--ntasks", "2", "train.sh"}, "/w", read); err != nil || files["train.sh"] == "" {
 		t.Fatalf("--ntasks: %v %v", files, err)

@@ -25,6 +25,7 @@ import (
 	devpodv1alpha1 "github.com/mrhaoxx/devpod/api/v1alpha1"
 	"github.com/mrhaoxx/devpod/internal/access"
 	"github.com/mrhaoxx/devpod/internal/audit/store"
+	"github.com/mrhaoxx/devpod/internal/gpures"
 	"github.com/mrhaoxx/devpod/internal/render"
 	"github.com/mrhaoxx/devpod/internal/webui/clusters"
 )
@@ -355,7 +356,7 @@ func (s *Server) followJob(ctx context.Context, cc *clusters.ClusterClients, j *
 		s.endJob(ctx, cc, j, devpodv1alpha1.JobCancelled, "cancelled", nil, now)
 		return
 	}
-	n := j.Spec.Nodes
+	n := j.Spec.Ranks()
 	graceOver := j.Status.Phase == devpodv1alpha1.JobRunning || j.Status.AttemptAt == nil || now.Sub(j.Status.AttemptAt.Time) > jobRankGrace
 	status := make([]devpodv1alpha1.JobRank, n)
 	for _, r := range j.Status.Ranks {
@@ -433,7 +434,7 @@ func (s *Server) followJob(ctx context.Context, cc *clusters.ClusterClients, j *
 
 // deleteRanks deletes every rank DevPod of j; false when one could not be.
 func (s *Server) deleteRanks(ctx context.Context, cc *clusters.ClusterClients, j *devpodv1alpha1.Job) bool {
-	for r := int32(0); r < j.Spec.Nodes; r++ {
+	for r := int32(0); r < j.Spec.Ranks(); r++ {
 		dp := &devpodv1alpha1.DevPod{ObjectMeta: metav1.ObjectMeta{Name: rankName(j.Spec.Owner, j.Name, r), Namespace: s.NS}}
 		if err := cc.Client.Delete(ctx, dp); err != nil && !apierrors.IsNotFound(err) {
 			slog.Warn("queue_delete_rank", "job", j.Name, "devpod", dp.Name, "err", err)
@@ -536,13 +537,21 @@ func (s *Server) startJob(ctx context.Context, cc *clusters.ClusterClients, j *d
 			}
 		}
 	}
+	// each rank's place among the job's on its machine, and how many are there
+	here, local := map[string]int{}, make([]int, len(machines))
+	for r, m := range machines {
+		local[r] = here[m]
+		here[m]++
+	}
 	for r, m := range machines {
 		dp := rankDevPod(j, int32(r), m, s.NS, master)
+		c := &dp.Spec.Pod.Spec.Containers[0]
+		c.Env = append(c.Env, corev1.EnvVar{Name: "DEVPOD_LOCAL_TASK", Value: strconv.Itoa(local[r])},
+			corev1.EnvVar{Name: "DEVPOD_TASKS_HERE", Value: strconv.Itoa(here[m])})
 		if j.Spec.Attach != "" && s.Queue.GangTimeout > 0 {
 			// it waits for its submitter as long as this start may take (the
 			// others' images may be slow to come) and a little: it is gone
 			// with the start, if that times out
-			c := &dp.Spec.Pod.Spec.Containers[0]
 			c.Env = append(c.Env, corev1.EnvVar{Name: "SUPERVISOR_ATTACH_WAIT", Value: (s.Queue.GangTimeout + time.Minute).String()})
 		}
 		if err := cc.Client.Create(ctx, dp); err != nil {
@@ -623,7 +632,7 @@ func (s *Server) keepsRankLogs() bool {
 // whyNotStarted: what kept j's first rank not running from running —
 // for a job failed for not starting.
 func (s *Server) whyNotStarted(ctx context.Context, cc *clusters.ClusterClients, j *devpodv1alpha1.Job, ranks map[int32]*devpodv1alpha1.DevPod) map[string]string {
-	for r := int32(0); r < j.Spec.Nodes; r++ {
+	for r := int32(0); r < j.Spec.Ranks(); r++ {
 		d := ranks[r]
 		if d != nil && d.Status.Phase == devpodv1alpha1.DevPodRunning {
 			continue
@@ -729,7 +738,8 @@ func (s *Server) queueViewFor(ctx context.Context, cc *clusters.ClusterClients, 
 			interactive = append(interactive, p)
 		}
 		c := capacityOf(n)
-		machines = append(machines, qMachine{Name: n.Name, Cap: c, Interactive: loadAt(c, rs, interactive, now, "").with(others[n.Name]).outside(), Rs: rs, Reservable: reservable})
+		machines = append(machines, qMachine{Name: n.Name, Cap: c, Interactive: loadAt(c, rs, interactive, now, "").with(others[n.Name]).outside(), Rs: rs, Reservable: reservable,
+			Models: gpures.Models(n)})
 	}
 	var running []qRun
 	for _, j := range active {
@@ -813,15 +823,15 @@ func (s *Server) queueViewFor(ctx context.Context, cc *clusters.ClusterClients, 
 		// the owner's jobs this round starts before it count as running
 		for _, pe := range planned {
 			if p := pe.Job; p != nil && p.Spec.Owner == j.Spec.Owner {
-				for r := int32(0); r < p.Spec.Nodes; r++ {
+				for r := int32(0); r < p.Spec.Ranks(); r++ {
 					existing = append(existing, *rankDevPod(p, r, "x", s.NS, ""))
 				}
 			}
 		}
-		for r := int32(0); r < j.Spec.Nodes-1; r++ {
+		for r := int32(0); r < j.Spec.Ranks()-1; r++ {
 			existing = append(existing, *rankDevPod(j, r, "x", s.NS, ""))
 		}
-		return CheckQuota(EffectiveQuota(up, cc.Name, s.clusterQuota(ctx, cc)), existing, rankDevPod(j, j.Spec.Nodes-1, "x", s.NS, "")) == nil
+		return CheckQuota(EffectiveQuota(up, cc.Name, s.clusterQuota(ctx, cc)), existing, rankDevPod(j, j.Spec.Ranks()-1, "x", s.NS, "")) == nil
 	}
 	return queueView{Now: now, Machines: machines, Running: running, Queued: queued, Allowed: mayRun, QuotaOK: quotaOK, Horizon: 14 * 24 * time.Hour}, byName, nil
 }
@@ -880,11 +890,21 @@ func (s *Server) jobHolds(ctx context.Context, cluster, node string, now time.Ti
 // cores on its reservable machines (outside the reservations in force,
 // what DevPods and running jobs take), and the most cards one machine has.
 type queueFree struct {
-	Cluster  string  `json:"cluster,omitempty"`
-	GPU      int64   `json:"gpu"`
-	CPU      float64 `json:"cpu"`
-	MaxGPU   int64   `json:"maxGPU"`
-	Machines int     `json:"machines"`
+	Cluster  string      `json:"cluster,omitempty"`
+	GPU      int64       `json:"gpu"`
+	CPU      float64     `json:"cpu"`
+	MaxGPU   int64       `json:"maxGPU"`
+	Machines int         `json:"machines"`
+	Models   []modelFree `json:"models"`
+}
+
+// modelFree: one model's cards on the queue's machines — free now, and
+// in all.
+type modelFree struct {
+	Model    string `json:"model"`
+	GPU      int64  `json:"gpu"`
+	Total    int64  `json:"total"`
+	Machines int    `json:"machines"`
 }
 
 // handleJobsFree serves GET /api/jobs/free: queueFree of each cluster
@@ -919,8 +939,9 @@ func (s *Server) handleJobsFree(w http.ResponseWriter, r *http.Request) {
 			slog.Warn("queue_free", "cluster", cluster, "err", err)
 			continue
 		}
-		f := queueFree{Cluster: s.clusterLabel(cc)}
+		f := queueFree{Cluster: s.clusterLabel(cc), Models: []modelFree{}}
 		var sum amount
+		byModel := map[string]*modelFree{}
 		for _, m := range v.Machines {
 			if !m.Reservable {
 				continue // the queue's jobs run only on reservable machines
@@ -929,8 +950,20 @@ func (s *Server) handleJobsFree(w http.ResponseWriter, r *http.Request) {
 			free := freeFor(m, v.Running, now, time.Minute).clamped()
 			sum = sum.add(free)
 			f.MaxGPU = max(f.MaxGPU, free.GPU)
+			if len(m.Models) > 0 && m.Cap.GPU > 0 {
+				name := strings.Join(m.Models, " / ")
+				if byModel[name] == nil {
+					byModel[name] = &modelFree{Model: name}
+				}
+				mf := byModel[name]
+				mf.GPU, mf.Total, mf.Machines = mf.GPU+free.GPU, mf.Total+m.Cap.GPU, mf.Machines+1
+			}
 		}
 		f.GPU, f.CPU = sum.GPU, float64(sum.CPU)/1000
+		for _, mf := range byModel {
+			f.Models = append(f.Models, *mf)
+		}
+		slices.SortFunc(f.Models, func(a, b modelFree) int { return cmp.Compare(a.Model, b.Model) })
 		items = append(items, f)
 	}
 	s.writeJSON(w, http.StatusOK, map[string]any{"items": items})
@@ -996,7 +1029,9 @@ func ranksMachines(ranks []devpodv1alpha1.JobRank) []string {
 // machines beside the reservations as they are now (fresh) and runs.
 func keptBesideReservations(v queueView, st qStart, fresh []devpodv1alpha1.NodeReservation, cluster string, runs []qRun) bool {
 	ask, limit := st.Entry.Ask, st.Entry.Limit
-	for _, name := range st.Machines {
+	distinct := slices.Clone(st.Machines)
+	slices.Sort(distinct)
+	for _, name := range slices.Compact(distinct) {
 		i := slices.IndexFunc(v.Machines, func(m qMachine) bool { return m.Name == name })
 		if i < 0 {
 			continue
@@ -1008,7 +1043,8 @@ func keptBesideReservations(v queueView, st qStart, fresh []devpodv1alpha1.NodeR
 				m.Rs = append(m.Rs, &fresh[k])
 			}
 		}
-		if !ask.fits(freeFor(m, runs, v.Now, limit)) {
+		// all of its ranks there
+		if !ask.times(count(st.Machines, name)).fits(freeFor(m, runs, v.Now, limit)) {
 			return false
 		}
 	}
