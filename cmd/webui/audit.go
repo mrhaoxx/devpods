@@ -199,6 +199,30 @@ func (l *lazyCH) InsertEvents(ctx context.Context, rows []store.EventRow, token 
 	return c.InsertEvents(ctx, rows, token)
 }
 
+func (l *lazyCH) InsertJob(ctx context.Context, r store.JobRow, token string) error {
+	c, err := l.get(ctx)
+	if err != nil {
+		return err
+	}
+	return c.InsertJob(ctx, r, token)
+}
+
+func (l *lazyCH) SearchJobs(ctx context.Context, f store.JobFilter) ([]store.JobRow, string, error) {
+	c, err := l.get(ctx)
+	if err != nil {
+		return nil, "", err
+	}
+	return c.SearchJobs(ctx, f)
+}
+
+func (l *lazyCH) GetJob(ctx context.Context, id string) (*store.JobRow, error) {
+	c, err := l.get(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return c.GetJob(ctx, id)
+}
+
 func (l *lazyCH) SearchEvents(ctx context.Context, f store.EventFilter) ([]store.EventRow, string, error) {
 	c, err := l.get(ctx)
 	if err != nil {

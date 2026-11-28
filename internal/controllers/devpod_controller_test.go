@@ -5,6 +5,7 @@
 package controllers_test
 
 import (
+	"k8s.io/client-go/util/retry"
 	"strings"
 	"testing"
 	"time"
@@ -300,14 +301,17 @@ func TestDevPodReconciler_HibernateDeletesPod(t *testing.T) {
 		t.Fatalf("Pod %s never appeared before hibernate", podKey)
 	}
 
-	// Flip to running=false. Use a fresh Get for current ResourceVersion.
+	// Flip to running=false, read again on a conflict (the controller
+	// writes the status meanwhile, and the cache may trail it).
 	dpKey := types.NamespacedName{Name: "grace-hibtest", Namespace: "devpods"}
-	var fresh devpodv1alpha1.DevPod
-	if err := env.Client.Get(env.Ctx, dpKey, &fresh); err != nil {
-		t.Fatalf("get dp before hibernate: %v", err)
-	}
-	fresh.Spec.Running = false
-	if err := env.Client.Update(env.Ctx, &fresh); err != nil {
+	if err := retry.RetryOnConflict(retry.DefaultRetry, func() error {
+		var fresh devpodv1alpha1.DevPod
+		if err := env.Client.Get(env.Ctx, dpKey, &fresh); err != nil {
+			return err
+		}
+		fresh.Spec.Running = false
+		return env.Client.Update(env.Ctx, &fresh)
+	}); err != nil {
 		t.Fatalf("patch running=false: %v", err)
 	}
 
@@ -366,13 +370,16 @@ func TestDevPodReconciler_HibernateStatusFields(t *testing.T) {
 		time.Sleep(150 * time.Millisecond)
 	}
 
-	// Flip to Running=false.
-	var fresh devpodv1alpha1.DevPod
-	if err := env.Client.Get(env.Ctx, dpKey, &fresh); err != nil {
-		t.Fatalf("get dp: %v", err)
-	}
-	fresh.Spec.Running = false
-	if err := env.Client.Update(env.Ctx, &fresh); err != nil {
+	// Flip to Running=false (read again on a conflict: the controller
+	// writes the status meanwhile, and the cache may trail it).
+	if err := retry.RetryOnConflict(retry.DefaultRetry, func() error {
+		var fresh devpodv1alpha1.DevPod
+		if err := env.Client.Get(env.Ctx, dpKey, &fresh); err != nil {
+			return err
+		}
+		fresh.Spec.Running = false
+		return env.Client.Update(env.Ctx, &fresh)
+	}); err != nil {
 		t.Fatalf("update Running=false: %v", err)
 	}
 
@@ -393,12 +400,15 @@ func TestDevPodReconciler_HibernateStatusFields(t *testing.T) {
 	t.Fatalf("status fields wrong after hibernate")
 
 resumeStep:
-	// Flip back to Running=true.
-	if err := env.Client.Get(env.Ctx, dpKey, &fresh); err != nil {
-		t.Fatalf("get dp pre-resume: %v", err)
-	}
-	fresh.Spec.Running = true
-	if err := env.Client.Update(env.Ctx, &fresh); err != nil {
+	// Flip back to Running=true (read again on a conflict, as above).
+	if err := retry.RetryOnConflict(retry.DefaultRetry, func() error {
+		var fresh devpodv1alpha1.DevPod
+		if err := env.Client.Get(env.Ctx, dpKey, &fresh); err != nil {
+			return err
+		}
+		fresh.Spec.Running = true
+		return env.Client.Update(env.Ctx, &fresh)
+	}); err != nil {
 		t.Fatalf("update Running=true: %v", err)
 	}
 

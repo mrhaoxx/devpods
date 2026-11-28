@@ -28,6 +28,9 @@ type AuditStore interface {
 	InsertAccessLog(context.Context, store.AccessLogRow) error
 	InsertReservationEvent(context.Context, store.ReservationEventRow) error
 	InsertEvents(context.Context, []store.EventRow, string) error
+	InsertJob(context.Context, store.JobRow, string) error
+	SearchJobs(context.Context, store.JobFilter) ([]store.JobRow, string, error)
+	GetJob(context.Context, string) (*store.JobRow, error)
 	SearchEvents(context.Context, store.EventFilter) ([]store.EventRow, string, error)
 	Presence(context.Context, []string) (map[string][]string, error)
 }

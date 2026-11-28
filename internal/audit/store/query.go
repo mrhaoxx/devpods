@@ -629,3 +629,56 @@ func (c *CH) SearchEvents(ctx context.Context, f EventFilter) ([]EventRow, strin
 	}
 	return rows, next, nil
 }
+
+// JobFilter narrows the kept jobs (any field empty: any).
+type JobFilter struct {
+	Cluster, Owner, Phase string
+	Cursor                string
+	Limit                 int
+}
+
+// InsertJob keeps an ended job, carrying token: kept again with it (a
+// write that went in, yet timed out), it is kept once.
+func (c *CH) InsertJob(ctx context.Context, r JobRow, token string) error {
+	return insertRows(ctx, c, "jobs", token, []JobRow{r})
+}
+
+// SearchJobs lists the kept jobs, the last to end first.
+func (c *CH) SearchJobs(ctx context.Context, f JobFilter) ([]JobRow, string, error) {
+	w := &where{}
+	w.add("1")
+	for _, eq := range []struct{ col, v string }{{"cluster", f.Cluster}, {"owner", f.Owner}, {"phase", f.Phase}} {
+		if eq.v != "" {
+			w.add(eq.col+" = ?", eq.v)
+		}
+	}
+	if err := w.cursor(f.Cursor, "finished_at", "id"); err != nil {
+		return nil, "", err
+	}
+	limit := limitOf(f.Limit)
+	var rows []JobRow
+	q := fmt.Sprintf("SELECT %s FROM %s.jobs WHERE %s ORDER BY finished_at DESC, id DESC LIMIT %d", columns[JobRow](), c.db, w.sql(), limit+1)
+	if err := c.conn.Select(c.readCtx(ctx), &rows, q, w.args...); err != nil {
+		return nil, "", fmt.Errorf("search jobs: %w", err)
+	}
+	next := ""
+	if len(rows) > limit {
+		rows = rows[:limit]
+		l := rows[limit-1]
+		next = encodeCursor(l.FinishedAt, l.ID)
+	}
+	return rows, next, nil
+}
+
+// GetJob is the kept job id (nil when none is).
+func (c *CH) GetJob(ctx context.Context, id string) (*JobRow, error) {
+	var rows []JobRow
+	q := fmt.Sprintf("SELECT %s FROM %s.jobs WHERE id = ? ORDER BY finished_at DESC LIMIT 1", columns[JobRow](), c.db)
+	if err := c.conn.Select(c.readCtx(ctx), &rows, q, id); err != nil {
+		return nil, fmt.Errorf("get job: %w", err)
+	}
+	if len(rows) == 0 {
+		return nil, nil
+	}
+	return &rows[0], nil
+}

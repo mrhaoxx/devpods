@@ -48,6 +48,8 @@ type fakeAuditStore struct {
 	eventLost int                         // the next so many writes go in, yet fail (timed out)
 	tokens    map[string]bool             // the writes' tokens seen: one again is a no-op
 	calls     int                         // event writes made
+	jobs      []store.JobRow              // ended jobs kept
+	jobErrs   int                         // the next so many job writes fail
 	eventF    store.EventFilter
 }
 
@@ -80,6 +82,54 @@ func (f *fakeAuditStore) InsertEvents(_ context.Context, rows []store.EventRow, 
 		return errors.New("timed out")
 	}
 	return nil
+}
+
+func (f *fakeAuditStore) InsertJob(_ context.Context, r store.JobRow, token string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.jobErrs > 0 {
+		f.jobErrs--
+		return errors.New("store down")
+	}
+	if f.tokens["job:"+token] {
+		return nil
+	}
+	if f.tokens == nil {
+		f.tokens = map[string]bool{}
+	}
+	f.tokens["job:"+token] = true
+	f.jobs = append(f.jobs, r)
+	return nil
+}
+
+func (f *fakeAuditStore) SearchJobs(_ context.Context, jf store.JobFilter) ([]store.JobRow, string, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	var out []store.JobRow
+	for i := len(f.jobs) - 1; i >= 0; i-- {
+		if r := f.jobs[i]; (jf.Owner == "" || r.Owner == jf.Owner) && (jf.Cluster == "" || r.Cluster == jf.Cluster) && (jf.Phase == "" || r.Phase == jf.Phase) {
+			out = append(out, r)
+		}
+	}
+	return out, "", nil
+}
+
+func (f *fakeAuditStore) GetJob(_ context.Context, id string) (*store.JobRow, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for i := range f.jobs {
+		if f.jobs[i].ID == id {
+			r := f.jobs[i]
+			return &r, nil
+		}
+	}
+	return nil, nil
+}
+
+func (f *fakeAuditStore) keptJobs() []store.JobRow {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]store.JobRow(nil), f.jobs...)
 }
 
 func (f *fakeAuditStore) eventCalls() int {

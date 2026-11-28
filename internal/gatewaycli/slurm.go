@@ -247,6 +247,7 @@ func runSbatch(e *Env, a *parsed) int {
 	if _, err := call(e, "POST", scoped(e, cluster, "/api/jobs"), body, &v); err != nil {
 		return fail(e, err)
 	}
+	sayWarnings(e, false, warningsOf(v)) // DP_NO_WORKDIR_WARNING hides them
 	fmt.Fprintf(e.Out, "Submitted batch job %v\n", v["id"])
 	return ExitOK
 }

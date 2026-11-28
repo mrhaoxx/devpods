@@ -29,6 +29,7 @@ type jobV struct {
 	Mine, CanManage, Requeue, Held    bool
 	Position                          int32
 	Code, Message                     string
+	Warnings                          []string
 }
 
 // jobRig: placeRig's machines (n1 reservable, 8 cards, 192 cores), the
@@ -231,26 +232,30 @@ func TestPriorityRulesAdmin(t *testing.T) {
 	}
 }
 
-// A job runs where the machines share storage: under the owner's shared
-// home (or on a shared volume of the source), never in what only the
-// DevPod's machine has.
-func TestJobWorkdirMustBeShared(t *testing.T) {
+// A working directory the machines may not share is the submitter's to
+// judge: the job is taken, with a warning (its ranks, on other machines,
+// may not find it), a dry run saying it too; a relative one means nothing
+// and is refused.
+func TestJobWorkdirNotSharedWarns(t *testing.T) {
 	p := jobRig(t, "jw", "jw-alice")
 	alice := p.as("jw-alice")
 	body := func(wd string) map[string]any {
 		return map[string]any{"from": map[string]any{"devpod": "jw-alice-dev1"}, "nodes": 1, "gpus": 1, "command": "true", "workdir": wd}
 	}
-	if code, v := submitJob(t, p.s, alice, body("/root/x")); code != http.StatusBadRequest || v.Code != "WORKDIR_NOT_SHARED" || !strings.Contains(v.Message, "/home/jw-alice") {
+	if code, v := submitJob(t, p.s, alice, body("/root/x")); code != http.StatusCreated || len(v.Warnings) != 1 ||
+		!strings.Contains(v.Warnings[0], "/root/x") || !strings.Contains(v.Warnings[0], "/home/jw-alice") {
 		t.Errorf("/root/x: %d %+v", code, v)
 	}
 	if code, v := submitJob(t, p.s, alice, body("x")); code != http.StatusBadRequest {
 		t.Errorf("relative: %d %+v", code, v)
 	}
-	if code, v := submitJob(t, p.s, alice, body("/home/jw-alice/proj")); code != http.StatusCreated {
+	if code, v := submitJob(t, p.s, alice, body("/home/jw-alice/proj")); code != http.StatusCreated || len(v.Warnings) != 0 {
 		t.Errorf("in the shared home: %d %+v", code, v)
 	}
-	if code, v := submitJob(t, p.s, alice, body("/home/jw-bob/proj")); code != http.StatusBadRequest {
-		t.Errorf("another's home is not one's own: %d %+v", code, v)
+	dry := body("/home/jw-bob/proj")
+	dry["dryRun"] = true
+	if code, v := submitJob(t, p.s, alice, dry); code != http.StatusOK || len(v.Warnings) != 1 {
+		t.Errorf("a dry run in another's home: %d %+v", code, v)
 	}
 }
 

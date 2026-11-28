@@ -203,7 +203,8 @@ func TestAccessTokens(t *testing.T) {
 			t.Fatalf("a directory user through the gateway: %v", me)
 		}
 		var nobody devpodv1alpha1.User
-		if err := k8sClient.Get(ctx, types.NamespacedName{Name: "tk-nobody"}, &nobody); err != nil {
+		// the API reader: the cache can trail the User just made
+		if err := k8sManager.GetAPIReader().Get(ctx, types.NamespacedName{Name: "tk-nobody"}, &nobody); err != nil {
 			t.Fatalf("no User object after their first use: %v", err)
 		}
 		t.Cleanup(func() { _ = k8sClient.Delete(ctx, &nobody) })

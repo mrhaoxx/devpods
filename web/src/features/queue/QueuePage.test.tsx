@@ -108,6 +108,59 @@ describe("QueuePage", () => {
     await waitFor(() => expect(calls.some((c) => c.method === "PATCH" && c.url.pathname === "/api/devpods/u-dev" && c.body === JSON.stringify({ running: false }))).toBe(true));
   });
 
+  it("已结束 lists the ended jobs, the last to end first, a page at a time", async () => {
+    const old = (id: string, finishedAt: string) => ({ ...jobs[1], id, phase: "Succeeded", position: undefined, reason: undefined, detail: undefined, finishedAt });
+    const calls = stubFetch({
+      "/api/jobs": (u: URL) =>
+        u.searchParams.get("ended") !== "1"
+          ? { items: jobs }
+          : u.searchParams.get("cursor") === "c2"
+            ? { items: [old("old02", "2026-11-26T01:00:00Z")], next: "" }
+            : { items: [old("old01", "2026-11-27T01:00:00Z")], next: "c2" },
+      "/api/jobs/free": { items: [] },
+    });
+    // the table's box has a height (jsdom gives none): its end is in sight
+    const own = Object.getOwnPropertyDescriptor(HTMLElement.prototype, "clientHeight");
+    Object.defineProperty(HTMLElement.prototype, "clientHeight", {
+      configurable: true,
+      get() {
+        return (this as HTMLElement).hasAttribute("data-table-scroller") ? 290 : 0;
+      },
+    });
+    try {
+      page();
+      await screen.findByText(/mine1/);
+      fireEvent.click(screen.getByRole("button", { name: "已结束" }));
+      expect(await screen.findByText(/old01/)).toBeTruthy();
+      expect(await screen.findByText(/old02/)).toBeTruthy();
+      expect(calls.some((c) => c.url.searchParams.get("ended") === "1" && c.url.searchParams.get("cursor") === "c2")).toBe(true);
+    } finally {
+      if (own) Object.defineProperty(HTMLElement.prototype, "clientHeight", own);
+      else delete (HTMLElement.prototype as { clientHeight?: number }).clientHeight;
+    }
+  });
+
+  it("a working directory the machines may not share is warned of, not refused", async () => {
+    const calls = stubFetch({
+      "/api/jobs": { items: [] },
+      "/api/jobs/limits": { maxPriority: 0, unlimitedPriority: false, defaultTimeLimitSeconds: 86400, maxTimeLimitSeconds: 259200 },
+      "/api/devpods": { items: [{ metadata: { name: "u-dev" }, spec: { owner: "u", running: true }, status: {} }] },
+      "/api/configs": { items: [] },
+      "POST /api/jobs": (_u: URL, init?: RequestInit) =>
+        JSON.parse(String(init?.body)).dryRun ? { position: 1, cpus: 4, warnings: ["the job runs in /root, which the machines may not share"] } : { id: "new01", phase: "Queued" },
+    });
+    page();
+    fireEvent.click(await screen.findByRole("button", { name: "提交任务…" }));
+    const dialog = within(await screen.findByRole("dialog"));
+    await dialog.findByRole("option", { name: "DevPod：u-dev" });
+    fireEvent.change(dialog.getByLabelText("来自"), { target: { value: "devpod:u-dev" } });
+    fireEvent.change(dialog.getByLabelText("命令"), { target: { value: "make" } });
+    fireEvent.change(dialog.getByLabelText("工作目录"), { target: { value: "/root" } });
+    expect(await dialog.findByText(/提醒：the job runs in \/root/)).toBeTruthy();
+    fireEvent.click(dialog.getByRole("button", { name: "提交" }));
+    await waitFor(() => expect(calls.some((c) => c.method === "POST" && !JSON.parse(c.body ?? "{}").dryRun)).toBe(true));
+  });
+
   it("the form submits what it says, shows where it would stand, and holds the priority to the cap", async () => {
     const calls = stubFetch({
       "/api/jobs": { items: [] },

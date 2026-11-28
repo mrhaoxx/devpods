@@ -93,7 +93,11 @@ func (s *Server) QueueRound(ctx context.Context) {
 		}
 		if jobEnded(j.Status.Phase) {
 			if j.Status.FinishedAt != nil && now.Sub(j.Status.FinishedAt.Time) > s.Queue.KeepEnded {
-				if err := s.Client.Delete(ctx, j); err != nil && !apierrors.IsNotFound(err) {
+				// long ended (its cluster away all along, say): kept as it
+				// is, or — nowhere to keep it — let go
+				if s.Audit != nil && s.Audit.Store != nil {
+					s.keepJob(ctx, j)
+				} else if err := s.Client.Delete(ctx, j); err != nil && !apierrors.IsNotFound(err) {
 					slog.Warn("queue_prune", "job", j.Name, "err", err)
 				}
 				continue
@@ -145,6 +149,11 @@ func (s *Server) queueIn(ctx context.Context, cluster string, jobs, ended []*dev
 	for _, j := range ended {
 		if len(all[j.Name]) > 0 {
 			s.cleanUpJob(ctx, cc, j)
+			continue
+		}
+		// its ranks gone and their output kept: kept, and out of the cluster
+		if _, cleaning := s.queueCleaning.Load(j.Name); !cleaning {
+			s.keepJob(ctx, j)
 		}
 	}
 	var active, queued []*devpodv1alpha1.Job

@@ -31,6 +31,7 @@ import (
 	devpodv1alpha1 "github.com/mrhaoxx/devpod/api/v1alpha1"
 	"github.com/mrhaoxx/devpod/internal/access"
 	"github.com/mrhaoxx/devpod/internal/agent"
+	"github.com/mrhaoxx/devpod/internal/audit/store"
 	"github.com/mrhaoxx/devpod/internal/configvars"
 	"github.com/mrhaoxx/devpod/internal/gpures"
 )
@@ -73,35 +74,38 @@ type JobPrivileges struct {
 // jobView is a job as the API shows it; what it runs only to its owner
 // and admins.
 type jobView struct {
-	Cluster          string                    `json:"cluster,omitempty"`
-	ID               string                    `json:"id"`
-	Title            string                    `json:"title,omitempty"`
-	Owner            string                    `json:"owner"`
-	Phase            devpodv1alpha1.JobPhase   `json:"phase"`
-	Reason           string                    `json:"reason,omitempty"`
-	Detail           map[string]string         `json:"detail,omitempty"`
-	Position         int32                     `json:"position,omitempty"`
-	Nodes            int32                     `json:"nodes"`
-	GPUs             int32                     `json:"gpus"`
-	CPUs             float64                   `json:"cpus"`
-	TimeLimitSeconds int64                     `json:"timeLimitSeconds"`
-	Priority         int32                     `json:"priority"`
-	Preemptible      bool                      `json:"preemptible,omitempty"`
-	Requeue          bool                      `json:"requeue"`
-	Held             bool                      `json:"held,omitempty"`
-	Mine             bool                      `json:"mine"`
-	CanManage        bool                      `json:"canManage"`
-	Submitted        time.Time                 `json:"submitted"`
-	ExpectedStart    *time.Time                `json:"expectedStart,omitempty"`
-	StartedAt        *time.Time                `json:"startedAt,omitempty"`
-	FinishedAt       *time.Time                `json:"finishedAt,omitempty"`
-	Attempts         int32                     `json:"attempts,omitempty"`
-	Preemptions      int32                     `json:"preemptions,omitempty"`
-	Ranks            []devpodv1alpha1.JobRank  `json:"ranks,omitempty"`
-	Command          string                    `json:"command,omitempty"`
-	Args             []string                  `json:"args,omitempty"`
-	Workdir          string                    `json:"workdir,omitempty"`
-	Source           *devpodv1alpha1.JobSource `json:"source,omitempty"`
+	Cluster          string                  `json:"cluster,omitempty"`
+	ID               string                  `json:"id"`
+	Title            string                  `json:"title,omitempty"`
+	Owner            string                  `json:"owner"`
+	Phase            devpodv1alpha1.JobPhase `json:"phase"`
+	Reason           string                  `json:"reason,omitempty"`
+	Detail           map[string]string       `json:"detail,omitempty"`
+	Position         int32                   `json:"position,omitempty"`
+	Nodes            int32                   `json:"nodes"`
+	GPUs             int32                   `json:"gpus"`
+	CPUs             float64                 `json:"cpus"`
+	TimeLimitSeconds int64                   `json:"timeLimitSeconds"`
+	Priority         int32                   `json:"priority"`
+	Preemptible      bool                    `json:"preemptible,omitempty"`
+	Requeue          bool                    `json:"requeue"`
+	Held             bool                    `json:"held,omitempty"`
+	// Warnings: what the submitter should know of what they submitted (a
+	// working directory the machines may not share) — said, not refused
+	Warnings      []string                  `json:"warnings,omitempty"`
+	Mine          bool                      `json:"mine"`
+	CanManage     bool                      `json:"canManage"`
+	Submitted     time.Time                 `json:"submitted"`
+	ExpectedStart *time.Time                `json:"expectedStart,omitempty"`
+	StartedAt     *time.Time                `json:"startedAt,omitempty"`
+	FinishedAt    *time.Time                `json:"finishedAt,omitempty"`
+	Attempts      int32                     `json:"attempts,omitempty"`
+	Preemptions   int32                     `json:"preemptions,omitempty"`
+	Ranks         []devpodv1alpha1.JobRank  `json:"ranks,omitempty"`
+	Command       string                    `json:"command,omitempty"`
+	Args          []string                  `json:"args,omitempty"`
+	Workdir       string                    `json:"workdir,omitempty"`
+	Source        *devpodv1alpha1.JobSource `json:"source,omitempty"`
 }
 
 func timeOf(t *metav1.Time) *time.Time {
@@ -410,8 +414,13 @@ func (s *Server) handleSubmitJob(w http.ResponseWriter, r *http.Request) {
 		s.writeServerErr(w, apiErr)
 		return
 	}
+	warnings := s.workdirWarnings(ctx, job)
 	if req.DryRun {
-		s.writeJSON(w, http.StatusOK, s.estimate(ctx, job))
+		est := s.estimate(ctx, job)
+		if len(warnings) > 0 {
+			est["warnings"] = warnings
+		}
+		s.writeJSON(w, http.StatusOK, est)
 		return
 	}
 	if apiErr := s.createJob(ctx, job); apiErr != nil {
@@ -421,7 +430,28 @@ func (s *Server) handleSubmitJob(w http.ResponseWriter, r *http.Request) {
 	s.recordJob(ctx, eventFrom(r, sess), job, "submit", jobSummary(job))
 	v := viewOfJob(job, sess.User, sess.Admin)
 	v.Cluster = s.clusterLabel(s.kc(ctx))
+	v.Warnings = warnings
 	s.writeJSON(w, http.StatusCreated, v)
+}
+
+// workdirWarnings: what to tell the submitter of where job runs — a
+// working directory the machines may not share (its ranks, on other
+// machines than the DevPod's, may not find it). Said, never refused: the
+// submitter knows their storage.
+func (s *Server) workdirWarnings(ctx context.Context, job *devpodv1alpha1.Job) []string {
+	wd, owner := job.Spec.Workdir, job.Spec.Owner
+	if wd == "" {
+		return nil
+	}
+	_, homes := s.controllerSays(ctx, s.resCluster(ctx))
+	if sharedDir(path.Clean(wd), owner, homes, &job.Spec.Template.Spec) {
+		return nil
+	}
+	where := "this cluster's homes are not shared: a shared volume of the DevPod (a host directory, NFS, a claim) is"
+	if homes != "" {
+		where = fmt.Sprintf("%s (your shared home) or a shared volume of the DevPod is", path.Join(homes, owner))
+	}
+	return []string{fmt.Sprintf("the job runs in %s, which the machines may not share: its ranks, on other machines than the DevPod's, may not find it there — %s", wd, where)}
 }
 
 // buildJob checks a request and makes the job it asks for (not yet kept).
@@ -477,21 +507,10 @@ func (s *Server) buildJob(ctx context.Context, sess Session, req JobRequest) (*d
 	}
 	applyPrivileges(&tmpl.Spec, req.Privileges)
 	owner := sess.User
-	// where the ranks run: on storage the machines share, or they (on
-	// other machines than the DevPod's) would not find it
-	if wd := req.Workdir; wd != "" {
-		if !path.IsAbs(wd) {
-			return nil, badRequest("the working directory is a full path (it is %q)", wd)
-		}
-		_, homes := s.controllerSays(ctx, s.resCluster(ctx))
-		if !sharedDir(path.Clean(wd), owner, homes, &tmpl.Spec) {
-			where := "this cluster's homes are not shared: work on a shared volume of the DevPod (a host directory, NFS, a claim), or give no working directory"
-			if homes != "" {
-				where = fmt.Sprintf("work under %s (your shared home) or on a shared volume of the DevPod", path.Join(homes, owner))
-			}
-			return nil, &serverErr{http.StatusBadRequest, "WORKDIR_NOT_SHARED",
-				fmt.Sprintf("the job would run in %s, which the machines do not share: its ranks, on other machines, would not find it — %s", wd, where), nil}
-		}
+	// where the ranks run (whether the machines share it is the
+	// submitter's to judge: workdirWarnings says, nothing refuses)
+	if wd := req.Workdir; wd != "" && !path.IsAbs(wd) {
+		return nil, badRequest("the working directory is a full path (it is %q)", wd)
 	}
 	machines, usable, err := s.jobMachines(ctx, owner, access.NeedsOf(&tmpl.Spec))
 	if err != nil {
@@ -754,10 +773,56 @@ func (s *Server) handleListJobs(w http.ResponseWriter, r *http.Request) {
 	}
 	sort.SliceStable(items, func(i, j int) bool { return items[i].Submitted.Before(items[j].Submitted) })
 	devpods := []queuedDevPodView{}
+	next := ""
 	if !ended {
 		devpods = s.queuedDevPods(r, sess, mine, shown)
+	} else if s.Audit != nil && s.Audit.Store != nil {
+		// and those kept, the last to end first, page by page (the ones
+		// still in the cluster on the first page)
+		cursor := q.Get("cursor")
+		if cursor != "" {
+			items = items[:0]
+		}
+		f := store.JobFilter{Cursor: cursor, Limit: queryLimit(r)}
+		if mine {
+			f.Owner = sess.User
+		}
+		rows, n, err := s.Audit.Store.SearchJobs(r.Context(), f)
+		if err != nil {
+			s.auditStoreErr(w, err)
+			return
+		}
+		next = n
+		seen := map[string]bool{}
+		for _, it := range items {
+			seen[it.ID] = true
+		}
+		for i := range rows {
+			if seen[rows[i].ID] {
+				continue
+			}
+			j, err := jobOfRow(&rows[i])
+			if err != nil {
+				continue
+			}
+			v := viewOfJob(j, sess.User, sess.Admin)
+			if (mine && !v.Mine) || (!v.CanManage && !shown(j.Spec.Cluster)) {
+				continue
+			}
+			v.Cluster = j.Spec.Cluster
+			items = append(items, v)
+		}
+		sort.SliceStable(items, func(i, j int) bool { return finishedOf(items[i]).After(finishedOf(items[j])) })
 	}
-	s.writeJSON(w, http.StatusOK, map[string]any{"items": items, "devpods": devpods})
+	s.writeJSON(w, http.StatusOK, map[string]any{"items": items, "devpods": devpods, "next": next})
+}
+
+// finishedOf: when a job's view says it ended (its submission, if not).
+func finishedOf(v jobView) time.Time {
+	if v.FinishedAt != nil {
+		return *v.FinishedAt
+	}
+	return v.Submitted
 }
 
 // queuedDevPodView is a DevPod waiting in the queue's line as the queue
@@ -829,8 +894,12 @@ func (s *Server) jobFor(w http.ResponseWriter, r *http.Request, sess Session, ma
 		s.writeErr(w, http.StatusNotFound, "QUEUE_OFF", "the queue is not on in this console", nil)
 		return nil, false
 	}
-	var j devpodv1alpha1.Job
-	if err := s.Reader.Get(r.Context(), types.NamespacedName{Name: r.PathValue("id")}, &j); err != nil {
+	j, err := s.jobByID(r.Context(), r.PathValue("id"))
+	if err != nil {
+		if !apierrors.IsNotFound(err) {
+			s.writeErr(w, http.StatusServiceUnavailable, "UNAVAILABLE", "the job cannot be read now: "+err.Error(), nil)
+			return nil, false
+		}
 		s.writeErr(w, http.StatusNotFound, "NOT_FOUND", "no such job", nil)
 		return nil, false
 	}
@@ -843,7 +912,7 @@ func (s *Server) jobFor(w http.ResponseWriter, r *http.Request, sess Session, ma
 		s.writeErr(w, http.StatusNotFound, "NOT_FOUND", "no such job", nil)
 		return nil, false
 	}
-	return &j, true
+	return j, true
 }
 
 // handleGetJob serves GET /api/jobs/{id}.
@@ -973,6 +1042,10 @@ func (s *Server) handlePatchJob(w http.ResponseWriter, r *http.Request) {
 	dec.DisallowUnknownFields()
 	if err := dec.Decode(&req); err != nil || (req.Priority == nil && req.Held == nil) {
 		s.writeErr(w, http.StatusBadRequest, "BAD_REQUEST", "say a priority, or held", nil)
+		return
+	}
+	if jobEnded(j.Status.Phase) {
+		s.writeErr(w, http.StatusConflict, "JOB_ENDED", errJobEnded.Error(), nil)
 		return
 	}
 	ctx := s.inCluster(r.Context(), j.Spec.Cluster)

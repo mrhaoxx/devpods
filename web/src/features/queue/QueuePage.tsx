@@ -2,7 +2,7 @@
 // unreserved capacity and those running, in the order they run — why each
 // waits and when the first is expected to start. A row opens the job.
 import { useMemo, useRef, useState } from "react";
-import { keepPreviousData, useQuery, useQueryClient } from "@tanstack/react-query";
+import { keepPreviousData, useInfiniteQuery, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import type { ColumnDef, SortingState } from "@tanstack/react-table";
 import { cancelJob, jobsFree, listJobs, patchDevPod, patchJob, resubmitJob, setQueuePriority, type Job } from "../../data/api";
@@ -17,6 +17,7 @@ import { EmptyState } from "../../design/EmptyState";
 import { Notice } from "../../design/Form";
 import { useNow } from "../../lib/useNow";
 import { fmtHours, jobEnded, sizeText, stateText } from "./jobs";
+import { endOf } from "../audit/common";
 import { PriorityDialog } from "./PriorityDialog";
 import { SubmitDialog } from "./SubmitDialog";
 
@@ -50,7 +51,17 @@ export function QueuePage() {
   const [sorting, setSorting] = useState<SortingState>([]); // none: the queue's own order
   const now = useNow(30_000).getTime();
   const { matches, several } = useClusterFilter();
-  const q = useQuery({ queryKey: ["jobs", { mine, ended }], queryFn: () => listJobs({ mine, ended }), refetchInterval: 5_000, placeholderData: keepPreviousData });
+  // the queues, live; the ended, a page at a time (kept in the audit store)
+  const live = useQuery({ queryKey: ["jobs", { mine, ended: false }], queryFn: () => listJobs({ mine }), refetchInterval: 5_000, placeholderData: keepPreviousData, enabled: !ended });
+  const past = useInfiniteQuery({
+    queryKey: ["jobs", { mine, ended: true }],
+    queryFn: ({ pageParam }) => listJobs({ mine, ended: true, cursor: pageParam || undefined }),
+    initialPageParam: "",
+    getNextPageParam: (last) => last.next || undefined,
+    enabled: ended,
+  });
+  const q = ended ? past : live;
+  const data = useMemo(() => (ended ? past.data && { items: past.data.pages.flatMap((p) => p.items), devpods: [] } : live.data), [ended, past.data, live.data]);
   // what the queue can use now (by cluster): not shown when it cannot be said
   const free = useQuery({ queryKey: ["jobs-free"], queryFn: jobsFree, refetchInterval: 15_000 });
   const freeText = (free.data?.items ?? [])
@@ -62,7 +73,7 @@ export function QueuePage() {
     // DevPods waiting in line stand in it as one-machine entries, marked so
     const devpods: Job[] = ended
       ? []
-      : (q.data?.devpods ?? []).filter(matches).map((d) => ({
+      : (data?.devpods ?? []).filter(matches).map((d) => ({
           id: d.name ? `DevPod ${d.name}` : "DevPod",
           devpod: d.name ?? "",
           owner: d.owner,
@@ -81,7 +92,7 @@ export function QueuePage() {
           expectedStart: d.expectedStart,
           cluster: d.cluster,
         }));
-    const items = [...(q.data?.items ?? []).filter(matches), ...devpods];
+    const items = [...(data?.items ?? []).filter(matches), ...devpods];
     // running first, then the waiting in their order, then the ended (latest first)
     const rank = (j: Job) => (j.phase === "Running" || j.phase === "Starting" ? 0 : j.phase === "Queued" ? 1 : 2);
     return [...items].sort(
@@ -90,7 +101,7 @@ export function QueuePage() {
         (a.position ?? 0) - (b.position ?? 0) ||
         Date.parse(b.finishedAt ?? b.submitted) - Date.parse(a.finishedAt ?? a.submitted),
     );
-  }, [q.data, matches, ended]);
+  }, [data, matches, ended]);
 
   // what may be done to a row: one's own jobs (an admin's: any) not ended,
   // a DevPod of one's own waiting in line (its name shown: one's own, or an admin's view)
@@ -206,12 +217,12 @@ export function QueuePage() {
           <Notice>{actionError}</Notice>
         </div>
       )}
-      {q.isError && q.data && (
+      {q.isError && data && (
         <div className="border-b border-line px-3 py-1.5">
           <Notice tone="warm">刷新失败（{failure(q.error)}），显示的是上次的数据。</Notice>
         </div>
       )}
-      {q.isError && !q.data ? (
+      {q.isError && !data ? (
         <EmptyState tone="error" title="队列不可用" hint={failure(q.error)} />
       ) : (
         <DataTable<Job>
@@ -223,6 +234,7 @@ export function QueuePage() {
           getRowId={(j) => `${j.cluster ?? ""}/${j.id}`}
           sorting={sorting}
           onSortingChange={setSorting}
+          onEnd={ended ? endOf(past) : undefined}
           selectable
           canSelect={manageable}
           bulkBar={(picked, clear) =>

@@ -57,6 +57,8 @@ submit options:
                     (--requeue, the default, waits again)
   --host-network --privileged --cap-add CAP   what of the host the ranks ask
   --env K=V  --workdir DIR  --title T  --dry-run (where it would stand)
+  --no-workdir-warning  say nothing of a working directory the machines may
+                    not share (or DP_NO_WORKDIR_WARNING=1 in the DevPod's shell)
   --export ALL|NONE take the shell's environment along (inside a DevPod;
                     ALL, as sbatch's): PATH goes in front of the ranks' own
   -d, --detach      submit and be done (as sbatch). Without it, as srun:
@@ -77,7 +79,7 @@ func jobCommands() []*command {
 		short: "the queue: submit jobs, see the queue, cancel, read a job's output",
 		long:  jobLong,
 		vals:  []string{"title", "from-devpod", "from-config", "var", "N", "nodes", "gpus", "cpus", "t", "time", "priority", "cap-add", "env", "workdir", "script", "rank", "attempt", "export"},
-		bools: []string{"preemptible", "host-network", "privileged", "dry-run", "mine", "ended", "f", "follow", "d", "detach", "requeue", "no-requeue"}, run: runJob}}
+		bools: []string{"preemptible", "host-network", "privileged", "dry-run", "mine", "ended", "f", "follow", "d", "detach", "requeue", "no-requeue", "no-workdir-warning"}, run: runJob}}
 }
 
 type jobView struct {
@@ -107,8 +109,9 @@ type jobView struct {
 		Phase    string `json:"phase"`
 		ExitCode *int   `json:"exitCode"`
 	} `json:"ranks"`
-	Command string `json:"command"`
-	Workdir string `json:"workdir"`
+	Command  string   `json:"command"`
+	Workdir  string   `json:"workdir"`
+	Warnings []string `json:"warnings"`
 }
 
 func runJob(e *Env, a *parsed) int {
@@ -226,6 +229,7 @@ type submitOpts struct {
 	cpus                                           *float64
 	limit                                          time.Duration
 	preemptible, hostNetwork, privileged, dryRun   bool
+	noWorkdirWarning                               bool
 	requeue                                        *bool // nil: the console's default (requeued)
 	detach                                         bool  // job submit -d: submit and be done (else as srun)
 	capAdd                                         []string
@@ -298,6 +302,7 @@ func submitOptsOf(a *parsed) (submitOpts, error) {
 		return o, errors.New("--export takes ALL or NONE")
 	}
 	o.preemptible, o.hostNetwork, o.privileged, o.dryRun = a.has["preemptible"], a.has["host-network"], a.has["privileged"], a.has["dry-run"]
+	o.noWorkdirWarning = a.has["no-workdir-warning"]
 	switch {
 	case a.has["requeue"] && a.has["no-requeue"]:
 		return o, errors.New("--requeue and --no-requeue say opposite things")
@@ -438,11 +443,49 @@ func jobSubmit(e *Env, a *parsed, c *command) int {
 		if _, err := call(e, "POST", scoped(e, cluster, "/api/jobs"), body, &v); err != nil {
 			return fail(e, err)
 		}
+		sayWarnings(e, o.noWorkdirWarning, v.Warnings)
 		ref := joinRef(v.Cluster, v.ID)
 		fmt.Fprintf(e.Err, "submitted job %s\n", ref)
 		return waitJob(e, ref, v.ID, o.nodes)
 	}
-	return postJob(e, a, scoped(e, cluster, "/api/jobs"), body)
+	return postJob(e, a, scoped(e, cluster, "/api/jobs"), body, o.noWorkdirWarning)
+}
+
+// sayWarnings: the console's warnings of a submission, on standard error
+// — none when asked not to (quiet: --no-workdir-warning; or
+// DP_NO_WORKDIR_WARNING in the DevPod's shell, for dp).
+func sayWarnings(e *Env, quiet bool, warnings []string) {
+	if quiet || quietWorkdir(e) {
+		return
+	}
+	for _, w := range warnings {
+		fmt.Fprintf(e.Err, "warning: %s (hide this: --no-workdir-warning, or DP_NO_WORKDIR_WARNING=1)\n", w)
+	}
+}
+
+// quietWorkdir: dp's shell says DP_NO_WORKDIR_WARNING (1, true, yes…).
+func quietWorkdir(e *Env) bool {
+	if e.Origin == nil {
+		return false
+	}
+	switch strings.ToLower(strings.TrimSpace(e.Origin.Env["DP_NO_WORKDIR_WARNING"])) {
+	case "", "0", "false", "no", "off":
+		return false
+	}
+	return true
+}
+
+// warningsOf: the warnings a JSON answer carries.
+func warningsOf(v map[string]any) []string {
+	var out []string
+	if ws, ok := v["warnings"].([]any); ok {
+		for _, w := range ws {
+			if s, ok := w.(string); ok {
+				out = append(out, s)
+			}
+		}
+	}
+	return out
 }
 
 // waitPoll: how often a waiting job submit looks at its job.
@@ -615,13 +658,15 @@ func cancelWaited(e *Env, ref, id string) int {
 	return 130
 }
 
-// postJob submits body to path and says how it went.
-func postJob(e *Env, a *parsed, path string, body map[string]any) int {
+// postJob submits body to path and says how it went (and what the console
+// warns of, unless quiet).
+func postJob(e *Env, a *parsed, path string, body map[string]any, quiet bool) int {
 	var v map[string]any
 	raw, err := call(e, "POST", path, body, &v)
 	if err != nil {
 		return fail(e, err)
 	}
+	sayWarnings(e, quiet, warningsOf(v))
 	if a.json {
 		printJSON(e, raw)
 		return ExitOK

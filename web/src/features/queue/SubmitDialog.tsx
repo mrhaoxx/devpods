@@ -286,7 +286,7 @@ export function SubmitDialog({ onClose }: { onClose(): void }) {
                   特权容器
                 </label>
                 <Field label="工作目录（选填）">
-                  <Input aria-label="工作目录" className="mono text-xs" placeholder="留空：镜像的默认目录；须在共享存储上，如你的 home" value={workdir} onChange={(e) => setWorkdir(e.target.value)} />
+                  <Input aria-label="工作目录" className="mono text-xs" placeholder="留空：镜像的默认目录；最好在多台机器共享的存储上，如你的 home" value={workdir} onChange={(e) => setWorkdir(e.target.value)} />
                 </Field>
                 <Field label="名称（选填）">
                   <Input aria-label="名称" value={title} onChange={(e) => setTitle(e.target.value)} />
@@ -300,6 +300,11 @@ export function SubmitDialog({ onClose }: { onClose(): void }) {
                   : `提交前预估：排第 ${estimate.position ?? "?"} 位${estimate.expectedStart ? `，预计 ${whenText(estimate.expectedStart, Date.now())} 前后开始` : ""}。`}
               </p>
             )}
+            {estimate?.warnings?.map((w) => (
+              <Notice key={w} tone="warm">
+                提醒：{w}
+              </Notice>
+            ))}
             {estimateError && <Notice tone="warm">{estimateError}</Notice>}
             {error && <Notice>{error}</Notice>}
             <div className="flex items-center justify-end gap-2">

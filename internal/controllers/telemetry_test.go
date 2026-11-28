@@ -6,6 +6,8 @@ package controllers_test
 
 import (
 	"encoding/json"
+	"k8s.io/client-go/util/retry"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 	"testing"
 	"time"
 
@@ -70,8 +72,15 @@ func TestDevPodReconciler_TelemetryKeysReconciled(t *testing.T) {
 	}
 	// A stale telemetry.json (e.g. from an older controller) is corrected
 	// on the next reconcile, without recreating the Pod.
-	sec.Data["telemetry.json"] = []byte(`{"topN":1}`)
-	if err := env.Client.Update(env.Ctx, sec); err != nil {
+	// (read again on a conflict: the controller writes this Secret too)
+	if err := retry.RetryOnConflict(retry.DefaultRetry, func() error {
+		var cur corev1.Secret
+		if err := env.Client.Get(env.Ctx, client.ObjectKeyFromObject(sec), &cur); err != nil {
+			return err
+		}
+		cur.Data["telemetry.json"] = []byte(`{"topN":1}`)
+		return env.Client.Update(env.Ctx, &cur)
+	}); err != nil {
 		t.Fatal(err)
 	}
 	live.Annotations = map[string]string{"test/poke": "1"}

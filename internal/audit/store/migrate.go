@@ -52,6 +52,7 @@ var ttlRules = map[string]ttlRule{
 	"access_log":           {"ts", "DAY", auditDays},
 	"reservations":         {"ts", "DAY", auditDays},
 	"events":               {"ts", "DAY", auditDays},
+	"jobs":                 {"finished_at", "DAY", auditDays},
 	"http_requests":        {"ts", "DAY", auditDays},
 	"ssh_conns":            {"first_seen", "DAY", auditDays},
 	"processes":            {"first_seen", "DAY", auditDays},

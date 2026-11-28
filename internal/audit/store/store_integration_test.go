@@ -233,6 +233,72 @@ func TestEventsMachineScope(t *testing.T) {
 	}
 }
 
+// Ended queue jobs are kept whole — found by id with their spec and
+// status as written, listed newest ended first by cluster, owner and
+// state, page by page — and a job sent again with its token is kept once.
+func TestJobs(t *testing.T) {
+	ctx := context.Background()
+	c := openTestCH(t, "audit_jobs")
+	if err := c.conn.Exec(ctx, "DROP DATABASE IF EXISTS audit_jobs"); err != nil {
+		t.Fatal(err)
+	}
+	if err := Migrate(ctx, c, DefaultRetention(180)); err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().UTC().Truncate(time.Millisecond)
+	row := func(id, cluster, owner, phase string, ago time.Duration) JobRow {
+		return JobRow{ID: id, UID: "uid-" + id, Cluster: cluster, Owner: owner, Title: "t-" + id, Phase: phase,
+			SubmittedAt: now.Add(-ago - time.Hour), FinishedAt: now.Add(-ago),
+			Spec: `{"owner":"` + owner + `","command":"echo ` + id + `"}`, Status: `{"phase":"` + phase + `"}`}
+	}
+	for _, r := range []JobRow{
+		row("aaaa1", "st", "al", "Succeeded", 3*time.Minute),
+		row("bbbb2", "st", "bo", "Failed", 2*time.Minute),
+		row("cccc3", "yc", "al", "Cancelled", time.Minute),
+	} {
+		for range 2 {
+			if err := c.InsertJob(ctx, r, r.UID); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	got, err := c.GetJob(ctx, "bbbb2")
+	if err != nil || got == nil || got.Owner != "bo" || got.Spec != `{"owner":"bo","command":"echo bbbb2"}` || got.Status != `{"phase":"Failed"}` || !got.FinishedAt.Equal(now.Add(-2*time.Minute)) {
+		t.Fatalf("by id: %+v %v", got, err)
+	}
+	if got, err := c.GetJob(ctx, "none9"); err != nil || got != nil {
+		t.Fatalf("an id never kept: %+v %v", got, err)
+	}
+	ids := func(f JobFilter) ([]string, string) {
+		t.Helper()
+		rows, next, err := c.SearchJobs(ctx, f)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var out []string
+		for _, r := range rows {
+			out = append(out, r.ID)
+		}
+		return out, next
+	}
+	if all, _ := ids(JobFilter{}); strings.Join(all, ",") != "cccc3,bbbb2,aaaa1" {
+		t.Fatalf("all, newest ended first, each once: %v", all)
+	}
+	if mine, _ := ids(JobFilter{Owner: "al"}); strings.Join(mine, ",") != "cccc3,aaaa1" {
+		t.Fatalf("al's: %v", mine)
+	}
+	if in, _ := ids(JobFilter{Cluster: "st", Phase: "Failed"}); strings.Join(in, ",") != "bbbb2" {
+		t.Fatalf("st's failed: %v", in)
+	}
+	page1, next := ids(JobFilter{Limit: 2})
+	if strings.Join(page1, ",") != "cccc3,bbbb2" || next == "" {
+		t.Fatalf("page 1: %v %q", page1, next)
+	}
+	if page2, next2 := ids(JobFilter{Limit: 2, Cursor: next}); strings.Join(page2, ",") != "aaaa1" || next2 != "" {
+		t.Fatalf("page 2: %v %q", page2, next2)
+	}
+}
+
 func sampleBatch(sid string) Batch {
 	now := time.Now().UTC().Truncate(time.Millisecond)
 	exit := int32(3)

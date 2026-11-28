@@ -11,6 +11,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
@@ -172,14 +173,23 @@ func TestUsersAcrossClusters(t *testing.T) {
 			t.Fatalf("%s in a, where the console's default holds: %d %v", n, code, out)
 		}
 	}
-	// what she is told about herself: usage and quota per cluster
-	_, me := plain("GET", "/api/me", "")
-	per, _ := me["clusters"].(map[string]any)
-	pb, _ := per["b"].(map[string]any)
-	pa, _ := per["a"].(map[string]any)
-	if pb == nil || pa == nil || pb["usage"].(map[string]any)["devpods"] != float64(1) || pa["usage"].(map[string]any)["devpods"] != float64(2) ||
-		pb["quota"].(map[string]any)["maxDevPods"] != float64(1) || pa["quota"].(map[string]any)["maxDevPods"] != float64(5) {
-		t.Fatalf("/api/me per cluster: %v", me["clusters"])
+	// what she is told about herself: usage and quota per cluster (the
+	// usage counted from the caches, which have the DevPods a moment later)
+	var me map[string]any
+	ok := func() bool {
+		_, me = plain("GET", "/api/me", "")
+		per, _ := me["clusters"].(map[string]any)
+		pb, _ := per["b"].(map[string]any)
+		pa, _ := per["a"].(map[string]any)
+		return pb != nil && pa != nil && pb["usage"].(map[string]any)["devpods"] == float64(1) && pa["usage"].(map[string]any)["devpods"] == float64(2) &&
+			pb["quota"].(map[string]any)["maxDevPods"] == float64(1) && pa["quota"].(map[string]any)["maxDevPods"] == float64(5)
+	}
+	deadline := time.Now().Add(10 * time.Second)
+	for !ok() {
+		if time.Now().After(deadline) {
+			t.Fatalf("/api/me per cluster: %v", me["clusters"])
+		}
+		time.Sleep(50 * time.Millisecond)
 	}
 
 	// a token for one cluster

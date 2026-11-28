@@ -745,9 +745,9 @@ func (s *Server) handleJobHistory(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	var j devpodv1alpha1.Job
 	may, asAuditor := false, false
-	if err := s.Reader.Get(r.Context(), types.NamespacedName{Name: r.PathValue("id")}, &j); err == nil {
+	j, err := s.jobByID(r.Context(), r.PathValue("id")) // in the cluster, or kept
+	if err == nil {
 		may, asAuditor = s.mayReadHistory(r.Context(), sess, j.Spec.Cluster, j.Spec.Owner, nil, ranksMachines(j.Status.Ranks))
 	}
 	if !may {

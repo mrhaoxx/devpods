@@ -286,3 +286,20 @@ type EventRow struct {
 	ClientIP  string `ch:"client_ip" json:"client_ip,omitempty"`
 	RequestID string `ch:"request_id" json:"request_id,omitempty"`
 }
+
+// JobRow is a queue job that has ended, as kept once it leaves the
+// cluster: all of it — its spec as submitted (to show it and submit it
+// again) and its status (how it went, each rank's end and output) as
+// JSON — with what it is listed by beside.
+type JobRow struct {
+	ID          string    `ch:"id" json:"id"`
+	UID         string    `ch:"uid" json:"uid"`
+	Cluster     string    `ch:"cluster" json:"cluster,omitempty"`
+	Owner       string    `ch:"owner" json:"owner"`
+	Title       string    `ch:"title" json:"title,omitempty"`
+	Phase       string    `ch:"phase" json:"phase"`
+	SubmittedAt time.Time `ch:"submitted_at" json:"submittedAt"`
+	FinishedAt  time.Time `ch:"finished_at" json:"finishedAt"`
+	Spec        string    `ch:"spec" json:"-"`
+	Status      string    `ch:"status" json:"-"`
+}

@@ -65,8 +65,17 @@ func TestPasswordAuth(t *testing.T) {
 	})
 
 	t.Run("login success sets session", func(t *testing.T) {
-		rec := doJSON(t, s.HandlePasswordLoginForTest(), "POST", "/api/auth/password", nil, nil,
-			`{"username":"pwuser","password":"hunter2secret"}`)
+		// the login reads the user through the cache: its hash shows a moment after it is set
+		var rec *httptest.ResponseRecorder
+		deadline := time.Now().Add(10 * time.Second)
+		for {
+			rec = doJSON(t, s.HandlePasswordLoginForTest(), "POST", "/api/auth/password", nil, nil,
+				`{"username":"pwuser","password":"hunter2secret"}`)
+			if rec.Code == http.StatusOK || time.Now().After(deadline) {
+				break
+			}
+			time.Sleep(50 * time.Millisecond)
+		}
 		if rec.Code != http.StatusOK {
 			t.Fatalf("login = %d %s", rec.Code, rec.Body)
 		}

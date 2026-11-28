@@ -785,14 +785,25 @@ export type JobRequest = {
   env?: Record<string, string>;
   dryRun?: boolean;
 };
-export type JobEstimate = { position?: number; startsNow?: boolean; expectedStart?: string; reason?: string; detail?: Record<string, string>; cpus: number };
+export type JobEstimate = {
+  position?: number;
+  startsNow?: boolean;
+  expectedStart?: string;
+  reason?: string;
+  detail?: Record<string, string>;
+  cpus: number;
+  /** what the submitter should know (a working directory the machines may not share): said, not refused */
+  warnings?: string[];
+};
 export type JobLimits = { maxPriority: number; unlimitedPriority: boolean; defaultTimeLimitSeconds: number; maxTimeLimitSeconds: number };
-export const listJobs = (q: { mine?: boolean; ended?: boolean } = {}) => {
+/** listJobs: the queues — or, ended, the jobs that have ended (kept in the audit store), the last to end first, a page at a time (next: the next page's cursor). */
+export const listJobs = (q: { mine?: boolean; ended?: boolean; cursor?: string } = {}) => {
   const p = new URLSearchParams();
   if (q.mine) p.set("mine", "1");
   if (q.ended) p.set("ended", "1");
+  if (q.cursor) p.set("cursor", q.cursor);
   const qs = p.toString();
-  return req<{ items: Job[]; devpods?: QueuedDevPod[] }>("GET", `/api/jobs${qs ? `?${qs}` : ""}`);
+  return req<{ items: Job[]; devpods?: QueuedDevPod[]; next?: string }>("GET", `/api/jobs${qs ? `?${qs}` : ""}`);
 };
 
 /** QueuedDevPod: a DevPod waiting in the queue's line (its name only to

@@ -406,3 +406,21 @@ func TestJobListHeld(t *testing.T) {
 		t.Fatalf("list: %d %q %q", code, out, errs)
 	}
 }
+
+// A warning of the console's (a working directory the machines may not
+// share) goes to standard error — unless asked not to: --no-workdir-warning,
+// or DP_NO_WORKDIR_WARNING in dp's shell.
+func TestJobSubmitWarnings(t *testing.T) {
+	f := newFakeAPI(t)
+	f.routes["POST /api/jobs"] = map[string]any{"id": "abc12", "warnings": []string{"the job will run in /root, which the machines may not share"}}
+	if code, _, errs := f.run("job submit -d --from-devpod alice-a -- true"); code != 0 || !strings.Contains(errs, "warning: the job will run in /root") || !strings.Contains(errs, "--no-workdir-warning") {
+		t.Fatalf("warned: %d %q", code, errs)
+	}
+	if code, _, errs := f.run("job submit -d --from-devpod alice-a --no-workdir-warning -- true"); code != 0 || strings.Contains(errs, "warning") {
+		t.Fatalf("asked not to: %d %q", code, errs)
+	}
+	quiet := &Origin{DevPod: "alice-a", Cwd: "/root", Env: map[string]string{"DP_NO_WORKDIR_WARNING": "1"}}
+	if code, _, errs := f.runFrom("job submit -d -- true", quiet, nil); code != 0 || strings.Contains(errs, "warning") {
+		t.Fatalf("its shell asked not to: %d %q", code, errs)
+	}
+}
